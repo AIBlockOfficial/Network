@@ -1,0 +1,11 @@
+[package]
+name = "system"
+version = "0.1.0"
+authors = ["Byron Houwens <zhion360@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+chrono = "0.4.10"
+sha3 = "0.8.2"
+rand = "0.7.3"
+sodiumoxide = "0.2.5"
