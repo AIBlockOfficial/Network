@@ -1,13 +1,14 @@
-use crate::comms_handler::CommsHandler;
 use crate::interfaces::{Block, Heat, MinerInterface, ProofOfWork, Response};
 use crate::rand::Rng;
 use crate::sha3::Digest;
 use crate::unicorn::UnicornShard;
+use crate::Node;
 use rand;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
@@ -18,11 +19,8 @@ const MINING_DIFFICULTY: usize = 2;
 /// An instance of a MinerNode
 #[derive(Debug, Clone)]
 pub struct MinerNode {
-    pub comms_address: &'static str,
+    node: Node,
     pub last_pow: ProofOfWork,
-    peers: Vec<MinerNode>,
-    peer_limit: usize,
-    address_table: BTreeMap<&'static str, &'static str>,
 }
 
 impl MinerNode {
@@ -53,10 +51,7 @@ impl MinerNode {
     /// * `address` - Payment address for a valid PoW
     pub fn generate_pow(&mut self, address: &'static str) -> ProofOfWork {
         let mut nonce = self.generate_nonce();
-        let mut pow = ProofOfWork {
-            address: address,
-            nonce: nonce,
-        };
+        let mut pow = ProofOfWork { address, nonce };
 
         while !self.validate_pow(&mut pow) {
             nonce = self.generate_nonce();
@@ -91,12 +86,9 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn new(comms_address: &'static str) -> MinerNode {
+    fn new(comms_address: SocketAddr) -> MinerNode {
         MinerNode {
-            peers: Vec::with_capacity(PEER_LIMIT),
-            peer_limit: PEER_LIMIT,
-            comms_address: comms_address,
-            address_table: BTreeMap::new(),
+            node: Node::new(comms_address, PEER_LIMIT),
             last_pow: ProofOfWork {
                 address: "",
                 nonce: Vec::new(),

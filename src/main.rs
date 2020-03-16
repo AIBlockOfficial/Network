@@ -12,9 +12,49 @@ mod key_creation;
 mod miner;
 mod unicorn;
 
+use crate::sha3::Digest;
 use key_creation::KeyAgreement;
+use sha3::Sha3_256;
+
+#[cfg(not(features = "mock"))]
+pub(crate) use comms_handler::Node;
+use compute::ComputeNode;
+use interfaces::*;
+use miner::MinerNode;
+#[cfg(features = "mock")]
+pub(crate) use mock::Node;
 
 fn main() {
+    let mut compute_node =
+        ComputeNode::new("0.0.0.0:8079".parse().expect("Invalid endpoint format"));
+
+    let m1_address = "0.0.0.0:8080".parse().expect("Invalid endpoint format");
+    let m2_address = "0.0.0.0:8081".parse().expect("Invalid endpoint format");
+    let m3_address = "0.0.0.0:8082".parse().expect("Invalid endpoint format");
+
+    let mut miner1 = MinerNode::new(m1_address);
+    let mut miner2 = MinerNode::new(m2_address);
+    let mut miner3 = MinerNode::new(m3_address);
+
+    let pow1 = miner1.generate_pow_promise("A12g2340984jfk09");
+    let pow2 = miner2.generate_pow_promise("B12g2340984jfk09");
+    let pow3 = miner3.generate_pow_promise("C12g2340984jfk09");
+
+    let _resp1 = compute_node.receive_pow(m1_address, pow1);
+    let _resp2 = compute_node.receive_commit(m1_address, miner1.last_pow);
+
+    let _resp3 = compute_node.receive_pow(m2_address, pow2);
+    let _resp4 = compute_node.receive_commit(m2_address, miner2.last_pow);
+
+    let _resp5 = compute_node.receive_pow(m3_address, pow3);
+    let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
+
+    println!("{:?}", compute_node.unicorn_list);
+
+    key_agreement();
+}
+
+fn key_agreement() {
     // Key agreement input
     let mut first_addr = vec![0, 12, 3, 4, 5];
     let mut first_uni = vec![10, 51, 1, 20, 0];

@@ -1,4 +1,5 @@
 use crate::unicorn::UnicornShard;
+use std::net::SocketAddr;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone)]
@@ -61,23 +62,23 @@ pub trait ComputeInterface {
     /// ### Arguments
     ///
     /// * `address` - Address for the current compute node
-    fn new(address: &'static str) -> Self;
+    fn new(address: SocketAddr) -> Self;
 
     /// Receives a PoW for inclusion in the UnicornShard build
     ///
     /// ### Arguments
     ///
-    /// * `address` - IP address for the node providing the PoW
+    /// * `address` - address for the peer providing the PoW
     /// * `pow`     - PoW for potential inclusion
-    fn receive_pow(&mut self, address: &'static str, pow: Vec<u8>) -> Response;
+    fn receive_pow(&mut self, peer: SocketAddr, pow: Vec<u8>) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///
     /// ### Arguments
     ///
-    /// * `address` - IP address for the node providing the PoW
+    /// * `address` - address for the peer providing the PoW
     /// * `commit`  - PoW commit for potential inclusion
-    fn receive_commit(&mut self, address: &'static str, commit: ProofOfWork) -> Response;
+    fn receive_commit(&mut self, peer: SocketAddr, commit: ProofOfWork) -> Response;
 
     /// Returns the internal unicorn table
     fn get_unicorn_table(&self) -> Vec<UnicornShard>;
@@ -104,8 +105,8 @@ pub trait MinerInterface {
     ///
     /// ### Arguments
     ///
-    /// * `comms_address`   - IP address used for communications
-    fn new(comms_address: &'static str) -> Self;
+    /// * `comms_address`   - endpoint address used for communications
+    fn new(comms_address: SocketAddr) -> Self;
 
     /// Receives a new block to be mined
     ///

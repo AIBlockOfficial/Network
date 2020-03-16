@@ -2,7 +2,9 @@ use crate::comms_handler::CommsHandler;
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
-use std::collections::BTreeMap;
+use crate::Node;
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
@@ -12,11 +14,9 @@ const UNICORN_LIMIT: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
-    address: &'static str,
-    pub unicorn_list: BTreeMap<&'static str, UnicornShard>,
-    peers: Vec<ComputeNode>,
+    node: Node,
+    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     comms_handler: CommsHandler,
-    pub peer_limit: usize,
     pub unicorn_limit: usize,
 }
 
@@ -28,25 +28,8 @@ impl ComputeNode {
     ///
     /// * `address`     - Address of the new peer
     /// * `force_add`   - If true and the peer limit is reached, an old peer will be ejected to make space
-    pub fn add_peer(&mut self, address: &'static str, force_add: bool) -> Response {
-        let is_full = self.peers.len() >= self.peer_limit;
-
-        if force_add && is_full {
-            self.peers.truncate(self.peer_limit);
-        }
-
-        if !is_full {
-            self.peers.push(ComputeNode::new(address));
-            return Response {
-                success: true,
-                reason: "Peer added successfully",
-            };
-        }
-
-        Response {
-            success: false,
-            reason: "Peer list is full. Unable to add new peer",
-        }
+    pub fn add_peer(&mut self, address: SocketAddr, force_add: bool) -> Response {
+        self.node.add_peer(address, force_add)
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -56,7 +39,7 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_pow_to_peers(&self, address: &'static str, pow: &Vec<u8>) {
+    pub fn flood_pow_to_peers(&self, address: SocketAddr, pow: &Vec<u8>) {
         println!("Flooding PoW to peers not implemented");
     }
 
@@ -67,25 +50,23 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_commit_to_peers(&self, address: &'static str, commit: &ProofOfWork) {
+    pub fn flood_commit_to_peers(&self, address: SocketAddr, commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
     }
 }
 
 impl ComputeInterface for ComputeNode {
-    fn new(address: &'static str) -> ComputeNode {
+    fn new(address: SocketAddr) -> ComputeNode {
         ComputeNode {
-            address: address,
-            unicorn_list: BTreeMap::new(),
-            peers: Vec::with_capacity(PEER_LIMIT),
-            peer_limit: PEER_LIMIT,
+            node: Node::new(address, PEER_LIMIT),
+            unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             comms_handler: CommsHandler,
         }
     }
 
-    fn receive_commit(&mut self, address: &'static str, commit: ProofOfWork) -> Response {
-        if let Some(entry) = self.unicorn_list.get_mut(address) {
+    fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
+        if let Some(entry) = self.unicorn_list.get_mut(&address) {
             if entry.is_valid(commit.clone()) {
                 self.flood_commit_to_peers(address, &commit);
                 return Response {
@@ -106,7 +87,7 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_pow(&mut self, address: &'static str, pow: Vec<u8>) -> Response {
+    fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
         if self.unicorn_list.len() < self.unicorn_limit {
             let mut unicorn_value = UnicornShard::new();
             unicorn_value.promise = pow.clone();
