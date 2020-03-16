@@ -15,6 +15,7 @@ mod unicorn;
 use crate::sha3::Digest;
 use key_creation::KeyAgreement;
 use sha3::Sha3_256;
+use tokio::runtime::Runtime;
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;
@@ -24,13 +25,12 @@ use miner::MinerNode;
 #[cfg(features = "mock")]
 pub(crate) use mock::Node;
 
-fn main() {
-    let mut compute_node =
-        ComputeNode::new("0.0.0.0:8079".parse().expect("Invalid endpoint format"));
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut compute_node = ComputeNode::new("0.0.0.0:8079".parse()?);
 
-    let m1_address = "0.0.0.0:8080".parse().expect("Invalid endpoint format");
-    let m2_address = "0.0.0.0:8081".parse().expect("Invalid endpoint format");
-    let m3_address = "0.0.0.0:8082".parse().expect("Invalid endpoint format");
+    let m1_address = "0.0.0.0:8080".parse()?;
+    let m2_address = "0.0.0.0:8081".parse()?;
+    let m3_address = "0.0.0.0:8082".parse()?;
 
     let mut miner1 = MinerNode::new(m1_address);
     let mut miner2 = MinerNode::new(m2_address);
@@ -49,9 +49,14 @@ fn main() {
     let _resp5 = compute_node.receive_pow(m3_address, pow3);
     let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
 
-    println!("{:?}", compute_node.unicorn_list);
+    let mut runtime = Runtime::new()?;
+    runtime.block_on(async move {
+        let _ = compute_node.start().await;
+    });
 
     key_agreement();
+
+    Ok(())
 }
 
 fn key_agreement() {

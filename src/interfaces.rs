@@ -34,6 +34,18 @@ pub struct Heat;
 /// A placeholder Asset struct
 pub struct Asset;
 
+/// Denotes existing node types
+pub enum NodeType {
+    Miner,
+    Storage,
+    Compute,
+}
+
+/// Handshake request that peers send when they connect to someone
+pub struct HandshakeRequest {
+    node_type: NodeType,
+}
+
 /// Encapsulates storage requests
 #[derive(Deserialize, Serialize, Debug)]
 pub enum StorageRequest {

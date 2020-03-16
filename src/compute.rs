@@ -1,4 +1,4 @@
-use crate::comms_handler::CommsHandler;
+use crate::comms_handler::{CommsError, CommsHandler};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
@@ -6,6 +6,19 @@ use crate::Node;
 use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+
+/// Result wrapper for compute errors
+pub type Result<T> = std::result::Result<T, ComputeError>;
+
+pub enum ComputeError {
+    Network(CommsError),
+}
+
+impl From<CommsError> for ComputeError {
+    fn from(other: CommsError) -> Self {
+        Self::Network(other)
+    }
+}
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
@@ -55,21 +68,29 @@ impl ComputeNode {
         println!("Flooding commit to peers not implemented");
     }
 
+    /// Start the compute node on the network.
+    pub async fn start(&mut self) -> Result<()> {
+        Ok(self.node.listen().await?)
+    }
+
     /// Listens for incoming requests and handles them.
     /// The future returned from this function should be executed in the runtime.
     pub async fn handle_requests(&mut self) {
-	self.node.requests::<ComputeRequest>().for_each(move |req| {
-	    let resp = self.handle_request(req);
-	    future::ready(())
-	}).await
+        self.node
+            .requests::<ComputeRequest>()
+            .for_each(move |req| {
+                let resp = self.handle_request(req);
+                future::ready(())
+            })
+            .await
     }
 
     /// Handles a compute request.
     async fn handle_request(&mut self, req: ComputeRequest) -> Response {
-	use ComputeRequest::*;
-	match req {
-	    SendPoW { peer, pow } => self.receive_pow(peer, pow)
-	}
+        use ComputeRequest::*;
+        match req {
+            SendPoW { peer, pow } => self.receive_pow(peer, pow),
+        }
     }
 }
 
