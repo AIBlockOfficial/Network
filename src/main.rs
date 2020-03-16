@@ -2,11 +2,14 @@ extern crate chrono;
 extern crate sha3;
 extern crate rand;
 extern crate sodiumoxide;
+extern crate rug;
+extern crate hex;
 
 mod miner;
 mod unicorn;
 mod compute;
 mod interfaces;
+mod key_creation;
 mod comms_handler;
 
 use sha3::Sha3_256;
