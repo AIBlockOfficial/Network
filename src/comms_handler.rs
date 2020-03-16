@@ -1,5 +1,8 @@
 //! This module provides basic networking interfaces.
 
+use bincode::deserialize;
+use futures::Stream;
+use serde::{de::DeserializeOwned, Serialize};
 use std::net::SocketAddr;
 
 use crate::interfaces::Response;
@@ -50,5 +53,13 @@ impl Node {
             success: false,
             reason: "Peer list is full. Unable to add new peer",
         }
+    }
+
+    /// Sends data to a peer.
+    pub fn send(&mut self, peer: SocketAddr, data: impl Serialize) {}
+
+    /// Provides a stream of requests.
+    pub fn requests<ReqType: DeserializeOwned + Clone>(&mut self) -> impl Stream<Item = ReqType> {
+        futures::stream::repeat(deserialize(&[1]).unwrap())
     }
 }

@@ -1,8 +1,9 @@
 use crate::comms_handler::CommsHandler;
 use crate::interfaces::ProofOfWork;
-use crate::interfaces::{ComputeInterface, Contract, Response, Tx};
+use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
 use crate::Node;
+use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
@@ -52,6 +53,23 @@ impl ComputeNode {
     /// * `pow`     - PoW to flood
     pub fn flood_commit_to_peers(&self, address: SocketAddr, commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
+    }
+
+    /// Listens for incoming requests and handles them.
+    /// The future returned from this function should be executed in the runtime.
+    pub async fn handle_requests(&mut self) {
+	self.node.requests::<ComputeRequest>().for_each(move |req| {
+	    let resp = self.handle_request(req);
+	    future::ready(())
+	}).await
+    }
+
+    /// Handles a compute request.
+    async fn handle_request(&mut self, req: ComputeRequest) -> Response {
+	use ComputeRequest::*;
+	match req {
+	    SendPoW { peer, pow } => self.receive_pow(peer, pow)
+	}
     }
 }
 

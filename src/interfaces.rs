@@ -1,4 +1,5 @@
 use crate::unicorn::UnicornShard;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
 /// A placeholder struct for sensible feedback
@@ -16,12 +17,15 @@ pub struct ProofOfWork {
 }
 
 /// A placeholder tx struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Tx;
 
 /// A placeholder Block struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Block;
 
 /// A placeholder Contract struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Contract;
 
 /// A placeholder Heat struct
@@ -29,6 +33,16 @@ pub struct Heat;
 
 /// A placeholder Asset struct
 pub struct Asset;
+
+/// Encapsulates storage requests
+#[derive(Deserialize, Serialize, Debug)]
+pub enum StorageRequest {
+    GetHistory { start_time: u64, end_time: u64 },
+    GetUnicornTable { n_last_items: Option<u64> },
+    Pow { hash: f64 },
+    PreBlock { pre_block: Block },
+    Store { contract: Contract },
+}
 
 pub trait StorageInterface {
     /// Creates a new instance of a Store implementor
@@ -54,6 +68,12 @@ pub trait StorageInterface {
 
     /// Receives agreed contracts for storage
     fn receive_contracts(&self, contract: Contract) -> Response;
+}
+
+/// Encapsulates compute requests
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ComputeRequest {
+    SendPoW { peer: SocketAddr, pow: Vec<u8> },
 }
 
 pub trait ComputeInterface {
