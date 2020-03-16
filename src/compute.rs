@@ -26,7 +26,7 @@ const PEER_LIMIT: usize = 6;
 /// Limit for the number of PoWs a compute node may have for UnicornShard creation
 const UNICORN_LIMIT: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ComputeNode {
     node: Node,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -35,17 +35,6 @@ pub struct ComputeNode {
 }
 
 impl ComputeNode {
-    /// Adds a new peer to the compute node's list of peers.
-    /// TODO: Could make peer_list a LRU cache later.
-    ///
-    /// ### Arguments
-    ///
-    /// * `address`     - Address of the new peer
-    /// * `force_add`   - If true and the peer limit is reached, an old peer will be ejected to make space
-    pub fn add_peer(&mut self, address: SocketAddr, force_add: bool) -> Response {
-        self.node.add_peer(address, force_add)
-    }
-
     /// Floods all peers with a PoW for UnicornShard creation
     /// TODO: Add in comms handling for sending and receiving requests
     ///
@@ -80,13 +69,14 @@ impl ComputeNode {
             .requests::<ComputeRequest>()
             .for_each(move |req| {
                 let resp = self.handle_request(req);
+                println!("Response: {:?}", resp);
                 future::ready(())
             })
             .await
     }
 
     /// Handles a compute request.
-    async fn handle_request(&mut self, req: ComputeRequest) -> Response {
+    fn handle_request(&mut self, req: ComputeRequest) -> Response {
         use ComputeRequest::*;
         match req {
             SendPoW { peer, pow } => self.receive_pow(peer, pow),
@@ -127,6 +117,8 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
+        println!("Receieved PoW from peer {:?}", address);
+
         if self.unicorn_list.len() < self.unicorn_limit {
             let mut unicorn_value = UnicornShard::new();
             unicorn_value.promise = pow.clone();

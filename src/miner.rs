@@ -1,4 +1,7 @@
-use crate::interfaces::{Block, Heat, MinerInterface, ProofOfWork, Response};
+use crate::comms_handler::CommsError;
+use crate::interfaces::{
+    Block, HandshakeRequest, Heat, MinerInterface, NodeType, ProofOfWork, Response,
+};
 use crate::rand::Rng;
 use crate::sha3::Digest;
 use crate::unicorn::UnicornShard;
@@ -7,8 +10,20 @@ use rand;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
+
+/// Result wrapper for miner errors
+pub type Result<T> = std::result::Result<T, MinerError>;
+
+pub enum MinerError {
+    Network(CommsError),
+}
+
+impl From<CommsError> for MinerError {
+    fn from(other: CommsError) -> Self {
+        Self::Network(other)
+    }
+}
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
@@ -17,13 +32,25 @@ const PEER_LIMIT: usize = 6;
 const MINING_DIFFICULTY: usize = 2;
 
 /// An instance of a MinerNode
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MinerNode {
     node: Node,
     pub last_pow: ProofOfWork,
 }
 
 impl MinerNode {
+    /// Start the compute node on the network.
+    pub async fn start(&mut self) -> Result<()> {
+        Ok(self.node.listen().await?)
+    }
+
+    /// Connect to a peer on the network.
+    pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
+        self.node.connect_to(peer).await?;
+        // self.node.send(peer, HandshakeRequest { node_type: NodeType::Miner }).await?;
+        Ok(())
+    }
+
     /// Validates a PoW
     ///
     /// ### Arguments

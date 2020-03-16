@@ -14,7 +14,9 @@ hex = "0.4.2"
 serde = { version = "1.0.104", features = ["derive"] }
 bincode = "1.2.1"
 futures = "0.3"
-tokio = { version = "0.2.13", features = ["rt-threaded", "rt-core", "tcp", "stream"] }
+tokio = { version = "0.2.13", features = ["rt-threaded", "rt-core", "tcp", "stream", "sync"] }
+tokio-util = { version = "0.3", features = ["codec"] }
+bytes = "0.5.4"
 
 [features]
 mock = []

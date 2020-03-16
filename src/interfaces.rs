@@ -35,6 +35,7 @@ pub struct Heat;
 pub struct Asset;
 
 /// Denotes existing node types
+#[derive(Deserialize, Serialize, Debug)]
 pub enum NodeType {
     Miner,
     Storage,
@@ -42,8 +43,9 @@ pub enum NodeType {
 }
 
 /// Handshake request that peers send when they connect to someone
+#[derive(Deserialize, Serialize, Debug)]
 pub struct HandshakeRequest {
-    node_type: NodeType,
+    pub node_type: NodeType,
 }
 
 /// Encapsulates storage requests

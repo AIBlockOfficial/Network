@@ -26,33 +26,38 @@ use miner::MinerNode;
 pub(crate) use mock::Node;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut compute_node = ComputeNode::new("0.0.0.0:8079".parse()?);
+    let runtime = Runtime::new()?;
 
+    let cn_address = "0.0.0.0:8079".parse()?;
     let m1_address = "0.0.0.0:8080".parse()?;
     let m2_address = "0.0.0.0:8081".parse()?;
     let m3_address = "0.0.0.0:8082".parse()?;
+
+    let mut compute_node = ComputeNode::new(cn_address);
+    runtime.spawn(async move {
+        let _ = compute_node.start().await;
+    });
 
     let mut miner1 = MinerNode::new(m1_address);
     let mut miner2 = MinerNode::new(m2_address);
     let mut miner3 = MinerNode::new(m3_address);
 
-    let pow1 = miner1.generate_pow_promise("A12g2340984jfk09");
+    runtime.spawn(async move {
+        let pow1 = miner1.generate_pow_promise("A12g2340984jfk09");
+        let _peer = miner1.connect_to(cn_address).await;
+    });
+
     let pow2 = miner2.generate_pow_promise("B12g2340984jfk09");
     let pow3 = miner3.generate_pow_promise("C12g2340984jfk09");
 
-    let _resp1 = compute_node.receive_pow(m1_address, pow1);
-    let _resp2 = compute_node.receive_commit(m1_address, miner1.last_pow);
+    // let _resp1 = compute_node.receive_pow(m1_address, pow1);
+    // let _resp2 = compute_node.receive_commit(m1_address, miner1.last_pow);
 
-    let _resp3 = compute_node.receive_pow(m2_address, pow2);
-    let _resp4 = compute_node.receive_commit(m2_address, miner2.last_pow);
+    // let _resp3 = compute_node.receive_pow(m2_address, pow2);
+    // let _resp4 = compute_node.receive_commit(m2_address, miner2.last_pow);
 
-    let _resp5 = compute_node.receive_pow(m3_address, pow3);
-    let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
-
-    let mut runtime = Runtime::new()?;
-    runtime.block_on(async move {
-        let _ = compute_node.start().await;
-    });
+    // let _resp5 = compute_node.receive_pow(m3_address, pow3);
+    // let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
 
     key_agreement();
 
