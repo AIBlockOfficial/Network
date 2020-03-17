@@ -59,9 +59,6 @@ impl From<bincode::Error> for CommsError {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CommsHandler;
-
 /// An abstract communication interface in the network.
 #[derive(Debug)]
 pub struct Node {

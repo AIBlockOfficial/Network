@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, CommsHandler};
+use crate::comms_handler::CommsError;
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
@@ -30,7 +30,6 @@ const UNICORN_LIMIT: usize = 5;
 pub struct ComputeNode {
     node: Node,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
-    comms_handler: CommsHandler,
     pub unicorn_limit: usize,
 }
 
@@ -90,7 +89,6 @@ impl ComputeInterface for ComputeNode {
             node: Node::new(address, PEER_LIMIT),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
-            comms_handler: CommsHandler,
         }
     }
 
