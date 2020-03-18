@@ -1,44 +1,36 @@
 extern crate chrono;
-extern crate sha3;
-extern crate rand;
-extern crate sodiumoxide;
-extern crate rug;
 extern crate hex;
+extern crate rand;
+extern crate rug;
+extern crate sha3;
+extern crate sodiumoxide;
 
-mod miner;
-mod unicorn;
+mod comms_handler;
 mod compute;
 mod interfaces;
 mod key_creation;
-mod comms_handler;
+mod miner;
+mod unicorn;
 
-use sha3::Sha3_256;
-use crate::sha3::Digest;
-use interfaces::*;
-
-use compute::ComputeNode;
-use miner::MinerNode;
-
+use key_creation::KeyAgreement;
 
 fn main() {
-    let mut compute_node = ComputeNode::new("0.0.0.0:8079");
+    // Key agreement input
+    let mut first_addr = vec![0, 12, 3, 4, 5];
+    let mut first_uni = vec![10, 51, 1, 20, 0];
+    let mut first_nonce = vec![0, 0, 0, 0, 0];
 
-    let mut miner1 = MinerNode::new("0.0.0.0:8080");
-    let mut miner2 = MinerNode::new("0.0.0.0:8081");
-    let mut miner3 = MinerNode::new("0.0.0.0:8082");
+    let mut second_addr = vec![9, 9, 9, 9, 9];
+    let mut second_uni = vec![1, 1, 1, 1, 1];
+    let mut second_nonce = vec![10, 9, 1, 0, 0];
 
-    let pow1 = miner1.generate_pow_promise("A12g2340984jfk09");
-    let pow2 = miner2.generate_pow_promise("B12g2340984jfk09");
-    let pow3 = miner3.generate_pow_promise("C12g2340984jfk09");
+    // Actual key agreement process
+    let mut first = KeyAgreement::new(12, 10, 5);
+    let mut second = KeyAgreement::new(12, 2, 1);
 
-    let _resp1 = compute_node.receive_pow(miner1.comms_address, pow1);
-    let _resp2 = compute_node.receive_commit(miner1.comms_address, miner1.last_pow);
+    // First round
+    first.first_round(&mut first_addr, &mut first_uni, &mut first_nonce);
+    second.first_round(&mut second_addr, &mut second_uni, &mut second_nonce);
 
-    let _resp3 = compute_node.receive_pow(miner2.comms_address, pow2);
-    let _resp4 = compute_node.receive_commit(miner2.comms_address, miner2.last_pow);
-
-    let _resp5 = compute_node.receive_pow(miner3.comms_address, pow3);
-    let _resp6 = compute_node.receive_commit(miner3.comms_address, miner3.last_pow);
-
-    println!("{:?}", compute_node.unicorn_list);
+    println!("FIRST: {:?}", first);
 }

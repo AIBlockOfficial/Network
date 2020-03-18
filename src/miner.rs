@@ -1,21 +1,19 @@
-use rand;
-use sha3::Sha3_256;
+use crate::comms_handler::CommsHandler;
+use crate::interfaces::{Block, Heat, MinerInterface, ProofOfWork, Response};
 use crate::rand::Rng;
 use crate::sha3::Digest;
 use crate::unicorn::UnicornShard;
+use rand;
+use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::ed25519::{ PublicKey, SecretKey };
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
-use crate::comms_handler::CommsHandler;
-use crate::interfaces::{ Block, Heat, MinerInterface, Response, ProofOfWork };
-
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
 
 /// Set the mining difficulty by number of required zeroes
 const MINING_DIFFICULTY: usize = 2;
-
 
 /// An instance of a MinerNode
 #[derive(Debug, Clone)]
@@ -24,14 +22,14 @@ pub struct MinerNode {
     pub last_pow: ProofOfWork,
     peers: Vec<MinerNode>,
     peer_limit: usize,
-    address_table: BTreeMap<&'static str, &'static str>
+    address_table: BTreeMap<&'static str, &'static str>,
 }
 
 impl MinerNode {
     /// Validates a PoW
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `pow` - PoW to validate
     pub fn validate_pow(&self, pow: &mut ProofOfWork) -> bool {
         let mut pow_body = pow.address.as_bytes().to_vec();
@@ -40,20 +38,25 @@ impl MinerNode {
         let pow_hash = Sha3_256::digest(&pow_body).to_vec();
 
         for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
-            if entry != 0 { return false; }
+            if entry != 0 {
+                return false;
+            }
         }
-        
+
         true
     }
 
     /// Generates a valid PoW
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `address` - Payment address for a valid PoW
     pub fn generate_pow(&mut self, address: &'static str) -> ProofOfWork {
         let mut nonce = self.generate_nonce();
-        let mut pow = ProofOfWork { address: address, nonce: nonce };
+        let mut pow = ProofOfWork {
+            address: address,
+            nonce: nonce,
+        };
 
         while !self.validate_pow(&mut pow) {
             nonce = self.generate_nonce();
@@ -64,9 +67,9 @@ impl MinerNode {
     }
 
     /// Generate a valid PoW and return the hashed value
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `address` - Payment address for a valid PoW
     pub fn generate_pow_promise(&mut self, address: &'static str) -> Vec<u8> {
         let pow = self.generate_pow(address);
@@ -81,9 +84,7 @@ impl MinerNode {
     /// Generates a random sequence of values for a nonce
     fn generate_nonce(&self) -> Vec<u8> {
         let mut rng = rand::thread_rng();
-        let nonce = (0..10).map(|_| {
-            rng.gen_range(1, 200)
-        }).collect();
+        let nonce = (0..10).map(|_| rng.gen_range(1, 200)).collect();
 
         nonce
     }
@@ -96,11 +97,17 @@ impl MinerInterface for MinerNode {
             peer_limit: PEER_LIMIT,
             comms_address: comms_address,
             address_table: BTreeMap::new(),
-            last_pow: ProofOfWork { address: "", nonce: Vec::new() }
+            last_pow: ProofOfWork {
+                address: "",
+                nonce: Vec::new(),
+            },
         }
     }
 
     fn receive_pre_block(&self, pre_block: &Block) -> Response {
-        Response { success: false, reason: "Not implemented yet" }
+        Response {
+            success: false,
+            reason: "Not implemented yet",
+        }
     }
 }

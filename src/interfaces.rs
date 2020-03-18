@@ -4,16 +4,15 @@ use crate::unicorn::UnicornShard;
 #[derive(Debug, Clone)]
 pub struct Response {
     pub success: bool,
-    pub reason: &'static str
+    pub reason: &'static str,
 }
 
 /// PoW structure
 #[derive(Debug, Clone)]
 pub struct ProofOfWork {
     pub address: &'static str,
-    pub nonce: Vec<u8>
+    pub nonce: Vec<u8>,
 }
-
 
 /// A placeholder tx struct
 pub struct Tx;
@@ -29,7 +28,6 @@ pub struct Heat;
 
 /// A placeholder Asset struct
 pub struct Asset;
-
 
 pub trait StorageInterface {
     /// Creates a new instance of a Store implementor
@@ -58,26 +56,25 @@ pub trait StorageInterface {
 }
 
 pub trait ComputeInterface {
-    
     /// Generates a new compute node instance
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `address` - Address for the current compute node
     fn new(address: &'static str) -> Self;
-  
+
     /// Receives a PoW for inclusion in the UnicornShard build
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `address` - IP address for the node providing the PoW
     /// * `pow`     - PoW for potential inclusion
     fn receive_pow(&mut self, address: &'static str, pow: Vec<u8>) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `address` - IP address for the node providing the PoW
     /// * `commit`  - PoW commit for potential inclusion
     fn receive_commit(&mut self, address: &'static str, commit: ProofOfWork) -> Response;
@@ -104,16 +101,16 @@ pub trait ComputeInterface {
 
 pub trait MinerInterface {
     /// Creates a new instance of Mining implementor
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `comms_address`   - IP address used for communications
     fn new(comms_address: &'static str) -> Self;
 
     /// Receives a new block to be mined
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `pre_block` - New block to be mined
     fn receive_pre_block(&self, pre_block: &Block) -> Response;
 }
