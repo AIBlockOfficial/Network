@@ -56,12 +56,14 @@ impl MinerNode {
     /// Connect to a peer on the network.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
-        self.node.send(
-            peer,
-            HandshakeRequest {
-                node_type: NodeType::Miner,
-            },
-        )?;
+        self.node
+            .send(
+                peer,
+                HandshakeRequest {
+                    node_type: NodeType::Miner,
+                },
+            )
+            .await?;
         Ok(())
     }
 

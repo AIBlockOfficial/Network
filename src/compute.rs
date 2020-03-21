@@ -6,7 +6,7 @@ use crate::Node;
 use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -65,14 +65,17 @@ impl ComputeNode {
     /// Listens for incoming requests and handles them.
     /// The future returned from this function should be executed in the runtime.
     pub async fn handle_requests(&mut self) {
-        self.node
-            .requests::<ComputeRequest>()
-            .for_each(move |req| {
-                let response = self.handle_request(req);
-                debug!(?response, "Sending response");
-                future::ready(())
-            })
-            .await
+        while let Some((peer, frame)) = self.node.next_frame::<ComputeRequest>().await {
+            match frame {
+                Ok(req) => {
+                    let response = self.handle_request(req);
+                    debug!(?response, ?peer, "Sending response");
+                }
+                Err(error) => {
+                    warn!(?error, ?peer, "Failed to receive a frame");
+                }
+            }
+        }
     }
 
     /// Handles a compute request.
