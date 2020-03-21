@@ -47,8 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _peer = miner1.connect_to(cn_address).await;
     });
 
-    let pow2 = miner2.generate_pow_promise("B12g2340984jfk09");
-    let pow3 = miner3.generate_pow_promise("C12g2340984jfk09");
+    runtime.spawn(async move {
+        let pow2 = miner2.generate_pow_promise("B12g2340984jfk09");
+        let _peer = miner2.connect_to(cn_address).await;
+    });
+
+    runtime.spawn(async move {
+        let pow3 = miner3.generate_pow_promise("C12g2340984jfk09");
+        let _peer = miner3.connect_to(cn_address).await;
+    });
 
     // let _resp1 = compute_node.receive_pow(m1_address, pow1);
     // let _resp2 = compute_node.receive_commit(m1_address, miner1.last_pow);

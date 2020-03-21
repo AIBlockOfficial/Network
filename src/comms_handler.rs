@@ -13,7 +13,7 @@ use tokio::{
     stream::StreamExt,
     sync::mpsc,
 };
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub type Result<T> = std::result::Result<T, CommsError>;
 
@@ -97,14 +97,7 @@ impl Node {
                 Ok(conn) => {
                     // TODO: have a timeout for incoming handshake to disconnect clients who are linger on without any communication
                     println!("Accepted peer {:?}", conn.peer_addr());
-                    // self.add_peer(conn, false);
-
-                    let mut transport = Framed::new(conn, LengthDelimitedCodec::new());
-                    tokio::spawn(async move {
-                        while let Some(frame) = transport.next().await {
-                            println!("Recvd {:?}", frame);
-                        }
-                    });
+                    self.add_peer(conn, false)?;
                 }
                 Err(e) => {
                     // TODO: proper logging
@@ -136,15 +129,8 @@ impl Node {
             let peer_addr = socket.peer_addr()?;
             println!("Connected to {:?}", peer_addr);
 
-            let mut sock = Framed::new(socket, LengthDelimitedCodec::new());
-            let (send_tx, mut send_rx) = mpsc::channel(128);
-
-            tokio::spawn(async move {
-                // Redirect messages from the mpsc channel into the TCP socket
-                if let Err(e) = sock.send_all(&mut send_rx).await {
-                    eprintln!("Error while redirecting messages: {:?}", e);
-                }
-            });
+            // Spawn the tasks to manage the peer
+            let send_tx = handle_peer(socket);
 
             self.peers.insert(peer_addr, Peer { send_tx });
 
@@ -158,8 +144,6 @@ impl Node {
         let stream = TcpStream::connect(peer).await?;
         let peer_addr = stream.peer_addr()?;
         self.add_peer(stream, false)?;
-        self.send_bytes(peer_addr, Bytes::from("Hello"))?;
-
         Ok(())
     }
 
@@ -193,4 +177,31 @@ impl Node {
     pub fn requests<ReqType: DeserializeOwned + Clone>(&mut self) -> impl Stream<Item = ReqType> {
         futures::stream::repeat(deserialize(&[1]).unwrap())
     }
+}
+
+/// Manages the data exchange with the peer.
+/// Accepts incoming data and decodes it to frames.
+fn handle_peer(socket: TcpStream) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
+    let (send_tx, mut send_rx) = mpsc::channel(128);
+
+    let (sock_in, sock_out) = tokio::io::split(socket);
+    let mut sock_in = FramedRead::new(sock_in, LengthDelimitedCodec::new());
+    let mut sock_out = FramedWrite::new(sock_out, LengthDelimitedCodec::new());
+
+    // Spawn the sender task.
+    // Redirect messages from the mpsc channel into the TCP socket
+    tokio::spawn(async move {
+        if let Err(e) = sock_out.send_all(&mut send_rx).await {
+            eprintln!("Error while redirecting messages: {:?}", e);
+        }
+    });
+
+    // Spawn the receiver task which will redirect the incoming messages into the MPSC channel.
+    tokio::spawn(async move {
+        while let Some(frame) = sock_in.next().await {
+            println!("Recvd {:?}", frame);
+        }
+    });
+
+    send_tx
 }
