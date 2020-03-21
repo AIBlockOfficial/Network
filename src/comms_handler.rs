@@ -1,9 +1,10 @@
 //! This module provides basic networking interfaces.
 
+use crate::interfaces::HandshakeRequest;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use futures::{SinkExt, Stream};
-use serde::{de::DeserializeOwned, Serialize};
+use futures::SinkExt;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -65,6 +66,11 @@ impl From<bincode::Error> for CommsError {
 /// Contains a shared list of connected peers.
 type PeerList = Arc<RwLock<HashMap<SocketAddr, Peer>>>;
 
+/// Events from peer.
+pub enum Event {
+    NewFrame { peer: SocketAddr, frame: Bytes },
+}
+
 /// An abstract communication interface in the network.
 #[derive(Debug)]
 pub struct Node {
@@ -76,10 +82,10 @@ pub struct Node {
     peer_limit: usize,
     /// Tracing context.
     span: Span,
-    /// Channel to transmit incoming frames sent from peers.
-    frame_tx: mpsc::UnboundedSender<(SocketAddr, Bytes)>,
-    /// Incoming frames sent from peers.
-    frame_rx: mpsc::UnboundedReceiver<(SocketAddr, Bytes)>,
+    /// Channel to transmit incoming frames and events from peers.
+    event_tx: mpsc::UnboundedSender<Event>,
+    /// Incoming events from peers.
+    event_rx: mpsc::UnboundedReceiver<Event>,
 }
 
 struct Peer {
@@ -100,15 +106,15 @@ impl Node {
     /// `address` is the socket address the node listener will use.
     pub fn new(address: SocketAddr, peer_limit: usize) -> Self {
         let span = info_span!("node", ?address);
-        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         Self {
             listener_address: address,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
             span,
-            frame_tx,
-            frame_rx,
+            event_tx,
+            event_rx,
         }
     }
 
@@ -117,6 +123,7 @@ impl Node {
         let mut listener = TcpListener::bind(self.listener_address).await?;
 
         let peers = self.peers.clone();
+        let event_tx = self.event_tx.clone();
         let peer_limit = self.peer_limit;
 
         tokio::spawn(
@@ -132,8 +139,17 @@ impl Node {
                                 peer_addr = tracing::field::debug(conn.peer_addr())
                             );
 
-                            match add_peer(peers.clone(), peer_limit, conn, false, peer_span).await
-                            {
+                            let new_peer = add_peer(
+                                event_tx.clone(),
+                                peers.clone(),
+                                peer_limit,
+                                conn,
+                                false,
+                                peer_span,
+                            )
+                            .await;
+
+                            match new_peer {
                                 Ok(()) => {}
                                 Err(error) => warn!(?error, "Could not add a new peer"),
                             }
@@ -154,6 +170,7 @@ impl Node {
         let stream = TcpStream::connect(peer).await?;
         let peer_addr = stream.peer_addr()?;
         add_peer(
+            self.event_tx.clone(),
             self.peers.clone(),
             self.peer_limit,
             stream,
@@ -189,14 +206,9 @@ impl Node {
         self.send_bytes(peer, data).await
     }
 
-    /// Blocks & waits for a next incoming request.
-    pub async fn next_frame<ReqType: DeserializeOwned + Clone>(
-        &mut self,
-    ) -> Option<(SocketAddr, Result<ReqType>)> {
-        self.frame_rx
-            .recv()
-            .await
-            .map(|(peer, data)| (peer, deserialize(&data).map_err(From::from)))
+    /// Blocks & waits for a next event from a peer.
+    pub async fn next_event(&mut self) -> Option<Event> {
+        self.event_rx.recv().await
     }
 }
 
@@ -209,6 +221,8 @@ impl Node {
 /// * `span`   - The logging scope for this peer.
 fn handle_peer(
     socket: TcpStream,
+    peer_addr: SocketAddr,
+    event_tx: mpsc::UnboundedSender<Event>,
     span: Span,
 ) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
     let (send_tx, mut send_rx) = mpsc::channel(128);
@@ -229,11 +243,34 @@ fn handle_peer(
         .instrument(span.clone()),
     );
 
-    // Spawn the receiver task which will redirect the incoming messages into the MPSC channel.
+    // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
+    // and manage the peer state transitions.
+    enum PeerState {
+        WaitingForHandshake,
+        Connected,
+    }
+
     tokio::spawn(
         async move {
+            let mut peer_state = PeerState::WaitingForHandshake;
+
             while let Some(frame) = sock_in.next().await {
-                trace!(?frame, "recv_frame");
+                match peer_state {
+                    PeerState::Connected => {
+                        trace!(?frame, "recv_frame");
+                        event_tx.send(Event::NewFrame {
+                            peer: peer_addr,
+                            frame: frame.unwrap().freeze(), // TODO: handle possible errors
+                        });
+                    }
+                    PeerState::WaitingForHandshake => {
+                        // Try to decode the handshake message.
+                        let handshake = deserialize::<HandshakeRequest>(&frame.unwrap());
+                        trace!(?handshake);
+
+                        peer_state = PeerState::Connected;
+                    }
+                }
             }
         }
         .instrument(span),
@@ -247,11 +284,13 @@ fn handle_peer(
 ///
 /// ### Arguments
 ///
+/// * `event_tx`   - Channel to transmit events from the peer.
 /// * `peers_list` - Shared list of a node peers.
 /// * `socket`     - A new peer's TcpStream socket.
 /// * `force_add`  - If true and the peer limit is reached, an old peer will be ejected to make space.
 /// * `peer_span`  - Tracing scope for this peer.
 async fn add_peer(
+    event_tx: mpsc::UnboundedSender<Event>,
     peers_list: PeerList,
     peer_limit: usize,
     socket: TcpStream,
@@ -270,7 +309,7 @@ async fn add_peer(
         let peer_addr = socket.peer_addr()?;
 
         // Spawn the tasks to manage the peer
-        let send_tx = handle_peer(socket, peer_span.clone());
+        let send_tx = handle_peer(socket, peer_addr, event_tx, peer_span.clone());
 
         peer_span.in_scope(|| trace!("new peer"));
 

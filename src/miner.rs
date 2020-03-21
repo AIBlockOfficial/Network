@@ -1,6 +1,6 @@
 use crate::comms_handler::CommsError;
 use crate::interfaces::{
-    Block, HandshakeRequest, Heat, MinerInterface, NodeType, ProofOfWork, Response,
+    Block, ComputeRequest, HandshakeRequest, Heat, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::rand::Rng;
 use crate::sha3::Digest;
@@ -63,6 +63,14 @@ impl MinerNode {
                     node_type: NodeType::Miner,
                 },
             )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends PoW to a compute node.
+    pub async fn send_pow(&mut self, peer: SocketAddr, pow_promise: Vec<u8>) -> Result<()> {
+        self.node
+            .send(peer, ComputeRequest::SendPoW { pow: pow_promise })
             .await?;
         Ok(())
     }

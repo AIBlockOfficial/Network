@@ -1,12 +1,14 @@
-use crate::comms_handler::CommsError;
+use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
 use crate::Node;
+use bincode::deserialize;
+use bytes::Bytes;
 use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::{debug, warn};
+use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -59,30 +61,40 @@ impl ComputeNode {
 
     /// Start the compute node on the network.
     pub async fn start(&mut self) -> Result<()> {
-        Ok(self.node.listen().await?)
+        self.node.listen().await?;
+        self.handle_events().await;
+        Ok(())
     }
 
-    /// Listens for incoming requests and handles them.
+    /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime.
-    pub async fn handle_requests(&mut self) {
-        while let Some((peer, frame)) = self.node.next_frame::<ComputeRequest>().await {
-            match frame {
-                Ok(req) => {
-                    let response = self.handle_request(req);
-                    debug!(?response, ?peer, "Sending response");
-                }
-                Err(error) => {
-                    warn!(?error, ?peer, "Failed to receive a frame");
-                }
+    pub async fn handle_events(&mut self) {
+        while let Some(event) = self.node.next_event().await {
+            match event {
+                Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
+            }
+        }
+    }
+
+    /// Hanldes a new incoming message from a peer.
+    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) {
+        match deserialize::<ComputeRequest>(&frame) {
+            Ok(req) => {
+                // TODO: enter request span here
+                let response = self.handle_request(peer, req);
+                debug!(?response, ?peer, "Sending response");
+            }
+            Err(error) => {
+                warn!(?error, ?peer, "Failed to decode a frame");
             }
         }
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, req: ComputeRequest) -> Response {
+    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
         use ComputeRequest::*;
         match req {
-            SendPoW { peer, pow } => self.receive_pow(peer, pow),
+            SendPoW { pow } => self.receive_pow(peer, pow),
         }
     }
 }
@@ -119,7 +131,7 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
-        println!("Receieved PoW from peer {:?}", address);
+        info!(?address, "Receieved PoW");
 
         if self.unicorn_list.len() < self.unicorn_limit {
             let mut unicorn_value = UnicornShard::new();

@@ -87,7 +87,7 @@ pub trait StorageInterface {
 /// Encapsulates compute requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
-    SendPoW { peer: SocketAddr, pow: Vec<u8> },
+    SendPoW { pow: Vec<u8> },
 }
 
 pub trait ComputeInterface {

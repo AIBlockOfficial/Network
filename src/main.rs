@@ -115,6 +115,8 @@ fn run_miner(
                 Ok(()) => (),
                 Err(error) => error!(error = tracing::field::display(error), "start"),
             }
+
+            miner.send_pow(cn_address, pow).await;
         }
         .in_current_span(),
     );
