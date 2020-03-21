@@ -103,15 +103,15 @@ impl Node {
     /// Starts the listener.
     pub async fn listen(&mut self) -> Result<()> {
         let mut listener = TcpListener::bind(self.listener_address).await?;
+        self.span.in_scope(|| trace!("listen"));
 
         while let Some(new_conn) = listener.next().await {
             match new_conn {
                 Ok(conn) => {
                     // TODO: have a timeout for incoming handshake to disconnect clients who are linger on without any communication
-                    let peer_span = info_span!(parent: &self.span,
-                        "accepted peer",
-                        peer_addr = tracing::field::debug(conn.peer_addr()),
-                    );
+                    let peer_span = info_span!(parent: &self.span, "accepted peer",
+                                   peer_addr = tracing::field::debug(conn.peer_addr()));
+
                     self.add_peer(conn, false, peer_span)?;
                 }
                 Err(error) => {
@@ -178,6 +178,7 @@ impl Node {
 
         tokio::spawn(
             async move {
+                trace!(?bytes, "send_bytes");
                 if let Err(error) = tx.send(Ok(bytes)).await {
                     error!(?error, "Error sending a frame through the message channel",);
                 }

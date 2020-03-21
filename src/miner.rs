@@ -10,6 +10,7 @@ use rand;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
+use std::fmt;
 use std::net::SocketAddr;
 
 /// Result wrapper for miner errors
@@ -17,6 +18,14 @@ pub type Result<T> = std::result::Result<T, MinerError>;
 
 pub enum MinerError {
     Network(CommsError),
+}
+
+impl fmt::Display for MinerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MinerError::Network(err) => write!(f, "Network error: {}", err),
+        }
+    }
 }
 
 impl From<CommsError> for MinerError {
