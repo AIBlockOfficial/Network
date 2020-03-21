@@ -26,6 +26,10 @@ use miner::MinerNode;
 pub(crate) use mock::Node;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Setup logging
+    tracing_subscriber::fmt::init();
+
+    // Setup runtime
     let runtime = Runtime::new()?;
 
     let cn_address = "0.0.0.0:8079".parse()?;
@@ -67,6 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
 
     key_agreement();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
 
     Ok(())
 }

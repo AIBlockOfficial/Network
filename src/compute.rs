@@ -6,6 +6,7 @@ use crate::Node;
 use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tracing::debug;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -67,8 +68,8 @@ impl ComputeNode {
         self.node
             .requests::<ComputeRequest>()
             .for_each(move |req| {
-                let resp = self.handle_request(req);
-                println!("Response: {:?}", resp);
+                let response = self.handle_request(req);
+                debug!(?response, "Sending response");
                 future::ready(())
             })
             .await

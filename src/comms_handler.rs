@@ -14,6 +14,8 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tracing::{error, info_span, trace, Span};
+use tracing_futures::Instrument;
 
 pub type Result<T> = std::result::Result<T, CommsError>;
 
@@ -62,13 +64,21 @@ impl From<bincode::Error> for CommsError {
 /// An abstract communication interface in the network.
 #[derive(Debug)]
 pub struct Node {
+    /// This node's listener address.
     listener_address: SocketAddr,
+    /// List of all connected peers.
     peers: HashMap<SocketAddr, Peer>,
+    /// The max number of peers this node should handle.
     peer_limit: usize,
+    /// Tracing context.
+    span: Span,
 }
 
 struct Peer {
+    /// Channel for sending frames to the peer.
     send_tx: mpsc::Sender<io::Result<Bytes>>,
+    /// Tracing context.
+    span: Span,
 }
 
 impl fmt::Debug for Peer {
@@ -81,10 +91,12 @@ impl Node {
     /// Creates a new node.
     /// `address` is the socket address the node listener will use.
     pub fn new(address: SocketAddr, peer_limit: usize) -> Self {
+        let span = info_span!("node", ?address);
         Self {
             listener_address: address,
             peers: HashMap::with_capacity(peer_limit),
             peer_limit,
+            span,
         }
     }
 
@@ -96,12 +108,14 @@ impl Node {
             match new_conn {
                 Ok(conn) => {
                     // TODO: have a timeout for incoming handshake to disconnect clients who are linger on without any communication
-                    println!("Accepted peer {:?}", conn.peer_addr());
-                    self.add_peer(conn, false)?;
+                    let peer_span = info_span!(parent: &self.span,
+                        "accepted peer",
+                        peer_addr = tracing::field::debug(conn.peer_addr()),
+                    );
+                    self.add_peer(conn, false, peer_span)?;
                 }
-                Err(e) => {
-                    // TODO: proper logging
-                    eprintln!("Connection failure: {:?}, {}", e, e);
+                Err(error) => {
+                    error!(?error, "Connection failure");
                 }
             }
         }
@@ -116,7 +130,8 @@ impl Node {
     ///
     /// * `socket`    - Peer's TcpStream socket
     /// * `force_add` - If true and the peer limit is reached, an old peer will be ejected to make space
-    fn add_peer(&mut self, socket: TcpStream, force_add: bool) -> Result<()> {
+    /// * `peer_span` - Tracing scope for this peer
+    fn add_peer(&mut self, socket: TcpStream, force_add: bool, peer_span: Span) -> Result<()> {
         let is_full = self.peers.len() >= self.peer_limit;
 
         if force_add && is_full {
@@ -125,14 +140,20 @@ impl Node {
         }
 
         if !is_full {
-            // Wrap the peer socket into the tokio codec which handles length-delimited frames.
             let peer_addr = socket.peer_addr()?;
-            println!("Connected to {:?}", peer_addr);
 
             // Spawn the tasks to manage the peer
-            let send_tx = handle_peer(socket);
+            let send_tx = handle_peer(socket, peer_span.clone());
 
-            self.peers.insert(peer_addr, Peer { send_tx });
+            peer_span.in_scope(|| trace!("new peer"));
+
+            self.peers.insert(
+                peer_addr,
+                Peer {
+                    send_tx,
+                    span: peer_span,
+                },
+            );
 
             Ok(())
         } else {
@@ -143,26 +164,26 @@ impl Node {
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         let stream = TcpStream::connect(peer).await?;
         let peer_addr = stream.peer_addr()?;
-        self.add_peer(stream, false)?;
+        self.add_peer(
+            stream,
+            false,
+            info_span!(parent: &self.span, "connect_to", ?peer_addr),
+        )?;
         Ok(())
     }
 
     fn send_bytes(&self, peer: SocketAddr, bytes: Bytes) -> Result<()> {
-        let mut tx = self
-            .peers
-            .get(&peer)
-            .ok_or(CommsError::PeerNotFound)?
-            .send_tx
-            .clone();
+        let peer = self.peers.get(&peer).ok_or(CommsError::PeerNotFound)?;
+        let mut tx = peer.send_tx.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = tx.send(Ok(bytes)).await {
-                eprintln!(
-                    "Error sending a frame through the message channel: {:?}, {}",
-                    e, e
-                );
+        tokio::spawn(
+            async move {
+                if let Err(error) = tx.send(Ok(bytes)).await {
+                    error!(?error, "Error sending a frame through the message channel",);
+                }
             }
-        });
+            .instrument(peer.span.clone()),
+        );
 
         Ok(())
     }
@@ -181,27 +202,42 @@ impl Node {
 
 /// Manages the data exchange with the peer.
 /// Accepts incoming data and decodes it to frames.
-fn handle_peer(socket: TcpStream) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
+///
+/// ### Arguments
+///
+/// * `socket` - The peer's TCP socket.
+/// * `span`   - The logging scope for this peer.
+fn handle_peer(
+    socket: TcpStream,
+    span: Span,
+) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
     let (send_tx, mut send_rx) = mpsc::channel(128);
 
+    // Wrap the peer socket into the tokio codec which handles length-delimited frames.
     let (sock_in, sock_out) = tokio::io::split(socket);
     let mut sock_in = FramedRead::new(sock_in, LengthDelimitedCodec::new());
     let mut sock_out = FramedWrite::new(sock_out, LengthDelimitedCodec::new());
 
     // Spawn the sender task.
     // Redirect messages from the mpsc channel into the TCP socket
-    tokio::spawn(async move {
-        if let Err(e) = sock_out.send_all(&mut send_rx).await {
-            eprintln!("Error while redirecting messages: {:?}", e);
+    tokio::spawn(
+        async move {
+            if let Err(error) = sock_out.send_all(&mut send_rx).await {
+                error!(?error, "Error while redirecting messages");
+            }
         }
-    });
+        .instrument(span.clone()),
+    );
 
     // Spawn the receiver task which will redirect the incoming messages into the MPSC channel.
-    tokio::spawn(async move {
-        while let Some(frame) = sock_in.next().await {
-            println!("Recvd {:?}", frame);
+    tokio::spawn(
+        async move {
+            while let Some(frame) = sock_in.next().await {
+                trace!(?frame, "recv_frame");
+            }
         }
-    });
+        .instrument(span),
+    );
 
     send_tx
 }

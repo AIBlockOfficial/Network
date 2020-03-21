@@ -16,6 +16,9 @@ bincode = "1.2.1"
 futures = "0.3"
 tokio = { version = "0.2.13", features = ["rt-threaded", "rt-core", "tcp", "stream", "sync", "io-util"] }
 tokio-util = { version = "0.3", features = ["codec"] }
+tracing = "0.1.13"
+tracing-subscriber = "0.2.3"
+tracing-futures = "0.2.3"
 bytes = "0.5.4"
 
 [features]
