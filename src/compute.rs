@@ -7,18 +7,26 @@ use bincode::deserialize;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
 
+#[derive(Debug)]
 pub enum ComputeError {
     Network(CommsError),
+    Serialization(bincode::Error),
 }
 
 impl From<CommsError> for ComputeError {
     fn from(other: CommsError) -> Self {
         Self::Network(other)
+    }
+}
+
+impl From<bincode::Error> for ComputeError {
+    fn from(other: bincode::Error) -> Self {
+        Self::Serialization(other)
     }
 }
 
@@ -28,7 +36,7 @@ const PEER_LIMIT: usize = 6;
 /// Limit for the number of PoWs a compute node may have for UnicornShard creation
 const UNICORN_LIMIT: usize = 5;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -36,6 +44,11 @@ pub struct ComputeNode {
 }
 
 impl ComputeNode {
+    /// Returns the compute node's public endpoint.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
+    }
+
     /// Floods all peers with a PoW for UnicornShard creation
     /// TODO: Add in comms handling for sending and receiving requests
     ///
@@ -61,32 +74,37 @@ impl ComputeNode {
     /// Start the compute node on the network.
     pub async fn start(&mut self) -> Result<()> {
         self.node.listen().await?;
-        self.handle_events().await;
         Ok(())
     }
 
     /// Listens for new events from peers and handles them.
-    /// The future returned from this function should be executed in the runtime.
-    pub async fn handle_events(&mut self) {
-        while let Some(event) = self.node.next_event().await {
-            match event {
-                Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
-            }
+    /// The future returned from this function should be executed in the runtime. It will block execution.
+    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+        let event = self.node.next_event().await?;
+        self.handle_event(event).await.into()
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+        match event {
+            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
         }
     }
 
     /// Hanldes a new incoming message from a peer.
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) {
-        match deserialize::<ComputeRequest>(&frame) {
-            Ok(req) => {
-                // TODO: enter request span here
+    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+        info_span!("peer", ?peer).in_scope(|| {
+            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+                warn!(?error, "frame-deserialize");
+                error
+            })?;
+
+            info_span!("request", ?req).in_scope(|| {
                 let response = self.handle_request(peer, req);
-                debug!(?response, ?peer, "Sending response");
-            }
-            Err(error) => {
-                warn!(?error, ?peer, "Failed to decode a frame");
-            }
-        }
+                debug!(?response, ?peer, "response");
+
+                Ok(response)
+            })
+        })
     }
 
     /// Handles a compute request.

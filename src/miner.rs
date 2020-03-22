@@ -7,8 +7,8 @@ use crate::sha3::Digest;
 use crate::Node;
 use rand;
 use sha3::Sha3_256;
-use std::fmt;
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr, sync::Arc};
+use tokio::{sync::RwLock, task};
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -16,12 +16,14 @@ pub type Result<T> = std::result::Result<T, MinerError>;
 #[derive(Debug)]
 pub enum MinerError {
     Network(CommsError),
+    AsyncTask(task::JoinError),
 }
 
 impl fmt::Display for MinerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MinerError::Network(err) => write!(f, "Network error: {}", err),
+            MinerError::AsyncTask(err) => write!(f, "Async task error: {}", err),
         }
     }
 }
@@ -32,6 +34,12 @@ impl From<CommsError> for MinerError {
     }
 }
 
+impl From<task::JoinError> for MinerError {
+    fn from(other: task::JoinError) -> Self {
+        Self::AsyncTask(other)
+    }
+}
+
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
 
@@ -39,13 +47,18 @@ const PEER_LIMIT: usize = 6;
 const MINING_DIFFICULTY: usize = 2;
 
 /// An instance of a MinerNode
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MinerNode {
     node: Node,
-    pub last_pow: ProofOfWork,
+    last_pow: Arc<RwLock<ProofOfWork>>,
 }
 
 impl MinerNode {
+    /// Returns the miner node's public endpoint.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
+    }
+
     /// Start the compute node on the network.
     pub async fn start(&mut self) -> Result<()> {
         Ok(self.node.listen().await?)
@@ -78,7 +91,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `pow` - PoW to validate
-    pub fn validate_pow(&self, pow: &mut ProofOfWork) -> bool {
+    pub fn validate_pow(pow: &mut ProofOfWork) -> bool {
         let mut pow_body = pow.address.as_bytes().to_vec();
         pow_body.append(&mut pow.nonce.clone());
 
@@ -98,16 +111,19 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `address` - Payment address for a valid PoW
-    pub fn generate_pow(&mut self, address: &'static str) -> ProofOfWork {
-        let mut nonce = self.generate_nonce();
-        let mut pow = ProofOfWork { address, nonce };
+    pub async fn generate_pow(&mut self, address: &'static str) -> Result<ProofOfWork> {
+        Ok(task::spawn_blocking(move || {
+            let mut nonce = Self::generate_nonce();
+            let mut pow = ProofOfWork { address, nonce };
 
-        while !self.validate_pow(&mut pow) {
-            nonce = self.generate_nonce();
-            pow.nonce = nonce;
-        }
+            while !Self::validate_pow(&mut pow) {
+                nonce = Self::generate_nonce();
+                pow.nonce = nonce;
+            }
 
-        pow
+            pow
+        })
+        .await?)
     }
 
     /// Generate a valid PoW and return the hashed value
@@ -115,18 +131,23 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `address` - Payment address for a valid PoW
-    pub fn generate_pow_promise(&mut self, address: &'static str) -> Vec<u8> {
-        let pow = self.generate_pow(address);
+    pub async fn generate_pow_promise(&mut self, address: &'static str) -> Result<Vec<u8>> {
+        let pow = self.generate_pow(address).await?;
 
-        self.last_pow = pow.clone();
+        *(self.last_pow.write().await) = pow.clone();
         let mut pow_body = pow.address.as_bytes().to_vec();
         pow_body.append(&mut pow.nonce.clone());
 
-        Sha3_256::digest(&pow_body).to_vec()
+        Ok(Sha3_256::digest(&pow_body).to_vec())
+    }
+
+    /// Returns the last PoW.
+    pub async fn last_pow(&self) -> ProofOfWork {
+        self.last_pow.read().await.clone()
     }
 
     /// Generates a random sequence of values for a nonce
-    fn generate_nonce(&self) -> Vec<u8> {
+    fn generate_nonce() -> Vec<u8> {
         let mut rng = rand::thread_rng();
         let nonce = (0..10).map(|_| rng.gen_range(1, 200)).collect();
 
@@ -138,10 +159,10 @@ impl MinerInterface for MinerNode {
     fn new(comms_address: SocketAddr) -> MinerNode {
         MinerNode {
             node: Node::new(comms_address, PEER_LIMIT),
-            last_pow: ProofOfWork {
+            last_pow: Arc::new(RwLock::new(ProofOfWork {
                 address: "",
                 nonce: Vec::new(),
-            },
+            })),
         }
     }
 

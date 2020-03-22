@@ -13,7 +13,7 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::StreamExt,
-    sync::{mpsc, RwLock},
+    sync::{mpsc, Mutex, RwLock},
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
@@ -23,9 +23,13 @@ pub type Result<T> = std::result::Result<T, CommsError>;
 
 #[derive(Debug)]
 pub enum CommsError {
+    /// Input/output-related communication error.
     Io(io::Error),
+    /// The peers list is at the limit.
     PeerListFull,
+    /// No such peer found.
     PeerNotFound,
+    /// Serialization-related error.
     Serialization(bincode::Error),
 }
 
@@ -73,7 +77,7 @@ pub enum Event {
 }
 
 /// An abstract communication interface in the network.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     /// This node's listener address.
     listener_address: SocketAddr,
@@ -86,7 +90,7 @@ pub struct Node {
     /// Channel to transmit incoming frames and events from peers.
     event_tx: mpsc::UnboundedSender<Event>,
     /// Incoming events from peers.
-    event_rx: mpsc::UnboundedReceiver<Event>,
+    event_rx: Arc<Mutex<mpsc::UnboundedReceiver<Event>>>,
 }
 
 struct Peer {
@@ -115,7 +119,7 @@ impl Node {
             peer_limit,
             span,
             event_tx,
-            event_rx,
+            event_rx: Arc::new(Mutex::new(event_rx)),
         }
     }
 
@@ -167,6 +171,16 @@ impl Node {
         Ok(())
     }
 
+    /// Connects to a remote peer.
+    ///
+    /// ### Arguments
+    /// * `peer` - Endpoint address of a remote peer.
+    ///
+    /// ### Returns
+    /// * `Ok(())` if this node has successfully connected to a peer.
+    /// * See [`CommsError`][error] for a list of possible errors.
+    ///
+    /// [error]: enum.CommsError.html
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         let stream = TcpStream::connect(peer).await?;
         let peer_addr = stream.peer_addr()?;
@@ -188,15 +202,10 @@ impl Node {
 
         let mut tx = peer.send_tx.clone();
 
-        tokio::spawn(
-            async move {
-                trace!(?bytes, "send_bytes");
-                if let Err(error) = tx.send(Ok(bytes)).await {
-                    error!(?error, "Error sending a frame through the message channel",);
-                }
-            }
-            .instrument(peer.span.clone()),
-        );
+        trace!(?bytes, "send_bytes");
+        if let Err(error) = tx.send(Ok(bytes)).await {
+            error!(?error, "Error sending a frame through the message channel");
+        }
 
         Ok(())
     }
@@ -209,7 +218,12 @@ impl Node {
 
     /// Blocks & waits for a next event from a peer.
     pub async fn next_event(&mut self) -> Option<Event> {
-        self.event_rx.recv().await
+        self.event_rx.lock().await.recv().await
+    }
+
+    /// Returns this node's listener address.
+    pub fn address(&self) -> SocketAddr {
+        self.listener_address
     }
 }
 
@@ -256,9 +270,10 @@ fn handle_peer(
             let mut peer_state = PeerState::WaitingForHandshake;
 
             while let Some(frame) = sock_in.next().await {
+                trace!(?frame, "recv_frame");
+
                 match peer_state {
                     PeerState::Connected => {
-                        trace!(?frame, "recv_frame");
                         if let Err(error) = event_tx.send(Event::NewFrame {
                             peer: peer_addr,
                             frame: frame.unwrap().freeze(), // TODO: handle possible errors
@@ -314,7 +329,7 @@ async fn add_peer(
         // Spawn the tasks to manage the peer
         let send_tx = handle_peer(socket, peer_addr, event_tx, peer_span.clone());
 
-        peer_span.in_scope(|| trace!("new peer"));
+        peer_span.in_scope(|| trace!("added new peer"));
 
         peers.insert(
             peer_addr,

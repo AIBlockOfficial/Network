@@ -10,114 +10,21 @@ mod compute;
 mod interfaces;
 mod key_creation;
 mod miner;
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod tests;
 mod unicorn;
-
-use std::net::SocketAddr;
-use tokio::runtime::Runtime;
-use tracing::{error, trace_span};
-use tracing_futures::Instrument;
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;
-use compute::ComputeNode;
-use interfaces::*;
 use key_creation::KeyAgreement;
-use miner::MinerNode;
 #[cfg(features = "mock")]
 pub(crate) use mock::Node;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     key_agreement();
-
-    // Setup logging
-    tracing_subscriber::fmt::init();
-
-    // Setup runtime
-    let mut runtime = Runtime::new()?;
-
-    let cn_address = "127.0.0.1:8079".parse()?;
-    let m1_address = "0.0.0.0:8080".parse()?;
-    let m2_address = "0.0.0.0:8081".parse()?;
-    let m3_address = "0.0.0.0:8082".parse()?;
-
-    runtime.spawn(
-        async move {
-            let mut compute_node = ComputeNode::new(cn_address);
-            let _ = compute_node.start().await;
-        }
-        .instrument(trace_span!("compute1")),
-    );
-
-    trace_span!("miner1").in_scope(|| {
-        run_miner(
-            &mut runtime,
-            cn_address,
-            MinerNode::new(m1_address),
-            "A12g2340984jfk09",
-        )
-    });
-
-    trace_span!("miner2").in_scope(|| {
-        run_miner(
-            &mut runtime,
-            cn_address,
-            MinerNode::new(m2_address),
-            "B12g2340984jfk09",
-        )
-    });
-
-    trace_span!("miner3").in_scope(|| {
-        run_miner(
-            &mut runtime,
-            cn_address,
-            MinerNode::new(m3_address),
-            "C12g2340984jfk09",
-        )
-    });
-
-    // let _resp1 = compute_node.receive_pow(m1_address, pow1);
-    // let _resp2 = compute_node.receive_commit(m1_address, miner1.last_pow);
-
-    // let _resp3 = compute_node.receive_pow(m2_address, pow2);
-    // let _resp4 = compute_node.receive_commit(m2_address, miner2.last_pow);
-
-    // let _resp5 = compute_node.receive_pow(m3_address, pow3);
-    // let _resp6 = compute_node.receive_commit(m3_address, miner3.last_pow);
-
-    // Run until we receive SIGTERM.
-    loop {}
-}
-
-fn run_miner(
-    runtime: &mut Runtime,
-    cn_address: SocketAddr,
-    mut miner: MinerNode,
-    pow_address: &'static str,
-) {
-    runtime.spawn(
-        async move {
-            let pow = miner.generate_pow_promise(pow_address);
-
-            match miner.connect_to(cn_address).await {
-                Ok(()) => (),
-                Err(error) => {
-                    error!(
-                        error = tracing::field::display(error),
-                        ?cn_address,
-                        "connect_to"
-                    );
-                    return;
-                }
-            }
-            match miner.start().await {
-                Ok(()) => (),
-                Err(error) => error!(error = tracing::field::display(error), "start"),
-            }
-
-            miner.send_pow(cn_address, pow).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    Ok(())
 }
 
 fn key_agreement() {

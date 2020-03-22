@@ -1,17 +1,18 @@
 #![allow(unused)]
 use crate::unicorn::UnicornShard;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::SocketAddr;
 
 /// A placeholder struct for sensible feedback
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub success: bool,
     pub reason: &'static str,
 }
 
 /// PoW structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
     pub address: &'static str,
     pub nonce: Vec<u8>,
@@ -89,6 +90,16 @@ pub trait StorageInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
     SendPoW { pow: Vec<u8> },
+}
+
+impl fmt::Debug for ComputeRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ComputeRequest::*;
+
+        match *self {
+            SendPoW { ref pow } => write!(f, "SendPoW"),
+        }
+    }
 }
 
 pub trait ComputeInterface {
