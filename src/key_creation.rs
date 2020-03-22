@@ -1,3 +1,4 @@
+#![allow(non_snake_case, unused)]
 use crate::sha3::Digest;
 use hex::encode;
 use rug::integer::Order;

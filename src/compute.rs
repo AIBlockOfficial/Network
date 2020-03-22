@@ -5,10 +5,9 @@ use crate::unicorn::UnicornShard;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
-use futures::{future, stream::StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, info, warn};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -44,7 +43,7 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_pow_to_peers(&self, address: SocketAddr, pow: &Vec<u8>) {
+    pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &Vec<u8>) {
         println!("Flooding PoW to peers not implemented");
     }
 
@@ -55,7 +54,7 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_commit_to_peers(&self, address: SocketAddr, commit: &ProofOfWork) {
+    pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
     }
 
@@ -162,7 +161,7 @@ impl ComputeInterface for ComputeNode {
         unicorn_table
     }
 
-    fn partition(&self, uuids: Vec<&'static str>) -> Response {
+    fn partition(&self, _uuids: Vec<&'static str>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
@@ -176,14 +175,14 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&self, transactions: Vec<Tx>) -> Response {
+    fn receive_transactions(&self, _transactions: Vec<Tx>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
         }
     }
 
-    fn execute_contract(&self, contract: Contract) -> Response {
+    fn execute_contract(&self, _contract: Contract) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",

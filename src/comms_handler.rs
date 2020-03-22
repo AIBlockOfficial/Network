@@ -67,6 +67,7 @@ impl From<bincode::Error> for CommsError {
 type PeerList = Arc<RwLock<HashMap<SocketAddr, Peer>>>;
 
 /// Events from peer.
+#[derive(Debug)]
 pub enum Event {
     NewFrame { peer: SocketAddr, frame: Bytes },
 }
@@ -258,10 +259,12 @@ fn handle_peer(
                 match peer_state {
                     PeerState::Connected => {
                         trace!(?frame, "recv_frame");
-                        event_tx.send(Event::NewFrame {
+                        if let Err(error) = event_tx.send(Event::NewFrame {
                             peer: peer_addr,
                             frame: frame.unwrap().freeze(), // TODO: handle possible errors
-                        });
+                        }) {
+                            warn!(?error, ?peer_addr, "event_tx.send");
+                        }
                     }
                     PeerState::WaitingForHandshake => {
                         // Try to decode the handshake message.

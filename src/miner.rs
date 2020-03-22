@@ -1,21 +1,19 @@
 use crate::comms_handler::CommsError;
 use crate::interfaces::{
-    Block, ComputeRequest, HandshakeRequest, Heat, MinerInterface, NodeType, ProofOfWork, Response,
+    Block, ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::rand::Rng;
 use crate::sha3::Digest;
-use crate::unicorn::UnicornShard;
 use crate::Node;
 use rand;
 use sha3::Sha3_256;
-use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::fmt;
 use std::net::SocketAddr;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
 
+#[derive(Debug)]
 pub enum MinerError {
     Network(CommsError),
 }
@@ -147,7 +145,7 @@ impl MinerInterface for MinerNode {
         }
     }
 
-    fn receive_pre_block(&self, pre_block: &Block) -> Response {
+    fn receive_pre_block(&self, _pre_block: &Block) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",

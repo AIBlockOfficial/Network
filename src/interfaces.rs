@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::unicorn::UnicornShard;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;

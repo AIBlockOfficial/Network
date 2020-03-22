@@ -12,8 +12,6 @@ mod key_creation;
 mod miner;
 mod unicorn;
 
-use crate::sha3::Digest;
-use sha3::Sha3_256;
 use std::net::SocketAddr;
 use tokio::runtime::Runtime;
 use tracing::{error, trace_span};
@@ -116,7 +114,7 @@ fn run_miner(
                 Err(error) => error!(error = tracing::field::display(error), "start"),
             }
 
-            miner.send_pow(cn_address, pow).await;
+            miner.send_pow(cn_address, pow).await.unwrap();
         }
         .in_current_span(),
     );
