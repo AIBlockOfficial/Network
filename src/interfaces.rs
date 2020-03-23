@@ -1,26 +1,33 @@
+#![allow(unused)]
 use crate::unicorn::UnicornShard;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::net::SocketAddr;
 
 /// A placeholder struct for sensible feedback
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub success: bool,
     pub reason: &'static str,
 }
 
 /// PoW structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
     pub address: &'static str,
     pub nonce: Vec<u8>,
 }
 
 /// A placeholder tx struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Tx;
 
 /// A placeholder Block struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Block;
 
 /// A placeholder Contract struct
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Contract;
 
 /// A placeholder Heat struct
@@ -28,6 +35,30 @@ pub struct Heat;
 
 /// A placeholder Asset struct
 pub struct Asset;
+
+/// Denotes existing node types
+#[derive(Deserialize, Serialize, Debug)]
+pub enum NodeType {
+    Miner,
+    Storage,
+    Compute,
+}
+
+/// Handshake request that peers send when they connect to someone
+#[derive(Deserialize, Serialize, Debug)]
+pub struct HandshakeRequest {
+    pub node_type: NodeType,
+}
+
+/// Encapsulates storage requests
+#[derive(Deserialize, Serialize, Debug)]
+pub enum StorageRequest {
+    GetHistory { start_time: u64, end_time: u64 },
+    GetUnicornTable { n_last_items: Option<u64> },
+    Pow { hash: f64 },
+    PreBlock { pre_block: Block },
+    Store { contract: Contract },
+}
 
 pub trait StorageInterface {
     /// Creates a new instance of a Store implementor
@@ -55,29 +86,45 @@ pub trait StorageInterface {
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
+/// Encapsulates compute requests
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ComputeRequest {
+    SendPoW { pow: Vec<u8> },
+}
+
+impl fmt::Debug for ComputeRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ComputeRequest::*;
+
+        match *self {
+            SendPoW { ref pow } => write!(f, "SendPoW"),
+        }
+    }
+}
+
 pub trait ComputeInterface {
     /// Generates a new compute node instance
     ///
     /// ### Arguments
     ///
     /// * `address` - Address for the current compute node
-    fn new(address: &'static str) -> Self;
+    fn new(address: SocketAddr) -> Self;
 
     /// Receives a PoW for inclusion in the UnicornShard build
     ///
     /// ### Arguments
     ///
-    /// * `address` - IP address for the node providing the PoW
+    /// * `address` - address for the peer providing the PoW
     /// * `pow`     - PoW for potential inclusion
-    fn receive_pow(&mut self, address: &'static str, pow: Vec<u8>) -> Response;
+    fn receive_pow(&mut self, peer: SocketAddr, pow: Vec<u8>) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///
     /// ### Arguments
     ///
-    /// * `address` - IP address for the node providing the PoW
+    /// * `address` - address for the peer providing the PoW
     /// * `commit`  - PoW commit for potential inclusion
-    fn receive_commit(&mut self, address: &'static str, commit: ProofOfWork) -> Response;
+    fn receive_commit(&mut self, peer: SocketAddr, commit: ProofOfWork) -> Response;
 
     /// Returns the internal unicorn table
     fn get_unicorn_table(&self) -> Vec<UnicornShard>;
@@ -104,8 +151,8 @@ pub trait MinerInterface {
     ///
     /// ### Arguments
     ///
-    /// * `comms_address`   - IP address used for communications
-    fn new(comms_address: &'static str) -> Self;
+    /// * `comms_address`   - endpoint address used for communications
+    fn new(comms_address: SocketAddr) -> Self;
 
     /// Receives a new block to be mined
     ///

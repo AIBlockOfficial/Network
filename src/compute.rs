@@ -1,8 +1,34 @@
-use crate::comms_handler::CommsHandler;
+use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
-use crate::interfaces::{ComputeInterface, Contract, Response, Tx};
+use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
 use crate::unicorn::UnicornShard;
-use std::collections::BTreeMap;
+use crate::Node;
+use bincode::deserialize;
+use bytes::Bytes;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use tracing::{debug, info, info_span, warn};
+
+/// Result wrapper for compute errors
+pub type Result<T> = std::result::Result<T, ComputeError>;
+
+#[derive(Debug)]
+pub enum ComputeError {
+    Network(CommsError),
+    Serialization(bincode::Error),
+}
+
+impl From<CommsError> for ComputeError {
+    fn from(other: CommsError) -> Self {
+        Self::Network(other)
+    }
+}
+
+impl From<bincode::Error> for ComputeError {
+    fn from(other: bincode::Error) -> Self {
+        Self::Serialization(other)
+    }
+}
 
 /// Limit for the number of peers a compute node may have
 const PEER_LIMIT: usize = 6;
@@ -12,41 +38,15 @@ const UNICORN_LIMIT: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
-    address: &'static str,
-    pub unicorn_list: BTreeMap<&'static str, UnicornShard>,
-    peers: Vec<ComputeNode>,
-    comms_handler: CommsHandler,
-    pub peer_limit: usize,
+    node: Node,
+    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
 }
 
 impl ComputeNode {
-    /// Adds a new peer to the compute node's list of peers.
-    /// TODO: Could make peer_list a LRU cache later.
-    ///
-    /// ### Arguments
-    ///
-    /// * `address`     - Address of the new peer
-    /// * `force_add`   - If true and the peer limit is reached, an old peer will be ejected to make space
-    pub fn add_peer(&mut self, address: &'static str, force_add: bool) -> Response {
-        let is_full = self.peers.len() >= self.peer_limit;
-
-        if force_add && is_full {
-            self.peers.truncate(self.peer_limit);
-        }
-
-        if !is_full {
-            self.peers.push(ComputeNode::new(address));
-            return Response {
-                success: true,
-                reason: "Peer added successfully",
-            };
-        }
-
-        Response {
-            success: false,
-            reason: "Peer list is full. Unable to add new peer",
-        }
+    /// Returns the compute node's public endpoint.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -56,7 +56,7 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_pow_to_peers(&self, address: &'static str, pow: &Vec<u8>) {
+    pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &Vec<u8>) {
         println!("Flooding PoW to peers not implemented");
     }
 
@@ -67,25 +67,66 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_commit_to_peers(&self, address: &'static str, commit: &ProofOfWork) {
+    pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
+    }
+
+    /// Start the compute node on the network.
+    pub async fn start(&mut self) -> Result<()> {
+        self.node.listen().await?;
+        Ok(())
+    }
+
+    /// Listens for new events from peers and handles them.
+    /// The future returned from this function should be executed in the runtime. It will block execution.
+    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+        let event = self.node.next_event().await?;
+        self.handle_event(event).await.into()
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+        match event {
+            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+        }
+    }
+
+    /// Hanldes a new incoming message from a peer.
+    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+        info_span!("peer", ?peer).in_scope(|| {
+            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+                warn!(?error, "frame-deserialize");
+                error
+            })?;
+
+            info_span!("request", ?req).in_scope(|| {
+                let response = self.handle_request(peer, req);
+                debug!(?response, ?peer, "response");
+
+                Ok(response)
+            })
+        })
+    }
+
+    /// Handles a compute request.
+    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
+        use ComputeRequest::*;
+        match req {
+            SendPoW { pow } => self.receive_pow(peer, pow),
+        }
     }
 }
 
 impl ComputeInterface for ComputeNode {
-    fn new(address: &'static str) -> ComputeNode {
+    fn new(address: SocketAddr) -> ComputeNode {
         ComputeNode {
-            address: address,
-            unicorn_list: BTreeMap::new(),
-            peers: Vec::with_capacity(PEER_LIMIT),
-            peer_limit: PEER_LIMIT,
+            node: Node::new(address, PEER_LIMIT),
+            unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
-            comms_handler: CommsHandler,
         }
     }
 
-    fn receive_commit(&mut self, address: &'static str, commit: ProofOfWork) -> Response {
-        if let Some(entry) = self.unicorn_list.get_mut(address) {
+    fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
+        if let Some(entry) = self.unicorn_list.get_mut(&address) {
             if entry.is_valid(commit.clone()) {
                 self.flood_commit_to_peers(address, &commit);
                 return Response {
@@ -106,7 +147,9 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_pow(&mut self, address: &'static str, pow: Vec<u8>) -> Response {
+    fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
+        info!(?address, "Receieved PoW");
+
         if self.unicorn_list.len() < self.unicorn_limit {
             let mut unicorn_value = UnicornShard::new();
             unicorn_value.promise = pow.clone();
@@ -136,7 +179,7 @@ impl ComputeInterface for ComputeNode {
         unicorn_table
     }
 
-    fn partition(&self, uuids: Vec<&'static str>) -> Response {
+    fn partition(&self, _uuids: Vec<&'static str>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
@@ -150,14 +193,14 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&self, transactions: Vec<Tx>) -> Response {
+    fn receive_transactions(&self, _transactions: Vec<Tx>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
         }
     }
 
-    fn execute_contract(&self, contract: Contract) -> Response {
+    fn execute_contract(&self, _contract: Contract) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",

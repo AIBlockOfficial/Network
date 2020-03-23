@@ -10,11 +10,24 @@ mod compute;
 mod interfaces;
 mod key_creation;
 mod miner;
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod tests;
 mod unicorn;
 
+#[cfg(not(features = "mock"))]
+pub(crate) use comms_handler::Node;
 use key_creation::KeyAgreement;
+#[cfg(features = "mock")]
+pub(crate) use mock::Node;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    key_agreement();
+    Ok(())
+}
+
+fn key_agreement() {
     // Key agreement input
     let mut first_addr = vec![0, 12, 3, 4, 5];
     let mut first_uni = vec![10, 51, 1, 20, 0];
