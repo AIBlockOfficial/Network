@@ -4,6 +4,7 @@ use hex::encode;
 use rug::integer::Order;
 use rug::ops::Pow;
 use rug::Integer;
+use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
@@ -14,7 +15,7 @@ use std::iter::FromIterator;
 const PARTICIPANTS: usize = 2;
 
 /// A data structure for peer info
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PeerInfo {
     u_i: u32,
     M_iI: Vec<u8>,
@@ -28,7 +29,7 @@ pub struct PeerInfo {
 #[derive(Debug, Clone)]
 pub struct KeyAgreement {
     g: u64,
-    id: u32,
+    id: String,
     u_i: u32,
     x_i: u32,
     k_i: Vec<u8>,
@@ -47,9 +48,11 @@ pub struct KeyAgreement {
     sigma_iII: Vec<u8>,
     s_key: SecretKey,
     pub p_key: PublicKey,
+    pub left_y_i: Vec<u8>,
+    pub right_y_i: Vec<u8>,
     broadcast_1: Vec<u8>,
     pub shared_key: Option<String>,
-    pid_table: BTreeMap<u32, PeerInfo>,
+    pid_table: BTreeMap<String, PeerInfo>,
 }
 
 impl KeyAgreement {
@@ -58,7 +61,7 @@ impl KeyAgreement {
     /// ### Arguments
     ///
     /// * `g` - Generator value
-    pub fn new(id: u32, g: u64, x_i: u32, u_i: u32) -> KeyAgreement {
+    pub fn new(id: String, g: u64, x_i: u32, u_i: u32) -> KeyAgreement {
         let (pk, sk) = sign::gen_keypair();
 
         KeyAgreement {
@@ -80,6 +83,8 @@ impl KeyAgreement {
             M_iIU: Vec::new(),
             M_iII: Vec::new(),
             sid_i: Vec::new(),
+            left_y_i: Vec::new(),
+            right_y_i: Vec::new(),
             sigma_iI: Vec::new(),
             sigma_iII: Vec::new(),
             M_iIIsigma: Vec::new(),
@@ -207,7 +212,7 @@ impl KeyAgreement {
     ///
     /// * `id`          - ID for the peer
     /// * `peer_info`   - Peer info to add
-    pub fn receive_peer_info(&mut self, id: u32, peer_info: PeerInfo) {
+    pub fn receive_peer_info(&mut self, id: String, peer_info: PeerInfo) {
         self.pid_table.insert(id, peer_info);
     }
 
@@ -217,7 +222,7 @@ impl KeyAgreement {
     ///
     /// * `id`      - ID for the peer
     /// * `U_I`    - Peer's Mi_I value
-    pub fn receive_U_I(&mut self, id: u32, U_I: u32) {
+    pub fn receive_U_I(&mut self, id: String, U_I: u32) {
         let mut peer_info = self.pid_table.get(&id).unwrap().clone();
         peer_info.u_i = U_I;
 
@@ -230,11 +235,21 @@ impl KeyAgreement {
     ///
     /// * `id`      - ID for the peer
     /// * `Mi_I`    - Peer's Mi_I value
-    pub fn receive_miI(&mut self, id: u32, M_iI: Vec<u8>) {
+    pub fn receive_miI(&mut self, id: String, M_iI: Vec<u8>) {
         let mut peer_info = self.pid_table.get(&id).unwrap().clone();
         peer_info.M_iI = M_iI;
 
         self.pid_table.insert(id, peer_info);
+    }
+
+    /// Receives a y_i from a peer, either from the "left" or "right" of the partition list
+    ///
+    /// ### Arguments
+    ///
+    /// * `id`  - ID for the peer
+    /// * `y_i` - Peer's y_i value
+    pub fn receive_y_i(&mut self, id: String, y_i: Vec<u8>) {
+        // TODO: Figure out if it's left or right, and then save there
     }
 
     /// Receives a PID k_j from a peer, along with the peer's ID
@@ -243,7 +258,7 @@ impl KeyAgreement {
     ///
     /// * `id`      - ID for the peer
     /// * `k_j`    - Peer's k_j value
-    pub fn receive_k_j(&mut self, id: u32, k_j: Vec<u8>) {
+    pub fn receive_k_j(&mut self, id: String, k_j: Vec<u8>) {
         let mut peer_info = self.pid_table.get(&id).unwrap().clone();
         peer_info.k_j = k_j;
 
@@ -256,7 +271,7 @@ impl KeyAgreement {
     ///
     /// * `id`      - ID for the peer
     /// * `ek_i`    - Peer's ek_i value
-    pub fn receive_ek_i(&mut self, id: u32, ek_i: Vec<u8>) {
+    pub fn receive_ek_i(&mut self, id: String, ek_i: Vec<u8>) {
         let mut peer_info = self.pid_table.get(&id).unwrap().clone();
         peer_info.ek_i = ek_i;
 
@@ -269,7 +284,7 @@ impl KeyAgreement {
 
         // First sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|&(a, _), &(b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
 
         // Throw u_i into the concatenation
         for pid in sorted_pid_table.clone() {
@@ -290,11 +305,11 @@ impl KeyAgreement {
     pub fn compute_k_j(&mut self) {
         // First add own PID info
         let own_peer_info = self.get_peer_info();
-        self.pid_table.insert(self.id, own_peer_info);
+        self.pid_table.insert(self.id.clone(), own_peer_info);
 
         // Then sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|&(a, _), &(b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
 
         // Reconstruct PID table without self
         let index_of_self = sorted_pid_table
@@ -334,17 +349,17 @@ impl KeyAgreement {
     /// Computes the key, assuming that all validation checks and computations have been performed
     pub fn compute_key(&mut self) {
         // First add own Kj to PID table
-        self.receive_k_j(self.id, self.k_j.clone());
+        self.receive_k_j(self.id.clone(), self.k_j.clone());
 
         // Sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|&(a, _), &(b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
 
         let mut key = Vec::new();
 
         // First PID concat
         for pid in sorted_pid_table.clone() {
-            key.append(&mut pid.0.to_be_bytes().to_vec());
+            key.append(&mut pid.0.as_bytes().to_vec());
         }
 
         // Then Kj concat

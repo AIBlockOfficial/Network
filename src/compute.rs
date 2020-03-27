@@ -1,6 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::interfaces::ProofOfWork;
-use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
+use crate::interfaces::{
+    ComputeInterface, ComputeRequest, Contract, MineRequest, ProofOfWork, Response, Tx,
+};
 use crate::unicorn::UnicornShard;
 use crate::Node;
 use bincode::deserialize;
@@ -39,6 +40,9 @@ const UNICORN_LIMIT: usize = 5;
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
+    current_block: Vec<u8>,
+    current_random_num: Vec<u8>,
+    partition_list: Vec<SocketAddr>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
 }
@@ -47,6 +51,57 @@ impl ComputeNode {
     /// Returns the compute node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Generates a garbage file for use in network testing. Will save the file
+    /// as the current block internally
+    ///
+    /// ### Arguments
+    ///
+    /// * `size`    - Size of the file in bytes
+    pub fn generate_garbage_block(&mut self, size: usize) {
+        let garbage_block = vec![0; size];
+        self.current_block = garbage_block;
+    }
+
+    /// Sends block to a mining node.
+    pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
+        let block_to_send = self.current_block.clone();
+
+        self.node
+            .send(
+                peer,
+                MineRequest::SendBlock {
+                    block: block_to_send,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends random number to a mining node.
+    pub async fn send_random_number(&mut self, peer: SocketAddr) -> Result<()> {
+        let random_num = self.current_random_num.clone();
+
+        self.node
+            .send(peer, MineRequest::SendRandomNum { rnum: random_num })
+            .await?;
+        Ok(())
+    }
+
+    /// Sends the partition list of winners to a mining node
+    pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
+        let partition_list = self.partition_list.clone();
+
+        self.node
+            .send(
+                peer,
+                MineRequest::SendPartitionList {
+                    p_list: partition_list,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -110,6 +165,7 @@ impl ComputeNode {
     /// Handles a compute request.
     fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
         use ComputeRequest::*;
+
         match req {
             SendPoW { pow } => self.receive_pow(peer, pow),
         }
@@ -122,6 +178,9 @@ impl ComputeInterface for ComputeNode {
             node: Node::new(address, PEER_LIMIT),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
+            current_block: Vec::new(),
+            current_random_num: Vec::new(),
+            partition_list: Vec::new(),
         }
     }
 
@@ -148,7 +207,7 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
-        info!(?address, "Receieved PoW");
+        info!(?address, "Received PoW");
 
         if self.unicorn_list.len() < self.unicorn_limit {
             let mut unicorn_value = UnicornShard::new();

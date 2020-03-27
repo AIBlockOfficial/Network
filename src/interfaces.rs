@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::key_creation::PeerInfo;
 use crate::unicorn::UnicornShard;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -86,6 +87,34 @@ pub trait StorageInterface {
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
+/// Encapsulates miner requests
+#[derive(Serialize, Deserialize, Clone)]
+pub enum MineRequest {
+    SendBlock { block: Vec<u8> },
+    SendRandomNum { rnum: Vec<u8> },
+    SendPartitionList { p_list: Vec<SocketAddr> },
+
+    // Key agreement stuff
+    SendYi { y_i: Vec<u8> },
+    SendPeerInfo { peer_info: PeerInfo },
+    SendKj { k_j: Vec<u8> },
+}
+
+impl fmt::Debug for MineRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use MineRequest::*;
+
+        match *self {
+            SendBlock { ref block } => write!(f, "SendBlock"),
+            SendRandomNum { ref rnum } => write!(f, "SendRandomNum"),
+            SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
+            SendYi { ref y_i } => write!(f, "SendYi"),
+            SendPeerInfo { ref peer_info } => write!(f, "SendPeerInfo"),
+            SendKj { ref k_j } => write!(f, "SendKj"),
+        }
+    }
+}
+
 /// Encapsulates compute requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
@@ -159,7 +188,7 @@ pub trait MinerInterface {
     /// ### Arguments
     ///
     /// * `pre_block` - New block to be mined
-    fn receive_pre_block(&self, pre_block: &Block) -> Response;
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
 }
 
 pub trait UseInterface {
