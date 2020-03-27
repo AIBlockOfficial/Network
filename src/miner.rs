@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::{
-    Block, ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
-    Response,
+    ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
+    ProofOfWorkBlock, Response,
 };
 use crate::key_creation::{KeyAgreement, PeerInfo};
 use crate::rand::Rng;
@@ -83,7 +83,7 @@ impl MinerNode {
     }
 
     /// Generates a garbage coinbase tx for network testing
-    fn generate_garbage_coinbase(&self) -> Vec<u8> {
+    fn generate_garbage_coinbase() -> Vec<u8> {
         vec![0; 285]
     }
 
@@ -275,6 +275,54 @@ impl MinerNode {
         }
 
         true
+    }
+
+    /// I'm lazy, so just making another verifier for now
+    pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
+        let mut pow_body = pow.address.as_bytes().to_vec();
+        pow_body.append(&mut pow.nonce.clone());
+        pow_body.append(&mut pow.block.clone());
+        pow_body.append(&mut pow.coinbase.clone());
+
+        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
+
+        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
+            if entry != 0 {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Generates a valid PoW for a block specifically
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Payment address for a valid PoW
+    pub async fn generate_pow_for_block(
+        &mut self,
+        address: &'static str,
+        block: Vec<u8>,
+    ) -> Result<ProofOfWorkBlock> {
+        Ok(task::spawn_blocking(move || {
+            let mut nonce = Self::generate_nonce();
+            let mut coinbase = Self::generate_garbage_coinbase();
+            let mut pow = ProofOfWorkBlock {
+                address,
+                nonce,
+                block,
+                coinbase,
+            };
+
+            while !Self::validate_pow_block(&mut pow) {
+                nonce = Self::generate_nonce();
+                pow.nonce = nonce;
+            }
+
+            pow
+        })
+        .await?)
     }
 
     /// Generates a valid PoW

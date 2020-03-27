@@ -19,6 +19,15 @@ pub struct ProofOfWork {
     pub nonce: Vec<u8>,
 }
 
+/// PoW structure for blocks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofOfWorkBlock {
+    pub address: &'static str,
+    pub nonce: Vec<u8>,
+    pub block: Vec<u8>,
+    pub coinbase: Vec<u8>,
+}
+
 /// A placeholder tx struct
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Tx;
