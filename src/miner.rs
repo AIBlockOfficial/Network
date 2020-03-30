@@ -4,17 +4,14 @@ use crate::interfaces::{
     ProofOfWorkBlock, Response,
 };
 use crate::key_creation::{KeyAgreement, PeerInfo};
-use crate::rand::Rng;
-use crate::sha3::Digest;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
-use tracing::{debug, info, info_span, warn};
-
-use rand;
-use sha3::Sha3_256;
-use std::{fmt, net::SocketAddr, sync::Arc};
+use rand::{self, Rng};
+use sha3::{Digest, Sha3_256};
+use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
+use tracing::{debug, info_span, warn};
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -29,9 +26,19 @@ pub enum MinerError {
 impl fmt::Display for MinerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MinerError::Network(err) => write!(f, "Network error: {}", err),
-            MinerError::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            MinerError::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
+            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+        }
+    }
+}
+
+impl Error for MinerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Network(ref e) => Some(e),
+            Self::Serialization(ref e) => Some(e),
+            Self::AsyncTask(ref e) => Some(e),
         }
     }
 }

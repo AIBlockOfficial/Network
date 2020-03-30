@@ -1,10 +1,11 @@
 #![allow(non_snake_case, unused)]
-use crate::sha3::Digest;
+
 use hex::encode;
 use rug::integer::Order;
 use rug::ops::Pow;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
+use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};

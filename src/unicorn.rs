@@ -1,6 +1,5 @@
 use crate::interfaces::ProofOfWork;
-use crate::sha3::Digest;
-use sha3::Sha3_256;
+use sha3::{Digest, Sha3_256};
 
 /// A structure for the block header UnicornShard
 #[derive(Debug, Clone)]

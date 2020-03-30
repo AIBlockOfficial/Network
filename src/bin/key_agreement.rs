@@ -1,38 +1,4 @@
-extern crate chrono;
-extern crate hex;
-extern crate rand;
-extern crate rug;
-extern crate sha3;
-extern crate sodiumoxide;
-
-mod comms_handler;
-mod compute;
-mod interfaces;
-mod key_creation;
-mod miner;
-#[cfg(test)]
-mod test_utils;
-#[cfg(test)]
-mod tests;
-mod unicorn;
-
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-use futures::stream::StreamExt;
-use tokio::net::TcpListener;
-use tokio::prelude::*;
-
-use compute::ComputeNode;
-use interfaces::ComputeInterface;
-use tokio::task::JoinHandle;
-use tracing::{error, field, info_span, trace};
-use tracing_futures::Instrument;
-
-#[cfg(not(features = "mock"))]
-pub(crate) use comms_handler::Node;
-use key_creation::KeyAgreement;
-#[cfg(features = "mock")]
-pub(crate) use mock::Node;
+use system::key_creation::KeyAgreement;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     key_agreement();
@@ -41,7 +7,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn key_agreement() {
-
     // Key agreement input
     // let mut first_addr = vec![0, 12, 3, 4, 5];
     // let mut first_uni = vec![10, 51, 1, 20, 0];
