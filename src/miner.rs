@@ -192,10 +192,12 @@ impl MinerNode {
             .iter()
             .position(|&x| x == self.node.address())
             .unwrap();
+
         let right_index = match own_index + 1 {
             p_length => 0,
             _ => own_index + 1,
         };
+
         let left_index = match own_index - 1 {
             num if num < 0 => p_length - 1,
             _ => own_index - 1,
@@ -264,6 +266,18 @@ impl MinerNode {
         Ok(())
     }
 
+    /// Sends a request to partition to a Compute node
+    pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
+        let own_address = self.address().clone();
+        println!("OWN ADDRESS: {:?}", own_address);
+
+        self.node
+            .send(compute, ComputeRequest::SendPartitionRequest)
+            .await?;
+
+        Ok(())
+    }
+
     /// Validates a PoW
     ///
     /// ### Arguments
@@ -314,7 +328,7 @@ impl MinerNode {
     ) -> Result<ProofOfWorkBlock> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
-            let mut coinbase = Self::generate_garbage_coinbase();
+            let coinbase = Self::generate_garbage_coinbase();
             let mut pow = ProofOfWorkBlock {
                 address,
                 nonce,

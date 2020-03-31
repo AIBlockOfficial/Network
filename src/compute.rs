@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::constants::{PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     ComputeInterface, ComputeRequest, Contract, MineRequest, ProofOfWork, Response, Tx,
 };
@@ -48,20 +49,14 @@ impl From<bincode::Error> for ComputeError {
     }
 }
 
-/// Limit for the number of peers a compute node may have
-const PEER_LIMIT: usize = 6;
-
-/// Limit for the number of PoWs a compute node may have for UnicornShard creation
-const UNICORN_LIMIT: usize = 5;
-
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
     current_block: Vec<u8>,
-    current_random_num: Vec<u8>,
-    partition_list: Vec<SocketAddr>,
-    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
+    current_random_num: Vec<u8>,
+    pub partition_list: Vec<SocketAddr>,
+    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
 
 impl ComputeNode {
@@ -185,7 +180,36 @@ impl ComputeNode {
 
         match req {
             SendPoW { pow } => self.receive_pow(peer, pow),
+            SendPartitionRequest => self.receive_partition_request(peer),
         }
+    }
+
+    /// Receive a partition request from a miner node
+    /// TODO: This may need to be part of the ComputeInterface depending on key agreement
+    fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+        if self.partition_list.len() < PARTITION_LIMIT {
+            self.partition_list.push(peer);
+
+            return Response {
+                success: true,
+                reason: "Partition request received successfully",
+            };
+        }
+
+        Response {
+            success: false,
+            reason: "Partition list is full",
+        }
+    }
+
+    /// Floods the full partition list to participants
+    pub async fn flood_partition_list(&mut self) -> Result<()> {
+        for entry in self.partition_list.clone() {
+            println!("Flooding to peer: {:?}", entry);
+            let _result = self.send_partition_list(entry).await.unwrap();
+        }
+
+        Ok(())
     }
 }
 

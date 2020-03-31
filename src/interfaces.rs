@@ -128,6 +128,7 @@ impl fmt::Debug for MineRequest {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
     SendPoW { pow: Vec<u8> },
+    SendPartitionRequest,
 }
 
 impl fmt::Debug for ComputeRequest {
@@ -136,6 +137,7 @@ impl fmt::Debug for ComputeRequest {
 
         match *self {
             SendPoW { ref pow } => write!(f, "SendPoW"),
+            SendPartitionRequest => write!(f, "SendPartitionRequest"),
         }
     }
 }

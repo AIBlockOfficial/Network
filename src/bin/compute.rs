@@ -1,7 +1,7 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use system::{ComputeInterface, ComputeNode};
+use system::{ComputeInterface, ComputeNode, Response, PARTITION_LIMIT};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,8 +37,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Started node at {}", node.address());
 
+    let partition_response = Response {
+        success: true,
+        reason: "Partition request received successfully",
+    };
+
     while let Some(response) = node.handle_next_event().await {
         println!("Response: {:?}", response);
+
+        if response.unwrap() == partition_response && node.partition_list.len() == PARTITION_LIMIT {
+            let _flood = node.flood_partition_list().await.unwrap();
+        }
     }
 
     Ok(())
