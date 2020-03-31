@@ -96,8 +96,6 @@ pub struct Node {
 struct Peer {
     /// Channel for sending frames to the peer.
     send_tx: mpsc::Sender<io::Result<Bytes>>,
-    /// Tracing context.
-    span: Span,
 }
 
 impl fmt::Debug for Peer {
@@ -126,6 +124,8 @@ impl Node {
     /// Starts the listener.
     pub async fn listen(&mut self) -> Result<()> {
         let mut listener = TcpListener::bind(self.listener_address).await?;
+
+        self.listener_address = listener.local_addr()?;
 
         let peers = self.peers.clone();
         let event_tx = self.event_tx.clone();
@@ -331,13 +331,7 @@ async fn add_peer(
 
         peer_span.in_scope(|| trace!("added new peer"));
 
-        peers.insert(
-            peer_addr,
-            Peer {
-                send_tx,
-                span: peer_span,
-            },
-        );
+        peers.insert(peer_addr, Peer { send_tx });
 
         Ok(())
     } else {

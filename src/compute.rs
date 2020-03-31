@@ -6,8 +6,7 @@ use crate::unicorn::UnicornShard;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::{collections::HashMap, error::Error, fmt, net::SocketAddr};
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -17,6 +16,24 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 pub enum ComputeError {
     Network(CommsError),
     Serialization(bincode::Error),
+}
+
+impl fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+        }
+    }
+}
+
+impl Error for ComputeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Network(ref e) => Some(e),
+            Self::Serialization(ref e) => Some(e),
+        }
+    }
 }
 
 impl From<CommsError> for ComputeError {
