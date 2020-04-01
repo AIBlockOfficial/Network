@@ -205,7 +205,6 @@ impl ComputeNode {
     /// Floods the full partition list to participants
     pub async fn flood_partition_list(&mut self) -> Result<()> {
         for entry in self.partition_list.clone() {
-            println!("Flooding to peer: {:?}", entry);
             let _result = self.send_partition_list(entry).await.unwrap();
         }
 

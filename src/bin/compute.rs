@@ -42,13 +42,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reason: "Partition request received successfully",
     };
 
-    while let Some(response) = node.handle_next_event().await {
-        println!("Response: {:?}", response);
+    tokio::spawn({
+        let mut node = node.clone();
 
-        if response.unwrap() == partition_response && node.partition_list.len() == PARTITION_LIMIT {
-            let _flood = node.flood_partition_list().await.unwrap();
+        async move {
+            while let Some(response) = node.handle_next_event().await {
+                println!("Response: {:?}", response);
+
+                if response.unwrap() == partition_response
+                    && node.partition_list.len() == PARTITION_LIMIT
+                {
+                    let _flood = node.flood_partition_list().await.unwrap();
+                }
+            }
         }
-    }
+    });
 
-    Ok(())
+    loop {}
 }

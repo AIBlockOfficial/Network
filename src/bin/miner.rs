@@ -1,7 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
-use system::{command_input_to_socket, MinerInterface, MinerNode};
+use system::{command_input_to_socket, MinerInterface, MinerNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,12 +52,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(compute_node.parse().unwrap()).await?;
     }
 
+    let partition_list_receipt = Response {
+        success: true,
+        reason: "Received partition list successfully",
+    };
+
     tokio::spawn({
         let mut node = node.clone();
 
         async move {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
+                let node_addr = node.address();
+
+                if response.unwrap() == partition_list_receipt
+                    && node.partition_list.iter().any(|&x| x == node_addr)
+                {
+                    // It's time to do the light PoW and send on
+                }
             }
         }
     });

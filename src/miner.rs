@@ -73,9 +73,9 @@ pub struct MinerNode {
     node: Node,
     rand_num: Vec<u8>,
     current_block: Vec<u8>,
-    partition_list: Vec<SocketAddr>,
     key_creator: KeyAgreement,
     last_pow: Arc<RwLock<ProofOfWork>>,
+    pub partition_list: Vec<SocketAddr>,
 }
 
 impl MinerNode {
@@ -141,6 +141,7 @@ impl MinerNode {
     /// Handles a compute request.
     fn handle_request(&mut self, peer: SocketAddr, req: MineRequest) -> Response {
         use MineRequest::*;
+        println!("RECEIVED REQUEST: {:?}", req);
 
         match req {
             SendBlock { block } => self.receive_pre_block(block),
@@ -268,11 +269,10 @@ impl MinerNode {
 
     /// Sends a request to partition to a Compute node
     pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
-        let own_address = self.address().clone();
-        println!("OWN ADDRESS: {:?}", own_address);
+        let _peer_span = info_span!("sending partition participation request");
 
         self.node
-            .send(compute, ComputeRequest::SendPartitionRequest)
+            .send(compute, ComputeRequest::SendPartitionRequest {})
             .await?;
 
         Ok(())

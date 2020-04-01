@@ -329,7 +329,7 @@ async fn add_peer(
         // Spawn the tasks to manage the peer
         let send_tx = handle_peer(socket, peer_addr, event_tx, peer_span.clone());
 
-        peer_span.in_scope(|| trace!("added new peer"));
+        peer_span.in_scope(|| trace!("added new peer: {:?}", peer_addr));
 
         peers.insert(peer_addr, Peer { send_tx });
 
