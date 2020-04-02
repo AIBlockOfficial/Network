@@ -49,6 +49,11 @@ impl fmt::Debug for Peer {
     }
 }
 
+enum PeerState {
+    WaitingForHandshake,
+    Ready,
+}
+
 impl Node {
     /// Creates a new node.
     /// `address` is the socket address the node listener will use.
@@ -83,7 +88,7 @@ impl Node {
                 while let Some(new_conn) = listener.next().await {
                     match new_conn {
                         Ok(conn) => {
-                            // TODO: have a timeout for incoming handshake to disconnect clients who are linger on without any communication
+                            // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
                                 peer_addr = tracing::field::debug(conn.peer_addr())
@@ -96,6 +101,7 @@ impl Node {
                                 conn,
                                 false,
                                 peer_span,
+                                PeerState::WaitingForHandshake,
                             )
                             .await;
 
@@ -136,6 +142,7 @@ impl Node {
             stream,
             false,
             info_span!(parent: &self.span, "connect_to", ?peer_addr),
+            PeerState::Ready,
         )
         .await?;
         Ok(())
@@ -184,6 +191,7 @@ fn handle_peer(
     peer_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<Event>,
     span: Span,
+    initial_peer_state: PeerState,
 ) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
     let (send_tx, mut send_rx) = mpsc::channel(128);
 
@@ -205,20 +213,15 @@ fn handle_peer(
 
     // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
     // and manage the peer state transitions.
-    enum PeerState {
-        WaitingForHandshake,
-        Connected,
-    }
-
     tokio::spawn(
         async move {
-            let mut peer_state = PeerState::WaitingForHandshake;
+            let mut peer_state = initial_peer_state;
 
             while let Some(frame) = sock_in.next().await {
                 trace!(?frame, "recv_frame");
 
                 match peer_state {
-                    PeerState::Connected => {
+                    PeerState::Ready => {
                         if let Err(error) = event_tx.send(Event::NewFrame {
                             peer: peer_addr,
                             frame: frame.unwrap().freeze(), // TODO: handle possible errors
@@ -231,7 +234,7 @@ fn handle_peer(
                         let handshake = deserialize::<HandshakeRequest>(&frame.unwrap());
                         trace!(?handshake);
 
-                        peer_state = PeerState::Connected;
+                        peer_state = PeerState::Ready;
                     }
                 }
             }
@@ -259,6 +262,7 @@ async fn add_peer(
     socket: TcpStream,
     force_add: bool,
     peer_span: Span,
+    initial_peer_state: PeerState,
 ) -> Result<()> {
     let mut peers = peers_list.write().await;
     let is_full = peers.len() >= peer_limit;
@@ -272,7 +276,13 @@ async fn add_peer(
         let peer_addr = socket.peer_addr()?;
 
         // Spawn the tasks to manage the peer
-        let send_tx = handle_peer(socket, peer_addr, event_tx, peer_span.clone());
+        let send_tx = handle_peer(
+            socket,
+            peer_addr,
+            event_tx,
+            peer_span.clone(),
+            initial_peer_state,
+        );
 
         peer_span.in_scope(|| trace!("added new peer: {:?}", peer_addr));
 
