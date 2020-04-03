@@ -1,5 +1,4 @@
-//! This module provides basic networking interfaces.
-
+use super::{CommsError, Event, Result};
 use crate::interfaces::HandshakeRequest;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -8,7 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::{error::Error, fmt, io};
+use std::{fmt, io};
 use tokio::{
     self,
     net::{TcpListener, TcpStream},
@@ -19,62 +18,8 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
 
-pub type Result<T> = std::result::Result<T, CommsError>;
-
-#[derive(Debug)]
-pub enum CommsError {
-    /// Input/output-related communication error.
-    Io(io::Error),
-    /// The peers list is at the limit.
-    PeerListFull,
-    /// No such peer found.
-    PeerNotFound,
-    /// Serialization-related error.
-    Serialization(bincode::Error),
-}
-
-impl fmt::Display for CommsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CommsError::Io(err) => write!(f, "I/O error: {}", err),
-            CommsError::PeerListFull => write!(f, "Peer list is full"),
-            CommsError::PeerNotFound => write!(f, "Peer not found"),
-            CommsError::Serialization(err) => write!(f, "Serialization error: {}", err),
-        }
-    }
-}
-
-impl Error for CommsError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            CommsError::Io(err) => Some(err),
-            CommsError::PeerListFull => None,
-            CommsError::PeerNotFound => None,
-            CommsError::Serialization(err) => Some(err),
-        }
-    }
-}
-
-impl From<io::Error> for CommsError {
-    fn from(other: io::Error) -> Self {
-        Self::Io(other)
-    }
-}
-
-impl From<bincode::Error> for CommsError {
-    fn from(other: bincode::Error) -> Self {
-        Self::Serialization(other)
-    }
-}
-
 /// Contains a shared list of connected peers.
 type PeerList = Arc<RwLock<HashMap<SocketAddr, Peer>>>;
-
-/// Events from peer.
-#[derive(Debug)]
-pub enum Event {
-    NewFrame { peer: SocketAddr, frame: Bytes },
-}
 
 /// An abstract communication interface in the network.
 #[derive(Debug, Clone)]
@@ -102,6 +47,11 @@ impl fmt::Debug for Peer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Peer")
     }
+}
+
+enum PeerState {
+    WaitingForHandshake,
+    Ready,
 }
 
 impl Node {
@@ -138,7 +88,7 @@ impl Node {
                 while let Some(new_conn) = listener.next().await {
                     match new_conn {
                         Ok(conn) => {
-                            // TODO: have a timeout for incoming handshake to disconnect clients who are linger on without any communication
+                            // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
                                 peer_addr = tracing::field::debug(conn.peer_addr())
@@ -151,6 +101,7 @@ impl Node {
                                 conn,
                                 false,
                                 peer_span,
+                                PeerState::WaitingForHandshake,
                             )
                             .await;
 
@@ -191,6 +142,7 @@ impl Node {
             stream,
             false,
             info_span!(parent: &self.span, "connect_to", ?peer_addr),
+            PeerState::Ready,
         )
         .await?;
         Ok(())
@@ -239,6 +191,7 @@ fn handle_peer(
     peer_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<Event>,
     span: Span,
+    initial_peer_state: PeerState,
 ) -> mpsc::Sender<std::result::Result<Bytes, io::Error>> {
     let (send_tx, mut send_rx) = mpsc::channel(128);
 
@@ -260,20 +213,15 @@ fn handle_peer(
 
     // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
     // and manage the peer state transitions.
-    enum PeerState {
-        WaitingForHandshake,
-        Connected,
-    }
-
     tokio::spawn(
         async move {
-            let mut peer_state = PeerState::WaitingForHandshake;
+            let mut peer_state = initial_peer_state;
 
             while let Some(frame) = sock_in.next().await {
                 trace!(?frame, "recv_frame");
 
                 match peer_state {
-                    PeerState::Connected => {
+                    PeerState::Ready => {
                         if let Err(error) = event_tx.send(Event::NewFrame {
                             peer: peer_addr,
                             frame: frame.unwrap().freeze(), // TODO: handle possible errors
@@ -286,7 +234,7 @@ fn handle_peer(
                         let handshake = deserialize::<HandshakeRequest>(&frame.unwrap());
                         trace!(?handshake);
 
-                        peer_state = PeerState::Connected;
+                        peer_state = PeerState::Ready;
                     }
                 }
             }
@@ -314,6 +262,7 @@ async fn add_peer(
     socket: TcpStream,
     force_add: bool,
     peer_span: Span,
+    initial_peer_state: PeerState,
 ) -> Result<()> {
     let mut peers = peers_list.write().await;
     let is_full = peers.len() >= peer_limit;
@@ -327,7 +276,13 @@ async fn add_peer(
         let peer_addr = socket.peer_addr()?;
 
         // Spawn the tasks to manage the peer
-        let send_tx = handle_peer(socket, peer_addr, event_tx, peer_span.clone());
+        let send_tx = handle_peer(
+            socket,
+            peer_addr,
+            event_tx,
+            peer_span.clone(),
+            initial_peer_state,
+        );
 
         peer_span.in_scope(|| trace!("added new peer: {:?}", peer_addr));
 

@@ -1,7 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
-use system::{command_input_to_socket, MinerInterface, MinerNode, Response};
+use system::{MinerInterface, MinerNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,10 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Started node at {}", node.address());
 
     if let Some(compute_node) = matches.value_of("connect") {
-        compute_node_connected = Some(compute_node.to_string());
+        compute_node_connected = Some(compute_node.parse().unwrap());
 
         // Connect to a compute node.
-        node.connect_to(compute_node.parse().unwrap()).await?;
+        node.connect_to(compute_node_connected.unwrap()).await?;
     }
 
     let partition_list_receipt = Response {
@@ -77,10 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Send any requests to the compute node here
 
     // Send partition request
-    let compute_socket_addr = command_input_to_socket(compute_node_connected.unwrap());
     println!("MINER ADDRESS: {:?}", node.address());
     let _result = node
-        .send_partition_request(compute_socket_addr)
+        .send_partition_request(compute_node_connected.unwrap())
         .await
         .unwrap();
 
