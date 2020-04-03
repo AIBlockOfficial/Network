@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if response.unwrap() == partition_response
                     && node.partition_list.len() == PARTITION_LIMIT
                 {
+                    node.generate_random_num(5);
                     let _flood = node.flood_partition_list().await.unwrap();
                 }
             }

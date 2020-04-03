@@ -15,7 +15,7 @@ pub struct Response {
 /// PoW structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
-    pub address: &'static str,
+    pub address: String,
     pub nonce: Vec<u8>,
 }
 

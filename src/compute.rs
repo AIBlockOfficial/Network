@@ -76,6 +76,16 @@ impl ComputeNode {
         self.current_block = garbage_block;
     }
 
+    /// Generates a garbage random num for use in network testing
+    ///
+    /// ### Arguments
+    ///
+    /// * `size`    - Size of the file in bytes
+    pub fn generate_random_num(&mut self, size: usize) {
+        let random_num = vec![0; size];
+        self.current_random_num = random_num;
+    }
+
     /// Sends block to a mining node.
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         let block_to_send = self.current_block.clone();
@@ -94,24 +104,10 @@ impl ComputeNode {
     /// Sends random number to a mining node.
     pub async fn send_random_number(&mut self, peer: SocketAddr) -> Result<()> {
         let random_num = self.current_random_num.clone();
+        println!("RANDOM NUMBER IN COMPUTE: {:?}", random_num);
 
         self.node
             .send(peer, MineRequest::SendRandomNum { rnum: random_num })
-            .await?;
-        Ok(())
-    }
-
-    /// Sends the partition list of winners to a mining node
-    pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
-        let partition_list = self.partition_list.clone();
-
-        self.node
-            .send(
-                peer,
-                MineRequest::SendPartitionList {
-                    p_list: partition_list,
-                },
-            )
             .await?;
         Ok(())
     }
@@ -205,7 +201,7 @@ impl ComputeNode {
     /// Floods the full partition list to participants
     pub async fn flood_partition_list(&mut self) -> Result<()> {
         for entry in self.partition_list.clone() {
-            let _result = self.send_partition_list(entry).await.unwrap();
+            let _result = self.send_random_number(entry).await.unwrap();
         }
 
         Ok(())

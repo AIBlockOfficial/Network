@@ -52,9 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(compute_node_connected.unwrap()).await?;
     }
 
-    let partition_list_receipt = Response {
+    let random_num_receipt = Response {
         success: true,
-        reason: "Received partition list successfully",
+        reason: "Received random number successfully",
     };
 
     tokio::spawn({
@@ -63,12 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         async move {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
-                let node_addr = node.address();
 
-                if response.unwrap() == partition_list_receipt
-                    && node.partition_list.iter().any(|&x| x == node_addr)
-                {
+                if response.unwrap() == random_num_receipt {
                     // It's time to do the light PoW and send on
+                    println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
+                    let participation_pow =
+                        node.generate_pow_promise(endpoint.clone()).await.unwrap();
+                    let _send_pow = node
+                        .send_pow(compute_node_connected.unwrap(), participation_pow)
+                        .await
+                        .unwrap();
                 }
             }
         }
