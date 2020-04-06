@@ -37,11 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Started node at {}", node.address());
 
-    let partition_response = Response {
-        success: true,
-        reason: "Partition request received successfully",
-    };
-
+    // REQUEST HANDLING
     tokio::spawn({
         let mut node = node.clone();
 
@@ -49,11 +45,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
 
-                if response.unwrap() == partition_response
-                    && node.partition_list.len() == PARTITION_LIMIT
-                {
-                    node.generate_random_num(5);
-                    let _flood = node.flood_partition_list().await.unwrap();
+                match response {
+                    Ok(Response {
+                        success: true,
+                        reason: "Partition request received successfully",
+                    }) => {
+                        node.generate_random_num(5);
+                        let _flood = node.flood_rand_num_to_requesters().await.unwrap();
+                    }
+                    Ok(Response {
+                        success: false,
+                        reason: "Partition list is full",
+                    }) => {
+                        let _flood = node.flood_block_to_partition().await.unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: &_,
+                    }) => {
+                        println!("UNHANDLED RESPONSE TYPE");
+                    }
+                    Ok(Response {
+                        success: false,
+                        reason: &_,
+                    }) => {
+                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                    }
+                    Err(error) => {
+                        panic!("ERROR HANDLING RESPONSE: {:?}", error);
+                    }
                 }
             }
         }

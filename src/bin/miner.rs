@@ -52,11 +52,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(compute_node_connected.unwrap()).await?;
     }
 
-    let random_num_receipt = Response {
-        success: true,
-        reason: "Received random number successfully",
-    };
-
     tokio::spawn({
         let mut node = node.clone();
 
@@ -64,15 +59,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
 
-                if response.unwrap() == random_num_receipt {
-                    // It's time to do the light PoW and send on
-                    println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
-                    let participation_pow =
-                        node.generate_pow_promise(endpoint.clone()).await.unwrap();
-                    let _send_pow = node
-                        .send_pow(compute_node_connected.unwrap(), participation_pow)
-                        .await
-                        .unwrap();
+                match response {
+                    Ok(Response {
+                        success: true,
+                        reason: "Received random number successfully",
+                    }) => {
+                        println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
+                        let participation_pow = node.generate_pow(endpoint.clone()).await.unwrap();
+
+                        let _send_pow = node
+                            .send_partition_pow(compute_node_connected.unwrap(), participation_pow)
+                            .await
+                            .unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Pre-block received successfully",
+                    }) => {
+                        println!("PRE-BLOCK RECEIVED");
+                        let block = node.current_block.clone();
+                        let block_pow = node
+                            .generate_pow_for_block(endpoint.clone(), block)
+                            .await
+                            .unwrap();
+
+                        let _send_pow = node
+                            .send_pow(compute_node_connected.unwrap(), block_pow)
+                            .await
+                            .unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: &_,
+                    }) => {
+                        println!("UNHANDLED RESPONSE TYPE");
+                    }
+                    Ok(Response {
+                        success: false,
+                        reason: &_,
+                    }) => {
+                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                    }
+                    Err(error) => {
+                        panic!("ERROR HANDLING RESPONSE: {:?}", error);
+                    }
                 }
             }
         }

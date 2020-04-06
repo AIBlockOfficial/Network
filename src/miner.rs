@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
     ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response,
@@ -61,18 +62,12 @@ impl From<task::JoinError> for MinerError {
     }
 }
 
-/// Limit for the number of peers a compute node may have
-const PEER_LIMIT: usize = 6;
-
-/// Set the mining difficulty by number of required zeroes
-const MINING_DIFFICULTY: usize = 2;
-
 /// An instance of a MinerNode
 #[derive(Debug, Clone)]
 pub struct MinerNode {
     node: Node,
     pub rand_num: Vec<u8>,
-    current_block: Vec<u8>,
+    pub current_block: Vec<u8>,
     key_creator: KeyAgreement,
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<SocketAddr>,
@@ -232,9 +227,30 @@ impl MinerNode {
     }
 
     /// Sends PoW to a compute node.
-    pub async fn send_pow(&mut self, peer: SocketAddr, pow_promise: Vec<u8>) -> Result<()> {
+    pub async fn send_pow(
+        &mut self,
+        peer: SocketAddr,
+        pow_promise: ProofOfWorkBlock,
+    ) -> Result<()> {
         self.node
             .send(peer, ComputeRequest::SendPoW { pow: pow_promise })
+            .await?;
+        Ok(())
+    }
+
+    /// Sends the light partition PoW to a compute node
+    pub async fn send_partition_pow(
+        &mut self,
+        peer: SocketAddr,
+        pow_components: ProofOfWork,
+    ) -> Result<()> {
+        self.node
+            .send(
+                peer,
+                ComputeRequest::SendPartitionPoW {
+                    pow_components: pow_components,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -324,7 +340,7 @@ impl MinerNode {
     /// * `address` - Payment address for a valid PoW
     pub async fn generate_pow_for_block(
         &mut self,
-        address: &'static str,
+        address: String,
         block: Vec<u8>,
     ) -> Result<ProofOfWorkBlock> {
         Ok(task::spawn_blocking(move || {
@@ -415,8 +431,8 @@ impl MinerInterface for MinerNode {
         self.current_block = pre_block;
 
         Response {
-            success: false,
-            reason: "Not implemented yet",
+            success: true,
+            reason: "Pre-block received successfully",
         }
     }
 }

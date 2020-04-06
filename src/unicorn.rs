@@ -1,10 +1,10 @@
-use crate::interfaces::ProofOfWork;
+use crate::interfaces::{ProofOfWork, ProofOfWorkBlock};
 use sha3::{Digest, Sha3_256};
 
 /// A structure for the block header UnicornShard
 #[derive(Debug, Clone)]
 pub struct UnicornShard {
-    pub promise: Vec<u8>,
+    pub promise: ProofOfWorkBlock,
     pub commit: ProofOfWork,
 }
 
@@ -18,7 +18,7 @@ impl UnicornShard {
         };
 
         UnicornShard {
-            promise: Vec::new(),
+            promise: ProofOfWorkBlock::new(),
             commit: pow,
         }
     }
@@ -30,10 +30,10 @@ impl UnicornShard {
 
         let result = Sha3_256::digest(&commit_body).to_vec();
 
-        if result == self.promise {
-            self.commit = commit;
-            return true;
-        }
+        // if result == self.promise {
+        //     self.commit = commit;
+        //     return true;
+        // }
 
         false
     }

@@ -22,10 +22,21 @@ pub struct ProofOfWork {
 /// PoW structure for blocks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWorkBlock {
-    pub address: &'static str,
+    pub address: String,
     pub nonce: Vec<u8>,
     pub block: Vec<u8>,
     pub coinbase: Vec<u8>,
+}
+
+impl ProofOfWorkBlock {
+    pub fn new() -> Self {
+        ProofOfWorkBlock {
+            address: "".to_string(),
+            nonce: Vec::new(),
+            block: Vec::new(),
+            coinbase: Vec::new(),
+        }
+    }
 }
 
 /// A placeholder tx struct
@@ -127,7 +138,8 @@ impl fmt::Debug for MineRequest {
 /// Encapsulates compute requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
-    SendPoW { pow: Vec<u8> },
+    SendPoW { pow: ProofOfWorkBlock },
+    SendPartitionPoW { pow_components: ProofOfWork },
     SendPartitionRequest,
 }
 
@@ -137,6 +149,7 @@ impl fmt::Debug for ComputeRequest {
 
         match *self {
             SendPoW { ref pow } => write!(f, "SendPoW"),
+            SendPartitionPoW { ref pow_components } => write!(f, "SendPartitionPow"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
         }
     }
@@ -156,7 +169,7 @@ pub trait ComputeInterface {
     ///
     /// * `address` - address for the peer providing the PoW
     /// * `pow`     - PoW for potential inclusion
-    fn receive_pow(&mut self, peer: SocketAddr, pow: Vec<u8>) -> Response;
+    fn receive_pow(&mut self, peer: SocketAddr, pow: ProofOfWorkBlock) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///
@@ -184,6 +197,13 @@ pub trait ComputeInterface {
 
     /// Returns the next block reward value
     fn get_next_block_reward(&self) -> f64;
+
+    /// Validates a PoW
+    ///
+    /// ### Arguments
+    ///
+    /// * `pow` - PoW to validate
+    fn validate_pow(pow: &mut ProofOfWork) -> bool;
 }
 
 pub trait MinerInterface {

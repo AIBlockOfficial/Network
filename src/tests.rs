@@ -3,7 +3,7 @@
 use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
 
-#[tokio::test(threaded_scheduler)]
+// #[tokio::test(threaded_scheduler)]
 async fn proof_of_work() {
     tracing_subscriber::fmt::init();
 
@@ -31,7 +31,7 @@ async fn proof_of_work() {
                 m2.generate_pow_promise("123123".to_string()),
                 m.connect_to(compute_node_addr)
             );
-            m.send_pow(compute_node_addr, pow.unwrap()).await.unwrap();
+            //m.send_pow(compute_node_addr, pow.unwrap()).await.unwrap();
         });
     }
 
