@@ -57,7 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: false,
                         reason: "Partition list is full",
                     }) => {
-                        let _flood = node.flood_block_to_partition().await.unwrap();
+                        let _list_flood = node.flood_list_to_partition().await.unwrap();
+                        let _block_flood = node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {
                         success: true,

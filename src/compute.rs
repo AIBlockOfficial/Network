@@ -104,6 +104,19 @@ impl ComputeNode {
         Ok(())
     }
 
+    /// Sends the full partition list to the participants
+    pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
+        self.node
+            .send(
+                peer,
+                MineRequest::SendPartitionList {
+                    p_list: self.partition_list.clone(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Sends random number to a mining node.
     pub async fn send_random_number(&mut self, peer: SocketAddr) -> Result<()> {
         let random_num = self.current_random_num.clone();
@@ -243,6 +256,15 @@ impl ComputeNode {
 
         for entry in self.partition_list.clone() {
             let _result = self.send_block(entry).await.unwrap();
+        }
+
+        Ok(())
+    }
+
+    /// Floods all peers with the full partition list
+    pub async fn flood_list_to_partition(&mut self) -> Result<()> {
+        for entry in self.partition_list.clone() {
+            let _result = self.send_partition_list(entry).await.unwrap();
         }
 
         Ok(())

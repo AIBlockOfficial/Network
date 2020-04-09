@@ -14,3 +14,6 @@ pub const MINING_DIFFICULTY: usize = 2;
 
 /// The size of a block in bytes
 pub const BLOCK_SIZE: usize = 1000000;
+
+/// Key agreement generator value
+pub const KA_GENERATOR: u64 = 12;

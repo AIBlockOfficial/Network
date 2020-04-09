@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
+use crate::constants::{KA_GENERATOR, MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
     ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response,
@@ -87,6 +87,17 @@ impl MinerNode {
     /// Generates a garbage coinbase tx for network testing
     fn generate_garbage_coinbase() -> Vec<u8> {
         vec![0; 285]
+    }
+
+    /// Generates a key agreement struct to kick everything off
+    pub fn generate_key_agreement(&mut self) {
+        let mut address_as_vec = self.address().to_string().as_bytes().to_vec();
+        let mut unicorn = vec![10, 51, 1, 20, 0];
+        let mut nonce = vec![0, 0, 0, 0, 0];
+
+        self.key_creator = KeyAgreement::new(self.address().to_string(), KA_GENERATOR, 10, 5);
+        self.key_creator
+            .first_round(&mut address_as_vec, &mut unicorn, &mut nonce);
     }
 
     /// Connect to a peer on the network.
@@ -215,10 +226,8 @@ impl MinerNode {
     /// Handles the receipt of the filled partition list
     fn receive_partition_list(&mut self, p_list: Vec<SocketAddr>) -> Response {
         self.partition_list = p_list.clone();
-
-        if p_list.iter().any(|&x| x == self.address()) {
-            // TODO: We won, so it's time to perform PoW on block
-        }
+        let self_index = p_list.iter().position(|&x| x == self.address()).unwrap();
+        let right_index = 0;
 
         Response {
             success: true,

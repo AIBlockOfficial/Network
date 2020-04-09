@@ -74,6 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Received partition list successfully",
+                    }) => {
+                        println!("RECEIVED PARTITION LIST");
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: "Pre-block received successfully",
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
@@ -112,6 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());
+    node.generate_key_agreement();
+
     let _result = node
         .send_partition_request(compute_node_connected.unwrap())
         .await
