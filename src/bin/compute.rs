@@ -58,13 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Partition list is full",
                     }) => {
                         let _list_flood = node.flood_list_to_partition().await.unwrap();
-                        let _block_flood = node.flood_block_to_partition().await.unwrap();
+                        node.partition_list = Vec::new();
+                        //let _block_flood = node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
                         reason: &_,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE");
+                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
                     }
                     Ok(Response {
                         success: false,

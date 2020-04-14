@@ -10,6 +10,7 @@ use bincode::deserialize;
 use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
+use std::net::{IpAddr, Ipv4Addr};
 use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
@@ -72,6 +73,8 @@ pub struct MinerNode {
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<SocketAddr>,
     pub y_i_requests: Vec<SocketAddr>,
+    pub right_index: Option<SocketAddr>,
+    pub left_index: Option<SocketAddr>,
 }
 
 impl MinerNode {
@@ -230,10 +233,15 @@ impl MinerNode {
     /// Handles the receipt of a peer's y_i value for the miner node
     fn receive_y_i(&mut self, peer: String, y_i: Vec<u8>) -> Response {
         let p_length = self.partition_list.len();
+        let comparison_addr = self.get_comparison_addr();
+
+        println!("PEER: {:?}", peer);
+        println!("COMPARISON: {:?}", comparison_addr);
+
         let own_index = self
             .partition_list
             .iter()
-            .position(|&x| x == self.node.address())
+            .position(|&x| x == comparison_addr)
             .unwrap();
 
         let right_index = match own_index + 1 {
@@ -261,22 +269,39 @@ impl MinerNode {
     /// Handles the receipt of the filled partition list
     fn receive_partition_list(&mut self, p_list: Vec<SocketAddr>) -> Response {
         self.partition_list = p_list.clone();
-        let self_index = p_list.iter().position(|&x| x == self.address()).unwrap();
-        let mut right_index = 0;
-        let mut left_index = 0;
+
+        let comparison_addr = self.get_comparison_addr();
+        println!("PARTITION LIST: {:?}", p_list);
+        println!("COMPARISON ADDRESS: {:?}", comparison_addr);
+
+        let self_index = p_list.iter().position(|&x| x == comparison_addr).unwrap();
 
         if self_index == 0 {
-            right_index = 1;
-            left_index = p_list.len() - 1;
+            self.right_index = Some(p_list[1]);
+            self.left_index = Some(p_list[p_list.len() - 1]);
         } else if self_index == p_list.len() - 1 {
-            right_index = 0;
-            left_index = p_list.len() - 2;
+            self.right_index = Some(p_list[0]);
+            self.left_index = Some(p_list[p_list.len() - 2]);
+        } else {
+            self.right_index = Some(p_list[self_index + 1]);
+            self.left_index = Some(p_list[self_index - 1]);
         }
 
         Response {
             success: true,
             reason: "Received partition list successfully",
         }
+    }
+
+    /// Util function to get a socket address for PID table checks
+    fn get_comparison_addr(&self) -> SocketAddr {
+        let comparison_port = self.address().port() + 1;
+        let mut comparison_addr = self.address().clone();
+
+        comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        comparison_addr.set_port(comparison_port);
+
+        comparison_addr
     }
 
     /// Sends PoW to a compute node.
@@ -305,6 +330,12 @@ impl MinerNode {
                 },
             )
             .await?;
+        Ok(())
+    }
+
+    /// Sends a request to the peer for their y_i value
+    pub async fn send_y_i_request(&mut self, peer: SocketAddr) -> Result<()> {
+        self.node.send(peer, MineRequest::SendYiRequest).await?;
         Ok(())
     }
 
@@ -472,6 +503,8 @@ impl MinerInterface for MinerNode {
             rand_num: Vec::new(),
             current_block: Vec::new(),
             y_i_requests: Vec::new(),
+            right_index: None,
+            left_index: None,
             node: Node::new(comms_address, PEER_LIMIT),
             key_creator: KeyAgreement::new(comms_address.to_string(), 12, 10, 5),
             last_pow: Arc::new(RwLock::new(ProofOfWork {

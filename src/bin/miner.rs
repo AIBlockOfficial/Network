@@ -77,6 +77,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Received partition list successfully",
                     }) => {
                         println!("RECEIVED PARTITION LIST");
+                        println!("RIGHT: {:?}", node.right_index);
+                        println!("LEFT: {:?}", node.left_index);
+
+                        let _init_connect_right =
+                            node.connect_to(node.right_index.unwrap()).await.unwrap();
+                        let _init_connect_left =
+                            node.connect_to(node.left_index.unwrap()).await.unwrap();
+
+                        let _right_reply = node
+                            .send_y_i_request(node.right_index.unwrap())
+                            .await
+                            .unwrap();
+                        let _left_reply = node
+                            .send_y_i_request(node.left_index.unwrap())
+                            .await
+                            .unwrap();
                     }
                     Ok(Response {
                         success: true,
@@ -84,15 +100,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
                         let block = node.current_block.clone();
-                        let block_pow = node
-                            .generate_pow_for_block(endpoint.clone(), block)
-                            .await
-                            .unwrap();
 
-                        let _send_pow = node
-                            .send_pow(compute_node_connected.unwrap(), block_pow)
-                            .await
-                            .unwrap();
+                        // let block_pow = node
+                        //     .generate_pow_for_block(endpoint.clone(), block)
+                        //     .await
+                        //     .unwrap();
+
+                        // println!("BLOCK PoW: {:?}", block_pow);
+
+                        // let _send_pow = node
+                        //     .send_pow(compute_node_connected.unwrap(), block_pow)
+                        //     .await
+                        //     .unwrap();
                     }
                     Ok(Response {
                         success: true,
@@ -119,8 +138,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Flood peer info
                             let peer_info = node.key_creator.get_peer_info();
                             for entry in node.partition_list.clone() {
-                                let _send_peer_info =
-                                    node.send_peer_info(entry, peer_info.clone()).await.unwrap();
+                                if entry != node.address() {
+                                    let _send_peer_info = node
+                                        .send_peer_info(entry, peer_info.clone())
+                                        .await
+                                        .unwrap();
+                                }
                             }
                         }
                     }
@@ -134,7 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let k_j = node.key_creator.k_j.clone();
 
                         for entry in node.partition_list.clone() {
-                            let _send_k_j = node.send_k_j(entry, k_j.clone()).await.unwrap();
+                            if entry != node.address() {
+                                let _send_k_j = node.send_k_j(entry, k_j.clone()).await.unwrap();
+                            }
                         }
                     }
                     Ok(Response {
@@ -143,6 +168,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }) => {
                         // Compute shared key
                         node.key_creator.compute_key();
+
+                        println!("SHARED KEY: {:?}", node.key_creator.shared_key);
 
                         // TODO: Decrypt the pre-block, attach coinbase, mine, send block to compute
                     }
