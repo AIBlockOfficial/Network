@@ -96,6 +96,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Received y_i request successfully",
+                    }) => {
+                        for entry in node.y_i_requests.clone() {
+                            let y_i = node.key_creator.y_i.clone();
+                            let _sent_y_i = node.send_y_i(entry, y_i).await.unwrap();
+                        }
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Received peer's y_i successfully",
+                    }) => {
+                        if !node.key_creator.left_y_i.is_empty()
+                            && !node.key_creator.right_y_i.is_empty()
+                        {
+                            let left_y_i = node.key_creator.left_y_i.clone();
+                            let right_y_i = node.key_creator.right_y_i.clone();
+
+                            // Perform second round
+                            node.key_creator.second_round(left_y_i, right_y_i);
+
+                            // Flood peer info
+                            let peer_info = node.key_creator.get_peer_info();
+                            for entry in node.partition_list.clone() {
+                                let _send_peer_info =
+                                    node.send_peer_info(entry, peer_info.clone()).await.unwrap();
+                            }
+                        }
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Received peer info. Third round complete",
+                    }) => {
+                        // Perform third round
+                        node.key_creator.third_round();
+
+                        let k_j = node.key_creator.k_j.clone();
+
+                        for entry in node.partition_list.clone() {
+                            let _send_k_j = node.send_k_j(entry, k_j.clone()).await.unwrap();
+                        }
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Received peer k_j. All k_j values received",
+                    }) => {
+                        // Compute shared key
+                        node.key_creator.compute_key();
+
+                        // TODO: Decrypt the pre-block, attach coinbase, mine, send block to compute
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: &_,
                     }) => {
                         println!("UNHANDLED RESPONSE TYPE");

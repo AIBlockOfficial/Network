@@ -23,7 +23,7 @@ pub struct PeerInfo {
     ek_i: Vec<u8>,
     T_i: Vec<u8>,
     t_iL: Vec<u8>,
-    k_j: Vec<u8>,
+    pub k_j: Vec<u8>,
 }
 
 /// The data structure for partitioned key agreement
@@ -53,7 +53,7 @@ pub struct KeyAgreement {
     pub right_y_i: Vec<u8>,
     broadcast_1: Vec<u8>,
     pub shared_key: Option<String>,
-    pid_table: BTreeMap<String, PeerInfo>,
+    pub pid_table: BTreeMap<String, PeerInfo>,
 }
 
 impl KeyAgreement {

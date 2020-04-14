@@ -68,9 +68,10 @@ pub struct MinerNode {
     node: Node,
     pub rand_num: Vec<u8>,
     pub current_block: Vec<u8>,
-    key_creator: KeyAgreement,
+    pub key_creator: KeyAgreement,
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<SocketAddr>,
+    pub y_i_requests: Vec<SocketAddr>,
 }
 
 impl MinerNode {
@@ -158,6 +159,17 @@ impl MinerNode {
             SendYi { y_i } => self.receive_y_i(peer.to_string(), y_i),
             SendKj { k_j } => self.receive_k_j(peer.to_string(), k_j),
             SendPeerInfo { peer_info } => self.receive_peer_info(peer.to_string(), peer_info),
+            SendYiRequest => self.receive_y_i_request(peer),
+        }
+    }
+
+    /// Handles the receipt of a y_i request
+    fn receive_y_i_request(&mut self, peer: SocketAddr) -> Response {
+        self.y_i_requests.push(peer);
+
+        Response {
+            success: true,
+            reason: "Received y_i request successfully",
         }
     }
 
@@ -165,9 +177,17 @@ impl MinerNode {
     fn receive_peer_info(&mut self, peer: String, peer_info: PeerInfo) -> Response {
         self.key_creator.receive_peer_info(peer, peer_info);
 
+        // If we've received peer info from everyone in list
+        if self.key_creator.pid_table.len() == self.partition_list.len() {
+            return Response {
+                success: true,
+                reason: "Received peer info. Third round complete",
+            };
+        }
+
         Response {
             success: true,
-            reason: "Received random number successfully",
+            reason: "Received peer info successfully",
         }
     }
 
@@ -186,9 +206,24 @@ impl MinerNode {
     fn receive_k_j(&mut self, peer: String, k_j: Vec<u8>) -> Response {
         self.key_creator.receive_k_j(peer, k_j);
 
+        let mut is_full = true;
+        for (_id, peer_info) in self.key_creator.pid_table.iter() {
+            if peer_info.k_j.is_empty() {
+                is_full = false;
+                break;
+            }
+        }
+
+        if is_full {
+            return Response {
+                success: true,
+                reason: "Received peer k_j. All k_j values received",
+            };
+        }
+
         Response {
             success: true,
-            reason: "Received peer's y_i successfully",
+            reason: "Received peer's k_j successfully",
         }
     }
 
@@ -227,7 +262,16 @@ impl MinerNode {
     fn receive_partition_list(&mut self, p_list: Vec<SocketAddr>) -> Response {
         self.partition_list = p_list.clone();
         let self_index = p_list.iter().position(|&x| x == self.address()).unwrap();
-        let right_index = 0;
+        let mut right_index = 0;
+        let mut left_index = 0;
+
+        if self_index == 0 {
+            right_index = 1;
+            left_index = p_list.len() - 1;
+        } else if self_index == p_list.len() - 1 {
+            right_index = 0;
+            left_index = p_list.len() - 2;
+        }
 
         Response {
             success: true,
@@ -427,6 +471,7 @@ impl MinerInterface for MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             current_block: Vec::new(),
+            y_i_requests: Vec::new(),
             node: Node::new(comms_address, PEER_LIMIT),
             key_creator: KeyAgreement::new(comms_address.to_string(), 12, 10, 5),
             last_pow: Arc::new(RwLock::new(ProofOfWork {

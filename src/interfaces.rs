@@ -118,6 +118,7 @@ pub enum MineRequest {
     SendYi { y_i: Vec<u8> },
     SendPeerInfo { peer_info: PeerInfo },
     SendKj { k_j: Vec<u8> },
+    SendYiRequest,
 }
 
 impl fmt::Debug for MineRequest {
@@ -131,6 +132,7 @@ impl fmt::Debug for MineRequest {
             SendYi { ref y_i } => write!(f, "SendYi"),
             SendPeerInfo { ref peer_info } => write!(f, "SendPeerInfo"),
             SendKj { ref k_j } => write!(f, "SendKj"),
+            SendYiRequest => write!(f, "SendYiRequest"),
         }
     }
 }
