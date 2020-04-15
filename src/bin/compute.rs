@@ -1,7 +1,7 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use system::{ComputeInterface, ComputeNode, Response, PARTITION_LIMIT};
+use system::{ComputeInterface, ComputeNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,11 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Partition request received successfully",
                     }) => {
-                        node.generate_random_num(5);
                         let _flood = node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
-                        success: false,
+                        success: true,
                         reason: "Partition list is full",
                     }) => {
                         let _list_flood = node.flood_list_to_partition().await.unwrap();

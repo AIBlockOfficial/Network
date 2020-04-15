@@ -9,7 +9,9 @@ use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
-use std::{collections::HashMap, error::Error, fmt, net::SocketAddr};
+use std::collections::{BTreeMap, HashMap};
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::{error::Error, fmt, net::SocketAddr};
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -58,7 +60,7 @@ pub struct ComputeNode {
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
     pub partition_list: Vec<SocketAddr>,
-    pub request_list: Vec<SocketAddr>,
+    pub request_list: BTreeMap<String, bool>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
 
@@ -87,6 +89,26 @@ impl ComputeNode {
     pub fn generate_random_num(&mut self, size: usize) {
         let random_num = vec![0; size];
         self.current_random_num = random_num;
+    }
+
+    /// Gets a decremented socket address of peer for storage
+    fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
+        let mut storage_address = address.clone();
+        storage_address.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+        storage_address.set_port(address.port() - 1);
+
+        storage_address
+    }
+
+    /// Util function to get a socket address for PID table checks
+    fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
+        let comparison_port = address.port() + 1;
+        let mut comparison_addr = address.clone();
+
+        comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        comparison_addr.set_port(comparison_port);
+
+        comparison_addr
     }
 
     /// Sends block to a mining node.
@@ -200,7 +222,11 @@ impl ComputeNode {
     /// Receive a partition request from a miner node
     /// TODO: This may need to be part of the ComputeInterface depending on key agreement
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
-        self.request_list.push(peer);
+        if self.request_list.is_empty() {
+            self.generate_random_num(5);
+        }
+
+        self.request_list.insert(peer.to_string(), false);
 
         Response {
             success: true,
@@ -211,13 +237,14 @@ impl ComputeNode {
     /// Receives the light POW for partition inclusion
     fn receive_partition_pow(&mut self, peer: SocketAddr, pow_components: ProofOfWork) -> Response {
         let mut pow_mut = pow_components.clone();
+        let peer_for_storage = self.get_storage_address(peer);
 
         if self.partition_list.len() < PARTITION_LIMIT && Self::validate_pow(&mut pow_mut) {
-            self.partition_list.push(peer);
+            self.partition_list.push(peer_for_storage);
 
             if self.partition_list.len() == PARTITION_LIMIT {
                 return Response {
-                    success: false,
+                    success: true,
                     reason: "Partition list is full",
                 };
             }
@@ -243,8 +270,21 @@ impl ComputeNode {
 
     /// Floods the random number to everyone who requested
     pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
-        for entry in self.request_list.clone() {
-            let _result = self.send_random_number(entry).await.unwrap();
+        let mut exclusions = Vec::new();
+
+        for (peer, peer_sent) in self.request_list.clone() {
+            if !peer_sent {
+                exclusions.push(peer.clone());
+                let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+
+                println!("PEER ADDRESS: {:?}", peer_addr);
+
+                let _result = self.send_random_number(peer_addr).await.unwrap();
+            }
+        }
+
+        for exclusion in exclusions {
+            self.request_list.insert(exclusion, true);
         }
 
         Ok(())
@@ -255,7 +295,8 @@ impl ComputeNode {
         self.generate_garbage_block(BLOCK_SIZE);
 
         for entry in self.partition_list.clone() {
-            let _result = self.send_block(entry).await.unwrap();
+            let send_entry = self.get_comms_address(entry);
+            let _result = self.send_block(send_entry).await.unwrap();
         }
 
         Ok(())
@@ -264,7 +305,8 @@ impl ComputeNode {
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
         for entry in self.partition_list.clone() {
-            let _result = self.send_partition_list(entry).await.unwrap();
+            let send_entry = self.get_comms_address(entry);
+            let _result = self.send_partition_list(send_entry).await.unwrap();
         }
 
         Ok(())
@@ -279,7 +321,7 @@ impl ComputeInterface for ComputeNode {
             unicorn_limit: UNICORN_LIMIT,
             current_block: Vec::new(),
             current_random_num: Vec::new(),
-            request_list: Vec::new(),
+            request_list: BTreeMap::new(),
             partition_list: Vec::new(),
         }
     }

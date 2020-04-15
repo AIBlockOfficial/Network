@@ -82,8 +82,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let _init_connect_right =
                             node.connect_to(node.right_index.unwrap()).await.unwrap();
-                        let _init_connect_left =
-                            node.connect_to(node.left_index.unwrap()).await.unwrap();
+
+                        println!("CONNECTED TO RIGHT");
+
+                        if node.left_index != node.right_index {
+                            let _init_connect_left =
+                                node.connect_to(node.left_index.unwrap()).await.unwrap();
+                        }
 
                         let _right_reply = node
                             .send_y_i_request(node.right_index.unwrap())

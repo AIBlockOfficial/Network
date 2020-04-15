@@ -270,11 +270,9 @@ impl MinerNode {
     fn receive_partition_list(&mut self, p_list: Vec<SocketAddr>) -> Response {
         self.partition_list = p_list.clone();
 
-        let comparison_addr = self.get_comparison_addr();
         println!("PARTITION LIST: {:?}", p_list);
-        println!("COMPARISON ADDRESS: {:?}", comparison_addr);
 
-        let self_index = p_list.iter().position(|&x| x == comparison_addr).unwrap();
+        let self_index = p_list.iter().position(|&x| x == self.address()).unwrap();
 
         if self_index == 0 {
             self.right_index = Some(p_list[1]);
