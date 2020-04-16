@@ -5,12 +5,15 @@ use crate::interfaces::{
     Response, Tx,
 };
 use crate::unicorn::UnicornShard;
+use crate::utils::get_partition_entry_key;
 use crate::Node;
+
 use bincode::deserialize;
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
+use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr};
 use std::{error::Error, fmt, net::SocketAddr};
 use tracing::{debug, info, info_span, warn};
 
@@ -59,6 +62,7 @@ pub struct ComputeNode {
     pub current_block: Vec<u8>,
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
+    pub partition_key: Key,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -248,6 +252,12 @@ impl ComputeNode {
             self.partition_list.push(partition_entry.clone());
 
             if self.partition_list.len() == PARTITION_LIMIT {
+                let key = get_partition_entry_key(self.partition_list.clone());
+                self.partition_key = match Key::from_slice(&key) {
+                    Some(v) => v,
+                    None => panic!("Error trying to create key"),
+                };
+
                 return Response {
                     success: true,
                     reason: "Partition list is full",
@@ -329,6 +339,7 @@ impl ComputeInterface for ComputeNode {
             current_random_num: Vec::new(),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
+            partition_key: gen_key(),
         }
     }
 

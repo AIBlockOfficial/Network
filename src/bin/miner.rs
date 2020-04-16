@@ -84,18 +84,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
                         let block = node.current_block.clone();
-
-                        // let block_pow = node
-                        //     .generate_pow_for_block(endpoint.clone(), block)
-                        //     .await
-                        //     .unwrap();
-
-                        // println!("BLOCK PoW: {:?}", block_pow);
-
-                        // let _send_pow = node
-                        //     .send_pow(compute_node_connected.unwrap(), block_pow)
-                        //     .await
-                        //     .unwrap();
                     }
                     Ok(Response {
                         success: true,

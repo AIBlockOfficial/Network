@@ -16,7 +16,6 @@ use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
-// use sodiumoxide::crypto::secretbox::xsalsa20poly1305::Key;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
