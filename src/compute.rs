@@ -59,7 +59,7 @@ pub struct ComputeNode {
     pub current_block: Vec<u8>,
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
-    pub partition_list: Vec<SocketAddr>,
+    pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
@@ -214,7 +214,9 @@ impl ComputeNode {
 
         match req {
             SendPoW { pow } => self.receive_pow(peer, pow),
-            SendPartitionPoW { pow_components } => self.receive_partition_pow(peer, pow_components),
+            SendPartitionEntry { partition_entry } => {
+                self.receive_partition_entry(peer, partition_entry)
+            }
             SendPartitionRequest => self.receive_partition_request(peer),
         }
     }
@@ -235,12 +237,15 @@ impl ComputeNode {
     }
 
     /// Receives the light POW for partition inclusion
-    fn receive_partition_pow(&mut self, peer: SocketAddr, pow_components: ProofOfWork) -> Response {
-        let mut pow_mut = pow_components.clone();
-        let peer_for_storage = self.get_storage_address(peer);
+    fn receive_partition_entry(
+        &mut self,
+        peer: SocketAddr,
+        partition_entry: ProofOfWork,
+    ) -> Response {
+        let mut pow_mut = partition_entry.clone();
 
         if self.partition_list.len() < PARTITION_LIMIT && Self::validate_pow(&mut pow_mut) {
-            self.partition_list.push(peer_for_storage);
+            self.partition_list.push(partition_entry.clone());
 
             if self.partition_list.len() == PARTITION_LIMIT {
                 return Response {
@@ -294,8 +299,9 @@ impl ComputeNode {
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         self.generate_garbage_block(BLOCK_SIZE);
 
-        for entry in self.partition_list.clone() {
-            let send_entry = self.get_comms_address(entry);
+        for (peer, _) in self.request_list.clone() {
+            let peer_to_send: SocketAddr = peer.parse().unwrap();
+            let send_entry = self.get_comms_address(peer_to_send);
             let _result = self.send_block(send_entry).await.unwrap();
         }
 
@@ -304,8 +310,9 @@ impl ComputeNode {
 
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
-        for entry in self.partition_list.clone() {
-            let send_entry = self.get_comms_address(entry);
+        for (peer, _) in self.request_list.clone() {
+            let peer_to_send: SocketAddr = peer.parse().unwrap();
+            let send_entry = self.get_comms_address(peer_to_send);
             let _result = self.send_partition_list(send_entry).await.unwrap();
         }
 

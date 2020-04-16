@@ -1,10 +1,9 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::constants::{KA_GENERATOR, MINING_DIFFICULTY, PEER_LIMIT};
+use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
     ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response,
 };
-use crate::key_creation::{KeyAgreement, PeerInfo};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -69,12 +68,8 @@ pub struct MinerNode {
     node: Node,
     pub rand_num: Vec<u8>,
     pub current_block: Vec<u8>,
-    pub key_creator: KeyAgreement,
     last_pow: Arc<RwLock<ProofOfWork>>,
-    pub partition_list: Vec<SocketAddr>,
-    pub y_i_requests: Vec<SocketAddr>,
-    pub right_index: Option<SocketAddr>,
-    pub left_index: Option<SocketAddr>,
+    pub partition_list: Vec<ProofOfWork>,
 }
 
 impl MinerNode {
@@ -91,17 +86,6 @@ impl MinerNode {
     /// Generates a garbage coinbase tx for network testing
     fn generate_garbage_coinbase() -> Vec<u8> {
         vec![0; 285]
-    }
-
-    /// Generates a key agreement struct to kick everything off
-    pub fn generate_key_agreement(&mut self) {
-        let mut address_as_vec = self.address().to_string().as_bytes().to_vec();
-        let mut unicorn = vec![10, 51, 1, 20, 0];
-        let mut nonce = vec![0, 0, 0, 0, 0];
-
-        self.key_creator = KeyAgreement::new(self.address().to_string(), KA_GENERATOR, 10, 5);
-        self.key_creator
-            .first_round(&mut address_as_vec, &mut unicorn, &mut nonce);
     }
 
     /// Connect to a peer on the network.
@@ -157,40 +141,6 @@ impl MinerNode {
             SendBlock { block } => self.receive_pre_block(block),
             SendPartitionList { p_list } => self.receive_partition_list(p_list),
             SendRandomNum { rnum } => self.receive_random_number(rnum),
-
-            // Key agreement stuff
-            SendYi { y_i } => self.receive_y_i(peer.to_string(), y_i),
-            SendKj { k_j } => self.receive_k_j(peer.to_string(), k_j),
-            SendPeerInfo { peer_info } => self.receive_peer_info(peer.to_string(), peer_info),
-            SendYiRequest => self.receive_y_i_request(peer),
-        }
-    }
-
-    /// Handles the receipt of a y_i request
-    fn receive_y_i_request(&mut self, peer: SocketAddr) -> Response {
-        self.y_i_requests.push(peer);
-
-        Response {
-            success: true,
-            reason: "Received y_i request successfully",
-        }
-    }
-
-    /// Handles the receipt of a peer's peer info
-    fn receive_peer_info(&mut self, peer: String, peer_info: PeerInfo) -> Response {
-        self.key_creator.receive_peer_info(peer, peer_info);
-
-        // If we've received peer info from everyone in list
-        if self.key_creator.pid_table.len() == self.partition_list.len() {
-            return Response {
-                success: true,
-                reason: "Received peer info. Third round complete",
-            };
-        }
-
-        Response {
-            success: true,
-            reason: "Received peer info successfully",
         }
     }
 
@@ -205,85 +155,11 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of a peer's k_j value for the key creation
-    fn receive_k_j(&mut self, peer: String, k_j: Vec<u8>) -> Response {
-        self.key_creator.receive_k_j(peer, k_j);
-
-        let mut is_full = true;
-        for (_id, peer_info) in self.key_creator.pid_table.iter() {
-            if peer_info.k_j.is_empty() {
-                is_full = false;
-                break;
-            }
-        }
-
-        if is_full {
-            return Response {
-                success: true,
-                reason: "Received peer k_j. All k_j values received",
-            };
-        }
-
-        Response {
-            success: true,
-            reason: "Received peer's k_j successfully",
-        }
-    }
-
-    /// Handles the receipt of a peer's y_i value for the miner node
-    fn receive_y_i(&mut self, peer: String, y_i: Vec<u8>) -> Response {
-        let p_length = self.partition_list.len();
-        let comparison_addr = self.get_comparison_addr();
-
-        println!("PEER: {:?}", peer);
-        println!("COMPARISON: {:?}", comparison_addr);
-
-        let own_index = self
-            .partition_list
-            .iter()
-            .position(|&x| x == comparison_addr)
-            .unwrap();
-
-        let right_index = match own_index + 1 {
-            p_length => 0,
-            _ => own_index + 1,
-        };
-
-        let left_index = match own_index - 1 {
-            num if num < 0 => p_length - 1,
-            _ => own_index - 1,
-        };
-
-        if peer == self.partition_list[left_index].to_string() {
-            self.key_creator.left_y_i = y_i;
-        } else if peer == self.partition_list[right_index].to_string() {
-            self.key_creator.right_y_i = y_i;
-        }
-
-        Response {
-            success: true,
-            reason: "Received peer's y_i successfully",
-        }
-    }
-
     /// Handles the receipt of the filled partition list
-    fn receive_partition_list(&mut self, p_list: Vec<SocketAddr>) -> Response {
+    fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
         self.partition_list = p_list.clone();
 
         println!("PARTITION LIST: {:?}", p_list);
-
-        let self_index = p_list.iter().position(|&x| x == self.address()).unwrap();
-
-        if self_index == 0 {
-            self.right_index = Some(p_list[1]);
-            self.left_index = Some(p_list[p_list.len() - 1]);
-        } else if self_index == p_list.len() - 1 {
-            self.right_index = Some(p_list[0]);
-            self.left_index = Some(p_list[p_list.len() - 2]);
-        } else {
-            self.right_index = Some(p_list[self_index + 1]);
-            self.left_index = Some(p_list[self_index - 1]);
-        }
 
         Response {
             success: true,
@@ -318,48 +194,13 @@ impl MinerNode {
     pub async fn send_partition_pow(
         &mut self,
         peer: SocketAddr,
-        pow_components: ProofOfWork,
+        partition_entry: ProofOfWork,
     ) -> Result<()> {
         self.node
             .send(
                 peer,
-                ComputeRequest::SendPartitionPoW {
-                    pow_components: pow_components,
-                },
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Sends a request to the peer for their y_i value
-    pub async fn send_y_i_request(&mut self, peer: SocketAddr) -> Result<()> {
-        self.node.send(peer, MineRequest::SendYiRequest).await?;
-        Ok(())
-    }
-
-    /// Sends y_i to a peer miner.
-    pub async fn send_y_i(&mut self, peer: SocketAddr, y_i: Vec<u8>) -> Result<()> {
-        self.node
-            .send(peer, MineRequest::SendYi { y_i: y_i })
-            .await?;
-        Ok(())
-    }
-
-    /// Sends k_j to a peer miner.
-    pub async fn send_k_j(&mut self, peer: SocketAddr, k_j: Vec<u8>) -> Result<()> {
-        self.node
-            .send(peer, MineRequest::SendKj { k_j: k_j })
-            .await?;
-        Ok(())
-    }
-
-    /// Sends own peer info to a peer miner
-    pub async fn send_peer_info(&mut self, peer: SocketAddr, peer_info: PeerInfo) -> Result<()> {
-        self.node
-            .send(
-                peer,
-                MineRequest::SendPeerInfo {
-                    peer_info: peer_info,
+                ComputeRequest::SendPartitionEntry {
+                    partition_entry: partition_entry,
                 },
             )
             .await?;
@@ -500,11 +341,7 @@ impl MinerInterface for MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             current_block: Vec::new(),
-            y_i_requests: Vec::new(),
-            right_index: None,
-            left_index: None,
             node: Node::new(comms_address, PEER_LIMIT),
-            key_creator: KeyAgreement::new(comms_address.to_string(), 12, 10, 5),
             last_pow: Arc::new(RwLock::new(ProofOfWork {
                 address: "".to_string(),
                 nonce: Vec::new(),
