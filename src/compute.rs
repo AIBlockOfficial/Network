@@ -311,9 +311,8 @@ impl ComputeNode {
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
         for (peer, _) in self.request_list.clone() {
-            let peer_to_send: SocketAddr = peer.parse().unwrap();
-            let send_entry = self.get_comms_address(peer_to_send);
-            let _result = self.send_partition_list(send_entry).await.unwrap();
+            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+            let _result = self.send_partition_list(peer_addr).await.unwrap();
         }
 
         Ok(())

@@ -4,6 +4,7 @@ use crate::interfaces::{
     ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response,
 };
+use crate::utils::get_partition_entry_key;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -13,6 +14,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
+
+use sodiumoxide::crypto::secretbox::{gen_key, Key};
+// use sodiumoxide::crypto::secretbox::xsalsa20poly1305::Key;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -66,6 +70,7 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug, Clone)]
 pub struct MinerNode {
     node: Node,
+    pub partition_key: Key,
     pub rand_num: Vec<u8>,
     pub current_block: Vec<u8>,
     last_pow: Arc<RwLock<ProofOfWork>>,
@@ -159,7 +164,11 @@ impl MinerNode {
     fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
         self.partition_list = p_list.clone();
 
-        println!("PARTITION LIST: {:?}", p_list);
+        let key = get_partition_entry_key(p_list);
+        self.partition_key = match Key::from_slice(&key) {
+            Some(v) => v,
+            None => panic!("Error trying to create key"),
+        };
 
         Response {
             success: true,
@@ -340,6 +349,7 @@ impl MinerInterface for MinerNode {
         MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
+            partition_key: gen_key(),
             current_block: Vec::new(),
             node: Node::new(comms_address, PEER_LIMIT),
             last_pow: Arc::new(RwLock::new(ProofOfWork {

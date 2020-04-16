@@ -1,3 +1,4 @@
+use crate::interfaces::ProofOfWork;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Returns a socket address from command input
@@ -11,4 +12,16 @@ pub fn command_input_to_socket(command_input: String) -> SocketAddr {
     let ip_addr = IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]));
 
     SocketAddr::new(ip_addr, port)
+}
+
+/// Computes a key that will be shared from a vector of PoWs
+pub fn get_partition_entry_key(p_list: Vec<ProofOfWork>) -> Vec<u8> {
+    let mut key = Vec::new();
+    for entry in p_list {
+        let mut next_entry = entry.address.as_bytes().to_vec();
+        next_entry.append(&mut entry.nonce.clone());
+        key.append(&mut next_entry);
+    }
+
+    key
 }
