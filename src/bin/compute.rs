@@ -58,7 +58,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }) => {
                         let _list_flood = node.flood_list_to_partition().await.unwrap();
                         node.partition_list = Vec::new();
-                        //let _block_flood = node.flood_block_to_partition().await.unwrap();
+
+                        let _block_flood = node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {
                         success: true,

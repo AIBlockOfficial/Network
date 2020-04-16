@@ -1,6 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
+use std::time::SystemTime;
 use system::{MinerInterface, MinerNode, Response};
 
 #[tokio::main]
@@ -52,6 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(compute_node_connected.unwrap()).await?;
     }
 
+    let now = SystemTime::now();
+
     tokio::spawn({
         let mut node = node.clone();
 
@@ -83,7 +86,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Pre-block received successfully",
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
-                        let block = node.current_block.clone();
+                        let block_pow = node
+                            .generate_pow_for_block(endpoint.clone(), node.current_block.clone())
+                            .await
+                            .unwrap();
+                        match now.elapsed() {
+                            Ok(elapsed) => {
+                                println!("{}", elapsed.as_millis());
+                            }
+                            Err(e) => {
+                                // an error occurred!
+                                println!("Error: {:?}", e);
+                            }
+                        }
+
+                        let _send_pow = node
+                            .send_pow(compute_node_connected.unwrap(), block_pow)
+                            .await
+                            .unwrap();
                     }
                     Ok(Response {
                         success: true,

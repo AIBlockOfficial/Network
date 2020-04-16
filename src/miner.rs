@@ -10,6 +10,7 @@ use bincode::deserialize;
 use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
@@ -161,13 +162,12 @@ impl MinerNode {
 
     /// Handles the receipt of the filled partition list
     fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
-        self.partition_list = p_list.clone();
+        let key = get_partition_entry_key(p_list.clone());
+        let hashed_key = Sha3_256::digest(&key).to_vec();
+        let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
+        self.partition_key = Key(key_slice);
 
-        let key = get_partition_entry_key(p_list);
-        self.partition_key = match Key::from_slice(&key) {
-            Some(v) => v,
-            None => panic!("Error trying to create key"),
-        };
+        self.partition_list = p_list.clone();
 
         Response {
             success: true,
@@ -280,7 +280,7 @@ impl MinerNode {
             let mut pow = ProofOfWorkBlock {
                 address,
                 nonce,
-                block,
+                block: Sha3_256::digest(&block).to_vec(),
                 coinbase,
             };
 

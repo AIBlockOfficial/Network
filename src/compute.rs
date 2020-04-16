@@ -11,10 +11,13 @@ use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
-use sodiumoxide::crypto::secretbox::{gen_key, Key};
+
 use std::collections::{BTreeMap, HashMap};
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{error::Error, fmt, net::SocketAddr};
+
+use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -253,10 +256,9 @@ impl ComputeNode {
 
             if self.partition_list.len() == PARTITION_LIMIT {
                 let key = get_partition_entry_key(self.partition_list.clone());
-                self.partition_key = match Key::from_slice(&key) {
-                    Some(v) => v,
-                    None => panic!("Error trying to create key"),
-                };
+                let hashed_key = Sha3_256::digest(&key).to_vec();
+                let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
+                self.partition_key = Key(key_slice);
 
                 return Response {
                     success: true,
@@ -310,9 +312,8 @@ impl ComputeNode {
         self.generate_garbage_block(BLOCK_SIZE);
 
         for (peer, _) in self.request_list.clone() {
-            let peer_to_send: SocketAddr = peer.parse().unwrap();
-            let send_entry = self.get_comms_address(peer_to_send);
-            let _result = self.send_block(send_entry).await.unwrap();
+            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+            let _result = self.send_block(peer_addr).await.unwrap();
         }
 
         Ok(())
