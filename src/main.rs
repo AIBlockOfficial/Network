@@ -16,6 +16,7 @@ mod test_utils;
 #[cfg(test)]
 mod tests;
 mod unicorn;
+mod user;
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;
