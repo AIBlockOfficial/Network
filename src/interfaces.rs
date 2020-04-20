@@ -27,7 +27,7 @@ pub struct Tx;
 pub struct Block;
 
 /// A placeholder Contract struct
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract;
 
 /// A placeholder Heat struct
@@ -51,13 +51,32 @@ pub struct HandshakeRequest {
 }
 
 /// Encapsulates storage requests
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
     GetHistory { start_time: u64, end_time: u64 },
     GetUnicornTable { n_last_items: Option<u64> },
     SendPow { pow: ProofOfWork },
     SendPreBlock { pre_block: Block },
     Store { incoming_contract: Contract },
+}
+
+impl fmt::Debug for StorageRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use StorageRequest::*;
+
+        match *self {
+            GetHistory {
+                ref start_time,
+                ref end_time,
+            } => write!(f, "GetHistory"),
+            GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
+            SendPow { ref pow } => write!(f, "SendPoW"),
+            SendPreBlock { ref pre_block } => write!(f, "SendPreBlock"),
+            Store {
+                ref incoming_contract,
+            } => write!(f, "Store"),
+        }
+    }
 }
 
 pub trait StorageInterface {
