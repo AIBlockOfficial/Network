@@ -28,7 +28,7 @@ async fn proof_of_work() {
 
         tokio::spawn(async move {
             let (pow, _conn) = tokio::join!(
-                m2.generate_pow_promise("123123"),
+                m2.generate_pow_promise("123123".to_string()),
                 m.connect_to(compute_node_addr)
             );
             m.send_pow(compute_node_addr, pow.unwrap()).await.unwrap();

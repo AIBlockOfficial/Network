@@ -10,6 +10,7 @@ mod compute;
 mod interfaces;
 mod key_creation;
 mod miner;
+mod storage;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
