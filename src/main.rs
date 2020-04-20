@@ -15,8 +15,10 @@ mod storage;
 mod test_utils;
 #[cfg(test)]
 mod tests;
+mod transaction;
 mod unicorn;
 mod user;
+mod utils;
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;

@@ -1,7 +1,6 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
-use crate::interfaces::{Block, Contract, Response, StorageInterface, StorageRequest, Tx};
-use crate::unicorn::UnicornShard;
+use crate::interfaces::{Block, Contract, Response, StorageInterface, StorageRequest};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
