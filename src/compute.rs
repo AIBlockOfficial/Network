@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
-use crate::transaction::Transaction;
+use crate::primitives::transaction::Transaction;
 use crate::unicorn::UnicornShard;
 use crate::Node;
 

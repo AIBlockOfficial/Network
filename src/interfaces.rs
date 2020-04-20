@@ -1,5 +1,6 @@
 #![allow(unused)]
-use crate::transaction::Transaction;
+use crate::primitives::block::Block;
+use crate::primitives::transaction::Transaction;
 use crate::unicorn::UnicornShard;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -18,10 +19,6 @@ pub struct ProofOfWork {
     pub address: String,
     pub nonce: Vec<u8>,
 }
-
-/// A placeholder Block struct
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Block;
 
 /// A placeholder Contract struct
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -210,8 +207,8 @@ pub enum UserRequest {
         contract: Contract,
         peers: Vec<SocketAddr>,
     },
-    SendAsset {
-        asset: Asset,
+    SendAssets {
+        assets: Vec<Asset>,
     },
 }
 
@@ -224,7 +221,7 @@ impl fmt::Debug for UserRequest {
                 ref contract,
                 ref peers,
             } => write!(f, "AdvertiseContract"),
-            SendAsset { ref asset } => write!(f, "SendAsset"),
+            SendAssets { ref assets } => write!(f, "SendAsset"),
         }
     }
 }

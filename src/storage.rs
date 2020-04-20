@@ -1,12 +1,13 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::interfaces::ProofOfWork;
-use crate::interfaces::{Block, Contract, Response, StorageInterface, StorageRequest};
+use crate::interfaces::{Contract, ProofOfWork, Response, StorageInterface, StorageRequest};
+use crate::primitives::block::Block;
 use crate::Node;
+
 use bincode::deserialize;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, info_span, warn};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -94,7 +95,7 @@ impl StorageInterface for StorageNode {
         StorageNode {
             node: Node::new(address, 6),
             whitelisted: HashMap::new(),
-            pre_block: Block,
+            pre_block: Block::new(),
         }
     }
 

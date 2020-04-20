@@ -10,12 +10,12 @@ mod compute;
 mod interfaces;
 mod key_creation;
 mod miner;
+mod primitives;
 mod storage;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
 mod tests;
-mod transaction;
 mod unicorn;
 mod user;
 mod utils;

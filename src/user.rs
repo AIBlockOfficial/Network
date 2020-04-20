@@ -1,14 +1,17 @@
-use crate::comms_handler::CommsError;
+use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::{
     Asset, Contract, HandshakeRequest, NodeType, Response, UseInterface, UserRequest,
 };
 use crate::sha3::Digest;
 use crate::Node;
 
+use bincode::deserialize;
+use bytes::Bytes;
 use rand;
 use sha3::Sha3_256;
-use std::{fmt, net::SocketAddr, sync::Arc};
+use std::{fmt, net::SocketAddr};
 use tokio::{sync::RwLock, task};
+use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, UserError>;
@@ -17,6 +20,7 @@ pub type Result<T> = std::result::Result<T, UserError>;
 pub enum UserError {
     Network(CommsError),
     AsyncTask(task::JoinError),
+    Serialization(bincode::Error),
 }
 
 impl fmt::Display for UserError {
@@ -24,6 +28,7 @@ impl fmt::Display for UserError {
         match self {
             UserError::Network(err) => write!(f, "Network error: {}", err),
             UserError::AsyncTask(err) => write!(f, "Async task error: {}", err),
+            UserError::Serialization(err) => write!(f, "Serialization error: {}", err),
         }
     }
 }
@@ -37,6 +42,12 @@ impl From<CommsError> for UserError {
 impl From<task::JoinError> for UserError {
     fn from(other: task::JoinError) -> Self {
         Self::AsyncTask(other)
+    }
+}
+
+impl From<bincode::Error> for UserError {
+    fn from(other: bincode::Error) -> Self {
+        Self::Serialization(other)
     }
 }
 
@@ -70,6 +81,45 @@ impl UserNode {
             )
             .await?;
         Ok(())
+    }
+
+    /// Listens for new events from peers and handles them.
+    /// The future returned from this function should be executed in the runtime. It will block execution.
+    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+        let event = self.node.next_event().await?;
+        self.handle_event(event).await.into()
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+        match event {
+            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+        }
+    }
+
+    /// Hanldes a new incoming message from a peer.
+    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+        info_span!("peer", ?peer).in_scope(|| {
+            let req = deserialize::<UserRequest>(&frame).map_err(|error| {
+                warn!(?error, "frame-deserialize");
+                error
+            })?;
+
+            info_span!("request", ?req).in_scope(|| {
+                let response = self.handle_request(peer, req);
+                debug!(?response, ?peer, "response");
+
+                Ok(response)
+            })
+        })
+    }
+
+    /// Handles a compute request.
+    fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
+        use UserRequest::*;
+        match req {
+            AdvertiseContract { contract, peers } => self.check_contract(contract, peers),
+            SendAssets { assets } => self.receive_assets(assets),
+        }
     }
 }
 
