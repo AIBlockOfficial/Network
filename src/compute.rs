@@ -77,6 +77,24 @@ impl ComputeNode {
         self.node.address()
     }
 
+    /// I'm lazy, so just making another verifier for now
+    pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
+        let mut pow_body = pow.address.as_bytes().to_vec();
+        pow_body.append(&mut pow.nonce.clone());
+        pow_body.append(&mut pow.block.clone());
+        pow_body.append(&mut pow.coinbase.clone());
+
+        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
+
+        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
+            if entry != 0 {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Generates a garbage file for use in network testing. Will save the file
     /// as the current block internally
     ///
@@ -383,19 +401,26 @@ impl ComputeInterface for ComputeNode {
 
     fn receive_pow(&mut self, address: SocketAddr, pow: ProofOfWorkBlock) -> Response {
         info!(?address, "Received PoW");
+        let mut pow_block = pow.clone();
 
-        if self.unicorn_list.len() < self.unicorn_limit {
-            let mut unicorn_value = UnicornShard::new();
-            unicorn_value.promise = pow.clone();
-
-            self.unicorn_list.insert(address, unicorn_value);
-            //self.flood_pow_to_peers(address, &pow);
-
+        if Self::validate_pow_block(&mut pow_block) {
             return Response {
                 success: true,
                 reason: "Received PoW successfully",
             };
         }
+
+        // if self.unicorn_list.len() < self.unicorn_limit {
+        //     let mut unicorn_value = UnicornShard::new();
+        //     unicorn_value.promise = pow.clone();
+
+        //     self.unicorn_list.insert(address, unicorn_value);
+
+        //     return Response {
+        //         success: true,
+        //         reason: "Received PoW successfully",
+        //     };
+        // }
 
         Response {
             success: false,

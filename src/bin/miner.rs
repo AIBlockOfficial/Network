@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .generate_pow_for_block(endpoint.clone(), node.current_block.clone())
                             .await
                             .unwrap();
+
                         match now.elapsed() {
                             Ok(elapsed) => {
                                 println!("{}", elapsed.as_millis());
