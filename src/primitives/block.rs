@@ -1,7 +1,12 @@
 #![allow(unused)]
 use crate::interfaces::Asset;
 use crate::primitives::transaction::{Transaction, TxIn, TxOut};
+use crate::sha3::Digest;
+
 use serde::{Deserialize, Serialize};
+use sha3::Sha3_256;
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
+use std::convert::TryInto;
 
 /// Block header, which contains a smaller footprint view of the block.
 /// Hash records are assumed to be 256 bit
@@ -81,7 +86,11 @@ pub fn create_raw_genesis_block(
     let mut tx_out = TxOut::new();
 
     // Handle genesis transaction
-    tx_out.value = Some(Asset::Token(*genesis_reward));
+    let hashed_key = Sha3_256::digest(&unicorn_val.as_bytes()).to_vec();
+    let unicorn_key: [u8; 32] = hashed_key[..].try_into().unwrap();
+
+    //tx_in.script_signature = Some(PublicKey(unicorn_key));
+    //tx_out.value = Some(Asset::Token(*genesis_reward));
 
     gen_transaction.inputs.push(tx_in);
     gen_transaction.outputs.push(tx_out);

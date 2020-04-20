@@ -238,7 +238,8 @@ pub trait UseInterface {
     /// ### Arguments
     ///
     /// * `address` - Socket address of self
-    fn new(address: SocketAddr) -> Self;
+    /// * `network` - Network to join
+    fn new(address: SocketAddr, network: usize) -> Self;
 
     /// Checks an advertised contract with a set of peers
     ///
