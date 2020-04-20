@@ -1,10 +1,12 @@
 use crate::comms_handler::CommsError;
 use crate::interfaces::{
-    Block, ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
+use crate::primitives::block::Block;
 use crate::rand::Rng;
 use crate::sha3::Digest;
 use crate::Node;
+
 use rand;
 use sha3::Sha3_256;
 use std::{fmt, net::SocketAddr, sync::Arc};

@@ -10,12 +10,15 @@ mod compute;
 mod interfaces;
 mod key_creation;
 mod miner;
+mod primitives;
 mod storage;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
 mod tests;
 mod unicorn;
+mod user;
+mod utils;
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;

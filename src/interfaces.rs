@@ -1,4 +1,6 @@
 #![allow(unused)]
+use crate::primitives::block::Block;
+use crate::primitives::transaction::Transaction;
 use crate::unicorn::UnicornShard;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -18,14 +20,6 @@ pub struct ProofOfWork {
     pub nonce: Vec<u8>,
 }
 
-/// A placeholder tx struct
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Tx;
-
-/// A placeholder Block struct
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Block;
-
 /// A placeholder Contract struct
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract;
@@ -34,7 +28,11 @@ pub struct Contract;
 pub struct Heat;
 
 /// A placeholder Asset struct
-pub struct Asset;
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+pub enum Asset {
+    Token(u64),
+    Data(Vec<u8>),
+}
 
 /// Denotes existing node types
 #[derive(Deserialize, Serialize, Debug)]
@@ -128,6 +126,7 @@ pub trait StorageInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
     SendPoW { pow: Vec<u8> },
+    SendTx { tx: Vec<Transaction> },
 }
 
 impl fmt::Debug for ComputeRequest {
@@ -136,6 +135,7 @@ impl fmt::Debug for ComputeRequest {
 
         match *self {
             SendPoW { ref pow } => write!(f, "SendPoW"),
+            SendTx { ref tx } => write!(f, "SendTx"),
         }
     }
 }
@@ -175,7 +175,7 @@ pub trait ComputeInterface {
     fn get_service_levels(&self) -> Response;
 
     /// Receives transactions to be bundled into blocks
-    fn receive_transactions(&self, transactions: Vec<Tx>) -> Response;
+    fn receive_transactions(&self, transactions: Vec<Transaction>) -> Response;
 
     /// Executes a received and approved contract
     fn execute_contract(&self, contract: Contract) -> Response;
@@ -200,13 +200,52 @@ pub trait MinerInterface {
     fn receive_pre_block(&self, pre_block: &Block) -> Response;
 }
 
+/// Encapsulates storage requests
+#[derive(Deserialize, Serialize, Clone)]
+pub enum UserRequest {
+    AdvertiseContract {
+        contract: Contract,
+        peers: Vec<SocketAddr>,
+    },
+    SendAssets {
+        assets: Vec<Asset>,
+    },
+}
+
+impl fmt::Debug for UserRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use UserRequest::*;
+
+        match *self {
+            AdvertiseContract {
+                ref contract,
+                ref peers,
+            } => write!(f, "AdvertiseContract"),
+            SendAssets { ref assets } => write!(f, "SendAsset"),
+        }
+    }
+}
+
 pub trait UseInterface {
     /// Creates a new instance of Mining implementor
-    fn new() -> Self;
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Socket address of self
+    fn new(address: SocketAddr) -> Self;
 
-    /// Advertise a contract with a set of peers
-    fn advertise_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response;
+    /// Checks an advertised contract with a set of peers
+    ///
+    /// ### Arguments
+    ///
+    /// * `contract`    - Contract to check
+    /// * `peers`       - Peers with whom the contract is arranged
+    fn check_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response;
 
     /// Receives an asset/s, which could be tokens or data assets
-    fn receive_assets(assets: Vec<Asset>) -> Response;
+    ///
+    /// ### Arguments
+    ///
+    /// * `assets`  - Assets to receive
+    fn receive_assets(&mut self, assets: Vec<Asset>) -> Response;
 }

@@ -1,8 +1,10 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
-use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response, Tx};
+use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
+use crate::primitives::transaction::Transaction;
 use crate::unicorn::UnicornShard;
 use crate::Node;
+
 use bincode::deserialize;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -112,6 +114,7 @@ impl ComputeNode {
         use ComputeRequest::*;
         match req {
             SendPoW { pow } => self.receive_pow(peer, pow),
+            SendTx { tx } => self.receive_transactions(tx),
         }
     }
 }
@@ -193,7 +196,7 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&self, _transactions: Vec<Tx>) -> Response {
+    fn receive_transactions(&self, _transactions: Vec<Transaction>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
