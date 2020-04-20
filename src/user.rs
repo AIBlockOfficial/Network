@@ -2,6 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::{
     Asset, Contract, HandshakeRequest, NodeType, Response, UseInterface, UserRequest,
 };
+use crate::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use crate::sha3::Digest;
 use crate::Node;
 
@@ -9,7 +10,8 @@ use bincode::deserialize;
 use bytes::Bytes;
 use rand;
 use sha3::Sha3_256;
-use std::{fmt, net::SocketAddr};
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
+use std::{error::Error, fmt, net::SocketAddr};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info, info_span, warn};
 
@@ -29,6 +31,16 @@ impl fmt::Display for UserError {
             UserError::Network(err) => write!(f, "Network error: {}", err),
             UserError::AsyncTask(err) => write!(f, "Async task error: {}", err),
             UserError::Serialization(err) => write!(f, "Serialization error: {}", err),
+        }
+    }
+}
+
+impl Error for UserError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Network(ref e) => Some(e),
+            Self::Serialization(ref e) => Some(e),
+            Self::AsyncTask(ref e) => Some(e),
         }
     }
 }
@@ -56,12 +68,23 @@ impl From<bincode::Error> for UserError {
 pub struct UserNode {
     node: Node,
     assets: Vec<Asset>,
+    network: usize,
 }
 
 impl UserNode {
     /// Returns the miner node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Creates a new transaction to be included into the next block
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_ins`  - Transaction inputs
+    /// * `tx_outs`  - Transaction outputs
+    pub fn create_tx(&self, tx_ins: Vec<TxIn>, tx_outs: Vec<TxOut>) -> Transaction {
+        Transaction::new_from_input(tx_ins, tx_outs, self.network.clone())
     }
 
     /// Start the compute node on the network.
@@ -124,10 +147,11 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn new(address: SocketAddr) -> UserNode {
+    fn new(address: SocketAddr, network: usize) -> UserNode {
         UserNode {
             node: Node::new(address, 2),
             assets: Vec::new(),
+            network: network,
         }
     }
 

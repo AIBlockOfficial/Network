@@ -1,6 +1,7 @@
 use bincode::serialize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
 
 use crate::interfaces::Asset;
 use crate::utils::is_valid_amount;
@@ -26,8 +27,7 @@ impl OutPoint {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxIn {
     pub previous_out: Option<OutPoint>,
-    pub sequence: u32,
-    pub script_signature: Option<String>,
+    pub script_signature: Option<PublicKey>,
 }
 
 impl TxIn {
@@ -35,8 +35,20 @@ impl TxIn {
     pub fn new() -> TxIn {
         TxIn {
             previous_out: None,
-            sequence: 0,
             script_signature: None,
+        }
+    }
+
+    /// Creates a new TxIn instance from provided inputs
+    ///
+    /// ### Arguments
+    ///
+    /// * `previous_out`    - Outpoint of the previous transaction
+    /// * `script_sig`      - Script signature of the previous outpoint
+    pub fn new_from_input(previous_out: OutPoint, script_sig: PublicKey) -> TxIn {
+        TxIn {
+            previous_out: Some(previous_out),
+            script_signature: Some(script_sig),
         }
     }
 }
@@ -65,8 +77,7 @@ impl TxOut {
 pub struct Transaction {
     pub inputs: Vec<TxIn>,
     pub outputs: Vec<TxOut>,
-    pub version: i32,
-    pub lock_time: u32,
+    pub version: usize,
 }
 
 impl Transaction {
@@ -76,7 +87,21 @@ impl Transaction {
             inputs: Vec::new(),
             outputs: Vec::new(),
             version: 0,
-            lock_time: 0,
+        }
+    }
+
+    /// Creates a new Transaction instance from inputs
+    ///
+    /// ### Arguments
+    ///
+    /// * `inputs`  - Transaction inputs
+    /// * `outputs` - Transaction outputs
+    /// * `version` - Network version
+    pub fn new_from_input(inputs: Vec<TxIn>, outputs: Vec<TxOut>, version: usize) -> Transaction {
+        Transaction {
+            inputs: inputs,
+            outputs: outputs,
+            version: version,
         }
     }
 
