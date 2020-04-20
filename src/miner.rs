@@ -111,7 +111,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `address` - Payment address for a valid PoW
-    pub async fn generate_pow(&mut self, address: &'static str) -> Result<ProofOfWork> {
+    pub async fn generate_pow(&mut self, address: String) -> Result<ProofOfWork> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
             let mut pow = ProofOfWork { address, nonce };
@@ -131,7 +131,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `address` - Payment address for a valid PoW
-    pub async fn generate_pow_promise(&mut self, address: &'static str) -> Result<Vec<u8>> {
+    pub async fn generate_pow_promise(&mut self, address: String) -> Result<Vec<u8>> {
         let pow = self.generate_pow(address).await?;
 
         *(self.last_pow.write().await) = pow.clone();
@@ -160,7 +160,7 @@ impl MinerInterface for MinerNode {
         MinerNode {
             node: Node::new(comms_address, PEER_LIMIT),
             last_pow: Arc::new(RwLock::new(ProofOfWork {
-                address: "",
+                address: "".to_string(),
                 nonce: Vec::new(),
             })),
         }

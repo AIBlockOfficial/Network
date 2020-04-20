@@ -14,7 +14,7 @@ pub struct Response {
 /// PoW structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
-    pub address: &'static str,
+    pub address: String,
     pub nonce: Vec<u8>,
 }
 
@@ -23,7 +23,7 @@ pub struct ProofOfWork {
 pub struct Tx;
 
 /// A placeholder Block struct
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Block;
 
 /// A placeholder Contract struct
@@ -55,34 +55,53 @@ pub struct HandshakeRequest {
 pub enum StorageRequest {
     GetHistory { start_time: u64, end_time: u64 },
     GetUnicornTable { n_last_items: Option<u64> },
-    Pow { hash: f64 },
-    PreBlock { pre_block: Block },
-    Store { contract: Contract },
+    SendPow { pow: ProofOfWork },
+    SendPreBlock { pre_block: Block },
+    Store { incoming_contract: Contract },
 }
 
 pub trait StorageInterface {
     /// Creates a new instance of a Store implementor
-    fn new() -> Self;
+    fn new(address: SocketAddr) -> Self;
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
-    fn get_history(&self, start_time: &u64, end_time: &u64) -> Option<Vec<Tx>>;
+    fn get_history(&self, start_time: &u64, end_time: &u64) -> Response;
 
-    /// Whitelists the supplied UUID for edit permissions.
-    fn whitelist(&self, uuid: &'static str) -> Response;
+    /// Whitelists the supplied address for edit permissions.
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address to whitelist
+    fn whitelist(&mut self, address: SocketAddr) -> Response;
 
     /// Provides the UnicornShard table, with an optional section slice.
     /// Not providing a section slice will return the entire table.
-    fn get_unicorn_table(&self, n_last_items: Option<u64>) -> Option<Vec<f64>>;
+    ///
+    /// ### Arguments
+    ///
+    /// * `n_last_items`    - Number of last items to fetch from unicorn list
+    fn get_unicorn_table(&self, n_last_items: Option<u64>) -> Response;
 
     /// Receives a PoW to match against the current pre-block.
-    /// TODO: Hash needs to be a BigInt
-    fn receive_pow(&self, hash: &f64) -> Response;
+    ///
+    /// ### Arguments
+    ///
+    /// * `pow` - Proof of Work to match
+    fn receive_pow(&self, pow: ProofOfWork) -> Response;
 
     /// Receives the new pre-block from the ComputeInterface Ring
-    fn receive_pre_block(&self, pre_block: Block) -> Response;
+    ///
+    /// ### Arguments
+    ///
+    /// * `pre_block`   - The pre-block to be stored and checked
+    fn receive_pre_block(&mut self, pre_block: Block) -> Response;
 
     /// Receives agreed contracts for storage
+    ///
+    /// ### Arguments
+    ///
+    /// * `contract`    - Contract to store
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
