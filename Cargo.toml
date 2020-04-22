@@ -20,6 +20,7 @@ tracing = "0.1.13"
 tracing-subscriber = "0.2.3"
 tracing-futures = "0.2.3"
 bytes = "0.5.4"
+rocksdb = "0.13.0"
 
 [features]
 mock = []
