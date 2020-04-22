@@ -54,7 +54,7 @@ pub enum StorageRequest {
     GetHistory { start_time: u64, end_time: u64 },
     GetUnicornTable { n_last_items: Option<u64> },
     SendPow { pow: ProofOfWork },
-    SendPreBlock { pre_block: Block },
+    SendBlock { block: Block },
     Store { incoming_contract: Contract },
 }
 
@@ -69,7 +69,7 @@ impl fmt::Debug for StorageRequest {
             } => write!(f, "GetHistory"),
             GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
             SendPow { ref pow } => write!(f, "SendPoW"),
-            SendPreBlock { ref pre_block } => write!(f, "SendPreBlock"),
+            SendBlock { ref block } => write!(f, "SendBlock"),
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
@@ -79,7 +79,12 @@ impl fmt::Debug for StorageRequest {
 
 pub trait StorageInterface {
     /// Creates a new instance of a Store implementor
-    fn new(address: SocketAddr) -> Self;
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address of self
+    /// * `net`     - The network type to save to
+    fn new(address: SocketAddr, net: usize) -> Self;
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
@@ -107,12 +112,13 @@ pub trait StorageInterface {
     /// * `pow` - Proof of Work to match
     fn receive_pow(&self, pow: ProofOfWork) -> Response;
 
-    /// Receives the new pre-block from the ComputeInterface Ring
+    /// Receives the new block from the miner with permissions to write
     ///
     /// ### Arguments
     ///
-    /// * `pre_block`   - The pre-block to be stored and checked
-    fn receive_pre_block(&mut self, pre_block: Block) -> Response;
+    /// * `peer`    - Peer that the block is received from
+    /// * `block`   - The pre-block to be stored and checked
+    fn receive_block(&mut self, peer: SocketAddr, block: Block) -> Response;
 
     /// Receives agreed contracts for storage
     ///
