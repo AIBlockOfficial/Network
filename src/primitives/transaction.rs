@@ -3,6 +3,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::interfaces::Asset;
+use crate::script::lang::Script;
 use crate::utils::is_valid_amount;
 
 /// An outpoint - a combination of a transaction hash and an index n into its vout
@@ -27,7 +28,7 @@ impl OutPoint {
 pub struct TxIn {
     pub previous_out: Option<OutPoint>,
     pub sequence: u32,
-    pub script_signature: Option<String>,
+    pub script_signature: Option<Script>,
 }
 
 impl TxIn {
@@ -46,7 +47,7 @@ impl TxIn {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
-    pub script_public_key: Option<String>,
+    pub script_public_key: Option<Script>,
 }
 
 impl TxOut {

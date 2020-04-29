@@ -80,9 +80,7 @@ pub fn create_raw_genesis_block(
     let mut tx_out = TxOut::new();
 
     // Handle genesis transaction
-    tx_in.script_signature = Some(unicorn_val);
     tx_out.value = Some(Asset::Token(*genesis_reward));
-    tx_out.script_public_key = Some(genesis_output);
 
     gen_transaction.inputs.push(tx_in);
     gen_transaction.outputs.push(tx_out);

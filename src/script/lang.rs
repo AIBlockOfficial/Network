@@ -1,12 +1,13 @@
 use crate::script::{OpCodes, StackEntry};
 use crate::sha3::Digest;
+use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign::PublicKey;
 use tracing::{error, warn};
 
 /// Scripts are defined as a sequence of stack entries
 /// NOTE: A tuple struct could probably work here as well
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Script {
     pub stack: Vec<StackEntry>,
 }

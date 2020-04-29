@@ -24,7 +24,6 @@ pub const LOCKTIME_THRESHOLD: u32 = 500000000; // Tue Nov 5 00:53:20 1985 UTC
 // Maximum value that an opcode can be
 pub const MAX_OPCODE: u8 = OpCodes::OP_NOP10 as u8;
 
-
 /*------- STORAGE CONSTANTS -------*/
 
 /// Path to chain DB

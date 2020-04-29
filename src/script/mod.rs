@@ -1,10 +1,11 @@
 pub mod lang;
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Stack entry enum which embodies the range of possible
 /// operations that could be performed in a Script stack process
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 pub enum StackEntry {
     Op(OpCodes),
     Signature(Vec<u8>),
@@ -46,7 +47,7 @@ impl StackEntry {
 }
 
 /// Ops code for stack scripts
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 pub enum OpCodes {
     // push value
     OP_0 = 0x00,
