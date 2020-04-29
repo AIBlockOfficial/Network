@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::script::{OpCodes, StackEntry};
 use crate::sha3::Digest;
 use serde::{Deserialize, Serialize};

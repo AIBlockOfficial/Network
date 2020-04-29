@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::interfaces::Asset;
 use crate::primitives::transaction::{Transaction, TxIn, TxOut};
 use serde::{Deserialize, Serialize};

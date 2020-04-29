@@ -1,3 +1,4 @@
+#![allow(unused)]
 use bincode::serialize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
