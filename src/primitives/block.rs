@@ -10,6 +10,7 @@ pub struct BlockHeader {
     pub time: u32,
     pub bits: u32,
     pub nonce: u32,
+    pub seed_value: Vec<u8>, // for commercial
     pub previous_hash: Vec<u8>,
     pub merkle_root_hash: Vec<u8>,
 }
@@ -21,6 +22,7 @@ impl BlockHeader {
             version: 0,
             previous_hash: Vec::with_capacity(32),
             merkle_root_hash: Vec::with_capacity(32),
+            seed_value: Vec::new(),
             time: 0,
             bits: 0,
             nonce: 0,

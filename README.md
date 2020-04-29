@@ -6,7 +6,11 @@ A repo for the development of the Zenotta Network Protocol (ZNP).
 
 ## Setup
 
-Run the following when first cloning the repo in order to get setup and ready to go:
+You can set up the project on your local machine using the following steps:
+
+- Clone this repo using one of the options in Gitlab
+- From your terminal, move into the cloned folder on your local machine
+- Run the following and you're ready to go:
 
 ```
 make
