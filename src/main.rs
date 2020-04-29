@@ -13,6 +13,7 @@ mod interfaces;
 mod key_creation;
 mod miner;
 mod primitives;
+mod script;
 mod storage;
 #[cfg(test)]
 mod test_utils;
