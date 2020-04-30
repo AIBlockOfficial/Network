@@ -8,6 +8,7 @@ use crate::Node;
 
 use bincode::deserialize;
 use bytes::Bytes;
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info, info_span, warn};
@@ -119,17 +120,7 @@ impl UserNode {
         tx_ins
     }
 
-    /// Creates a new transaction to be included into the next block
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_ins`  - Transaction inputs
-    /// * `tx_outs`  - Transaction outputs
-    pub fn create_tx(&self, tx_ins: Vec<TxIn>, tx_outs: Vec<TxOut>) -> Transaction {
-        Transaction::new_from_input(tx_ins, tx_outs, self.network.clone())
-    }
-
-    /// Start the compute node on the network.
+    /// Start the user node on the network.
     pub async fn start(&mut self) -> Result<()> {
         Ok(self.node.listen().await?)
     }
