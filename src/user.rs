@@ -2,15 +2,12 @@ use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::{
     Asset, Contract, HandshakeRequest, NodeType, Response, UseInterface, UserRequest,
 };
-use crate::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
-use crate::sha3::Digest;
+use crate::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use crate::script::lang::Script;
 use crate::Node;
 
 use bincode::deserialize;
 use bytes::Bytes;
-use rand;
-use sha3::Sha3_256;
-use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info, info_span, warn};
@@ -75,6 +72,51 @@ impl UserNode {
     /// Returns the miner node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Constructs a transaction to pay a receiver
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_ins`              - Address/es to pay from
+    /// * `receiver_address`    - Address to send to
+    /// * `amount`              - Number of tokens to send
+    pub fn create_payment_tx(
+        &self,
+        tx_ins: Vec<TxIn>,
+        receiver_address: Vec<u8>,
+        amount: u64,
+    ) -> Transaction {
+        let mut tx = Transaction::new();
+        let mut tx_out = TxOut::new();
+
+        tx_out.value = Some(Asset::Token(amount));
+        tx_out.script_public_key = Some(receiver_address);
+
+        tx.outputs = vec![tx_out];
+        tx.inputs = tx_ins;
+        tx.version = 0;
+
+        tx
+    }
+
+    /// Constructs a set of TxIns for a payment
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_values`   - Series of values required for TxIn construction
+    pub fn create_payment_tx_ins(&self, tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
+        let mut tx_ins = Vec::new();
+
+        for entry in tx_values {
+            let mut new_tx_in = TxIn::new();
+            new_tx_in.script_signature = Some(Script::pay2pkh(entry.signature, entry.pub_key));
+            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+
+            tx_ins.push(new_tx_in);
+        }
+
+        tx_ins
     }
 
     /// Creates a new transaction to be included into the next block

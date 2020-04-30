@@ -8,6 +8,15 @@ use crate::interfaces::Asset;
 use crate::script::lang::Script;
 use crate::utils::is_valid_amount;
 
+/// A user-friendly construction struct for a TxIn
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TxConstructor {
+    pub prev_hash: Vec<u8>,
+    pub prev_n: i32,
+    pub signature: Vec<u8>,
+    pub pub_key: PublicKey,
+}
+
 /// An outpoint - a combination of a transaction hash and an index n into its vout
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutPoint {
@@ -18,7 +27,7 @@ pub struct OutPoint {
 // TODO: Hashes are currently Vec<u8>, can be stored some other way
 impl OutPoint {
     /// Creates a new outpoint instance
-    fn new(hash: Vec<u8>, n: i32) -> OutPoint {
+    pub fn new(hash: Vec<u8>, n: i32) -> OutPoint {
         OutPoint { hash: hash, n: n }
     }
 }
@@ -29,7 +38,7 @@ impl OutPoint {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxIn {
     pub previous_out: Option<OutPoint>,
-    pub script_signature: Option<Script>
+    pub script_signature: Option<Script>,
 }
 
 impl TxIn {
@@ -60,7 +69,7 @@ impl TxIn {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
-    pub script_public_key: Option<Script>,
+    pub script_public_key: Option<Vec<u8>>,
 }
 
 impl TxOut {
