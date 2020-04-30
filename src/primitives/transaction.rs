@@ -2,10 +2,20 @@
 use bincode::serialize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
 
 use crate::interfaces::Asset;
 use crate::script::lang::Script;
 use crate::utils::is_valid_amount;
+
+/// A user-friendly construction struct for a TxIn
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TxConstructor {
+    pub prev_hash: Vec<u8>,
+    pub prev_n: i32,
+    pub signature: Vec<u8>,
+    pub pub_key: PublicKey,
+}
 
 /// An outpoint - a combination of a transaction hash and an index n into its vout
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -17,7 +27,7 @@ pub struct OutPoint {
 // TODO: Hashes are currently Vec<u8>, can be stored some other way
 impl OutPoint {
     /// Creates a new outpoint instance
-    fn new(hash: Vec<u8>, n: i32) -> OutPoint {
+    pub fn new(hash: Vec<u8>, n: i32) -> OutPoint {
         OutPoint { hash: hash, n: n }
     }
 }
@@ -28,7 +38,6 @@ impl OutPoint {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxIn {
     pub previous_out: Option<OutPoint>,
-    pub sequence: u32,
     pub script_signature: Option<Script>,
 }
 
@@ -37,8 +46,20 @@ impl TxIn {
     pub fn new() -> TxIn {
         TxIn {
             previous_out: None,
-            sequence: 0,
             script_signature: None,
+        }
+    }
+
+    /// Creates a new TxIn instance from provided inputs
+    ///
+    /// ### Arguments
+    ///
+    /// * `previous_out`    - Outpoint of the previous transaction
+    /// * `script_sig`      - Script signature of the previous outpoint
+    pub fn new_from_input(previous_out: OutPoint, script_sig: Script) -> TxIn {
+        TxIn {
+            previous_out: Some(previous_out),
+            script_signature: Some(script_sig),
         }
     }
 }
@@ -48,7 +69,7 @@ impl TxIn {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
-    pub script_public_key: Option<Script>,
+    pub script_public_key: Option<Vec<u8>>,
 }
 
 impl TxOut {
@@ -67,8 +88,7 @@ impl TxOut {
 pub struct Transaction {
     pub inputs: Vec<TxIn>,
     pub outputs: Vec<TxOut>,
-    pub version: i32,
-    pub lock_time: u32,
+    pub version: usize,
 }
 
 impl Transaction {
@@ -78,7 +98,21 @@ impl Transaction {
             inputs: Vec::new(),
             outputs: Vec::new(),
             version: 0,
-            lock_time: 0,
+        }
+    }
+
+    /// Creates a new Transaction instance from inputs
+    ///
+    /// ### Arguments
+    ///
+    /// * `inputs`  - Transaction inputs
+    /// * `outputs` - Transaction outputs
+    /// * `version` - Network version
+    pub fn new_from_input(inputs: Vec<TxIn>, outputs: Vec<TxOut>, version: usize) -> Transaction {
+        Transaction {
+            inputs: inputs,
+            outputs: outputs,
+            version: version,
         }
     }
 
