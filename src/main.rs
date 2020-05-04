@@ -9,6 +9,7 @@ extern crate sodiumoxide;
 mod comms_handler;
 mod compute;
 mod constants;
+mod db;
 mod interfaces;
 mod key_creation;
 mod miner;

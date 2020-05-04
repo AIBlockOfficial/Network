@@ -1,9 +1,11 @@
 #![allow(unused)]
 use crate::script::{OpCodes, StackEntry};
 use crate::sha3::Digest;
+use bincode::serialize;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
-use sodiumoxide::crypto::sign::PublicKey;
+use sodiumoxide::crypto::sign::{sign_detached, PublicKey, Signature};
 use tracing::{error, warn};
 
 /// Scripts are defined as a sequence of stack entries
@@ -23,16 +25,22 @@ impl Script {
     ///
     /// ### Arguments
     ///
-    /// * `signature`   - Signature of the payer
+    /// * `check_data`  - Check data to provide signature
+    /// * `signature`   - Signature of check data
     /// * `pub_key`     - Public key of the payer
-    pub fn pay2pkh(signature: Vec<u8>, pub_key: PublicKey) -> Script {
+    pub fn pay2pkh(check_data: Vec<u8>, signature: Signature, pub_key: PublicKey) -> Script {
         let mut new_script = Script::new();
-        let new_key = Sha3_256::digest(&pub_key.0).to_vec();
+        let pub_key_stack_entry = StackEntry::PubKey(pub_key);
 
+        let pub_key_bytes = Bytes::from(serialize(&pub_key_stack_entry).unwrap());
+        let new_key = Sha3_256::digest(&pub_key_bytes).to_vec();
+
+        new_script.stack.push(StackEntry::Bytes(check_data));
         new_script.stack.push(StackEntry::Signature(signature));
-        new_script.stack.push(StackEntry::PubKey(new_key));
+        new_script.stack.push(pub_key_stack_entry.clone());
         new_script.stack.push(StackEntry::Op(OpCodes::OP_DUP));
         new_script.stack.push(StackEntry::Op(OpCodes::OP_HASH256));
+        new_script.stack.push(StackEntry::PubKeyHash(new_key));
         new_script
             .stack
             .push(StackEntry::Op(OpCodes::OP_EQUALVERIFY));
@@ -57,15 +65,15 @@ impl Script {
             error!("Multisig requiring more keys to lock than the total number of keys");
         } else {
             let mut new_stack = Vec::with_capacity(3 + pub_keys.len());
-            let mut stack_entry_keys = Vec::new();
-
-            for key in pub_keys {
-                let new_key = Sha3_256::digest(&key.0).to_vec();
-                stack_entry_keys.push(StackEntry::PubKey(new_key));
-            }
 
             new_stack.push(StackEntry::Num(m));
-            new_stack.append(&mut stack_entry_keys);
+            new_stack.append(
+                &mut pub_keys
+                    .clone()
+                    .iter()
+                    .map(|e| StackEntry::PubKey(*e))
+                    .collect(),
+            );
             new_stack.push(StackEntry::Num(n));
             new_stack.push(StackEntry::Op(OpCodes::OP_CHECKMULTISIG));
 
@@ -80,13 +88,15 @@ impl Script {
     /// ### Arguments
     ///
     /// * `signatures`  - Signatures to unlock with
-    pub fn multisig_unlock(signatures: Vec<Vec<u8>>) -> Script {
+    pub fn multisig_unlock(signatures: Vec<Signature>) -> Script {
         let mut new_script = Script::new();
         new_script.stack = vec![StackEntry::Op(OpCodes::OP_0)];
-
-        for sig in signatures {
-            new_script.stack.push(StackEntry::Signature(sig));
-        }
+        new_script.stack.append(
+            &mut signatures
+                .iter()
+                .map(|e| StackEntry::Signature(*e))
+                .collect(),
+        );
 
         new_script
     }
@@ -102,7 +112,7 @@ impl Script {
     pub fn multisig_validation(
         m: usize,
         n: usize,
-        signatures: Vec<Vec<u8>>,
+        signatures: Vec<Signature>,
         pub_keys: Vec<PublicKey>,
     ) -> Script {
         let mut new_script = Script::new();
@@ -115,15 +125,19 @@ impl Script {
             new_script.stack = vec![StackEntry::Op(OpCodes::OP_0)];
 
             // Handle signatures
-            for sig in signatures {
-                new_script.stack.push(StackEntry::Signature(sig));
-            }
+            new_script.stack.append(
+                &mut signatures
+                    .iter()
+                    .map(|e| StackEntry::Signature(*e))
+                    .collect(),
+            );
 
             new_script.stack.push(StackEntry::Num(m));
-            for key in pub_keys {
-                let new_key = Sha3_256::digest(&key.0).to_vec();
-                new_script.stack.push(StackEntry::PubKey(new_key));
-            }
+
+            // Handle pub keys
+            new_script
+                .stack
+                .append(&mut pub_keys.iter().map(|e| StackEntry::PubKey(*e)).collect());
             new_script.stack.push(StackEntry::Num(n));
             new_script
                 .stack

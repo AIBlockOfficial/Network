@@ -1,7 +1,9 @@
 #![allow(unused)]
 pub mod lang;
+pub mod utils;
 
 use serde::{Deserialize, Serialize};
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, Signature};
 use std::fmt;
 
 /// Stack entry enum which embodies the range of possible
@@ -9,9 +11,11 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 pub enum StackEntry {
     Op(OpCodes),
-    Signature(Vec<u8>),
-    PubKey(Vec<u8>),
+    Signature(Signature),
+    PubKey(PublicKey),
+    PubKeyHash(Vec<u8>),
     Num(usize),
+    Bytes(Vec<u8>),
 }
 
 impl StackEntry {
@@ -20,6 +24,7 @@ impl StackEntry {
         match self {
             StackEntry::Signature(_) => true,
             StackEntry::PubKey(_) => true,
+            StackEntry::PubKeyHash(_) => true,
             _ => false,
         }
     }
@@ -28,20 +33,6 @@ impl StackEntry {
     pub fn is_an_op(&self) -> bool {
         match self {
             StackEntry::Op(_) => true,
-            _ => false,
-        }
-    }
-
-    /// Checks whether the value at "index" of a hash is eq to "value"
-    ///
-    /// ### Arguments
-    ///
-    /// * `index`   - Index to check
-    /// * `value`   - Value to check index against
-    pub fn value_at_index_eq(&self, index: usize, value: u8) -> bool {
-        match self {
-            StackEntry::Signature(v) => v[index] == value,
-            StackEntry::PubKey(v) => v[index] == value,
             _ => false,
         }
     }
