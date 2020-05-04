@@ -110,8 +110,11 @@ impl UserNode {
 
         for entry in tx_values {
             let mut new_tx_in = TxIn::new();
-            new_tx_in.script_signature =
-                Script::pay2pkh(entry.prev_hash.clone(), entry.signature, entry.pub_key);
+            new_tx_in.script_signature = Script::pay2pkh(
+                entry.prev_hash.clone(),
+                entry.signatures[0],
+                entry.pub_keys[0],
+            );
             new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);

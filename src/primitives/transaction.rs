@@ -14,8 +14,8 @@ use crate::utils::is_valid_amount;
 pub struct TxConstructor {
     pub prev_hash: Vec<u8>,
     pub prev_n: i32,
-    pub signature: Signature,
-    pub pub_key: PublicKey,
+    pub signatures: Vec<Signature>,
+    pub pub_keys: Vec<PublicKey>,
 }
 
 /// An outpoint - a combination of a transaction hash and an index n into its vout

@@ -112,6 +112,7 @@ impl Script {
     pub fn multisig_validation(
         m: usize,
         n: usize,
+        check_data: Vec<u8>,
         signatures: Vec<Signature>,
         pub_keys: Vec<PublicKey>,
     ) -> Script {
@@ -122,7 +123,7 @@ impl Script {
         } else if m > n {
             error!("Multisig requiring more keys to lock than the total number of keys");
         } else {
-            new_script.stack = vec![StackEntry::Op(OpCodes::OP_0)];
+            new_script.stack = vec![StackEntry::Bytes(check_data)];
 
             // Handle signatures
             new_script.stack.append(
