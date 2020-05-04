@@ -27,7 +27,7 @@ pub const MAX_OPCODE: u8 = OpCodes::OP_NOP10 as u8;
 /*------- STORAGE CONSTANTS -------*/
 
 /// Path to chain DB
-pub const DB_PATH: &'static str = "src/db";
+pub const DB_PATH: &'static str = "src/db/db";
 
 /// Path to test net DB
 pub const DB_PATH_TEST: &'static str = "test";

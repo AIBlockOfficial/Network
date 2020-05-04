@@ -2,10 +2,11 @@
 use bincode::serialize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::sign::ed25519::PublicKey;
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, Signature};
 
 use crate::interfaces::Asset;
 use crate::script::lang::Script;
+use crate::script::{OpCodes, StackEntry};
 use crate::utils::is_valid_amount;
 
 /// A user-friendly construction struct for a TxIn
@@ -13,8 +14,8 @@ use crate::utils::is_valid_amount;
 pub struct TxConstructor {
     pub prev_hash: Vec<u8>,
     pub prev_n: i32,
-    pub signature: Vec<u8>,
-    pub pub_key: PublicKey,
+    pub signatures: Vec<Signature>,
+    pub pub_keys: Vec<PublicKey>,
 }
 
 /// An outpoint - a combination of a transaction hash and an index n into its vout
@@ -38,15 +39,18 @@ impl OutPoint {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxIn {
     pub previous_out: Option<OutPoint>,
-    pub script_signature: Option<Script>,
+    pub script_signature: Script,
 }
 
 impl TxIn {
     /// Creates a new TxIn instance
     pub fn new() -> TxIn {
+        let mut script_sig = Script::new();
+        script_sig.stack.push(StackEntry::Op(OpCodes::OP_0));
+
         TxIn {
             previous_out: None,
-            script_signature: None,
+            script_signature: script_sig,
         }
     }
 
@@ -59,7 +63,7 @@ impl TxIn {
     pub fn new_from_input(previous_out: OutPoint, script_sig: Script) -> TxIn {
         TxIn {
             previous_out: Some(previous_out),
-            script_signature: Some(script_sig),
+            script_signature: script_sig,
         }
     }
 }

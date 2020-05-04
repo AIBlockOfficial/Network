@@ -2,6 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
 use crate::primitives::transaction::Transaction;
+use crate::script::utils::tx_ins_are_valid;
 use crate::unicorn::UnicornShard;
 use crate::Node;
 
@@ -49,6 +50,27 @@ impl ComputeNode {
     /// Returns the compute node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Processes transaction for payment from user
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to process
+    pub fn process_p2pkh_tx(&self, transaction: Transaction) -> Response {
+        if tx_ins_are_valid(transaction.inputs) {
+            // TODO: Dump valid tx in current block
+
+            return Response {
+                success: true,
+                reason: "Token payment made successfully",
+            };
+        }
+
+        Response {
+            success: false,
+            reason: "You are not authorised to make this payment",
+        }
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
