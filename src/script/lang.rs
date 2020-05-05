@@ -49,14 +49,42 @@ impl Script {
         new_script
     }
 
+    /// Constructs one part of a multiparty transaction script
+    ///
+    /// ### Arguments
+    ///
+    /// * `check_data`  - Data to be signed for verification
+    /// * `pub_key`     - Public key of this party
+    /// * `signature`   - Signature of this party
+    pub fn member_multisig(
+        check_data: Vec<u8>,
+        pub_key: PublicKey,
+        signature: Signature,
+    ) -> Script {
+        let mut new_script = Script::new();
+
+        new_script.stack.push(StackEntry::Bytes(check_data));
+        new_script.stack.push(StackEntry::Signature(signature));
+        new_script.stack.push(StackEntry::PubKey(pub_key));
+        new_script.stack.push(StackEntry::Op(OpCodes::OP_CHECKSIG));
+
+        new_script
+    }
+
     /// Constructs a multisig locking script
     ///
     /// ### Arguments
     ///
     /// * `m`           - Number of signatures required to unlock
     /// * `n`           - Number of valid signatures total
+    /// * `check_data`  - Data to have checked against signatures
     /// * `pub_keys`    - The constituent public keys
-    pub fn multisig_lock(m: usize, n: usize, pub_keys: Vec<PublicKey>) -> Script {
+    pub fn multisig_lock(
+        m: usize,
+        n: usize,
+        check_data: Vec<u8>,
+        pub_keys: Vec<PublicKey>,
+    ) -> Script {
         let mut new_script = Script::new();
 
         if n > pub_keys.len() || m > pub_keys.len() {
@@ -66,6 +94,7 @@ impl Script {
         } else {
             let mut new_stack = Vec::with_capacity(3 + pub_keys.len());
 
+            new_stack.push(StackEntry::Bytes(check_data));
             new_stack.push(StackEntry::Num(m));
             new_stack.append(
                 &mut pub_keys
@@ -87,10 +116,11 @@ impl Script {
     ///
     /// ### Arguments
     ///
+    /// * `check_data`  - Data to have signed
     /// * `signatures`  - Signatures to unlock with
-    pub fn multisig_unlock(signatures: Vec<Signature>) -> Script {
+    pub fn multisig_unlock(check_data: Vec<u8>, signatures: Vec<Signature>) -> Script {
         let mut new_script = Script::new();
-        new_script.stack = vec![StackEntry::Op(OpCodes::OP_0)];
+        new_script.stack = vec![StackEntry::Bytes(check_data)];
         new_script.stack.append(
             &mut signatures
                 .iter()

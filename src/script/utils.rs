@@ -12,6 +12,48 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, Signature};
 use tracing::{debug, error, info};
 
+/// Verifies that a member of a multisig tx script is valid
+///
+/// ### Arguments
+///
+/// * `script`  - Script to verify
+pub fn member_multisig_is_valid(script: Script) -> bool {
+    let mut current_stack: Vec<StackEntry> = Vec::with_capacity(script.stack.len());
+
+    for stack_entry in script.stack {
+        match stack_entry {
+            StackEntry::Op(OpCodes::OP_CHECKSIG) => {
+                println!("Checking signature matches public key for multisig member");
+                let pub_key: PublicKey = match current_stack.pop().unwrap() {
+                    StackEntry::PubKey(pub_key) => pub_key,
+                    _ => panic!("Public key not present to verify transaction"),
+                };
+
+                let sig: Signature = match current_stack.pop().unwrap() {
+                    StackEntry::Signature(sig) => sig,
+                    _ => panic!("Signature not present to verify transaction"),
+                };
+
+                let check_data = match current_stack.pop().unwrap() {
+                    StackEntry::Bytes(check_data) => check_data,
+                    _ => panic!("Check data bytes not present to verify transaction"),
+                };
+
+                if (!sign::verify_detached(&sig, &check_data, &pub_key)) {
+                    error!("Signature not valid. Member multisig input invalid");
+                    return false;
+                }
+            }
+            _ => {
+                println!("Adding constant to stack: {:?}", stack_entry);
+                current_stack.push(stack_entry);
+            }
+        }
+    }
+
+    true
+}
+
 /// Verifies that all incoming tx_ins are allowed to be spent. Returns false if a single
 /// transaction doesn't verify
 ///
