@@ -12,6 +12,48 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, Signature};
 use tracing::{debug, error, info};
 
+/// Verifies that a member of a multisig tx script is valid
+///
+/// ### Arguments
+///
+/// * `script`  - Script to verify
+pub fn member_multisig_is_valid(script: Script) -> bool {
+    let mut current_stack: Vec<StackEntry> = Vec::with_capacity(script.stack.len());
+
+    for stack_entry in script.stack {
+        match stack_entry {
+            StackEntry::Op(OpCodes::OP_CHECKSIG) => {
+                println!("Checking signature matches public key for multisig member");
+                let pub_key: PublicKey = match current_stack.pop().unwrap() {
+                    StackEntry::PubKey(pub_key) => pub_key,
+                    _ => panic!("Public key not present to verify transaction"),
+                };
+
+                let sig: Signature = match current_stack.pop().unwrap() {
+                    StackEntry::Signature(sig) => sig,
+                    _ => panic!("Signature not present to verify transaction"),
+                };
+
+                let check_data = match current_stack.pop().unwrap() {
+                    StackEntry::Bytes(check_data) => check_data,
+                    _ => panic!("Check data bytes not present to verify transaction"),
+                };
+
+                if (!sign::verify_detached(&sig, &check_data, &pub_key)) {
+                    error!("Signature not valid. Member multisig input invalid");
+                    return false;
+                }
+            }
+            _ => {
+                println!("Adding constant to stack: {:?}", stack_entry);
+                current_stack.push(stack_entry);
+            }
+        }
+    }
+
+    true
+}
+
 /// Verifies that all incoming tx_ins are allowed to be spent. Returns false if a single
 /// transaction doesn't verify
 ///
@@ -235,6 +277,67 @@ mod tests {
         }
 
         tx_ins
+    }
+
+    /// Util function to create multisig member TxIns
+    fn create_multisig_member_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
+        let mut tx_ins = Vec::new();
+
+        for entry in tx_values {
+            let mut new_tx_in = TxIn::new();
+            new_tx_in.script_signature = Script::member_multisig(
+                entry.prev_hash.clone(),
+                entry.pub_keys[0],
+                entry.signatures[0],
+            );
+            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+
+            tx_ins.push(new_tx_in);
+        }
+
+        tx_ins
+    }
+
+    #[test]
+    /// Checks that correct member multisig scripts are validated as such
+    fn should_pass_member_multisig_valid() {
+        let (pk, sk) = sign::gen_keypair();
+        let prev_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+
+        let tx_const = TxConstructor {
+            prev_hash: prev_hash,
+            prev_n: 0,
+            signatures: vec![signature],
+            pub_keys: vec![pk],
+        };
+
+        let tx_ins = create_multisig_member_tx_ins(vec![tx_const]);
+
+        assert!(member_multisig_is_valid(tx_ins[0].clone().script_signature));
+    }
+
+    #[test]
+    /// Checks that incorrect member multisig scripts are validated as such
+    fn should_fail_member_multisig_invalid() {
+        let (_pk, sk) = sign::gen_keypair();
+        let (pk, _sk) = sign::gen_keypair();
+        let prev_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+
+        let tx_const = TxConstructor {
+            prev_hash: prev_hash,
+            prev_n: 0,
+            signatures: vec![signature],
+            pub_keys: vec![pk],
+        };
+
+        let tx_ins = create_multisig_member_tx_ins(vec![tx_const]);
+
+        assert_eq!(
+            member_multisig_is_valid(tx_ins[0].clone().script_signature),
+            false
+        );
     }
 
     #[test]
