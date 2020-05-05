@@ -17,3 +17,11 @@ make
 ```
 
 Once done you can build the project using `cargo build` and run it using `cargo run`, as per usual.
+
+..
+
+## Git Flow
+
+When working on this repo, please ensure that any branches you may create pull from `master` regularly. In this you 
+ensure that your local version has the latest code for the project and minimizes the possbility of unnecessary merge 
+conflicts.
