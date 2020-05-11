@@ -1,8 +1,8 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
-    ComputeInterface, ComputeRequest, Contract, MineRequest, ProofOfWork, ProofOfWorkBlock,
-    Response, Tx,
+    ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
+    ProofOfWorkBlock, Response, Tx,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::get_partition_entry_key;
@@ -11,13 +11,14 @@ use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
-
-use std::collections::{BTreeMap, HashMap};
-use std::convert::TryInto;
-use std::net::{IpAddr, Ipv4Addr};
-use std::{error::Error, fmt, net::SocketAddr};
-
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryInto,
+    error::Error,
+    fmt,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -72,6 +73,24 @@ pub struct ComputeNode {
 }
 
 impl ComputeNode {
+    /// Generates a new compute node instance
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address for the current compute node
+    pub async fn new(address: SocketAddr) -> Result<ComputeNode> {
+        Ok(ComputeNode {
+            node: Node::new(address, PEER_LIMIT, NodeType::Compute).await?,
+            unicorn_list: HashMap::new(),
+            unicorn_limit: UNICORN_LIMIT,
+            current_block: Vec::new(),
+            current_random_num: Vec::new(),
+            request_list: BTreeMap::new(),
+            partition_list: Vec::new(),
+            partition_key: gen_key(),
+        })
+    }
+
     /// Returns the compute node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
@@ -177,12 +196,6 @@ impl ComputeNode {
     /// * `pow`     - PoW to flood
     pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
-    }
-
-    /// Start the compute node on the network.
-    pub async fn start(&mut self) -> Result<()> {
-        self.node.listen().await?;
-        Ok(())
     }
 
     /// Listens for new events from peers and handles them.
@@ -331,19 +344,6 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
-    fn new(address: SocketAddr) -> ComputeNode {
-        ComputeNode {
-            node: Node::new(address, PEER_LIMIT),
-            unicorn_list: HashMap::new(),
-            unicorn_limit: UNICORN_LIMIT,
-            current_block: Vec::new(),
-            current_random_num: Vec::new(),
-            request_list: BTreeMap::new(),
-            partition_list: Vec::new(),
-            partition_key: gen_key(),
-        }
-    }
-
     fn validate_pow(pow: &mut ProofOfWork) -> bool {
         let mut pow_body = pow.address.as_bytes().to_vec();
         pow_body.append(&mut pow.nonce.clone());

@@ -27,78 +27,44 @@ pub struct NetworkConfig {
 }
 
 impl Network {
-    pub fn create_from_config(mut config: NetworkConfig) -> Self {
+    pub async fn create_from_config(mut config: NetworkConfig) -> Self {
         let ip_addr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let miner_nodes = Self::init_miners(ip_addr, &mut config);
-        let compute_nodes = Self::init_compute(ip_addr, &mut config);
+        let miner_nodes = Self::init_miners(ip_addr, &mut config).await;
+        let compute_nodes = Self::init_compute(ip_addr, &mut config).await;
         Self {
             miner_nodes,
             compute_nodes,
         }
     }
 
-    fn init_miners(ip: IpAddr, config: &mut NetworkConfig) -> BTreeMap<String, MinerNode> {
+    async fn init_miners(ip: IpAddr, config: &mut NetworkConfig) -> BTreeMap<String, MinerNode> {
         let mut port = 10000;
         let mut map = BTreeMap::new();
 
         for name in config.miner_nodes.drain(..) {
-            info_span!("miner", id = field::display(name.clone())).in_scope(|| {
-                map.insert(name, MinerNode::new(SocketAddr::new(ip, port)));
-            });
+            map.insert(
+                name,
+                MinerNode::new(SocketAddr::new(ip, port)).await.unwrap(),
+            );
             port += 1;
         }
 
         map
     }
 
-    fn init_compute(ip: IpAddr, config: &mut NetworkConfig) -> BTreeMap<String, ComputeNode> {
+    async fn init_compute(ip: IpAddr, config: &mut NetworkConfig) -> BTreeMap<String, ComputeNode> {
         let mut port = 20000;
         let mut map = BTreeMap::new();
 
         for name in config.compute_nodes.drain(..) {
-            info_span!("compute", id = field::display(name.clone())).in_scope(|| {
-                map.insert(name, ComputeNode::new(SocketAddr::new(ip, port)));
-            });
+            map.insert(
+                name,
+                ComputeNode::new(SocketAddr::new(ip, port)).await.unwrap(),
+            );
             port += 1;
         }
 
         map
-    }
-
-    /// Starts all nodes.
-    pub fn start(&mut self) {
-        for (name, compute) in self.compute_nodes.iter_mut() {
-            let mut cnode = compute.clone();
-
-            info_span!("compute", id = field::display(name)).in_scope(|| {
-                tokio::spawn(
-                    async move {
-                        let _ = cnode.start().await;
-                    }
-                    .in_current_span(),
-                );
-            });
-        }
-        for (name, mut miner) in self.miner_nodes.iter_mut() {
-            info_span!("miner", id = field::display(name)).in_scope(|| {
-                Self::start_miner(&mut miner);
-            });
-        }
-        trace!("Started network");
-    }
-
-    fn start_miner(miner: &mut MinerNode) -> JoinHandle<()> {
-        let mut miner = miner.clone();
-
-        tokio::spawn(
-            async move {
-                match miner.start().await {
-                    Ok(()) => (),
-                    Err(error) => error!(error = field::display(error), "start"),
-                }
-            }
-            .in_current_span(),
-        )
     }
 
     pub fn miner(&mut self, name: &str) -> Option<&mut MinerNode> {

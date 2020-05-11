@@ -5,7 +5,7 @@ use crate::test_utils::{Network, NetworkConfig};
 
 // #[tokio::test(threaded_scheduler)]
 async fn proof_of_work() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let miner_nodes = vec![
         "miner1".to_string(),
@@ -17,8 +17,8 @@ async fn proof_of_work() {
     let mut network = Network::create_from_config(NetworkConfig {
         miner_nodes,
         compute_nodes: vec!["compute".to_string()],
-    });
-    network.start();
+    })
+    .await;
 
     let compute_node_addr = network.get_address("compute").unwrap();
 
