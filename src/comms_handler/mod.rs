@@ -2,6 +2,8 @@
 
 mod error;
 mod node;
+#[cfg(test)]
+mod tests;
 
 pub use error::CommsError;
 pub use node::Node;

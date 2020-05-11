@@ -28,7 +28,7 @@ impl UnicornShard {
         let mut commit_body = commit.address.as_bytes().to_vec();
         commit_body.append(&mut commit.nonce.clone());
 
-        let result = Sha3_256::digest(&commit_body).to_vec();
+        let _result = Sha3_256::digest(&commit_body).to_vec();
 
         // if result == self.promise {
         //     self.commit = commit;

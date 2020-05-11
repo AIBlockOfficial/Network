@@ -1,8 +1,10 @@
 #![allow(unused)]
 use crate::key_creation::PeerInfo;
 use crate::unicorn::UnicornShard;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
 
 /// A placeholder struct for sensible feedback
@@ -58,17 +60,54 @@ pub struct Heat;
 pub struct Asset;
 
 /// Denotes existing node types
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
     Miner,
     Storage,
     Compute,
 }
 
-/// Handshake request that peers send when they connect to someone
-#[derive(Deserialize, Serialize, Debug)]
-pub struct HandshakeRequest {
-    pub node_type: NodeType,
+/// Token to uniquely identify messages.
+pub type Token = u64;
+
+/// Internal protocol messages exchanged between nodes.
+/// Handle nodes membership & bootstrapping. Wrap higher-level protocols.
+///
+/// ### Message IDs
+/// The requests & response pairs must have corresponding message IDs to make sure
+/// that an application is able to match them. However, not all requests require responses,
+/// and in this case the application will not be registering its interest in a response with
+/// a certain message ID.
+///
+/// Message IDs are also used for _gossip_: a node will remember message IDs it has seen and will
+/// retransmit all messages it has not seen yet.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum CommMessage {
+    /// Handshake request that peers send when they connect to someone.
+    HandshakeRequest {
+        /// Type of node that's trying to establish a connection.
+        node_type: NodeType,
+        /// Publicly available socket address of the node that can be used for inbound connections.
+        public_address: SocketAddr,
+    },
+    /// Handshake response containing contacts of ring members.
+    HandshakeResponse { contacts: Vec<SocketAddr> },
+    /// Gossip message, multicast to all peers within the same ring.
+    Gossip {
+        /// Contents of the gossip message. Can encapsulate other message types.
+        payload: Bytes,
+        /// Number of hops this message made.
+        ttl: u8,
+        /// Unique message identifier.
+        id: Token,
+    },
+    /// Wraps a direct message from peer to peer. Can encapsulate other message types.
+    Direct {
+        /// Contents of a message. Can be serialized message of another type.
+        payload: Bytes,
+        /// Unique message ID. Can be used for correspondence between requests and responses.
+        id: Token,
+    },
 }
 
 /// Encapsulates storage requests
@@ -150,13 +189,6 @@ impl fmt::Debug for ComputeRequest {
 }
 
 pub trait ComputeInterface {
-    /// Generates a new compute node instance
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Address for the current compute node
-    fn new(address: SocketAddr) -> Self;
-
     /// Receives a PoW for inclusion in the UnicornShard build
     ///
     /// ### Arguments
@@ -201,13 +233,6 @@ pub trait ComputeInterface {
 }
 
 pub trait MinerInterface {
-    /// Creates a new instance of Mining implementor
-    ///
-    /// ### Arguments
-    ///
-    /// * `comms_address`   - endpoint address used for communications
-    fn new(comms_address: SocketAddr) -> Self;
-
     /// Receives a new block to be mined
     ///
     /// ### Arguments
