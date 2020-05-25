@@ -42,7 +42,7 @@ async fn multicast() {
     let mut nodes = Vec::with_capacity(NUM_NODES);
 
     for _i in 0..NUM_NODES {
-        let node = Node::new("127.0.0.1:0".parse().unwrap(), 64, NodeType::Compute)
+        let node = Node::new("127.0.0.1:0".parse().unwrap(), NUM_NODES, NodeType::Compute)
             .await
             .unwrap();
         nodes.push(node);
@@ -52,7 +52,7 @@ async fn multicast() {
     let first_node = nodes[0].address();
     let mut conn_handles = Vec::with_capacity(NUM_NODES);
 
-    for i in 0..NUM_NODES {
+    for i in 1..NUM_NODES {
         let mut node = nodes[i].clone();
 
         conn_handles.push(tokio::spawn(async move {
