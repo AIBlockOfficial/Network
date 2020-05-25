@@ -14,6 +14,8 @@ pub enum CommsError {
     PeerNotFound,
     /// Peer is in invalid state.
     PeerInvalidState,
+    /// This peer is already connected.
+    PeerDuplicate,
     /// Serialization-related error.
     Serialization(bincode::Error),
     /// MPSC channel error.
@@ -27,7 +29,8 @@ impl fmt::Display for CommsError {
             CommsError::PeerListFull => write!(f, "Peer list is full"),
             CommsError::PeerListEmpty => write!(f, "Peer list is empty"),
             CommsError::PeerNotFound => write!(f, "Peer not found"),
-            CommsError::PeerInvalidState => write!(f, "Peer has invalid state"),
+            CommsError::PeerDuplicate => write!(f, "Peer has invalid state"),
+            CommsError::PeerInvalidState => write!(f, "Duplicate peer"),
             CommsError::Serialization(err) => write!(f, "Serialization error: {}", err),
             CommsError::ChannelSendError(err) => write!(f, "MPSC channel send error: {}", err),
         }
@@ -42,6 +45,7 @@ impl Error for CommsError {
             CommsError::PeerListEmpty => None,
             CommsError::PeerNotFound => None,
             CommsError::PeerInvalidState => None,
+            CommsError::PeerDuplicate => None,
             CommsError::Serialization(err) => Some(err),
             CommsError::ChannelSendError(err) => Some(err),
         }

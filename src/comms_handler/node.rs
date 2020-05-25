@@ -216,6 +216,7 @@ impl Node {
     ///
     /// [error]: enum.CommsError.html
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
+        trace!(?peer, "connection attempt");
         self.connect_to_peer(peer).await?;
         self.send_handshake(peer, self.node_type).await?;
 
@@ -396,7 +397,7 @@ impl Node {
 
                         peer_state = PeerState::Ready;
 
-                        if let Err(error) = self
+                        match self
                             .handle_handshake_request(
                                 peer_addr,
                                 public_address,
@@ -405,7 +406,13 @@ impl Node {
                             )
                             .await
                         {
-                            warn!(?error, "handle_handshake_request");
+                            Ok(()) => {}
+                            Err(CommsError::PeerDuplicate) => {
+                                // Drop a duplicate connection.
+                                warn!(?public_address, "duplicate peer");
+                                return;
+                            }
+                            Err(error) => warn!(?error, "handle_handshake_request"),
                         }
                     }
                     other => {
@@ -518,6 +525,12 @@ impl Node {
         peer_type: NodeType,
     ) -> Result<()> {
         let mut all_peers = self.peers.write().await;
+
+        // Check if we already have a connection to this peer.
+        if all_peers.contains_key(&peer_in_addr) {
+            return Err(CommsError::PeerDuplicate);
+        }
+
         let peer = all_peers
             .get_mut(&peer_out_addr)
             .ok_or(CommsError::PeerNotFound)?;
@@ -616,9 +629,13 @@ impl Node {
         tokio::spawn({
             let node = self.clone();
             let send_tx = send_tx.clone();
+            let peers = self.peers.clone();
             async move {
                 node.handle_peer_recv(peer_addr, send_tx, messages, is_initiator)
                     .await;
+                // Since we don't wait for any messages from this peer, we can drop the connection.
+                let mut peers_list = peers.write().await;
+                let _ = peers_list.remove(&peer_addr);
             }
             .instrument(span)
         });
