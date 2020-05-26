@@ -1,3 +1,4 @@
+extern crate bit_vec;
 extern crate chrono;
 extern crate hex;
 extern crate rand;
