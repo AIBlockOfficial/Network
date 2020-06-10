@@ -1,6 +1,8 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::constants::{MAX_BLOCK_SIZE, MAX_TX_POOL_SIZE};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
+use crate::primitives::block::{Block, BlockHeader};
 use crate::primitives::transaction::Transaction;
 use crate::script::utils::tx_ins_are_valid;
 use crate::unicorn::UnicornShard;
@@ -42,6 +44,8 @@ const UNICORN_LIMIT: usize = 5;
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
+    pub tx_pool: Vec<Transaction>,
+    pub current_block: Block,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
 }
@@ -71,6 +75,31 @@ impl ComputeNode {
             success: false,
             reason: "You are not authorised to make this payment",
         }
+    }
+
+    /// Processes the next batch of transactions from the floating tx pool
+    /// to create the next block
+    ///
+    /// ### Arguments
+    ///
+    /// * `prev_hash`   - The hash of the previous block
+    /// * `prev_time`   - The time of the previous block
+    pub fn build_block(&mut self, prev_hash: Vec<u8>, prev_time: u32) {
+        let mut next_block = Block::new();
+        next_block.header.time = prev_time + 1;
+        next_block.header.previous_hash = prev_hash;
+
+        while !next_block.is_full() {
+            if self.tx_pool.len() > 0 {
+                let next_tx = self.tx_pool.remove(0);
+                next_block.transactions.push(next_tx.clone());
+            } else {
+                println!("Tx pool is empty. Unable to build the next block");
+                break;
+            }
+        }
+
+        self.current_block = next_block;
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -145,6 +174,8 @@ impl ComputeInterface for ComputeNode {
     fn new(address: SocketAddr) -> ComputeNode {
         ComputeNode {
             node: Node::new(address, PEER_LIMIT),
+            current_block: Block::new(),
+            tx_pool: Vec::with_capacity(MAX_TX_POOL_SIZE),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
         }
@@ -218,10 +249,19 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&self, _transactions: Vec<Transaction>) -> Response {
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+        if self.tx_pool.len() + transactions.len() <= self.tx_pool.capacity() {
+            self.tx_pool.append(&mut transactions.clone());
+
+            return Response {
+                success: true,
+                reason: "Transactions added to current tx pool",
+            };
+        }
+
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Transaction pool is full. Please push to next compute node",
         }
     }
 

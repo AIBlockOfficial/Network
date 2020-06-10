@@ -1,14 +1,20 @@
 use crate::comms_handler::CommsError;
 use crate::interfaces::{
-    ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    Asset, ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::primitives::block::Block;
+use crate::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use crate::rand::Rng;
+use crate::script::lang::Script;
 use crate::sha3::Digest;
 use crate::Node;
+use bincode::{deserialize, serialize};
+use bytes::Bytes;
 
 use rand;
 use sha3::Sha3_256;
+use sodiumoxide::crypto::sign;
+use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
 
@@ -88,6 +94,35 @@ impl MinerNode {
         Ok(())
     }
 
+    /// Creates a coinbase tx with a saved pub keypair
+    ///
+    /// ### Arguments
+    ///
+    /// * `block_time`      - Current block time
+    /// * `block_reward`    - Block reward to be included in coinbase
+    pub fn create_coinbase(&mut self, block_time: u32, block_reward: u64) -> Transaction {
+        let (pk, sk) = sign::gen_keypair();
+
+        // TODO: Save SK to wallet
+
+        // TxIn
+        let mut coinbase_txin = TxIn::new();
+        coinbase_txin.previous_out = None;
+        coinbase_txin.script_signature = Script::new_for_coinbase(block_time);
+
+        // TxOut
+        let mut coinbase_txout = TxOut::new();
+        coinbase_txout.script_public_key = Some(pk);
+        coinbase_txout.value = Some(Asset::Token(block_reward));
+
+        // Final coinbase
+        let mut coinbase = Transaction::new();
+        coinbase.inputs = vec![coinbase_txin];
+        coinbase.outputs = vec![coinbase_txout];
+
+        coinbase
+    }
+
     /// Validates a PoW
     ///
     /// ### Arguments
@@ -155,6 +190,29 @@ impl MinerNode {
 
         nonce
     }
+
+    /// Handles a pre-block for mining and eventual send to compute
+    ///
+    /// ### Arguments
+    ///
+    /// * `pre_block`       - Pre-block to be mined and pushed on
+    /// * `block_reward`    - Block reward allocated to coinbase
+    fn handle_block_for_mine(&mut self, pre_block: &Block, block_reward: u64) -> Block {
+        let mut mined_block = pre_block.clone();
+        let coinbase = self.create_coinbase(pre_block.header.time, block_reward);
+
+        // Handle extra metadata
+        mined_block.transactions.push(coinbase);
+        mined_block.set_bits();
+        let _mhash = mined_block.get_merkle_root();
+
+        // Mine the block hash
+        let hash_input = Bytes::from(serialize(&mined_block).unwrap());
+        let hash_pow = Sha3_256::digest(&hash_input);
+        // TODO: Get pow here
+
+        mined_block
+    }
 }
 
 impl MinerInterface for MinerNode {
@@ -168,10 +226,12 @@ impl MinerInterface for MinerNode {
         }
     }
 
-    fn receive_pre_block(&self, _pre_block: &Block) -> Response {
+    fn receive_pre_block(&mut self, pre_block: &Block, block_reward: u64) -> Response {
+        self.handle_block_for_mine(pre_block, block_reward);
+
         Response {
-            success: false,
-            reason: "Not implemented yet",
+            success: true,
+            reason: "Pre-block received successfully",
         }
     }
 }

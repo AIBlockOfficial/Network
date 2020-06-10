@@ -181,7 +181,7 @@ pub trait ComputeInterface {
     fn get_service_levels(&self) -> Response;
 
     /// Receives transactions to be bundled into blocks
-    fn receive_transactions(&self, transactions: Vec<Transaction>) -> Response;
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
 
     /// Executes a received and approved contract
     fn execute_contract(&self, contract: Contract) -> Response;
@@ -202,8 +202,9 @@ pub trait MinerInterface {
     ///
     /// ### Arguments
     ///
-    /// * `pre_block` - New block to be mined
-    fn receive_pre_block(&self, pre_block: &Block) -> Response;
+    /// * `pre_block`       - New block to be mined
+    /// * `block_reward`    - Block reward allocated to coinbase
+    fn receive_pre_block(&mut self, pre_block: &Block, block_reward: u64) -> Response;
 }
 
 /// Encapsulates storage requests
