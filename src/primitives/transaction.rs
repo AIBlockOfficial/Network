@@ -73,7 +73,7 @@ impl TxIn {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
-    pub script_public_key: Option<Vec<u8>>,
+    pub script_public_key: Option<PublicKey>,
 }
 
 impl TxOut {

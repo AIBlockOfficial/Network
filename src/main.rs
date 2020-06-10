@@ -1,6 +1,8 @@
 extern crate bit_vec;
 extern crate chrono;
+extern crate crypto;
 extern crate hex;
+extern crate merkletree;
 extern crate rand;
 extern crate rocksdb;
 extern crate rug;

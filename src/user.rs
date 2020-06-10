@@ -8,6 +8,7 @@ use crate::Node;
 
 use bincode::deserialize;
 use bytes::Bytes;
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info, info_span, warn};
@@ -84,7 +85,7 @@ impl UserNode {
     pub fn create_payment_tx(
         &self,
         tx_ins: Vec<TxIn>,
-        receiver_address: Vec<u8>,
+        receiver_address: PublicKey,
         amount: u64,
     ) -> Transaction {
         let mut tx = Transaction::new();

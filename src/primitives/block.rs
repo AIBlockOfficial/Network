@@ -1,8 +1,14 @@
 #![allow(unused)]
+use crate::constants::MAX_BLOCK_SIZE;
 use crate::interfaces::Asset;
+use crate::primitives::merkle_hasher::MerkleHasher;
 use crate::primitives::transaction::{Transaction, TxIn, TxOut};
 use crate::sha3::Digest;
 
+use bincode::{deserialize, serialize};
+use bytes::Bytes;
+use merkletree::merkle::MerkleTree;
+use merkletree::store::VecStore;
 use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign::ed25519::PublicKey;
@@ -14,7 +20,7 @@ use std::convert::TryInto;
 pub struct BlockHeader {
     pub version: u32,
     pub time: u32,
-    pub bits: u32,
+    pub bits: usize,
     pub nonce: u32,
     pub seed_value: Vec<u8>, // for commercial
     pub previous_hash: Vec<u8>,
@@ -56,9 +62,57 @@ impl Block {
             transactions: Vec::new(),
         }
     }
+
+    /// Sets the internal number of bits based on length
+    pub fn set_bits(&mut self) {
+        let bytes = Bytes::from(serialize(&self).unwrap());
+        self.header.bits = bytes.len();
+    }
+
+    /// Checks whether a block has hit its maximum size
+    pub fn is_full(&self) -> bool {
+        let bytes = Bytes::from(serialize(&self).unwrap());
+        bytes.len() >= MAX_BLOCK_SIZE
+    }
+
+    /// Get the merkle root for the current set of transactions
+    pub fn get_merkle_root(&mut self) -> Vec<u8> {
+        let merkle = self.build_merkle_tree();
+        let root_hash = merkle.root().to_vec();
+
+        self.header.merkle_root_hash = root_hash.clone();
+        root_hash
+    }
+
+    /// Builds a merkle tree for secure reference
+    fn build_merkle_tree(&self) -> MerkleTree<[u8; 32], MerkleHasher, VecStore<[u8; 32]>> {
+        let mut tx_hashes = Vec::new();
+
+        for tx in &self.transactions {
+            let tx_bytes = Bytes::from(serialize(&tx).unwrap());
+            let tx_hash = Sha3_256::digest(&tx_bytes).to_vec();
+            let merkle_hash = from_slice(tx_hash.as_slice());
+
+            tx_hashes.push(merkle_hash);
+        }
+
+        MerkleTree::try_from_iter(tx_hashes.clone().into_iter().map(Ok)).unwrap()
+    }
 }
 
 /*---- FUNCTIONS ----*/
+
+/// Converts a dynamic array into a static 32 bit
+///
+/// ### Arguments
+///
+/// * `bytes`   - Bytes to cast
+fn from_slice(bytes: &[u8]) -> [u8; 32] {
+    let mut array = [0; 32];
+    let bytes = &bytes[..array.len()]; // panics if not enough data
+    array.copy_from_slice(bytes);
+    array
+}
 
 /// Builds the scaffold of a genesis block
 ///
@@ -73,7 +127,7 @@ impl Block {
 pub fn create_raw_genesis_block(
     time: &u32,
     nonce: &u32,
-    bits: &u32,
+    bits: &usize,
     version: &u32,
     genesis_reward: &u64,
     genesis_output: String,
@@ -120,7 +174,7 @@ pub fn create_raw_genesis_block(
 pub fn create_genesis_block(
     time: u32,
     nonce: u32,
-    bits: u32,
+    bits: usize,
     version: u32,
     genesis_reward: u64,
 ) -> Block {
