@@ -39,3 +39,6 @@ pub const DB_PATH_TEST: &'static str = "test";
 
 /// Path to live net DB
 pub const DB_PATH_LIVE: &'static str = "live";
+
+/// Path to wallet DB
+pub const WALLET_PATH: &'static str = "src/wallet/wallet";
