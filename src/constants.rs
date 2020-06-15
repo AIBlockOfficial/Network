@@ -5,9 +5,6 @@ use crate::script::OpCodes;
 // Maximum number of bytes that a block can contain
 pub const MAX_BLOCK_SIZE: usize = 1000;
 
-// Maximum number of transactions in a given tx_pool
-pub const MAX_TX_POOL_SIZE: usize = 1000000;
-
 /*------- SCRIPT CONSTANTS -------*/
 
 // Maximum number of bytes pushable to the stack

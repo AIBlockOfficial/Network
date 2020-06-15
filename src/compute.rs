@@ -1,8 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::constants::{MAX_BLOCK_SIZE, MAX_TX_POOL_SIZE};
 use crate::interfaces::ProofOfWork;
 use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
-use crate::primitives::block::{Block, BlockHeader};
+use crate::primitives::block::Block;
 use crate::primitives::transaction::Transaction;
 use crate::script::utils::tx_ins_are_valid;
 use crate::unicorn::UnicornShard;
@@ -175,7 +174,7 @@ impl ComputeInterface for ComputeNode {
         ComputeNode {
             node: Node::new(address, PEER_LIMIT),
             current_block: Block::new(),
-            tx_pool: Vec::with_capacity(MAX_TX_POOL_SIZE),
+            tx_pool: Vec::new(),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
         }
