@@ -3,18 +3,20 @@ use crate::interfaces::{
     Asset, ComputeRequest, HandshakeRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::primitives::block::Block;
-use crate::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use crate::primitives::transaction::{Transaction, TxIn, TxOut};
 use crate::rand::Rng;
 use crate::script::lang::Script;
 use crate::sha3::Digest;
+use crate::wallet::{create_address, save_to_wallet, WalletStore};
 use crate::Node;
+
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-
 use rand;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
+use std::io::Error;
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
 
@@ -25,6 +27,7 @@ pub type Result<T> = std::result::Result<T, MinerError>;
 pub enum MinerError {
     Network(CommsError),
     AsyncTask(task::JoinError),
+    Io(Error),
 }
 
 impl fmt::Display for MinerError {
@@ -32,7 +35,14 @@ impl fmt::Display for MinerError {
         match self {
             MinerError::Network(err) => write!(f, "Network error: {}", err),
             MinerError::AsyncTask(err) => write!(f, "Async task error: {}", err),
+            MinerError::Io(err) => write!(f, "IO error: {}", err),
         }
+    }
+}
+
+impl From<Error> for MinerError {
+    fn from(other: Error) -> Self {
+        Self::Io(other)
     }
 }
 
@@ -100,10 +110,12 @@ impl MinerNode {
     ///
     /// * `block_time`      - Current block time
     /// * `block_reward`    - Block reward to be included in coinbase
-    pub fn create_coinbase(&mut self, block_time: u32, block_reward: u64) -> Transaction {
+    pub async fn create_coinbase(
+        &mut self,
+        block_time: u32,
+        block_reward: u64,
+    ) -> Result<Transaction> {
         let (pk, sk) = sign::gen_keypair();
-
-        // TODO: Save SK to wallet
 
         // TxIn
         let mut coinbase_txin = TxIn::new();
@@ -120,7 +132,18 @@ impl MinerNode {
         coinbase.inputs = vec![coinbase_txin];
         coinbase.outputs = vec![coinbase_txout];
 
-        coinbase
+        // Create wallet content
+        let wallet_content = WalletStore {
+            secret_key: sk,
+            transactions: vec![coinbase.clone()],
+            net: 0,
+        };
+
+        // Create address and save to wallet
+        let address = create_address(pk, 0);
+        let _save_result = save_to_wallet(address, wallet_content).await?;
+
+        Ok(coinbase)
     }
 
     /// Validates a PoW
@@ -197,9 +220,15 @@ impl MinerNode {
     ///
     /// * `pre_block`       - Pre-block to be mined and pushed on
     /// * `block_reward`    - Block reward allocated to coinbase
-    fn handle_block_for_mine(&mut self, pre_block: &Block, block_reward: u64) -> Block {
+    async fn handle_block_for_mine(
+        &mut self,
+        pre_block: &Block,
+        block_reward: u64,
+    ) -> Result<Block> {
         let mut mined_block = pre_block.clone();
-        let coinbase = self.create_coinbase(pre_block.header.time, block_reward);
+        let coinbase = self
+            .create_coinbase(pre_block.header.time, block_reward)
+            .await?;
 
         // Handle extra metadata
         mined_block.transactions.push(coinbase);
@@ -211,7 +240,7 @@ impl MinerNode {
         let hash_pow = Sha3_256::digest(&hash_input);
         // TODO: Get pow here
 
-        mined_block
+        Ok(mined_block)
     }
 }
 

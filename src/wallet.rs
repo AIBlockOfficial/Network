@@ -13,9 +13,9 @@ use tokio::task;
 /// Data structure for wallet storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletStore {
-    secret_key: SecretKey,
-    transactions: Vec<Transaction>,
-    net: usize,
+    pub secret_key: SecretKey,
+    pub transactions: Vec<Transaction>,
+    pub net: usize,
 }
 
 /// Saves an address and the associated data with it to the wallet
