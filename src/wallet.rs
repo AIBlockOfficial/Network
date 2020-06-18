@@ -69,3 +69,38 @@ pub fn create_address(pub_key: PublicKey, net: usize) -> Vec<u8> {
 
     second_hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Creating a valid payment address
+    fn should_create_address_valid() {
+        let pk = PublicKey([
+            196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
+            14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
+        ]);
+        let addr = create_address(pk, 0);
+
+        assert_eq!(
+            addr,
+            [
+                253, 134, 242, 35, 15, 79, 213, 191, 217, 205, 136, 39, 50, 121, 34, 121, 166, 73,
+                234, 222, 126, 206, 175, 96, 248
+            ]
+        );
+    }
+
+    #[test]
+    /// Creating a payment address of 25 bytes
+    fn should_create_address_valid_length() {
+        let pk = PublicKey([
+            196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
+            14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
+        ]);
+        let addr = create_address(pk, 0);
+
+        assert_eq!(addr.len(), 25);
+    }
+}

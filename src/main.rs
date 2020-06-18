@@ -33,4 +33,7 @@ pub(crate) use comms_handler::Node;
 #[cfg(features = "mock")]
 pub(crate) use mock::Node;
 
+use sodiumoxide::crypto::sign;
+use wallet::create_address;
+
 fn main() {}
