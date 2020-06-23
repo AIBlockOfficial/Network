@@ -21,7 +21,7 @@ pub struct BlockHeader {
     pub version: u32,
     pub time: u32,
     pub bits: usize,
-    pub nonce: u32,
+    pub nonce: Vec<u8>,
     pub seed_value: Vec<u8>, // for commercial
     pub previous_hash: Vec<u8>,
     pub merkle_root_hash: Vec<u8>,
@@ -37,7 +37,7 @@ impl BlockHeader {
             seed_value: Vec::new(),
             time: 0,
             bits: 0,
-            nonce: 0,
+            nonce: Vec::new(),
         }
     }
 
@@ -126,7 +126,7 @@ fn from_slice(bytes: &[u8]) -> [u8; 32] {
 /// * `genesis_output`  - Output script for the genesis output (STILL TODO)
 pub fn create_raw_genesis_block(
     time: &u32,
-    nonce: &u32,
+    nonce: Vec<u8>,
     bits: &usize,
     version: &u32,
     genesis_reward: &u64,
@@ -152,7 +152,7 @@ pub fn create_raw_genesis_block(
     // Handle block header
     genesis.header.version = *version;
     genesis.header.bits = *bits;
-    genesis.header.nonce = *nonce;
+    genesis.header.nonce = nonce.clone();
     genesis.header.time = *time;
 
     // Add genesis transaction
@@ -173,7 +173,7 @@ pub fn create_raw_genesis_block(
 /// * `genesis_reward`  - Coinbase reward from the initial block
 pub fn create_genesis_block(
     time: u32,
-    nonce: u32,
+    nonce: Vec<u8>,
     bits: usize,
     version: u32,
     genesis_reward: u64,
@@ -181,7 +181,7 @@ pub fn create_genesis_block(
     // Using straight constant in this case, but will need to incorporate some kind of scripting situation
     create_raw_genesis_block(
         &time,
-        &nonce,
+        nonce,
         &bits,
         &version,
         &genesis_reward,
