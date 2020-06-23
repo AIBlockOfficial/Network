@@ -237,8 +237,11 @@ impl MinerNode {
 
         // Mine the block hash
         let hash_input = Bytes::from(serialize(&mined_block).unwrap());
-        let hash_pow = Sha3_256::digest(&hash_input);
-        // TODO: Get pow here
+        let hash_vec = Sha3_256::digest(&hash_input).to_vec();
+        let hash_pow = String::from_utf8_lossy(&hash_vec).to_string();
+
+        let final_pow = self.generate_pow(hash_pow).await?;
+        mined_block.header.nonce = final_pow.nonce;
 
         Ok(mined_block)
     }
