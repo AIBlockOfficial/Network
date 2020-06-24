@@ -124,7 +124,7 @@ impl MinerNode {
 
         // TxOut
         let mut coinbase_txout = TxOut::new();
-        coinbase_txout.script_public_key = Some(pk);
+        coinbase_txout.script_public_key = Some(pk.0.to_vec());
         coinbase_txout.value = Some(Asset::Token(block_reward));
 
         // Final coinbase

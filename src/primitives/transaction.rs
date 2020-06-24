@@ -73,7 +73,8 @@ impl TxIn {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
-    pub script_public_key: Option<PublicKey>,
+    pub amount: u64,
+    pub script_public_key: Option<Vec<u8>>,
 }
 
 impl TxOut {
@@ -81,6 +82,7 @@ impl TxOut {
     pub fn new() -> TxOut {
         TxOut {
             value: None,
+            amount: 0,
             script_public_key: None,
         }
     }
@@ -93,6 +95,9 @@ pub struct Transaction {
     pub inputs: Vec<TxIn>,
     pub outputs: Vec<TxOut>,
     pub version: usize,
+    pub druid: Option<Vec<u8>>,
+    pub expect_value: Option<Asset>,
+    pub expect_value_amount: Option<u64>,
 }
 
 impl Transaction {
@@ -102,6 +107,9 @@ impl Transaction {
             inputs: Vec::new(),
             outputs: Vec::new(),
             version: 0,
+            druid: None,
+            expect_value: None,
+            expect_value_amount: None,
         }
     }
 
@@ -109,14 +117,27 @@ impl Transaction {
     ///
     /// ### Arguments
     ///
-    /// * `inputs`  - Transaction inputs
-    /// * `outputs` - Transaction outputs
-    /// * `version` - Network version
-    pub fn new_from_input(inputs: Vec<TxIn>, outputs: Vec<TxOut>, version: usize) -> Transaction {
+    /// * `inputs`              - Transaction inputs
+    /// * `outputs`             - Transaction outputs
+    /// * `version`             - Network version
+    /// * `druid`               - DRUID value for a dual double entry
+    /// * `expect_value`        - Value expected in return for this payment (only in dual double)
+    /// * `expect_value_amount` - Amount of value expected in return for this payment (only in dual double)
+    pub fn new_from_input(
+        inputs: Vec<TxIn>,
+        outputs: Vec<TxOut>,
+        version: usize,
+        druid: Option<Vec<u8>>,
+        expect_value: Option<Asset>,
+        expect_value_amount: Option<u64>,
+    ) -> Transaction {
         Transaction {
             inputs: inputs,
             outputs: outputs,
             version: version,
+            druid: druid,
+            expect_value: expect_value,
+            expect_value_amount: expect_value_amount,
         }
     }
 
