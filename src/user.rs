@@ -61,7 +61,14 @@ impl From<bincode::Error> for UserError {
     }
 }
 
-// An instance of a MinerNode
+/// A structure for an asset to send, along with its quantity
+#[derive(Debug, Clone)]
+pub struct AssetInTransit {
+    pub asset: Asset,
+    pub amount: u64,
+}
+
+/// An instance of a MinerNode
 #[derive(Debug, Clone)]
 pub struct UserNode {
     node: Node,
@@ -85,13 +92,14 @@ impl UserNode {
     pub fn create_payment_tx(
         &self,
         tx_ins: Vec<TxIn>,
-        receiver_address: PublicKey,
+        receiver_address: Vec<u8>,
         amount: u64,
     ) -> Transaction {
         let mut tx = Transaction::new();
         let mut tx_out = TxOut::new();
 
         tx_out.value = Some(Asset::Token(amount));
+        tx_out.amount = amount;
         tx_out.script_public_key = Some(receiver_address);
 
         tx.outputs = vec![tx_out];
@@ -122,6 +130,40 @@ impl UserNode {
         }
 
         tx_ins
+    }
+
+    /// Constructs a dual double entry tx
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_ins`          - Addresses to pay from
+    /// * `address`         - Address to send the asset to
+    /// * `send_asset`      - Asset to be sent as payment
+    /// * `receive_asset`   - Asset to receive
+    /// * `druid`           - DRUID value to match with the other party
+    pub fn create_dde_tx(
+        &self,
+        tx_ins: Vec<TxIn>,
+        address: Vec<u8>,
+        send_asset: AssetInTransit,
+        receive_asset: AssetInTransit,
+        druid: Vec<u8>,
+    ) -> Transaction {
+        let mut tx = Transaction::new();
+        let mut tx_out = TxOut::new();
+
+        tx_out.value = Some(send_asset.asset);
+        tx_out.amount = send_asset.amount;
+        tx_out.script_public_key = Some(address);
+
+        tx.outputs = vec![tx_out];
+        tx.inputs = tx_ins;
+        tx.version = 0;
+        tx.druid = Some(druid);
+        tx.expect_value = Some(receive_asset.asset);
+        tx.expect_value_amount = Some(receive_asset.amount);
+
+        tx
     }
 
     /// Start the user node on the network.
