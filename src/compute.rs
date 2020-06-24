@@ -9,7 +9,7 @@ use crate::Node;
 
 use bincode::deserialize;
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use tracing::{debug, info, info_span, warn};
 
@@ -40,10 +40,18 @@ const PEER_LIMIT: usize = 6;
 /// Limit for the number of PoWs a compute node may have for UnicornShard creation
 const UNICORN_LIMIT: usize = 5;
 
+/// Druid pool structure for checking and holding participants
+#[derive(Debug, Clone)]
+pub struct DruidPuddle {
+    participants: usize,
+    tx: Vec<Transaction>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
     pub tx_pool: Vec<Transaction>,
+    pub druid_pool: BTreeMap<Vec<u8>, DruidPuddle>,
     pub current_block: Block,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
@@ -60,9 +68,9 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `transaction` - Transaction to process
-    pub fn process_p2pkh_tx(&self, transaction: Transaction) -> Response {
-        if tx_ins_are_valid(transaction.inputs) {
-            // TODO: Dump valid tx in current block
+    pub fn process_p2pkh_tx(&mut self, transaction: Transaction) -> Response {
+        if tx_ins_are_valid(transaction.clone().inputs) {
+            self.current_block.transactions.push(transaction);
 
             return Response {
                 success: true,
@@ -73,6 +81,76 @@ impl ComputeNode {
         Response {
             success: false,
             reason: "You are not authorised to make this payment",
+        }
+    }
+
+    /// Processes a dual double entry transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to process
+    pub fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
+        if let Some(druid) = transaction.clone().druid {
+            // If this transaction is meant to join others
+            if self.druid_pool.contains_key(&druid) {
+                let mut current_puddle = self.druid_pool.get(&druid).unwrap().clone();
+                current_puddle.tx.push(transaction);
+
+                // Execute the tx if it's ready
+                if current_puddle.tx.len() == current_puddle.participants {
+                    self.execute_dde_tx(current_puddle);
+                    let _removal = self.druid_pool.remove(&druid);
+                }
+                return Response {
+                    success: true,
+                    reason: "Transaction added to corresponding DRUID puddles",
+                };
+
+            // If we haven't seen this DRUID yet
+            } else {
+                let puddle = DruidPuddle {
+                    participants: transaction.druid_participants.unwrap(),
+                    tx: vec![transaction],
+                };
+
+                self.druid_pool.insert(druid, puddle);
+                return Response {
+                    success: true,
+                    reason: "Transaction added to DRUID pool. Awaiting other parties",
+                };
+            }
+        }
+
+        Response {
+            success: false,
+            reason: "Dual double entry transaction doesn't contain a DRUID",
+        }
+    }
+
+    /// Executes a waiting dual double entry transaction that is ready to execute
+    ///
+    /// ### Arguments
+    ///
+    /// * `puddle`  - DRUID puddle of transactions to execute
+    pub fn execute_dde_tx(&mut self, puddle: DruidPuddle) {
+        let mut txs_valid = true;
+
+        for entry in &puddle.tx {
+            if !tx_ins_are_valid(entry.inputs.clone()) {
+                txs_valid = false;
+                break;
+            }
+        }
+
+        if txs_valid {
+            self.current_block
+                .transactions
+                .append(&mut puddle.tx.clone());
+            println!(
+                "Transactions for dual double entry execution are valid. Adding to pending block"
+            );
+        } else {
+            println!("Transactions for dual double entry execution are invalid");
         }
     }
 
@@ -177,6 +255,7 @@ impl ComputeInterface for ComputeNode {
             tx_pool: Vec::new(),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
+            druid_pool: BTreeMap::new(),
         }
     }
 

@@ -136,11 +136,12 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `tx_ins`          - Addresses to pay from
-    /// * `address`         - Address to send the asset to
-    /// * `send_asset`      - Asset to be sent as payment
-    /// * `receive_asset`   - Asset to receive
-    /// * `druid`           - DRUID value to match with the other party
+    /// * `tx_ins`              - Addresses to pay from
+    /// * `address`             - Address to send the asset to
+    /// * `send_asset`          - Asset to be sent as payment
+    /// * `receive_asset`       - Asset to receive
+    /// * `druid`               - DRUID value to match with the other party
+    /// * `druid_participants`  - Number of DRUID values to match with
     pub fn create_dde_tx(
         &self,
         tx_ins: Vec<TxIn>,
@@ -148,6 +149,7 @@ impl UserNode {
         send_asset: AssetInTransit,
         receive_asset: AssetInTransit,
         druid: Vec<u8>,
+        druid_participants: usize,
     ) -> Transaction {
         let mut tx = Transaction::new();
         let mut tx_out = TxOut::new();
@@ -160,6 +162,7 @@ impl UserNode {
         tx.inputs = tx_ins;
         tx.version = 0;
         tx.druid = Some(druid);
+        tx.druid_participants = Some(druid_participants);
         tx.expect_value = Some(receive_asset.asset);
         tx.expect_value_amount = Some(receive_asset.amount);
 

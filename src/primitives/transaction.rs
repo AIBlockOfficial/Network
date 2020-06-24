@@ -18,7 +18,7 @@ pub struct TxConstructor {
     pub pub_keys: Vec<PublicKey>,
 }
 
-/// An outpoint - a combination of a transaction hash and an index n into its vout
+/// An outpoint - a combination of a block hash and an index n into its vout
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutPoint {
     pub hash: Vec<u8>,
@@ -96,6 +96,7 @@ pub struct Transaction {
     pub outputs: Vec<TxOut>,
     pub version: usize,
     pub druid: Option<Vec<u8>>,
+    pub druid_participants: Option<usize>,
     pub expect_value: Option<Asset>,
     pub expect_value_amount: Option<u64>,
 }
@@ -108,6 +109,7 @@ impl Transaction {
             outputs: Vec::new(),
             version: 0,
             druid: None,
+            druid_participants: None,
             expect_value: None,
             expect_value_amount: None,
         }
@@ -128,6 +130,7 @@ impl Transaction {
         outputs: Vec<TxOut>,
         version: usize,
         druid: Option<Vec<u8>>,
+        druid_participants: Option<usize>,
         expect_value: Option<Asset>,
         expect_value_amount: Option<u64>,
     ) -> Transaction {
@@ -136,6 +139,7 @@ impl Transaction {
             outputs: outputs,
             version: version,
             druid: druid,
+            druid_participants: druid_participants,
             expect_value: expect_value,
             expect_value_amount: expect_value_amount,
         }
