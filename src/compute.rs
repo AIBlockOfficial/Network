@@ -93,14 +93,8 @@ impl ComputeNode {
         if let Some(druid) = transaction.clone().druid {
             // If this transaction is meant to join others
             if self.druid_pool.contains_key(&druid) {
-                let mut current_puddle = self.druid_pool.get(&druid).unwrap().clone();
-                current_puddle.tx.push(transaction);
+                self.process_tx_druid(druid, transaction);
 
-                // Execute the tx if it's ready
-                if current_puddle.tx.len() == current_puddle.participants {
-                    self.execute_dde_tx(current_puddle);
-                    let _removal = self.druid_pool.remove(&druid);
-                }
                 return Response {
                     success: true,
                     reason: "Transaction added to corresponding DRUID puddles",
@@ -124,6 +118,22 @@ impl ComputeNode {
         Response {
             success: false,
             reason: "Dual double entry transaction doesn't contain a DRUID",
+        }
+    }
+
+    /// Processes a dual double entry transaction's DRUID with the current pool
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to process
+    pub fn process_tx_druid(&mut self, druid: Vec<u8>, transaction: Transaction) {
+        let mut current_puddle = self.druid_pool.get(&druid).unwrap().clone();
+        current_puddle.tx.push(transaction);
+
+        // Execute the tx if it's ready
+        if current_puddle.tx.len() == current_puddle.participants {
+            self.execute_dde_tx(current_puddle);
+            let _removal = self.druid_pool.remove(&druid);
         }
     }
 

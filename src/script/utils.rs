@@ -238,6 +238,7 @@ fn match_on_multisig_to_pubkey(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::transaction_utils::create_payment_tx_ins;
 
     /// Util function to create p2pkh TxIns
     fn create_multisig_tx_ins(tx_values: Vec<TxConstructor>, m: usize) -> Vec<TxIn> {
@@ -262,24 +263,24 @@ mod tests {
     }
 
     /// Util function to create multisig TxIns
-    fn create_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
-        let mut tx_ins = Vec::new();
+    // fn create_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
+    //     let mut tx_ins = Vec::new();
 
-        for entry in tx_values {
-            let mut new_tx_in = TxIn::new();
-            new_tx_in.script_signature = Script::pay2pkh(
-                entry.prev_hash.clone(),
-                entry.signatures[0],
-                entry.pub_keys[0],
-            );
-            new_tx_in.previous_out =
-                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
+    //     for entry in tx_values {
+    //         let mut new_tx_in = TxIn::new();
+    //         new_tx_in.script_signature = Script::pay2pkh(
+    //             entry.prev_hash.clone(),
+    //             entry.signatures[0],
+    //             entry.pub_keys[0],
+    //         );
+    //         new_tx_in.previous_out =
+    //             Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
 
-            tx_ins.push(new_tx_in);
-        }
+    //         tx_ins.push(new_tx_in);
+    //     }
 
-        tx_ins
-    }
+    //     tx_ins
+    // }
 
     /// Util function to create multisig member TxIns
     fn create_multisig_member_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
