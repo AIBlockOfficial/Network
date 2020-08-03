@@ -252,7 +252,8 @@ mod tests {
                 entry.signatures,
                 entry.pub_keys,
             );
-            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out =
+                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }
@@ -271,7 +272,8 @@ mod tests {
                 entry.signatures[0],
                 entry.pub_keys[0],
             );
-            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out =
+                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }
@@ -290,7 +292,8 @@ mod tests {
                 entry.pub_keys[0],
                 entry.signatures[0],
             );
-            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out =
+                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }
@@ -308,6 +311,7 @@ mod tests {
         let tx_const = TxConstructor {
             prev_hash: prev_hash,
             prev_n: 0,
+            b_num: 0,
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -328,6 +332,7 @@ mod tests {
         let tx_const = TxConstructor {
             prev_hash: prev_hash,
             prev_n: 0,
+            b_num: 0,
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -350,6 +355,7 @@ mod tests {
         let tx_const = TxConstructor {
             prev_hash: prev_hash,
             prev_n: 0,
+            b_num: 0,
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -370,6 +376,7 @@ mod tests {
         let tx_const = TxConstructor {
             prev_hash: prev_hash,
             prev_n: 0,
+            b_num: 0,
             signatures: vec![signature],
             pub_keys: vec![second_pk],
         };
@@ -398,6 +405,7 @@ mod tests {
         let tx_const = TxConstructor {
             prev_hash: check_data,
             prev_n: 0,
+            b_num: 0,
             signatures: vec![first_sig, second_sig, third_sig],
             pub_keys: vec![first_pk, second_pk, third_pk],
         };

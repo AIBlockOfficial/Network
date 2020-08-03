@@ -15,7 +15,6 @@ use bytes::Bytes;
 use rand;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::io::Error;
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};

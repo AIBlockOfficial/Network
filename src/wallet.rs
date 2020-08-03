@@ -63,6 +63,8 @@ pub fn create_address(pub_key: PublicKey, net: usize) -> Vec<u8> {
     let first_pubkey_bytes = Bytes::from(serialize(&pub_key).unwrap());
     let mut first_hash = Sha3_256::digest(&first_pubkey_bytes).to_vec();
 
+    // TODO: Add RIPEMD
+
     first_hash.insert(0, net as u8);
     let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
     second_hash.truncate(25);

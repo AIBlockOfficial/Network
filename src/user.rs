@@ -124,7 +124,8 @@ impl UserNode {
                 entry.signatures[0],
                 entry.pub_keys[0],
             );
-            new_tx_in.previous_out = Some(OutPoint::new(entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out =
+                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }

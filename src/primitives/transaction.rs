@@ -12,15 +12,17 @@ use crate::utils::is_valid_amount;
 /// A user-friendly construction struct for a TxIn
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxConstructor {
+    pub b_num: u64,
     pub prev_hash: Vec<u8>,
     pub prev_n: i32,
     pub signatures: Vec<Signature>,
     pub pub_keys: Vec<PublicKey>,
 }
 
-/// An outpoint - a combination of a block hash and an index n into its vout
+/// An outpoint - a combination of a block number, block hash and an index n into its vout
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutPoint {
+    pub b_num: u64,
     pub hash: Vec<u8>,
     pub n: i32,
 }
@@ -28,8 +30,12 @@ pub struct OutPoint {
 // TODO: Hashes are currently Vec<u8>, can be stored some other way
 impl OutPoint {
     /// Creates a new outpoint instance
-    pub fn new(hash: Vec<u8>, n: i32) -> OutPoint {
-        OutPoint { hash: hash, n: n }
+    pub fn new(b_num: u64, hash: Vec<u8>, n: i32) -> OutPoint {
+        OutPoint {
+            b_num: b_num,
+            hash: hash,
+            n: n,
+        }
     }
 }
 
