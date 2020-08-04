@@ -136,12 +136,42 @@ mod tests {
             pub_keys: vec![pk],
         };
 
-        let first_tx_ins = create_payment_tx_ins(vec![tx_const]);
+        let tx_ins = create_payment_tx_ins(vec![tx_const]);
 
         // DDE params
         let druid = vec![1, 2, 3, 4, 5];
         let druid_participants = 2;
+
         let first_asset = Asset::Token(10);
-        let amount = 10;
+        let first_amount = 10;
+        let second_asset = Asset::Token(0);
+        let second_amount = 0;
+
+        let first_asset_t = AssetInTransit {
+            asset: first_asset,
+            amount: first_amount,
+        };
+        let second_asset_t = AssetInTransit {
+            asset: second_asset,
+            amount: second_amount,
+        };
+
+        // Actual DDE
+        let dde = create_dde_tx(
+            tx_ins,
+            vec![0, 0, 0, 0],
+            first_asset_t.clone(),
+            second_asset_t,
+            druid.clone(),
+            druid_participants.clone(),
+        );
+
+        assert_eq!(dde.druid, Some(druid.clone()));
+        assert_eq!(
+            dde.outputs[0].clone().value,
+            Some(first_asset_t.clone().asset)
+        );
+        assert_eq!(dde.outputs[0].clone().amount, first_asset_t.clone().amount);
+        assert_eq!(dde.druid_participants, Some(druid_participants.clone()));
     }
 }
