@@ -169,12 +169,12 @@ impl ComputeNode {
     ///
     /// ### Arguments
     ///
-    /// * `prev_hash`   - The hash of the previous block
+    /// * `t_hash`   - The hash of the previous block
     /// * `prev_time`   - The time of the previous block
-    pub fn build_block(&mut self, prev_hash: Vec<u8>, prev_time: u32) {
+    pub fn build_block(&mut self, t_hash: Vec<u8>, prev_time: u32) {
         let mut next_block = Block::new();
         next_block.header.time = prev_time + 1;
-        next_block.header.previous_hash = prev_hash;
+        next_block.header.previous_hash = t_hash;
 
         while !next_block.is_full() {
             if self.tx_pool.len() > 0 {

@@ -66,12 +66,9 @@ pub fn construct_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
 
     for entry in tx_values {
         let mut new_tx_in = TxIn::new();
-        new_tx_in.script_signature = Script::pay2pkh(
-            entry.prev_hash.clone(),
-            entry.signatures[0],
-            entry.pub_keys[0],
-        );
-        new_tx_in.previous_out = Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
+        new_tx_in.script_signature =
+            Script::pay2pkh(entry.t_hash.clone(), entry.signatures[0], entry.pub_keys[0]);
+        new_tx_in.previous_out = Some(OutPoint::new(entry.b_hash, entry.t_hash, entry.prev_n));
 
         tx_ins.push(new_tx_in);
     }
@@ -147,14 +144,14 @@ mod tests {
     fn should_construct_a_valid_payment_tx() {
         let (_pk, sk) = sign::gen_keypair();
         let (pk, _sk) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
         let drs_block_hash = vec![1, 2, 3, 4, 5, 6];
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -177,14 +174,14 @@ mod tests {
     fn should_construct_a_valid_dde_tx() {
         let (_pk, sk) = sign::gen_keypair();
         let (pk, _sk) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
+        let t_hash = vec![0, 0, 0];
         let drs_block_hash = vec![1, 2, 3, 4, 5, 6];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![pk],
         };

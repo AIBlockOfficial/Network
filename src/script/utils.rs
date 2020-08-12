@@ -249,12 +249,11 @@ mod tests {
             new_tx_in.script_signature = Script::multisig_validation(
                 m,
                 entry.pub_keys.len(),
-                entry.prev_hash.clone(),
+                entry.t_hash.clone(),
                 entry.signatures,
                 entry.pub_keys,
             );
-            new_tx_in.previous_out =
-                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out = Some(OutPoint::new(entry.b_hash, entry.t_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }
@@ -269,12 +268,12 @@ mod tests {
     //     for entry in tx_values {
     //         let mut new_tx_in = TxIn::new();
     //         new_tx_in.script_signature = Script::pay2pkh(
-    //             entry.prev_hash.clone(),
+    //             entry.t_hash.clone(),
     //             entry.signatures[0],
     //             entry.pub_keys[0],
     //         );
     //         new_tx_in.previous_out =
-    //             Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
+    //             Some(OutPoint::new(entry.b_hash, entry.t_hash, entry.prev_n));
 
     //         tx_ins.push(new_tx_in);
     //     }
@@ -289,12 +288,11 @@ mod tests {
         for entry in tx_values {
             let mut new_tx_in = TxIn::new();
             new_tx_in.script_signature = Script::member_multisig(
-                entry.prev_hash.clone(),
+                entry.t_hash.clone(),
                 entry.pub_keys[0],
                 entry.signatures[0],
             );
-            new_tx_in.previous_out =
-                Some(OutPoint::new(entry.b_num, entry.prev_hash, entry.prev_n));
+            new_tx_in.previous_out = Some(OutPoint::new(entry.b_hash, entry.t_hash, entry.prev_n));
 
             tx_ins.push(new_tx_in);
         }
@@ -306,13 +304,13 @@ mod tests {
     /// Checks that correct member multisig scripts are validated as such
     fn should_pass_member_multisig_valid() {
         let (pk, sk) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -327,13 +325,13 @@ mod tests {
     fn should_fail_member_multisig_invalid() {
         let (_pk, sk) = sign::gen_keypair();
         let (pk, _sk) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -350,13 +348,13 @@ mod tests {
     /// Checks that correct p2pkh transaction signatures are validated as such
     fn should_pass_p2pkh_sig_valid() {
         let (pk, sk) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![pk],
         };
@@ -371,13 +369,13 @@ mod tests {
     fn should_fail_p2pkh_sig_invalid() {
         let (_pk, sk) = sign::gen_keypair();
         let (second_pk, _s) = sign::gen_keypair();
-        let prev_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&t_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
-            prev_hash: prev_hash,
+            t_hash: t_hash,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![signature],
             pub_keys: vec![second_pk],
         };
@@ -404,9 +402,9 @@ mod tests {
         let third_sig = sign::sign_detached(&check_data.clone(), &third_sk);
 
         let tx_const = TxConstructor {
-            prev_hash: check_data,
+            t_hash: check_data,
             prev_n: 0,
-            b_num: 0,
+            b_hash: vec![0],
             signatures: vec![first_sig, second_sig, third_sig],
             pub_keys: vec![first_pk, second_pk, third_pk],
         };

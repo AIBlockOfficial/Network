@@ -50,14 +50,14 @@ fn main() {
     let receiver_address = vec![0, 1, 2, 3, 4, 5, 6];
     let (_pk, sk) = sign::gen_keypair();
     let (pk, _sk) = sign::gen_keypair();
-    let prev_hash = vec![0, 0, 0];
-    let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+    let t_hash = vec![0, 0, 0];
+    let signature = sign::sign_detached(&t_hash.clone(), &sk);
     let drs_block_hash = vec![1, 2, 3, 4, 5, 6];
 
     let tx_const = TxConstructor {
-        prev_hash: prev_hash,
+        t_hash: t_hash,
         prev_n: 0,
-        b_num: 0,
+        b_hash: vec![0],
         signatures: vec![signature],
         pub_keys: vec![pk],
     };
@@ -67,7 +67,7 @@ fn main() {
 
     // Block variables
     let mut block = Block::new();
-    block.header.b_num = 1;
+    block.header.b_hash = 1;
     block.transactions.push(payment_tx);
 
     // Save the shit
@@ -83,14 +83,14 @@ fn main() {
         11, 176, 211, 40, 76, 147, 38, 195, 112, 150, 107, 40, 216, 226, 134, 169, 126, 185, 48,
         35, 194, 23, 124, 251, 183, 150, 11, 50, 57, 8, 39, 160,
     ];
-    match db.get(new_hash_key) {
-        Ok(Some(value)) => println!(
-            "retrieved value {:?}",
-            deserialize::<Block>(&value).unwrap()
-        ),
-        Ok(None) => println!("value not found"),
-        Err(e) => println!("operational problem encountered: {}", e),
-    }
+    // match db.get(new_hash_key) {
+    //     Ok(Some(value)) => println!(
+    //         "retrieved value {:?}",
+    //         deserialize::<Block>(&value).unwrap()
+    //     ),
+    //     Ok(None) => println!("value not found"),
+    //     Err(e) => println!("operational problem encountered: {}", e),
+    // }
     //db.put(hash_key, serialize(&block).unwrap()).unwrap();
 
     let _ = DB::destroy(&Options::default(), save_path.clone());
