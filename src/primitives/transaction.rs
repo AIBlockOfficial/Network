@@ -75,11 +75,13 @@ impl TxIn {
 }
 
 /// An output of a transaction. It contains the public key that the next input
-/// must be able to sign with to claim it.
+/// must be able to sign with to claim it. It also contains the block hash for the
+/// potential DRS if this is a data asset transaction
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TxOut {
     pub value: Option<Asset>,
     pub amount: u64,
+    pub drs_block_hash: Option<Vec<u8>>,
     pub script_public_key: Option<Vec<u8>>,
 }
 
@@ -89,6 +91,7 @@ impl TxOut {
         TxOut {
             value: None,
             amount: 0,
+            drs_block_hash: None,
             script_public_key: None,
         }
     }

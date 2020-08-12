@@ -3,20 +3,51 @@ use crate::primitives::transaction::*;
 use crate::script::lang::Script;
 use crate::user::AssetInTransit;
 
+/// Constructs a transaction for the creation of a new smart data asset
+///
+/// ### Arguments
+///
+/// * `drs` - Digital rights signature for the new asset
+/// * `receiver_address` - Address to receive the newly created asset
+/// * `amount`  - Amount of the asset to generate
+pub fn construct_create_tx(drs: Vec<u8>, receiver_address: Vec<u8>, amount: u64) -> Transaction {
+    let mut tx = Transaction::new();
+    let mut tx_out = TxOut::new();
+
+    tx_out.value = Some(Asset::Data(drs));
+    tx_out.amount = amount;
+    tx_out.script_public_key = Some(receiver_address);
+
+    // Provide an empty TxIn
+    tx.inputs.push(TxIn::new());
+
+    tx.outputs = vec![tx_out];
+    tx.version = 0;
+
+    tx
+}
+
 /// Constructs a transaction to pay a receiver
 ///
 /// ### Arguments
 ///
 /// * `tx_ins`              - Address/es to pay from
 /// * `receiver_address`    - Address to send to
+/// * `drs_block_hash`      - Hash of the block containing the original DRS. Only for data trades
 /// * `amount`              - Number of tokens to send
-pub fn create_payment_tx(tx_ins: Vec<TxIn>, receiver_address: Vec<u8>, amount: u64) -> Transaction {
+pub fn construct_payment_tx(
+    tx_ins: Vec<TxIn>,
+    receiver_address: Vec<u8>,
+    drs_block_hash: Option<Vec<u8>>,
+    amount: u64,
+) -> Transaction {
     let mut tx = Transaction::new();
     let mut tx_out = TxOut::new();
 
     tx_out.value = Some(Asset::Token(amount));
     tx_out.amount = amount;
     tx_out.script_public_key = Some(receiver_address);
+    tx_out.drs_block_hash = drs_block_hash;
 
     tx.outputs = vec![tx_out];
     tx.inputs = tx_ins;
@@ -30,7 +61,7 @@ pub fn create_payment_tx(tx_ins: Vec<TxIn>, receiver_address: Vec<u8>, amount: u
 /// ### Arguments
 ///
 /// * `tx_values`   - Series of values required for TxIn construction
-pub fn create_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
+pub fn construct_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
     let mut tx_ins = Vec::new();
 
     for entry in tx_values {
@@ -56,13 +87,15 @@ pub fn create_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
 /// * `address`             - Address to send the asset to
 /// * `send_asset`          - Asset to be sent as payment
 /// * `receive_asset`       - Asset to receive
+/// * `send_asset_drs_hash`  - Hash of the block containing the DRS for the sent asset. Only applicable to data trades
 /// * `druid`               - DRUID value to match with the other party
 /// * `druid_participants`  - Number of DRUID values to match with
-pub fn create_dde_tx(
+pub fn construct_dde_tx(
     tx_ins: Vec<TxIn>,
     address: Vec<u8>,
     send_asset: AssetInTransit,
     receive_asset: AssetInTransit,
+    send_asset_drs_hash: Option<Vec<u8>>,
     druid: Vec<u8>,
     druid_participants: usize,
 ) -> Transaction {
@@ -72,6 +105,7 @@ pub fn create_dde_tx(
     tx_out.value = Some(send_asset.asset);
     tx_out.amount = send_asset.amount;
     tx_out.script_public_key = Some(address);
+    tx_out.drs_block_hash = send_asset_drs_hash;
 
     tx.outputs = vec![tx_out];
     tx.inputs = tx_ins;
@@ -98,6 +132,7 @@ mod tests {
         let (pk, _sk) = sign::gen_keypair();
         let prev_hash = vec![0, 0, 0];
         let signature = sign::sign_detached(&prev_hash.clone(), &sk);
+        let drs_block_hash = vec![1, 2, 3, 4, 5, 6];
 
         let tx_const = TxConstructor {
             prev_hash: prev_hash,
@@ -107,8 +142,8 @@ mod tests {
             pub_keys: vec![pk],
         };
 
-        let tx_ins = create_payment_tx_ins(vec![tx_const]);
-        let payment_tx = create_payment_tx(tx_ins, vec![0, 0, 0, 0], 4);
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
+        let payment_tx = construct_payment_tx(tx_ins, vec![0, 0, 0, 0], Some(drs_block_hash), 4);
 
         assert_eq!(
             Asset::Token(4),
@@ -126,6 +161,7 @@ mod tests {
         let (_pk, sk) = sign::gen_keypair();
         let (pk, _sk) = sign::gen_keypair();
         let prev_hash = vec![0, 0, 0];
+        let drs_block_hash = vec![1, 2, 3, 4, 5, 6];
         let signature = sign::sign_detached(&prev_hash.clone(), &sk);
 
         let tx_const = TxConstructor {
@@ -136,7 +172,7 @@ mod tests {
             pub_keys: vec![pk],
         };
 
-        let tx_ins = create_payment_tx_ins(vec![tx_const]);
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
 
         // DDE params
         let druid = vec![1, 2, 3, 4, 5];
@@ -157,11 +193,12 @@ mod tests {
         };
 
         // Actual DDE
-        let dde = create_dde_tx(
+        let dde = construct_dde_tx(
             tx_ins,
             vec![0, 0, 0, 0],
             first_asset_t.clone(),
             second_asset_t,
+            Some(drs_block_hash),
             druid.clone(),
             druid_participants.clone(),
         );

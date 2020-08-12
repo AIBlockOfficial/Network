@@ -42,7 +42,7 @@ const UNICORN_LIMIT: usize = 5;
 
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Clone)]
-pub struct DruidPuddle {
+pub struct DruidDroplet {
     participants: usize,
     tx: Vec<Transaction>,
 }
@@ -51,7 +51,7 @@ pub struct DruidPuddle {
 pub struct ComputeNode {
     node: Node,
     pub tx_pool: Vec<Transaction>,
-    pub druid_pool: BTreeMap<Vec<u8>, DruidPuddle>,
+    pub druid_pool: BTreeMap<Vec<u8>, DruidDroplet>,
     pub current_block: Block,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub unicorn_limit: usize,
@@ -97,17 +97,17 @@ impl ComputeNode {
 
                 return Response {
                     success: true,
-                    reason: "Transaction added to corresponding DRUID puddles",
+                    reason: "Transaction added to corresponding DRUID droplets",
                 };
 
             // If we haven't seen this DRUID yet
             } else {
-                let puddle = DruidPuddle {
+                let droplet = DruidDroplet {
                     participants: transaction.druid_participants.unwrap(),
                     tx: vec![transaction],
                 };
 
-                self.druid_pool.insert(druid, puddle);
+                self.druid_pool.insert(druid, droplet);
                 return Response {
                     success: true,
                     reason: "Transaction added to DRUID pool. Awaiting other parties",
@@ -127,12 +127,12 @@ impl ComputeNode {
     ///
     /// * `transaction` - Transaction to process
     pub fn process_tx_druid(&mut self, druid: Vec<u8>, transaction: Transaction) {
-        let mut current_puddle = self.druid_pool.get(&druid).unwrap().clone();
-        current_puddle.tx.push(transaction);
+        let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
+        current_droplet.tx.push(transaction);
 
         // Execute the tx if it's ready
-        if current_puddle.tx.len() == current_puddle.participants {
-            self.execute_dde_tx(current_puddle);
+        if current_droplet.tx.len() == current_droplet.participants {
+            self.execute_dde_tx(current_droplet);
             let _removal = self.druid_pool.remove(&druid);
         }
     }
@@ -141,11 +141,11 @@ impl ComputeNode {
     ///
     /// ### Arguments
     ///
-    /// * `puddle`  - DRUID puddle of transactions to execute
-    pub fn execute_dde_tx(&mut self, puddle: DruidPuddle) {
+    /// * `droplet`  - DRUID droplet of transactions to execute
+    pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
         let mut txs_valid = true;
 
-        for entry in &puddle.tx {
+        for entry in &droplet.tx {
             if !tx_ins_are_valid(entry.inputs.clone()) {
                 txs_valid = false;
                 break;
@@ -155,7 +155,7 @@ impl ComputeNode {
         if txs_valid {
             self.current_block
                 .transactions
-                .append(&mut puddle.tx.clone());
+                .append(&mut droplet.tx.clone());
             println!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );

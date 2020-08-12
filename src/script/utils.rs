@@ -238,7 +238,7 @@ fn match_on_multisig_to_pubkey(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::transaction_utils::create_payment_tx_ins;
+    use crate::primitives::transaction_utils::construct_payment_tx_ins;
 
     /// Util function to create p2pkh TxIns
     fn create_multisig_tx_ins(tx_values: Vec<TxConstructor>, m: usize) -> Vec<TxIn> {
@@ -263,7 +263,7 @@ mod tests {
     }
 
     /// Util function to create multisig TxIns
-    // fn create_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
+    // fn construct_payment_tx_ins(tx_values: Vec<TxConstructor>) -> Vec<TxIn> {
     //     let mut tx_ins = Vec::new();
 
     //     for entry in tx_values {
@@ -361,7 +361,7 @@ mod tests {
             pub_keys: vec![pk],
         };
 
-        let tx_ins = create_payment_tx_ins(vec![tx_const]);
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
 
         assert!(tx_has_valid_p2pkh_sig(tx_ins[0].clone().script_signature));
     }
@@ -382,7 +382,7 @@ mod tests {
             pub_keys: vec![second_pk],
         };
 
-        let tx_ins = create_payment_tx_ins(vec![tx_const]);
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
 
         assert_eq!(
             tx_has_valid_p2pkh_sig(tx_ins[0].clone().script_signature),
