@@ -126,6 +126,23 @@ mod tests {
     use sodiumoxide::crypto::sign;
 
     #[test]
+    // Creates a valid creation transaction
+    fn should_construct_a_valid_create_tx() {
+        let receiver_address = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let amount = 1;
+        let drs = vec![0, 8, 30, 20, 1];
+
+        let tx = construct_create_tx(drs.clone(), receiver_address.clone(), amount);
+
+        assert_eq!(tx.druid, None);
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].amount, amount);
+        assert_eq!(tx.outputs[0].drs_block_hash, None);
+        assert_eq!(tx.outputs[0].script_public_key, Some(receiver_address));
+        assert_eq!(tx.outputs[0].value, Some(Asset::Data(drs)));
+    }
+
+    #[test]
     // Creates a valid payment transaction
     fn should_construct_a_valid_payment_tx() {
         let (_pk, sk) = sign::gen_keypair();
