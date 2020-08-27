@@ -1,8 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
-    ComputeRequest, HandshakeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork,
-    ProofOfWorkBlock, Response,
+    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
 use crate::Node;
@@ -78,14 +77,28 @@ pub struct MinerNode {
 }
 
 impl MinerNode {
+    /// Creates a new instance of Mining implementor
+    ///
+    /// ### Arguments
+    ///
+    /// * `comms_address`   - endpoint address used for communications
+    pub async fn new(comms_address: SocketAddr) -> Result<MinerNode> {
+        Ok(MinerNode {
+            node: Node::new(comms_address, PEER_LIMIT, NodeType::Miner).await?,
+            partition_list: Vec::new(),
+            rand_num: Vec::new(),
+            partition_key: gen_key(),
+            current_block: Vec::new(),
+            last_pow: Arc::new(RwLock::new(ProofOfWork {
+                address: "".to_string(),
+                nonce: Vec::new(),
+            })),
+        })
+    }
+
     /// Returns the miner node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
-    }
-
-    /// Start the compute node on the network.
-    pub async fn start(&mut self) -> Result<()> {
-        Ok(self.node.listen().await?)
     }
 
     /// Generates a garbage coinbase tx for network testing
@@ -96,14 +109,6 @@ impl MinerNode {
     /// Connect to a peer on the network.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
-        self.node
-            .send(
-                peer,
-                HandshakeRequest {
-                    node_type: NodeType::Miner,
-                },
-            )
-            .await?;
         Ok(())
     }
 
@@ -344,20 +349,6 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn new(comms_address: SocketAddr) -> MinerNode {
-        MinerNode {
-            partition_list: Vec::new(),
-            rand_num: Vec::new(),
-            partition_key: gen_key(),
-            current_block: Vec::new(),
-            node: Node::new(comms_address, PEER_LIMIT),
-            last_pow: Arc::new(RwLock::new(ProofOfWork {
-                address: "".to_string(),
-                nonce: Vec::new(),
-            })),
-        }
-    }
-
     fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response {
         self.current_block = pre_block;
 

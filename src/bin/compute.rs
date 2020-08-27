@@ -1,7 +1,7 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use system::{ComputeInterface, ComputeNode, Response};
+use system::{ComputeNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,9 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         matches.value_of("port").unwrap_or("0")
     );
 
-    let mut node = ComputeNode::new(endpoint.parse().unwrap());
-
-    node.start().await?;
+    let node = ComputeNode::new(endpoint.parse().unwrap()).await?;
 
     println!("Started node at {}", node.address());
 

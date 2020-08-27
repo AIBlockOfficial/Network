@@ -22,4 +22,4 @@ pub use utils::command_input_to_socket;
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;
 #[cfg(features = "mock")]
-pub(crate) use mock::Node;
+pub(crate) use mock::{Node, RingNode};

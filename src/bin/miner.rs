@@ -2,7 +2,7 @@
 
 use clap::{App, Arg};
 use std::time::SystemTime;
-use system::{MinerInterface, MinerNode, Response};
+use system::{MinerNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,10 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         matches.value_of("port").unwrap_or("0")
     );
 
-    let mut node = MinerNode::new(endpoint.parse().unwrap());
+    let mut node = MinerNode::new(endpoint.parse().unwrap()).await?;
     let mut compute_node_connected = None;
-
-    node.start().await?;
 
     println!("Started node at {}", node.address());
 
