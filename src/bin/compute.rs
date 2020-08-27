@@ -61,6 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Received PoW successfully",
+                    }) => {
+                        let _flood = node.flood_rand_num_to_requesters().await.unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: &_,
                     }) => {
                         println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
