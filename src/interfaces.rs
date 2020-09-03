@@ -166,17 +166,17 @@ impl fmt::Debug for MineRequest {
     }
 }
 
-/// Encapsulates compute requests
+/// Encapsulates compute requests & responses.
 #[derive(Serialize, Deserialize, Clone)]
-pub enum ComputeRequest {
+pub enum ComputeMessage {
     SendPoW { pow: ProofOfWorkBlock },
     SendPartitionEntry { partition_entry: ProofOfWork },
     SendPartitionRequest,
 }
 
-impl fmt::Debug for ComputeRequest {
+impl fmt::Debug for ComputeMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ComputeRequest::*;
+        use ComputeMessage::*;
 
         match *self {
             SendPoW { ref pow } => write!(f, "SendPoW"),

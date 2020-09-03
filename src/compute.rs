@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
-    ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
+    ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response, Tx,
 };
 use crate::unicorn::UnicornShard;
@@ -232,7 +232,7 @@ impl ComputeNode {
     /// Hanldes a new incoming message from a peer.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+            let req = deserialize::<ComputeMessage>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
                 error
             })?;
@@ -247,8 +247,8 @@ impl ComputeNode {
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
-        use ComputeRequest::*;
+    fn handle_request(&mut self, peer: SocketAddr, req: ComputeMessage) -> Response {
+        use ComputeMessage::*;
 
         match req {
             SendPoW { pow } => self.receive_pow(peer, pow),

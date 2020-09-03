@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
-    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
+    ComputeMessage, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
 use crate::Node;
@@ -198,7 +198,7 @@ impl MinerNode {
         pow_promise: ProofOfWorkBlock,
     ) -> Result<()> {
         self.node
-            .send(peer, ComputeRequest::SendPoW { pow: pow_promise })
+            .send(peer, ComputeMessage::SendPoW { pow: pow_promise })
             .await?;
         Ok(())
     }
@@ -212,7 +212,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeRequest::SendPartitionEntry {
+                ComputeMessage::SendPartitionEntry {
                     partition_entry: partition_entry,
                 },
             )
@@ -225,7 +225,7 @@ impl MinerNode {
         let _peer_span = info_span!("sending partition participation request");
 
         self.node
-            .send(compute, ComputeRequest::SendPartitionRequest {})
+            .send(compute, ComputeMessage::SendPartitionRequest {})
             .await?;
 
         Ok(())

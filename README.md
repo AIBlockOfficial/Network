@@ -37,3 +37,15 @@ To enable log output, set this environment variable:
 ```
 RUST_LOG=system=trace
 ```
+
+## Documentation
+
+Documentation can be built locally with rustdoc by running the following command:
+
+```
+cargo +nightly doc --document-private-items
+```
+
+The resulting documentation can be found in `target/doc/system/index.html`.
+
+Nightly is required because one of dependencies (`gmp-mpfr-sys`) uses unstable features.
