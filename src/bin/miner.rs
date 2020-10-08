@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await
                             .unwrap();
 
-                        node.current_coinbase = current_coinbase;
+                        node.current_coinbase = current_coinbase.clone();
                         match now.elapsed() {
                             Ok(elapsed) => {
                                 println!("{}", elapsed.as_millis());
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         let _send_pow = node
-                            .send_pow(compute_node_connected.unwrap(), block_pow)
+                            .send_pow(compute_node_connected.unwrap(), block_pow, current_coinbase)
                             .await
                             .unwrap();
                     }

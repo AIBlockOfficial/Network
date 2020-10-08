@@ -204,9 +204,16 @@ impl MinerNode {
         &mut self,
         peer: SocketAddr,
         pow_promise: ProofOfWorkBlock,
+        coinbase: Transaction,
     ) -> Result<()> {
         self.node
-            .send(peer, ComputeMessage::SendPoW { pow: pow_promise })
+            .send(
+                peer,
+                ComputeMessage::SendPoW {
+                    pow: pow_promise,
+                    coinbase,
+                },
+            )
             .await?;
         Ok(())
     }

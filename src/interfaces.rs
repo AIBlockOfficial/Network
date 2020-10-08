@@ -163,6 +163,7 @@ impl fmt::Debug for MineRequest {
 pub enum ComputeMessage {
     SendPoW {
         pow: ProofOfWorkBlock,
+        coinbase: Transaction,
     },
     SendPartitionEntry {
         partition_entry: ProofOfWork,
@@ -178,7 +179,10 @@ impl fmt::Debug for ComputeMessage {
         use ComputeMessage::*;
 
         match *self {
-            SendPoW { ref pow } => write!(f, "SendPoW"),
+            SendPoW {
+                ref pow,
+                ref coinbase,
+            } => write!(f, "SendPoW"),
             SendPartitionEntry {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),
@@ -190,12 +194,19 @@ impl fmt::Debug for ComputeMessage {
 
 pub trait ComputeInterface {
     /// Receives a PoW for inclusion in the UnicornShard build
+    /// TODO: Coinbase amount currently hardcoded to 12. Make dynamic
     ///
     /// ### Arguments
     ///
-    /// * `address` - address for the peer providing the PoW
-    /// * `pow`     - PoW for potential inclusion
-    fn receive_pow(&mut self, peer: SocketAddr, pow: ProofOfWorkBlock) -> Response;
+    /// * `address`         - address for the peer providing the PoW
+    /// * `pow`             - PoW for potential inclusion
+    /// * `coinbase`        - Coinbase tx to validate
+    fn receive_pow(
+        &mut self,
+        peer: SocketAddr,
+        pow: ProofOfWorkBlock,
+        coinbase: Transaction,
+    ) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///

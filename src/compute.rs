@@ -12,6 +12,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use std::sync::{Arc, Mutex};
 use std::{
     collections::{BTreeMap, HashMap},
     convert::TryInto,
@@ -22,6 +23,7 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::construct_utxo_set;
 use naom::script::utils::tx_ins_are_valid;
 
 use tracing::{debug, info, info_span, warn};
@@ -69,11 +71,12 @@ impl From<bincode::Error> for ComputeError {
 pub struct ComputeNode {
     node: Node,
     pub current_block: Block,
+    pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
     pub partition_key: Key,
     pub tx_pool: BTreeMap<String, Transaction>,
-    pub utxo_set: BTreeMap<String, Transaction>,
+    pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -91,9 +94,10 @@ impl ComputeNode {
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_block: Block::new(),
+            current_block_tx: BTreeMap::new(),
             current_random_num: Vec::new(),
             tx_pool: BTreeMap::new(),
-            utxo_set: BTreeMap::new(),
+            utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
@@ -122,6 +126,7 @@ impl ComputeNode {
     }
 
     /// Generates a block of transactions to be mined in the next round
+    /// TODO: Remember to store transactions in full internally
     ///
     /// ### Arguments
     ///
@@ -270,7 +275,7 @@ impl ComputeNode {
         use ComputeMessage::*;
 
         match req {
-            SendPoW { pow } => self.receive_pow(peer, pow),
+            SendPoW { pow, coinbase } => self.receive_pow(peer, pow, coinbase),
             SendPartitionEntry { partition_entry } => {
                 self.receive_partition_entry(peer, partition_entry)
             }
@@ -419,32 +424,39 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_pow(&mut self, address: SocketAddr, pow: ProofOfWorkBlock) -> Response {
+    fn receive_pow(
+        &mut self,
+        address: SocketAddr,
+        pow: ProofOfWorkBlock,
+        coinbase: Transaction,
+    ) -> Response {
         info!(?address, "Received PoW");
         let mut pow_block = pow.clone();
 
-        if Self::validate_pow_block(&mut pow_block) {
+        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
-                success: true,
-                reason: "Received PoW successfully",
+                success: false,
+                reason: "Coinbase transaction invalid",
             };
         }
 
-        // if self.unicorn_list.len() < self.unicorn_limit {
-        //     let mut unicorn_value = UnicornShard::new();
-        //     unicorn_value.promise = pow.clone();
+        if !Self::validate_pow_block(&mut pow_block) {
+            return Response {
+                success: false,
+                reason: "Invalid PoW for block",
+            };
+        }
 
-        //     self.unicorn_list.insert(address, unicorn_value);
-
-        //     return Response {
-        //         success: true,
-        //         reason: "Received PoW successfully",
-        //     };
-        // }
+        // Update internal UTXO; will consume current transactions
+        self.utxo_set
+            .lock()
+            .unwrap()
+            .append(&mut self.current_block_tx);
+        construct_utxo_set(&mut self.utxo_set);
 
         Response {
-            success: false,
-            reason: "UnicornShard limit reached. Unable to receive PoW",
+            success: true,
+            reason: "Received PoW successfully",
         }
     }
 
@@ -476,7 +488,9 @@ impl ComputeInterface for ComputeNode {
         let mut valid_tx = BTreeMap::new();
 
         for (hash, tx) in &transactions {
-            if !tx.is_coinbase() && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set) {
+            if !tx.is_coinbase()
+                && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
+            {
                 valid_tx.insert(hash.clone(), tx.clone());
             }
         }
