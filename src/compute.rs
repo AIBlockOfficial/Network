@@ -22,6 +22,8 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
+use naom::script::utils::tx_ins_are_valid;
+
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -471,11 +473,33 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        self.tx_pool.append(&mut transactions.clone());
+        let mut valid_tx = BTreeMap::new();
+
+        for (hash, tx) in &transactions {
+            if !tx.is_coinbase() && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set) {
+                valid_tx.insert(hash.clone(), tx.clone());
+            }
+        }
+
+        if valid_tx.len() == 0 {
+            return Response {
+                success: false,
+                reason: "No valid transactions provided",
+            };
+        }
+
+        self.tx_pool.append(&mut valid_tx);
+
+        if valid_tx.len() < transactions.len() {
+            return Response {
+                success: true,
+                reason: "Some transactions invalid. Adding valid transactions only",
+            };
+        }
 
         Response {
             success: true,
-            reason: "Transactions successfully added to tx pool",
+            reason: "All transactions successfully added to tx pool",
         }
     }
 
