@@ -1,10 +1,9 @@
-use crate::comms_handler::{CommsError, Event};
+use crate::comms_handler::{CommsError, Event, Node};
 use crate::interfaces::{
-    Asset, Contract, HandshakeRequest, NodeType, Response, UseInterface, UserRequest,
+    Asset, CommMessage::HandshakeRequest, Contract, NodeType, Response, UseInterface, UserRequest,
 };
-use crate::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
-use crate::script::lang::Script;
-use crate::Node;
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use naom::script::lang::Script;
 
 use bincode::deserialize;
 use bytes::Bytes;
@@ -77,14 +76,17 @@ pub struct UserNode {
 }
 
 impl UserNode {
+    pub async fn new(address: SocketAddr, network: usize) -> Result<UserNode> {
+        Ok(UserNode {
+            node: Node::new(address, 2, NodeType::User).await?,
+            assets: Vec::new(),
+            network: network,
+        })
+    }
+
     /// Returns the miner node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
-    }
-
-    /// Start the user node on the network.
-    pub async fn start(&mut self) -> Result<()> {
-        Ok(self.node.listen().await?)
     }
 
     /// Connect to a peer on the network.
@@ -95,6 +97,7 @@ impl UserNode {
                 peer,
                 HandshakeRequest {
                     node_type: NodeType::Miner,
+                    public_address: self.node.address(),
                 },
             )
             .await?;
@@ -142,14 +145,6 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn new(address: SocketAddr, network: usize) -> UserNode {
-        UserNode {
-            node: Node::new(address, 2),
-            assets: Vec::new(),
-            network: network,
-        }
-    }
-
     fn check_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response {
         Response {
             success: false,

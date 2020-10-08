@@ -1,24 +1,24 @@
-use crate::interfaces::ProofOfWork;
-use crate::sha3::Digest;
-use sha3::Sha3_256;
+use crate::interfaces::{ProofOfWork, ProofOfWorkBlock};
+use sha3::{Digest, Sha3_256};
 
 /// A structure for the block header UnicornShard
 #[derive(Debug, Clone)]
 pub struct UnicornShard {
-    pub promise: Vec<u8>,
+    pub promise: ProofOfWorkBlock,
     pub commit: ProofOfWork,
 }
 
 impl UnicornShard {
     /// Generate a new UnicornShard instance
     pub fn new() -> UnicornShard {
+        let static_add: String = "".to_string();
         let pow = ProofOfWork {
             address: "".to_string(),
             nonce: Vec::new(),
         };
 
         UnicornShard {
-            promise: Vec::new(),
+            promise: ProofOfWorkBlock::new(),
             commit: pow,
         }
     }
@@ -28,12 +28,12 @@ impl UnicornShard {
         let mut commit_body = commit.address.as_bytes().to_vec();
         commit_body.append(&mut commit.nonce.clone());
 
-        let result = Sha3_256::digest(&commit_body).to_vec();
+        let _result = Sha3_256::digest(&commit_body).to_vec();
 
-        if result == self.promise {
-            self.commit = commit;
-            return true;
-        }
+        // if result == self.promise {
+        //     self.commit = commit;
+        //     return true;
+        // }
 
         false
     }

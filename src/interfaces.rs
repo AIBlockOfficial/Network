@@ -1,10 +1,14 @@
 #![allow(unused)]
-use crate::primitives::block::Block;
-use crate::primitives::transaction::Transaction;
 use crate::unicorn::UnicornShard;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
+
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +22,22 @@ pub struct Response {
 pub struct ProofOfWork {
     pub address: String,
     pub nonce: Vec<u8>,
+}
+
+/// PoW structure for blocks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofOfWorkBlock {
+    pub nonce: Vec<u8>,
+    pub block: Block,
+}
+
+impl ProofOfWorkBlock {
+    pub fn new() -> Self {
+        ProofOfWorkBlock {
+            nonce: Vec::new(),
+            block: Block::new(),
+        }
+    }
 }
 
 /// A placeholder Contract struct
@@ -35,17 +55,55 @@ pub enum Asset {
 }
 
 /// Denotes existing node types
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
     Miner,
     Storage,
     Compute,
+    User,
 }
 
-/// Handshake request that peers send when they connect to someone
-#[derive(Deserialize, Serialize, Debug)]
-pub struct HandshakeRequest {
-    pub node_type: NodeType,
+/// Token to uniquely identify messages.
+pub type Token = u64;
+
+/// Internal protocol messages exchanged between nodes.
+/// Handle nodes membership & bootstrapping. Wrap higher-level protocols.
+///
+/// ### Message IDs
+/// The requests & response pairs must have corresponding message IDs to make sure
+/// that an application is able to match them. However, not all requests require responses,
+/// and in this case the application will not be registering its interest in a response with
+/// a certain message ID.
+///
+/// Message IDs are also used for _gossip_: a node will remember message IDs it has seen and will
+/// retransmit all messages it has not seen yet.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum CommMessage {
+    /// Handshake request that peers send when they connect to someone.
+    HandshakeRequest {
+        /// Type of node that's trying to establish a connection.
+        node_type: NodeType,
+        /// Publicly available socket address of the node that can be used for inbound connections.
+        public_address: SocketAddr,
+    },
+    /// Handshake response containing contacts of ring members.
+    HandshakeResponse { contacts: Vec<SocketAddr> },
+    /// Gossip message, multicast to all peers within the same ring.
+    Gossip {
+        /// Contents of the gossip message. Can encapsulate other message types.
+        payload: Bytes,
+        /// Number of hops this message made.
+        ttl: u8,
+        /// Unique message identifier.
+        id: Token,
+    },
+    /// Wraps a direct message from peer to peer. Can encapsulate other message types.
+    Direct {
+        /// Contents of a message. Can be serialized message of another type.
+        payload: Bytes,
+        /// Unique message ID. Can be used for correspondence between requests and responses.
+        id: Token,
+    },
 }
 
 /// Encapsulates storage requests
@@ -78,14 +136,6 @@ impl fmt::Debug for StorageRequest {
 }
 
 pub trait StorageInterface {
-    /// Creates a new instance of a Store implementor
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Address of self
-    /// * `net`     - The network type to save to
-    fn new(address: SocketAddr, net: usize) -> Self;
-
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
     fn get_history(&self, start_time: &u64, end_time: &u64) -> Response;
@@ -128,7 +178,7 @@ pub trait StorageInterface {
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
-/// Encapsulates compute requests
+/// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
     SendPoW { pow: Vec<u8> },
@@ -146,21 +196,75 @@ impl fmt::Debug for ComputeRequest {
     }
 }
 
-pub trait ComputeInterface {
-    /// Generates a new compute node instance
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Address for the current compute node
-    fn new(address: SocketAddr) -> Self;
+/// Encapsulates miner requests
+#[derive(Serialize, Deserialize, Clone)]
+pub enum MineRequest {
+    SendBlock { block: Vec<u8> },
+    SendRandomNum { rnum: Vec<u8> },
+    SendPartitionList { p_list: Vec<ProofOfWork> },
+}
 
+impl fmt::Debug for MineRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use MineRequest::*;
+
+        match *self {
+            SendBlock { ref block } => write!(f, "SendBlock"),
+            SendRandomNum { ref rnum } => write!(f, "SendRandomNum"),
+            SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
+        }
+    }
+}
+
+/// Encapsulates compute requests & responses.
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ComputeMessage {
+    SendPoW {
+        pow: ProofOfWorkBlock,
+        coinbase: Transaction,
+    },
+    SendPartitionEntry {
+        partition_entry: ProofOfWork,
+    },
+    SendTransactions {
+        transactions: BTreeMap<String, Transaction>,
+    },
+    SendPartitionRequest,
+}
+
+impl fmt::Debug for ComputeMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ComputeMessage::*;
+
+        match *self {
+            SendPoW {
+                ref pow,
+                ref coinbase,
+            } => write!(f, "SendPoW"),
+            SendPartitionEntry {
+                ref partition_entry,
+            } => write!(f, "SendPartitionEntry"),
+            SendTransactions { ref transactions } => write!(f, "SendTransactions"),
+            SendPartitionRequest => write!(f, "SendPartitionRequest"),
+        }
+    }
+}
+
+pub trait ComputeInterface {
     /// Receives a PoW for inclusion in the UnicornShard build
+    /// TODO: Coinbase amount currently hardcoded to 12. Make dynamic
     ///
     /// ### Arguments
     ///
-    /// * `address` - address for the peer providing the PoW
-    /// * `pow`     - PoW for potential inclusion
-    fn receive_pow(&mut self, peer: SocketAddr, pow: Vec<u8>) -> Response;
+    /// * `address`         - address for the peer providing the PoW
+    /// * `pow`             - PoW for potential inclusion
+    /// * `coinbase`        - Coinbase tx to validate
+    fn receive_pow(
+        &mut self,
+        peer: SocketAddr,
+        pow: ProofOfWorkBlock,
+        coinbase: Transaction,
+    ) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///
@@ -181,30 +285,29 @@ pub trait ComputeInterface {
     fn get_service_levels(&self) -> Response;
 
     /// Receives transactions to be bundled into blocks
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
+    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;
 
     /// Executes a received and approved contract
     fn execute_contract(&self, contract: Contract) -> Response;
 
     /// Returns the next block reward value
     fn get_next_block_reward(&self) -> f64;
-}
 
-pub trait MinerInterface {
-    /// Creates a new instance of Mining implementor
+    /// Validates a PoW
     ///
     /// ### Arguments
     ///
-    /// * `comms_address`   - endpoint address used for communications
-    fn new(comms_address: SocketAddr) -> Self;
+    /// * `pow` - PoW to validate
+    fn validate_pow(pow: &mut ProofOfWork) -> bool;
+}
 
+pub trait MinerInterface {
     /// Receives a new block to be mined
     ///
     /// ### Arguments
     ///
-    /// * `pre_block`       - New block to be mined
-    /// * `block_reward`    - Block reward allocated to coinbase
-    fn receive_pre_block(&mut self, pre_block: &Block, block_reward: u64) -> Response;
+    /// * `pre_block` - New block to be mined
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
 }
 
 /// Encapsulates storage requests
@@ -234,14 +337,6 @@ impl fmt::Debug for UserRequest {
 }
 
 pub trait UseInterface {
-    /// Creates a new instance of Mining implementor
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Socket address of self
-    /// * `network` - Network to join
-    fn new(address: SocketAddr, network: usize) -> Self;
-
     /// Checks an advertised contract with a set of peers
     ///
     /// ### Arguments

@@ -1,12 +1,13 @@
-use crate::comms_handler::{CommsError, Event};
-use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST};
-use crate::interfaces::{Contract, ProofOfWork, Response, StorageInterface, StorageRequest};
-use crate::primitives::block::Block;
+use crate::comms_handler::{CommsError, Event, Node};
+use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
+use crate::interfaces::{
+    Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
+};
 use crate::sha3::Digest;
-use crate::Node;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::block::Block;
 use rocksdb::{Options, DB};
 use sha3::Sha3_256;
 use std::collections::HashMap;
@@ -43,10 +44,13 @@ pub struct StorageNode {
 }
 
 impl StorageNode {
-    /// Start the compute node on the network.
-    pub async fn start(&mut self) -> Result<()> {
-        self.node.listen().await?;
-        Ok(())
+    pub async fn new(address: SocketAddr, net: usize) -> Result<StorageNode> {
+        Ok(StorageNode {
+            node: Node::new(address, PEER_LIMIT, NodeType::Storage).await?,
+            whitelisted: HashMap::new(),
+            block: Block::new(),
+            net: net,
+        })
     }
 
     /// Listens for new events from peers and handles them.
@@ -96,15 +100,6 @@ impl StorageNode {
 }
 
 impl StorageInterface for StorageNode {
-    fn new(address: SocketAddr, net: usize) -> StorageNode {
-        StorageNode {
-            node: Node::new(address, 6),
-            whitelisted: HashMap::new(),
-            block: Block::new(),
-            net: net,
-        }
-    }
-
     fn get_history(&self, start_time: &u64, end_time: &u64) -> Response {
         Response {
             success: false,

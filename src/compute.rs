@@ -1,16 +1,34 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::interfaces::ProofOfWork;
-use crate::interfaces::{ComputeInterface, ComputeRequest, Contract, Response};
-use crate::primitives::block::Block;
-use crate::primitives::transaction::Transaction;
-use crate::script::utils::tx_ins_are_valid;
+use crate::constants::{
+    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
+};
+use crate::interfaces::{
+    ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
+    ProofOfWorkBlock, Response,
+};
 use crate::unicorn::UnicornShard;
+use crate::utils::get_partition_entry_key;
 use crate::Node;
 
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use std::collections::{BTreeMap, HashMap};
-use std::net::SocketAddr;
+use sha3::{Digest, Sha3_256};
+
+use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use std::sync::{Arc, Mutex};
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryInto,
+    error::Error,
+    fmt,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
+
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::construct_utxo_set;
+use naom::script::utils::tx_ins_are_valid;
+
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -20,6 +38,24 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 pub enum ComputeError {
     Network(CommsError),
     Serialization(bincode::Error),
+}
+
+impl fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+        }
+    }
+}
+
+impl Error for ComputeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Network(ref e) => Some(e),
+            Self::Serialization(ref e) => Some(e),
+        }
+    }
 }
 
 impl From<CommsError> for ComputeError {
@@ -34,12 +70,6 @@ impl From<bincode::Error> for ComputeError {
     }
 }
 
-/// Limit for the number of peers a compute node may have
-const PEER_LIMIT: usize = 6;
-
-/// Limit for the number of PoWs a compute node may have for UnicornShard creation
-const UNICORN_LIMIT: usize = 5;
-
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Clone)]
 pub struct DruidDroplet {
@@ -50,38 +80,45 @@ pub struct DruidDroplet {
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
-    pub tx_pool: Vec<Transaction>,
-    pub druid_pool: BTreeMap<Vec<u8>, DruidDroplet>,
     pub current_block: Block,
-    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
+    pub druid_pool: BTreeMap<Vec<u8>, DruidDroplet>,
+    pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
+    current_random_num: Vec<u8>,
+    pub partition_key: Key,
+    pub tx_pool: BTreeMap<String, Transaction>,
+    pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
+    pub partition_list: Vec<ProofOfWork>,
+    pub request_list: BTreeMap<String, bool>,
+    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
 
 impl ComputeNode {
-    /// Returns the compute node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
-    }
-
-    /// Processes transaction for payment from user
+    /// Generates a new compute node instance
     ///
     /// ### Arguments
     ///
-    /// * `transaction` - Transaction to process
-    pub fn process_p2pkh_tx(&mut self, transaction: Transaction) -> Response {
-        if tx_ins_are_valid(transaction.clone().inputs) {
-            self.current_block.transactions.push(transaction);
+    /// * `address` - Address for the current compute node
+    pub async fn new(address: SocketAddr) -> Result<ComputeNode> {
+        Ok(ComputeNode {
+            node: Node::new(address, PEER_LIMIT, NodeType::Compute).await?,
+            unicorn_list: HashMap::new(),
+            unicorn_limit: UNICORN_LIMIT,
+            current_block: Block::new(),
+            current_block_tx: BTreeMap::new(),
+            druid_pool: BTreeMap::new(),
+            current_random_num: Vec::new(),
+            tx_pool: BTreeMap::new(),
+            utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
+            request_list: BTreeMap::new(),
+            partition_list: Vec::new(),
+            partition_key: gen_key(),
+        })
+    }
 
-            return Response {
-                success: true,
-                reason: "Token payment made successfully",
-            };
-        }
-
-        Response {
-            success: false,
-            reason: "You are not authorised to make this payment",
-        }
+    /// Returns the compute node's public endpoint.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
     }
 
     /// Processes a dual double entry transaction
@@ -90,34 +127,39 @@ impl ComputeNode {
     ///
     /// * `transaction` - Transaction to process
     pub fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
-        if let Some(druid) = transaction.clone().druid {
-            // If this transaction is meant to join others
-            if self.druid_pool.contains_key(&druid) {
-                self.process_tx_druid(druid, transaction);
+        // if let Some(druid) = transaction.clone().druid {
+        //     // If this transaction is meant to join others
+        //     if self.druid_pool.contains_key(&druid) {
+        //         self.process_tx_druid(druid, transaction);
 
-                return Response {
-                    success: true,
-                    reason: "Transaction added to corresponding DRUID droplets",
-                };
+        //         return Response {
+        //             success: true,
+        //             reason: "Transaction added to corresponding DRUID droplets",
+        //         };
 
-            // If we haven't seen this DRUID yet
-            } else {
-                let droplet = DruidDroplet {
-                    participants: transaction.druid_participants.unwrap(),
-                    tx: vec![transaction],
-                };
+        //     // If we haven't seen this DRUID yet
+        //     } else {
+        //         let droplet = DruidDroplet {
+        //             participants: transaction.druid_participants.unwrap(),
+        //             tx: vec![transaction],
+        //         };
 
-                self.druid_pool.insert(druid, droplet);
-                return Response {
-                    success: true,
-                    reason: "Transaction added to DRUID pool. Awaiting other parties",
-                };
-            }
-        }
+        //         self.druid_pool.insert(druid, droplet);
+        //         return Response {
+        //             success: true,
+        //             reason: "Transaction added to DRUID pool. Awaiting other parties",
+        //         };
+        //     }
+        // }
+
+        // Response {
+        //     success: false,
+        //     reason: "Dual double entry transaction doesn't contain a DRUID",
+        // }
 
         Response {
             success: false,
-            reason: "Dual double entry transaction doesn't contain a DRUID",
+            reason: "Not implemented yet",
         }
     }
 
@@ -146,16 +188,17 @@ impl ComputeNode {
         let mut txs_valid = true;
 
         for entry in &droplet.tx {
-            if !tx_ins_are_valid(entry.inputs.clone()) {
+            if !tx_ins_are_valid(entry.inputs.clone(), &self.utxo_set.lock().unwrap()) {
                 txs_valid = false;
                 break;
             }
         }
 
         if txs_valid {
-            self.current_block
-                .transactions
-                .append(&mut droplet.tx.clone());
+            // TODO: Append DDE tx's to current pre-block
+            // self.current_block
+            //     .transactions
+            //     .append(&mut droplet.tx.clone());
             println!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );
@@ -171,22 +214,113 @@ impl ComputeNode {
     ///
     /// * `t_hash`   - The hash of the previous block
     /// * `prev_time`   - The time of the previous block
-    pub fn build_block(&mut self, t_hash: Vec<u8>, prev_time: u32) {
+    pub fn generate_block(&mut self, t_hash: String, prev_time: u32) {
         let mut next_block = Block::new();
         next_block.header.time = prev_time + 1;
-        next_block.header.previous_hash = t_hash;
+        next_block.header.previous_hash = Some(t_hash);
 
-        while !next_block.is_full() {
-            if self.tx_pool.len() > 0 {
-                let next_tx = self.tx_pool.remove(0);
-                next_block.transactions.push(next_tx.clone());
-            } else {
-                println!("Tx pool is empty. Unable to build the next block");
-                break;
+        // TODO: Implement
+
+        self.current_block = next_block;
+    }
+
+    /// I'm lazy, so just making another verifier for now
+    pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
+        let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
+        pow_body.append(&mut pow.nonce.clone());
+
+        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
+
+        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
+            if entry != 0 {
+                return false;
             }
         }
 
-        self.current_block = next_block;
+        true
+    }
+
+    /// Generates a garbage file for use in network testing. Will save the file
+    /// as the current block internally
+    ///
+    /// TODO: Fill with random tx hashes
+    ///
+    /// ### Arguments
+    ///
+    /// * `size`    - Size of the file in bytes
+    pub fn generate_garbage_block(&mut self, size: usize) {
+        let garbage_block = vec![0; size];
+        // self.current_block = garbage_block;
+    }
+
+    /// Generates a garbage random num for use in network testing
+    ///
+    /// ### Arguments
+    ///
+    /// * `size`    - Size of the file in bytes
+    pub fn generate_random_num(&mut self, size: usize) {
+        let random_num = vec![0; size];
+        self.current_random_num = random_num;
+    }
+
+    /// Gets a decremented socket address of peer for storage
+    fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
+        let mut storage_address = address.clone();
+        storage_address.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+        storage_address.set_port(address.port() - 1);
+
+        storage_address
+    }
+
+    /// Util function to get a socket address for PID table checks
+    fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
+        let comparison_port = address.port() + 1;
+        let mut comparison_addr = address.clone();
+
+        comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        comparison_addr.set_port(comparison_port);
+
+        comparison_addr
+    }
+
+    /// Sends block to a mining node.
+    /// TODO: Make sure miner deserializes before mining
+    pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
+        let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
+
+        self.node
+            .send(
+                peer,
+                MineRequest::SendBlock {
+                    block: block_to_send,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends the full partition list to the participants
+    pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
+        self.node
+            .send(
+                peer,
+                MineRequest::SendPartitionList {
+                    p_list: self.partition_list.clone(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends random number to a mining node.
+    pub async fn send_random_number(&mut self, peer: SocketAddr) -> Result<()> {
+        let random_num = self.current_random_num.clone();
+        println!("RANDOM NUMBER IN COMPUTE: {:?}", random_num);
+
+        self.node
+            .send(peer, MineRequest::SendRandomNum { rnum: random_num })
+            .await?;
+        Ok(())
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -211,12 +345,6 @@ impl ComputeNode {
         println!("Flooding commit to peers not implemented");
     }
 
-    /// Start the compute node on the network.
-    pub async fn start(&mut self) -> Result<()> {
-        self.node.listen().await?;
-        Ok(())
-    }
-
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
@@ -233,7 +361,7 @@ impl ComputeNode {
     /// Hanldes a new incoming message from a peer.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+            let req = deserialize::<ComputeMessage>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
                 error
             })?;
@@ -248,25 +376,135 @@ impl ComputeNode {
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
-        use ComputeRequest::*;
+    fn handle_request(&mut self, peer: SocketAddr, req: ComputeMessage) -> Response {
+        use ComputeMessage::*;
+
         match req {
-            SendPoW { pow } => self.receive_pow(peer, pow),
-            SendTx { tx } => self.receive_transactions(tx),
+            SendPoW { pow, coinbase } => self.receive_pow(peer, pow, coinbase),
+            SendPartitionEntry { partition_entry } => {
+                self.receive_partition_entry(peer, partition_entry)
+            }
+            SendTransactions { transactions } => self.receive_transactions(transactions),
+            SendPartitionRequest => self.receive_partition_request(peer),
         }
+    }
+
+    /// Receive a partition request from a miner node
+    /// TODO: This may need to be part of the ComputeInterface depending on key agreement
+    fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+        if self.request_list.is_empty() {
+            self.generate_random_num(5);
+        }
+
+        self.request_list.insert(peer.to_string(), false);
+
+        Response {
+            success: true,
+            reason: "Partition request received successfully",
+        }
+    }
+
+    /// Receives the light POW for partition inclusion
+    fn receive_partition_entry(
+        &mut self,
+        peer: SocketAddr,
+        partition_entry: ProofOfWork,
+    ) -> Response {
+        let mut pow_mut = partition_entry.clone();
+
+        if self.partition_list.len() < PARTITION_LIMIT && Self::validate_pow(&mut pow_mut) {
+            self.partition_list.push(partition_entry.clone());
+
+            if self.partition_list.len() == PARTITION_LIMIT {
+                let key = get_partition_entry_key(self.partition_list.clone());
+                let hashed_key = Sha3_256::digest(&key).to_vec();
+                let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
+                self.partition_key = Key(key_slice);
+
+                return Response {
+                    success: true,
+                    reason: "Partition list is full",
+                };
+            }
+
+            return Response {
+                success: true,
+                reason: "Partition PoW received successfully",
+            };
+        }
+
+        if self.partition_list.len() >= PARTITION_LIMIT {
+            return Response {
+                success: false,
+                reason: "Partition list is full",
+            };
+        }
+
+        Response {
+            success: false,
+            reason: "PoW received is invalid",
+        }
+    }
+
+    /// Floods the random number to everyone who requested
+    pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
+        let mut exclusions = Vec::new();
+
+        for (peer, peer_sent) in self.request_list.clone() {
+            if !peer_sent {
+                exclusions.push(peer.clone());
+                let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+
+                println!("PEER ADDRESS: {:?}", peer_addr);
+
+                let _result = self.send_random_number(peer_addr).await.unwrap();
+            }
+        }
+
+        for exclusion in exclusions {
+            self.request_list.insert(exclusion, true);
+        }
+
+        Ok(())
+    }
+
+    /// Floods the full partition list to participants
+    pub async fn flood_block_to_partition(&mut self) -> Result<()> {
+        self.generate_garbage_block(BLOCK_SIZE);
+
+        for (peer, _) in self.request_list.clone() {
+            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+            let _result = self.send_block(peer_addr).await.unwrap();
+        }
+
+        Ok(())
+    }
+
+    /// Floods all peers with the full partition list
+    pub async fn flood_list_to_partition(&mut self) -> Result<()> {
+        for (peer, _) in self.request_list.clone() {
+            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+            let _result = self.send_partition_list(peer_addr).await.unwrap();
+        }
+
+        Ok(())
     }
 }
 
 impl ComputeInterface for ComputeNode {
-    fn new(address: SocketAddr) -> ComputeNode {
-        ComputeNode {
-            node: Node::new(address, PEER_LIMIT),
-            current_block: Block::new(),
-            tx_pool: Vec::new(),
-            unicorn_list: HashMap::new(),
-            unicorn_limit: UNICORN_LIMIT,
-            druid_pool: BTreeMap::new(),
+    fn validate_pow(pow: &mut ProofOfWork) -> bool {
+        let mut pow_body = pow.address.as_bytes().to_vec();
+        pow_body.append(&mut pow.nonce.clone());
+
+        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
+
+        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
+            if entry != 0 {
+                return false;
+            }
         }
+
+        true
     }
 
     fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
@@ -291,25 +529,39 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_pow(&mut self, address: SocketAddr, pow: Vec<u8>) -> Response {
-        info!(?address, "Receieved PoW");
+    fn receive_pow(
+        &mut self,
+        address: SocketAddr,
+        pow: ProofOfWorkBlock,
+        coinbase: Transaction,
+    ) -> Response {
+        info!(?address, "Received PoW");
+        let mut pow_block = pow.clone();
 
-        if self.unicorn_list.len() < self.unicorn_limit {
-            let mut unicorn_value = UnicornShard::new();
-            unicorn_value.promise = pow.clone();
-
-            self.unicorn_list.insert(address, unicorn_value);
-            self.flood_pow_to_peers(address, &pow);
-
+        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
-                success: true,
-                reason: "Received PoW successfully",
+                success: false,
+                reason: "Coinbase transaction invalid",
             };
         }
 
+        if !Self::validate_pow_block(&mut pow_block) {
+            return Response {
+                success: false,
+                reason: "Invalid PoW for block",
+            };
+        }
+
+        // Update internal UTXO; will consume current transactions
+        self.utxo_set
+            .lock()
+            .unwrap()
+            .append(&mut self.current_block_tx);
+        construct_utxo_set(&mut self.utxo_set);
+
         Response {
-            success: false,
-            reason: "UnicornShard limit reached. Unable to receive PoW",
+            success: true,
+            reason: "Received PoW successfully",
         }
     }
 
@@ -337,19 +589,43 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
-        if self.tx_pool.len() + transactions.len() <= self.tx_pool.capacity() {
-            self.tx_pool.append(&mut transactions.clone());
+    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
+        if self.tx_pool.len() + transactions.len() > TX_POOL_LIMIT {
+            return Response {
+                success: false,
+                reason: "Transaction pool for this compute node is full",
+            };
+        }
 
+        let mut valid_tx = BTreeMap::new();
+
+        for (hash, tx) in &transactions {
+            if !tx.is_coinbase()
+                && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
+            {
+                valid_tx.insert(hash.clone(), tx.clone());
+            }
+        }
+
+        if valid_tx.len() == 0 {
+            return Response {
+                success: false,
+                reason: "No valid transactions provided",
+            };
+        }
+
+        self.tx_pool.append(&mut valid_tx);
+
+        if valid_tx.len() < transactions.len() {
             return Response {
                 success: true,
-                reason: "Transactions added to current tx pool",
+                reason: "Some transactions invalid. Adding valid transactions only",
             };
         }
 
         Response {
-            success: false,
-            reason: "Transaction pool is full. Please push to next compute node",
+            success: true,
+            reason: "All transactions successfully added to tx pool",
         }
     }
 
