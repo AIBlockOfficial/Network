@@ -5,7 +5,7 @@ use crate::interfaces::{
 };
 use crate::utils::get_partition_entry_key;
 use crate::Node;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -15,7 +15,13 @@ use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
 
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use naom::utils::construct_address;
+
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use sodiumoxide::crypto::sign;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -71,7 +77,8 @@ pub struct MinerNode {
     node: Node,
     pub partition_key: Key,
     pub rand_num: Vec<u8>,
-    pub current_block: Vec<u8>,
+    pub current_block: Block,
+    pub current_coinbase: Transaction,
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<ProofOfWork>,
 }
@@ -88,7 +95,8 @@ impl MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             partition_key: gen_key(),
-            current_block: Vec::new(),
+            current_block: Block::new(),
+            current_coinbase: Transaction::new(),
             last_pow: Arc::new(RwLock::new(ProofOfWork {
                 address: "".to_string(),
                 nonce: Vec::new(),
@@ -102,8 +110,8 @@ impl MinerNode {
     }
 
     /// Generates a garbage coinbase tx for network testing
-    fn generate_garbage_coinbase() -> Vec<u8> {
-        vec![0; 285]
+    fn generate_garbage_coinbase() -> Transaction {
+        Transaction::new()
     }
 
     /// Connect to a peer on the network.
@@ -253,10 +261,8 @@ impl MinerNode {
 
     /// I'm lazy, so just making another verifier for now
     pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
-        let mut pow_body = pow.address.as_bytes().to_vec();
+        let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
         pow_body.append(&mut pow.nonce.clone());
-        pow_body.append(&mut pow.block.clone());
-        pow_body.append(&mut pow.coinbase.clone());
 
         let pow_hash = Sha3_256::digest(&pow_body).to_vec();
 
@@ -270,23 +276,30 @@ impl MinerNode {
     }
 
     /// Generates a valid PoW for a block specifically
+    /// TODO: Update the numbers used for reward and block time
+    /// TODO: Save pk/sk to temp storage
     ///
     /// ### Arguments
     ///
-    /// * `address` - Payment address for a valid PoW
+    /// * `block` - The block to get the PoW for
     pub async fn generate_pow_for_block(
         &mut self,
-        address: String,
-        block: Vec<u8>,
-    ) -> Result<ProofOfWorkBlock> {
+        block: Block,
+    ) -> Result<(ProofOfWorkBlock, Transaction)> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
-            let coinbase = Self::generate_garbage_coinbase();
+            let (pk, sk) = sign::gen_keypair();
+            let address = construct_address(pk);
+
+            let current_coinbase = construct_coinbase_tx(12, 1, address);
+            let coinbase_hash = construct_tx_hash(&current_coinbase);
+
+            let mut block_for_pow = block.clone();
+            block_for_pow.transactions.push(coinbase_hash);
+
             let mut pow = ProofOfWorkBlock {
-                address,
                 nonce,
-                block: Sha3_256::digest(&block).to_vec(),
-                coinbase,
+                block: block_for_pow,
             };
 
             while !Self::validate_pow_block(&mut pow) {
@@ -294,7 +307,7 @@ impl MinerNode {
                 pow.nonce = nonce;
             }
 
-            pow
+            (pow, current_coinbase)
         })
         .await?)
     }
@@ -350,7 +363,7 @@ impl MinerNode {
 
 impl MinerInterface for MinerNode {
     fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response {
-        self.current_block = pre_block;
+        self.current_block = deserialize::<Block>(&pre_block).unwrap();
 
         Response {
             success: true,

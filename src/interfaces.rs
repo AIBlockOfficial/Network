@@ -3,9 +3,13 @@ use crate::key_creation::PeerInfo;
 use crate::unicorn::UnicornShard;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -24,30 +28,18 @@ pub struct ProofOfWork {
 /// PoW structure for blocks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWorkBlock {
-    pub address: String,
     pub nonce: Vec<u8>,
-    pub block: Vec<u8>,
-    pub coinbase: Vec<u8>,
+    pub block: Block,
 }
 
 impl ProofOfWorkBlock {
     pub fn new() -> Self {
         ProofOfWorkBlock {
-            address: "".to_string(),
             nonce: Vec::new(),
-            block: Vec::new(),
-            coinbase: Vec::new(),
+            block: Block::new(),
         }
     }
 }
-
-/// A placeholder tx struct
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Tx;
-
-/// A placeholder Block struct
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Block;
 
 /// A placeholder Contract struct
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,7 +118,7 @@ pub trait StorageInterface {
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
-    fn get_history(&self, start_time: &u64, end_time: &u64) -> Option<Vec<Tx>>;
+    fn get_history(&self, start_time: &u64, end_time: &u64) -> Option<Vec<Transaction>>;
 
     /// Whitelists the supplied UUID for edit permissions.
     fn whitelist(&self, uuid: &'static str) -> Response;
@@ -169,8 +161,15 @@ impl fmt::Debug for MineRequest {
 /// Encapsulates compute requests & responses.
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeMessage {
-    SendPoW { pow: ProofOfWorkBlock },
-    SendPartitionEntry { partition_entry: ProofOfWork },
+    SendPoW {
+        pow: ProofOfWorkBlock,
+    },
+    SendPartitionEntry {
+        partition_entry: ProofOfWork,
+    },
+    SendTransactions {
+        transactions: BTreeMap<String, Transaction>,
+    },
     SendPartitionRequest,
 }
 
@@ -183,6 +182,7 @@ impl fmt::Debug for ComputeMessage {
             SendPartitionEntry {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),
+            SendTransactions { ref transactions } => write!(f, "SendTransactions"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
         }
     }
@@ -216,7 +216,7 @@ pub trait ComputeInterface {
     fn get_service_levels(&self) -> Response;
 
     /// Receives transactions to be bundled into blocks
-    fn receive_transactions(&self, transactions: Vec<Tx>) -> Response;
+    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;
 
     /// Executes a received and approved contract
     fn execute_contract(&self, contract: Contract) -> Response;

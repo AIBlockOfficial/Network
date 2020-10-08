@@ -84,11 +84,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Pre-block received successfully",
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
-                        let block_pow = node
-                            .generate_pow_for_block(endpoint.clone(), node.current_block.clone())
+                        let (block_pow, current_coinbase) = node
+                            .generate_pow_for_block(node.current_block.clone())
                             .await
                             .unwrap();
 
+                        node.current_coinbase = current_coinbase;
                         match now.elapsed() {
                             Ok(elapsed) => {
                                 println!("{}", elapsed.as_millis());

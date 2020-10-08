@@ -1,4 +1,5 @@
 //! Zenotta Network Protocol library.
+#![allow(warnings)]
 
 mod comms_handler;
 mod compute;

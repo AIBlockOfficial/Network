@@ -2,13 +2,13 @@ use crate::comms_handler::{CommsError, Event};
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
-    ProofOfWorkBlock, Response, Tx,
+    ProofOfWorkBlock, Response,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::get_partition_entry_key;
 use crate::Node;
 
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
@@ -19,6 +19,9 @@ use std::{
     fmt,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
+
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 use tracing::{debug, info, info_span, warn};
 
 /// Result wrapper for compute errors
@@ -63,10 +66,12 @@ impl From<bincode::Error> for ComputeError {
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
-    pub current_block: Vec<u8>,
+    pub current_block: Block,
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
     pub partition_key: Key,
+    pub tx_pool: BTreeMap<String, Transaction>,
+    pub utxo_set: BTreeMap<String, Transaction>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -83,8 +88,10 @@ impl ComputeNode {
             node: Node::new(address, PEER_LIMIT, NodeType::Compute).await?,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
-            current_block: Vec::new(),
+            current_block: Block::new(),
             current_random_num: Vec::new(),
+            tx_pool: BTreeMap::new(),
+            utxo_set: BTreeMap::new(),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
@@ -98,10 +105,8 @@ impl ComputeNode {
 
     /// I'm lazy, so just making another verifier for now
     pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
-        let mut pow_body = pow.address.as_bytes().to_vec();
+        let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
         pow_body.append(&mut pow.nonce.clone());
-        pow_body.append(&mut pow.block.clone());
-        pow_body.append(&mut pow.coinbase.clone());
 
         let pow_hash = Sha3_256::digest(&pow_body).to_vec();
 
@@ -114,15 +119,26 @@ impl ComputeNode {
         true
     }
 
+    /// Generates a block of transactions to be mined in the next round
+    ///
+    /// ### Arguments
+    ///
+    /// * `size`    - Size of the block in bytes
+    pub fn generate_block(&mut self, size: usize) {
+        let mut block = Block::new();
+    }
+
     /// Generates a garbage file for use in network testing. Will save the file
     /// as the current block internally
+    ///
+    /// TODO: Fill with random tx hashes
     ///
     /// ### Arguments
     ///
     /// * `size`    - Size of the file in bytes
     pub fn generate_garbage_block(&mut self, size: usize) {
         let garbage_block = vec![0; size];
-        self.current_block = garbage_block;
+        // self.current_block = garbage_block;
     }
 
     /// Generates a garbage random num for use in network testing
@@ -156,8 +172,9 @@ impl ComputeNode {
     }
 
     /// Sends block to a mining node.
+    /// TODO: Make sure miner deserializes before mining
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
-        let block_to_send = self.current_block.clone();
+        let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
 
         self.node
             .send(
@@ -255,6 +272,7 @@ impl ComputeNode {
             SendPartitionEntry { partition_entry } => {
                 self.receive_partition_entry(peer, partition_entry)
             }
+            SendTransactions { transactions } => self.receive_transactions(transactions),
             SendPartitionRequest => self.receive_partition_request(peer),
         }
     }
@@ -452,10 +470,12 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&self, _transactions: Vec<Tx>) -> Response {
+    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
+        self.tx_pool.append(&mut transactions.clone());
+
         Response {
-            success: false,
-            reason: "Not implemented yet",
+            success: true,
+            reason: "Transactions successfully added to tx pool",
         }
     }
 
