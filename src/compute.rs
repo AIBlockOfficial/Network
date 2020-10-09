@@ -16,8 +16,11 @@ use sha3::{Digest, Sha3_256};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::sync::{Arc, Mutex};
+
+use std::collections::BTreeMap;
+
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     convert::TryInto,
     error::Error,
     fmt,
@@ -26,7 +29,7 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::construct_utxo_set;
+use naom::primitives::transaction_utils::{construct_tx_hash, construct_utxo_set};
 use naom::script::utils::tx_ins_are_valid;
 
 use tracing::{debug, info, info_span, warn};
@@ -74,14 +77,14 @@ impl From<bincode::Error> for ComputeError {
 #[derive(Debug, Clone)]
 pub struct DruidDroplet {
     participants: usize,
-    tx: Vec<Transaction>,
+    tx: BTreeMap<String, Transaction>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
     pub current_block: Block,
-    pub druid_pool: BTreeMap<Vec<u8>, DruidDroplet>,
+    pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
     current_random_num: Vec<u8>,
@@ -127,39 +130,37 @@ impl ComputeNode {
     ///
     /// * `transaction` - Transaction to process
     pub fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
-        // if let Some(druid) = transaction.clone().druid {
-        //     // If this transaction is meant to join others
-        //     if self.druid_pool.contains_key(&druid) {
-        //         self.process_tx_druid(druid, transaction);
+        if let Some(druid) = transaction.clone().druid {
+            // If this transaction is meant to join others
+            if self.druid_pool.contains_key(&druid) {
+                self.process_tx_druid(druid, transaction);
 
-        //         return Response {
-        //             success: true,
-        //             reason: "Transaction added to corresponding DRUID droplets",
-        //         };
+                return Response {
+                    success: true,
+                    reason: "Transaction added to corresponding DRUID droplets",
+                };
 
-        //     // If we haven't seen this DRUID yet
-        //     } else {
-        //         let droplet = DruidDroplet {
-        //             participants: transaction.druid_participants.unwrap(),
-        //             tx: vec![transaction],
-        //         };
+            // If we haven't seen this DRUID yet
+            } else {
+                let mut droplet = DruidDroplet {
+                    participants: transaction.druid_participants.unwrap(),
+                    tx: BTreeMap::new(),
+                };
 
-        //         self.druid_pool.insert(druid, droplet);
-        //         return Response {
-        //             success: true,
-        //             reason: "Transaction added to DRUID pool. Awaiting other parties",
-        //         };
-        //     }
-        // }
+                let tx_hash = construct_tx_hash(&transaction);
+                droplet.tx.insert(tx_hash, transaction);
 
-        // Response {
-        //     success: false,
-        //     reason: "Dual double entry transaction doesn't contain a DRUID",
-        // }
+                self.druid_pool.insert(druid, droplet);
+                return Response {
+                    success: true,
+                    reason: "Transaction added to DRUID pool. Awaiting other parties",
+                };
+            }
+        }
 
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Dual double entry transaction doesn't contain a DRUID",
         }
     }
 
@@ -167,10 +168,12 @@ impl ComputeNode {
     ///
     /// ### Arguments
     ///
+    /// * `druid`       - DRUID to match on
     /// * `transaction` - Transaction to process
-    pub fn process_tx_druid(&mut self, druid: Vec<u8>, transaction: Transaction) {
+    pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
         let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
-        current_droplet.tx.push(transaction);
+        let tx_hash = construct_tx_hash(&transaction);
+        current_droplet.tx.insert(tx_hash, transaction);
 
         // Execute the tx if it's ready
         if current_droplet.tx.len() == current_droplet.participants {
@@ -187,18 +190,20 @@ impl ComputeNode {
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
         let mut txs_valid = true;
 
-        for entry in &droplet.tx {
-            if !tx_ins_are_valid(entry.inputs.clone(), &self.utxo_set.lock().unwrap()) {
+        for tx in droplet.tx.values() {
+            if !tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set.lock().unwrap()) {
                 txs_valid = false;
                 break;
             }
         }
 
         if txs_valid {
-            // TODO: Append DDE tx's to current pre-block
-            // self.current_block
-            //     .transactions
-            //     .append(&mut droplet.tx.clone());
+            for (h, tx) in &mut droplet.tx.clone().iter() {
+                self.current_block.transactions.push(h.to_string());
+
+                self.current_block_tx.insert(h.to_string(), tx.clone());
+            }
+
             println!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );
@@ -216,10 +221,22 @@ impl ComputeNode {
     /// * `prev_time`   - The time of the previous block
     pub fn generate_block(&mut self, t_hash: String, prev_time: u32) {
         let mut next_block = Block::new();
+        let mut tx_hashes: Vec<String> = self
+            .current_block_tx
+            .keys()
+            .into_iter()
+            .map(|x| x.clone())
+            .collect();
+
         next_block.header.time = prev_time + 1;
         next_block.header.previous_hash = Some(t_hash);
 
-        // TODO: Implement
+        while !next_block.is_full() {
+            if tx_hashes.len() > 0 {
+                let next_hash = tx_hashes.pop().unwrap();
+                next_block.transactions.push(next_hash);
+            }
+        }
 
         self.current_block = next_block;
     }
@@ -284,7 +301,6 @@ impl ComputeNode {
     }
 
     /// Sends block to a mining node.
-    /// TODO: Make sure miner deserializes before mining
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
 
