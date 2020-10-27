@@ -7,12 +7,13 @@ use crate::sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::block::Block;
 use rocksdb::{Options, DB};
 use sha3::Sha3_256;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use tracing::{debug, info_span, warn};
+
+use naom::primitives::{block::Block, transaction::Transaction};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -93,7 +94,7 @@ impl StorageNode {
             } => self.get_history(&start_time, &end_time),
             GetUnicornTable { n_last_items } => self.get_unicorn_table(n_last_items),
             SendPow { pow } => self.receive_pow(pow),
-            SendBlock { block } => self.receive_block(peer, block),
+            SendBlock { block, tx } => self.receive_block(peer, block, tx),
             Store { incoming_contract } => self.receive_contracts(incoming_contract),
         }
     }
@@ -130,13 +131,21 @@ impl StorageInterface for StorageNode {
         }
     }
 
-    fn receive_block(&mut self, peer: SocketAddr, block: Block) -> Response {
+    fn receive_block(
+        &mut self,
+        peer: SocketAddr,
+        block: Block,
+        tx: BTreeMap<String, Transaction>,
+    ) -> Response {
         if let Some(_) = self.whitelisted.get(&peer) {
             self.block = block;
 
             // TODO: Makes the DB save process async
+
+            // Save the block
             let hash_input = Bytes::from(serialize(&self.block).unwrap());
-            let hash_key = Sha3_256::digest(&hash_input);
+            let hash_digest = Sha3_256::digest(&hash_input);
+            let hash_key = hex::encode(hash_digest);
             let save_path = match self.net {
                 0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
                 _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
@@ -144,6 +153,13 @@ impl StorageInterface for StorageNode {
 
             let db = DB::open_default(save_path.clone()).unwrap();
             db.put(hash_key, hash_input).unwrap();
+
+            // Save each transaction
+            for (tx_hash, tx_value) in &tx {
+                let tx_input = Bytes::from(serialize(tx_value).unwrap());
+                db.put(tx_hash, tx_input).unwrap();
+            }
+
             let _ = DB::destroy(&Options::default(), save_path.clone());
 
             return Response {

@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Received PoW successfully",
                     }) => {
                         let _flood = node.flood_block_found_notification().await.unwrap();
+                        let _write_to_store = node.send_block_to_storage().await.unwrap();
                     }
                     Ok(Response {
                         success: true,

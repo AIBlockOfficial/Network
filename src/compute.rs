@@ -5,7 +5,7 @@ use crate::constants::{
 };
 use crate::interfaces::{
     ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
-    ProofOfWorkBlock, Response,
+    ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::get_partition_entry_key;
@@ -96,6 +96,7 @@ pub struct ComputeNode {
     pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
+    pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
 
@@ -121,6 +122,7 @@ impl ComputeNode {
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
+            storage_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
         })
     }
 
@@ -345,6 +347,27 @@ impl ComputeNode {
                 },
             )
             .await?;
+        Ok(())
+    }
+
+    /// Sends the latest block to storage
+    pub async fn send_block_to_storage(&mut self) -> Result<()> {
+        self.node
+            .send(
+                self.storage_addr,
+                StorageRequest::SendBlock {
+                    block: self.current_block.as_ref().unwrap().clone(),
+                    tx: self.current_block_tx.clone(),
+                },
+            )
+            .await?;
+
+        // Clear current block
+        self.current_block = None;
+
+        // Clear current block tx
+        self.current_block_tx.clear();
+
         Ok(())
     }
 
@@ -606,15 +629,12 @@ impl ComputeInterface for ComputeNode {
         let latest_block_h = Sha3_256::digest(&block_s).to_vec();
         self.last_block_hash = hex::encode(latest_block_h);
 
-        // Update internal UTXO; will consume current transactions
+        // Update internal UTXO
         self.utxo_set
             .lock()
             .unwrap()
-            .append(&mut self.current_block_tx);
+            .append(&mut self.current_block_tx.clone());
         update_utxo_set(&mut self.utxo_set);
-
-        // Finally, clear current block
-        self.current_block = None;
 
         Response {
             success: true,

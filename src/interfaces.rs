@@ -109,11 +109,23 @@ pub enum CommMessage {
 /// Encapsulates storage requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
-    GetHistory { start_time: u64, end_time: u64 },
-    GetUnicornTable { n_last_items: Option<u64> },
-    SendPow { pow: ProofOfWork },
-    SendBlock { block: Block },
-    Store { incoming_contract: Contract },
+    GetHistory {
+        start_time: u64,
+        end_time: u64,
+    },
+    GetUnicornTable {
+        n_last_items: Option<u64>,
+    },
+    SendPow {
+        pow: ProofOfWork,
+    },
+    SendBlock {
+        block: Block,
+        tx: BTreeMap<String, Transaction>,
+    },
+    Store {
+        incoming_contract: Contract,
+    },
 }
 
 impl fmt::Debug for StorageRequest {
@@ -127,7 +139,7 @@ impl fmt::Debug for StorageRequest {
             } => write!(f, "GetHistory"),
             GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
             SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock { ref block } => write!(f, "SendBlock"),
+            SendBlock { ref block, ref tx } => write!(f, "SendBlock"),
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
@@ -167,8 +179,14 @@ pub trait StorageInterface {
     /// ### Arguments
     ///
     /// * `peer`    - Peer that the block is received from
-    /// * `block`   - The pre-block to be stored and checked
-    fn receive_block(&mut self, peer: SocketAddr, block: Block) -> Response;
+    /// * `block`   - The block to be stored and checked
+    /// * `tx`      - The transactions in the block
+    fn receive_block(
+        &mut self,
+        peer: SocketAddr,
+        block: Block,
+        tx: BTreeMap<String, Transaction>,
+    ) -> Response;
 
     /// Receives agreed contracts for storage
     ///
@@ -312,7 +330,7 @@ pub trait MinerInterface {
     fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
 }
 
-/// Encapsulates storage requests
+/// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
     AdvertiseContract {
