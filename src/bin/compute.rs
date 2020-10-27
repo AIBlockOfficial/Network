@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        let _flood = node.flood_rand_num_to_requesters().await.unwrap();
+                        let _flood = node.flood_block_found_notification().await.unwrap();
                     }
                     Ok(Response {
                         success: true,

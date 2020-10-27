@@ -202,6 +202,7 @@ pub enum MineRequest {
     SendBlock { block: Vec<u8> },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
+    NotifyBlockFound { win_coinbase: Option<String> },
 }
 
 impl fmt::Debug for MineRequest {
@@ -212,6 +213,7 @@ impl fmt::Debug for MineRequest {
             SendBlock { ref block } => write!(f, "SendBlock"),
             SendRandomNum { ref rnum } => write!(f, "SendRandomNum"),
             SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
+            NotifyBlockFound { ref win_coinbase } => write!(f, "NotifyBlockFound"),
         }
     }
 }
@@ -251,7 +253,7 @@ impl fmt::Debug for ComputeMessage {
 }
 
 pub trait ComputeInterface {
-    /// Receives a PoW for inclusion in the UnicornShard build
+    /// Receives a PoW for block inclusion
     /// TODO: Coinbase amount currently hardcoded to 12. Make dynamic
     ///
     /// ### Arguments

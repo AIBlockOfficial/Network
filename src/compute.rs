@@ -1,6 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{
-    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
+    BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
+    UNICORN_LIMIT,
 };
 use crate::interfaces::{
     ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
@@ -29,7 +30,7 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_tx_hash, construct_utxo_set};
+use naom::primitives::transaction_utils::{construct_tx_hash, update_utxo_set};
 use naom::script::utils::tx_ins_are_valid;
 
 use tracing::{debug, info, info_span, warn};
@@ -83,11 +84,13 @@ pub struct DruidDroplet {
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
-    pub current_block: Block,
+    pub current_block: Option<Block>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
-    current_random_num: Vec<u8>,
+    pub current_random_num: Vec<u8>,
+    pub last_block_hash: String,
+    pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
     pub tx_pool: BTreeMap<String, Transaction>,
     pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
@@ -107,11 +110,13 @@ impl ComputeNode {
             node: Node::new(address, PEER_LIMIT, NodeType::Compute).await?,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
-            current_block: Block::new(),
+            current_block: None,
             current_block_tx: BTreeMap::new(),
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
             tx_pool: BTreeMap::new(),
+            last_block_hash: "".to_string(),
+            last_coinbase_hash: None,
             utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
@@ -199,8 +204,11 @@ impl ComputeNode {
 
         if txs_valid {
             for (h, tx) in &mut droplet.tx.clone().iter() {
-                self.current_block.transactions.push(h.to_string());
-
+                self.current_block
+                    .as_mut()
+                    .unwrap()
+                    .transactions
+                    .push(h.to_string());
                 self.current_block_tx.insert(h.to_string(), tx.clone());
             }
 
@@ -215,11 +223,10 @@ impl ComputeNode {
     /// Processes the next batch of transactions from the floating tx pool
     /// to create the next block
     ///
-    /// ### Arguments
+    /// TODO: Label previous block time
     ///
-    /// * `t_hash`   - The hash of the previous block
-    /// * `prev_time`   - The time of the previous block
-    pub fn generate_block(&mut self, t_hash: String, prev_time: u32) {
+    /// ### Arguments
+    pub fn generate_block(&mut self) {
         let mut next_block = Block::new();
         let mut tx_hashes: Vec<String> = self
             .current_block_tx
@@ -228,8 +235,8 @@ impl ComputeNode {
             .map(|x| x.clone())
             .collect();
 
-        next_block.header.time = prev_time + 1;
-        next_block.header.previous_hash = Some(t_hash);
+        next_block.header.time = 1;
+        next_block.header.previous_hash = Some(self.last_block_hash.clone());
 
         while !next_block.is_full() {
             if tx_hashes.len() > 0 {
@@ -238,7 +245,7 @@ impl ComputeNode {
             }
         }
 
-        self.current_block = next_block;
+        self.current_block = Some(next_block);
     }
 
     /// I'm lazy, so just making another verifier for now
@@ -322,6 +329,19 @@ impl ComputeNode {
                 peer,
                 MineRequest::SendPartitionList {
                     p_list: self.partition_list.clone(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends notification of a block find to partition participants
+    pub async fn send_bf_notification(&mut self, peer: SocketAddr) -> Result<()> {
+        self.node
+            .send(
+                peer,
+                MineRequest::NotifyBlockFound {
+                    win_coinbase: self.last_coinbase_hash.clone(),
                 },
             )
             .await?;
@@ -484,7 +504,7 @@ impl ComputeNode {
         Ok(())
     }
 
-    /// Floods the full partition list to participants
+    /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         self.generate_garbage_block(BLOCK_SIZE);
 
@@ -501,6 +521,16 @@ impl ComputeNode {
         for (peer, _) in self.request_list.clone() {
             let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
             let _result = self.send_partition_list(peer_addr).await.unwrap();
+        }
+
+        Ok(())
+    }
+
+    /// Floods all partition participants with block find notification
+    pub async fn flood_block_found_notification(&mut self) -> Result<()> {
+        for (peer, _) in self.request_list.clone() {
+            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+            let _result = self.send_bf_notification(peer_addr).await.unwrap();
         }
 
         Ok(())
@@ -568,12 +598,23 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        // Update latest coinbase to notify winner
+        self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
+
+        // Update latest block hash
+        let mut block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
+        let latest_block_h = Sha3_256::digest(&block_s).to_vec();
+        self.last_block_hash = hex::encode(latest_block_h);
+
         // Update internal UTXO; will consume current transactions
         self.utxo_set
             .lock()
             .unwrap()
             .append(&mut self.current_block_tx);
-        construct_utxo_set(&mut self.utxo_set);
+        update_utxo_set(&mut self.utxo_set);
+
+        // Finally, clear current block
+        self.current_block = None;
 
         Response {
             success: true,
@@ -630,7 +671,13 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        // At this point the tx's are considered valid
         self.tx_pool.append(&mut valid_tx);
+
+        // Create new block if needed
+        if self.tx_pool.len() > BLOCK_SIZE_IN_TX && self.current_block.is_none() {
+            self.generate_block();
+        }
 
         if valid_tx.len() < transactions.len() {
             return Response {
