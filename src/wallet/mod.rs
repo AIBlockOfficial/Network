@@ -64,7 +64,7 @@ pub fn create_address(pub_key: PublicKey, net: usize) -> String {
 
     first_hash.insert(0, net as u8);
     let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
-    second_hash.truncate(25);
+    second_hash.truncate(16);
 
     hex::encode(second_hash)
 }
@@ -82,10 +82,7 @@ mod tests {
         ]);
         let addr = create_address(pk, 0);
 
-        assert_eq!(
-            addr,
-            "fd86f2230f4fd5bfd9cd882732792279a649eade7eceaf60f8".to_string()
-        );
+        assert_eq!(addr, "fd86f2230f4fd5bfd9cd882732792279".to_string());
     }
 
     #[test]
@@ -97,6 +94,6 @@ mod tests {
         ]);
         let addr = create_address(pk, 0);
 
-        assert_eq!(addr.len(), 50);
+        assert_eq!(addr.len(), 32);
     }
 }

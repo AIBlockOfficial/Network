@@ -1,7 +1,13 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use system::{ComputeNode, Response};
+use naom::primitives::transaction_utils::{
+    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+};
+use naom::primitives::{asset::Asset, transaction::TxConstructor};
+use sodiumoxide::crypto::sign;
+use std::collections::BTreeMap;
+use system::{ComputeInterface, ComputeNode, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,6 +45,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn({
         let mut node = node.clone();
 
+        // Kick off with fake transactions
+        let (pk, sk) = sign::gen_keypair();
+        let t_hash = vec![0, 0, 0];
+        let signature = sign::sign_detached(&hex::encode(t_hash.clone()).as_bytes(), &sk);
+
+        let tx_const = TxConstructor {
+            t_hash: hex::encode(t_hash),
+            prev_n: 0,
+            b_hash: hex::encode(vec![0]),
+            signatures: vec![signature],
+            pub_keys: vec![pk],
+        };
+
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
+        let payment_tx = construct_payment_tx(
+            tx_ins,
+            hex::encode(vec![0, 0, 0]),
+            None,
+            None,
+            Asset::Token(4),
+            4,
+        );
+
+        println!("");
+        println!("Getting hash");
+        println!("");
+
+        let t_hash = construct_tx_hash(&payment_tx);
+
+        let mut transactions = BTreeMap::new();
+        transactions.insert(t_hash, payment_tx);
+        let _resp = node.receive_transactions(transactions);
+        println!("");
+        println!("CURRENT BLOCK IN BIN: {:?}", node.current_block);
+        println!("");
+
         async move {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
@@ -63,8 +105,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
+                        // BIG TODO: Send block to storage
+                        //let _write_to_store = node.send_block_to_storage().await.unwrap();
                         let _flood = node.flood_block_found_notification().await.unwrap();
-                        let _write_to_store = node.send_block_to_storage().await.unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "All transactions successfully added to tx pool",
+                    }) => {
+                        println!("Transactions received and processed successfully");
+                        println!("CURRENT BLOCK: {:?}", node.current_block);
                     }
                     Ok(Response {
                         success: true,

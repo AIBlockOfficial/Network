@@ -107,6 +107,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Block found",
+                    }) => {
+                        println!("Block nonce has been successfully found");
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: &_,
                     }) => {
                         println!("UNHANDLED RESPONSE TYPE");

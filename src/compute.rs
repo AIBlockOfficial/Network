@@ -240,12 +240,13 @@ impl ComputeNode {
         next_block.header.time = 1;
         next_block.header.previous_hash = Some(self.last_block_hash.clone());
 
-        while !next_block.is_full() {
-            if tx_hashes.len() > 0 {
-                let next_hash = tx_hashes.pop().unwrap();
-                next_block.transactions.push(next_hash);
-            }
-        }
+        // BIG TODO: PUT THIS BACK
+        // while !next_block.is_full() {
+        //     if tx_hashes.len() > 0 {
+        let next_hash = tx_hashes.pop().unwrap();
+        next_block.transactions.push(next_hash);
+        //     }
+        // }
 
         self.current_block = Some(next_block);
     }
@@ -311,6 +312,8 @@ impl ComputeNode {
 
     /// Sends block to a mining node.
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
+        println!("BLOCK TO SEND: {:?}", self.current_block);
+        println!("");
         let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
 
         self.node
@@ -680,7 +683,11 @@ impl ComputeInterface for ComputeNode {
             if !tx.is_coinbase()
                 && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
             {
+                if self.current_block_tx.is_empty() {
+                    self.current_block_tx = BTreeMap::new();
+                }
                 valid_tx.insert(hash.clone(), tx.clone());
+                self.current_block_tx.insert(hash.clone(), tx.clone());
             }
         }
 
@@ -692,10 +699,11 @@ impl ComputeInterface for ComputeNode {
         }
 
         // At this point the tx's are considered valid
-        self.tx_pool.append(&mut valid_tx);
+        self.tx_pool.append(&mut valid_tx.clone());
 
         // Create new block if needed
-        if self.tx_pool.len() > BLOCK_SIZE_IN_TX && self.current_block.is_none() {
+        // BIG TODO: TX POOL LENGTH NEEDS TO BE COMPARED AGAINST BLOCK_SIZE_IN_TX
+        if self.tx_pool.len() > 0 && self.current_block.is_none() {
             self.generate_block();
         }
 
