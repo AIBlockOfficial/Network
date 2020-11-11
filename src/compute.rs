@@ -16,9 +16,11 @@ use bytes::Bytes;
 use sha3::{Digest, Sha3_256};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
-use std::sync::{Arc, Mutex};
-
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::task;
+use tokio::time::delay_for;
 
 use std::{
     collections::HashMap,
@@ -42,12 +44,14 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 pub enum ComputeError {
     Network(CommsError),
     Serialization(bincode::Error),
+    AsyncTask(task::JoinError),
 }
 
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
         }
     }
@@ -57,6 +61,7 @@ impl Error for ComputeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Network(ref e) => Some(e),
+            Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
         }
     }
@@ -71,6 +76,12 @@ impl From<CommsError> for ComputeError {
 impl From<bincode::Error> for ComputeError {
     fn from(other: bincode::Error) -> Self {
         Self::Serialization(other)
+    }
+}
+
+impl From<task::JoinError> for ComputeError {
+    fn from(other: task::JoinError) -> Self {
+        Self::AsyncTask(other)
     }
 }
 
@@ -230,6 +241,10 @@ impl ComputeNode {
     /// ### Arguments
     pub fn generate_block(&mut self) {
         let mut next_block = Block::new();
+
+        // Update current_block_tx from tx pool if needed
+        self.update_current_block_tx();
+
         let mut tx_hashes: Vec<String> = self
             .current_block_tx
             .keys()
@@ -240,18 +255,46 @@ impl ComputeNode {
         next_block.header.time = 1;
         next_block.header.previous_hash = Some(self.last_block_hash.clone());
 
-        // BIG TODO: PUT THIS BACK
-        // while !next_block.is_full() {
-        //     if tx_hashes.len() > 0 {
-        let next_hash = tx_hashes.pop().unwrap();
-        next_block.transactions.push(next_hash);
-        //     }
-        // }
+        if tx_hashes.len() > 0 {
+            // If there are more transactions than block can handle
+            if self.current_block_tx.len() > BLOCK_SIZE_IN_TX {
+                while !next_block.is_full() {
+                    let next_hash = tx_hashes.pop().unwrap();
+                    next_block.transactions.push(next_hash);
+                }
 
-        self.current_block = Some(next_block);
+            // If there are fewer transactions than a full block
+            } else {
+                while tx_hashes.len() > 0 {
+                    let next_hash = tx_hashes.pop().unwrap();
+                    next_block.transactions.push(next_hash);
+                }
+            }
+
+            self.current_block = Some(next_block);
+        }
     }
 
-    /// I'm lazy, so just making another verifier for now
+    /// Updates the internal state of an empty tx list for the current block
+    fn update_current_block_tx(&mut self) {
+        if self.current_block_tx.len() == 0 {
+            while self.current_block_tx.len() < BLOCK_SIZE_IN_TX && self.tx_pool.len() > 0 {
+                let tx_hashes: Vec<String> =
+                    self.tx_pool.keys().into_iter().map(|x| x.clone()).collect();
+
+                let new_entry = self.tx_pool.get(&tx_hashes[0]).unwrap();
+                self.current_block_tx
+                    .insert(tx_hashes[0].clone(), new_entry.clone());
+                self.tx_pool.remove(&tx_hashes[0]);
+            }
+        }
+    }
+
+    /// Validates PoW for a full block
+    ///
+    /// ### Arguments
+    ///
+    /// * `pow` - Proof of work, including the block
     pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
         let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
         pow_body.append(&mut pow.nonce.clone());
@@ -291,6 +334,10 @@ impl ComputeNode {
     }
 
     /// Gets a decremented socket address of peer for storage
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`    - Address to decrement
     fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
         let mut storage_address = address.clone();
         storage_address.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
@@ -300,6 +347,10 @@ impl ComputeNode {
     }
 
     /// Util function to get a socket address for PID table checks
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`    - Peer's address
     fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
         let comparison_port = address.port() + 1;
         let mut comparison_addr = address.clone();
@@ -311,6 +362,10 @@ impl ComputeNode {
     }
 
     /// Sends block to a mining node.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Address to send to
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         println!("BLOCK TO SEND: {:?}", self.current_block);
         println!("");
@@ -328,6 +383,10 @@ impl ComputeNode {
     }
 
     /// Sends the full partition list to the participants
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Address to send to
     pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
         self.node
             .send(
@@ -341,6 +400,10 @@ impl ComputeNode {
     }
 
     /// Sends notification of a block find to partition participants
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Address to send to
     pub async fn send_bf_notification(&mut self, peer: SocketAddr) -> Result<()> {
         self.node
             .send(
@@ -628,7 +691,7 @@ impl ComputeInterface for ComputeNode {
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
 
         // Update latest block hash
-        let mut block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
+        let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
         let latest_block_h = Sha3_256::digest(&block_s).to_vec();
         self.last_block_hash = hex::encode(latest_block_h);
 
@@ -686,10 +749,18 @@ impl ComputeInterface for ComputeNode {
                 if self.current_block_tx.is_empty() {
                     self.current_block_tx = BTreeMap::new();
                 }
+
                 valid_tx.insert(hash.clone(), tx.clone());
-                self.current_block_tx.insert(hash.clone(), tx.clone());
+
+                // Only add if there is space
+                if self.current_block_tx.len() + 1 < BLOCK_SIZE_IN_TX {
+                    self.current_block_tx.insert(hash.clone(), tx.clone());
+                }
             }
         }
+
+        // At this point the tx's are considered valid
+        self.tx_pool.append(&mut valid_tx.clone());
 
         if valid_tx.len() == 0 {
             return Response {
@@ -698,13 +769,9 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        // At this point the tx's are considered valid
-        self.tx_pool.append(&mut valid_tx.clone());
-
         // Create new block if needed
-        // BIG TODO: TX POOL LENGTH NEEDS TO BE COMPARED AGAINST BLOCK_SIZE_IN_TX
-        if self.tx_pool.len() > 0 && self.current_block.is_none() {
-            self.generate_block();
+        if self.current_block.is_none() {
+            self.current_block = Some(Block::new());
         }
 
         if valid_tx.len() < transactions.len() {

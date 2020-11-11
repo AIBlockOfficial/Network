@@ -4,6 +4,10 @@ A repo for the development of the Zenotta Network Protocol (ZNP).
 
 ..
 
+##  
+
+..
+
 ## Setup
 
 You can set up the project on your local machine using the following steps:

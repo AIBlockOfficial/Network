@@ -1,5 +1,7 @@
-//! Zenotta Network Protocol library.
-// #![allow(warnings)]
+//! # Art
+//!
+//! A library for modeling artistic concepts.
+#![allow(warnings)]
 
 mod comms_handler;
 mod compute;

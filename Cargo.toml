@@ -3,6 +3,8 @@ name = "system"
 version = "0.1.0"
 authors = ["Byron Houwens <zhion360@gmail.com>"]
 edition = "2018"
+readme = "README.md"
+description = "The NAOM (Notarised Append Only Memory) crate contains all the code necessary to set up an instance of the Zenotta blockchain."
 
 [dependencies]
 chrono = "0.4.10"
