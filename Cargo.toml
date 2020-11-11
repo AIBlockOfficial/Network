@@ -27,6 +27,7 @@ rust-crypto = "0.2.36"
 naom = { path = "../naom" }
 rocksdb = "0.15.0"
 merkletree = "0.21.0"
+async-std = "1.7.0"
 
 [features]
 mock = []

@@ -1,5 +1,6 @@
 //! App to run a compute node.
 
+use async_std::task;
 use clap::{App, Arg};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -7,6 +8,7 @@ use naom::primitives::transaction_utils::{
 use naom::primitives::{asset::Asset, transaction::TxConstructor};
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
+use std::{thread, time};
 use system::{ComputeInterface, ComputeNode, Response};
 
 #[tokio::main]
@@ -76,10 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut transactions = BTreeMap::new();
         transactions.insert(t_hash, payment_tx);
+
         let _resp = node.receive_transactions(transactions);
-        println!("");
-        println!("CURRENT BLOCK IN BIN: {:?}", node.current_block);
-        println!("");
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "All transactions successfully added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
-                        println!("CURRENT BLOCK: {:?}", node.current_block);
+                        println!("CURRENT BLOCK: {:?}", node.clone().current_block);
                     }
                     Ok(Response {
                         success: true,
