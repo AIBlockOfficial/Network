@@ -4,10 +4,6 @@ A repo for the development of the Zenotta Network Protocol (ZNP).
 
 ..
 
-##  
-
-..
-
 ## Setup
 
 You can set up the project on your local machine using the following steps:
@@ -37,6 +33,8 @@ When working on this repo, please ensure that any branches you may create pull f
 ensure that your local version has the latest code for the project and minimizes the possibility of unnecessary merge 
 conflicts.
 
+..
+
 ## Running example nodes
 
 To run a test compute node:
@@ -58,6 +56,8 @@ To enable log output, set this environment variable:
 ```
 RUST_LOG=system=trace
 ```
+
+..
 
 ## Documentation
 
