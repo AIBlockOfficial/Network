@@ -3,7 +3,7 @@ use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
 };
-use crate::sha3::Digest;
+use sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -59,6 +59,11 @@ impl StorageNode {
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         let event = self.node.next_event().await?;
         self.handle_event(event).await.into()
+    }
+
+    /// Returns this node's listener address.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<Response> {
