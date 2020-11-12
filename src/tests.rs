@@ -2,8 +2,10 @@
 
 use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 
-// #[tokio::test(threaded_scheduler)]
+#[tokio::test(threaded_scheduler)]
 async fn proof_of_work() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -28,10 +30,13 @@ async fn proof_of_work() {
 
         tokio::spawn(async move {
             let (pow, _conn) = tokio::join!(
-                m2.generate_pow_promise("123123".to_string()),
+                m2.generate_pow_for_block(Block::new()),
                 m.connect_to(compute_node_addr)
             );
-            //m.send_pow(compute_node_addr, pow.unwrap()).await.unwrap();
+            let (pow, transaction) = pow.unwrap();
+            m.send_pow(compute_node_addr, pow, transaction)
+                .await
+                .unwrap();
         });
     }
 
