@@ -92,6 +92,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("initial receive_transactions Response: {:?}", resp);
         }
 
+        let storage_connected = {
+            let result = node.connect_to_storage().await;
+            println!("Storage connection: {:?}", result);
+            result.is_ok()
+        };
+
         async move {
             while let Some(response) = node.handle_next_event().await {
                 println!("Response: {:?}", response);
@@ -116,8 +122,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        // BIG TODO: Send block to storage
-                        //let _write_to_store = node.send_block_to_storage().await.unwrap();
+                        if storage_connected && node.has_current_block() {
+                            println!("Send Block to strage");
+                            println!("CURRENT BLOCK: {:?}", node.current_block);
+                            let _write_to_store = node.send_block_to_storage().await.unwrap();
+                        }
                         let _flood = node.flood_block_found_notification().await.unwrap();
                     }
                     Ok(Response {

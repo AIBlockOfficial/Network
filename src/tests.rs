@@ -89,7 +89,7 @@ async fn send_block_to_storage() {
 
         let mut c = comp.clone();
         tokio::spawn(async move {
-            c.connect_to(storage_node_addr).await.unwrap();
+            c.connect_to_storage().await.unwrap();
             let _write_to_store = c.send_block_to_storage().await.unwrap();
         });
     }

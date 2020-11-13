@@ -147,9 +147,14 @@ impl ComputeNode {
         self.node.address()
     }
 
+    /// Check if the node has a current block.
+    pub fn has_current_block(&self) -> bool {
+        self.current_block.is_some()
+    }
+
     /// Connect to a peer on the network.
-    pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
-        self.node.connect_to(peer).await?;
+    pub async fn connect_to_storage(&mut self) -> Result<()> {
+        self.node.connect_to(self.storage_addr).await?;
         Ok(())
     }
 
@@ -429,21 +434,13 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
+        // Only the first call will send to storage.
+        let block = std::mem::take(&mut self.current_block).unwrap();
+        let tx = std::mem::take(&mut self.current_block_tx);
+
         self.node
-            .send(
-                self.storage_addr,
-                StorageRequest::SendBlock {
-                    block: self.current_block.as_ref().unwrap().clone(),
-                    tx: self.current_block_tx.clone(),
-                },
-            )
+            .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
             .await?;
-
-        // Clear current block
-        self.current_block = None;
-
-        // Clear current block tx
-        self.current_block_tx.clear();
 
         Ok(())
     }
