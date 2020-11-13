@@ -752,10 +752,6 @@ impl ComputeInterface for ComputeNode {
             if !tx.is_coinbase()
                 && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
             {
-                if self.current_block_tx.is_empty() {
-                    self.current_block_tx = BTreeMap::new();
-                }
-
                 valid_tx.insert(hash.clone(), tx.clone());
 
                 // Only add if there is space

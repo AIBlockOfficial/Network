@@ -79,7 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut transactions = BTreeMap::new();
         transactions.insert(t_hash, payment_tx);
 
-        let _resp = node.receive_transactions(transactions);
+        let resp = node.receive_transactions(transactions);
+        println!("initial receive_transactions Response: {:?}", resp);
 
         async move {
             while let Some(response) = node.handle_next_event().await {
