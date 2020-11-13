@@ -142,41 +142,35 @@ impl StorageInterface for StorageNode {
         block: Block,
         tx: BTreeMap<String, Transaction>,
     ) -> Response {
-        if let Some(_) = self.whitelisted.get(&peer) {
-            self.block = block;
+        self.block = block;
 
-            // TODO: Makes the DB save process async
+        // TODO: Makes the DB save process async
+        // TODO: only accept whitelisted blocks
 
-            // Save the block
-            let hash_input = Bytes::from(serialize(&self.block).unwrap());
-            let hash_digest = Sha3_256::digest(&hash_input);
-            let hash_key = hex::encode(hash_digest);
-            let save_path = match self.net {
-                0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
-                _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
-            };
+        // Save the block
+        let hash_input = Bytes::from(serialize(&self.block).unwrap());
+        let hash_digest = Sha3_256::digest(&hash_input);
+        let hash_key = hex::encode(hash_digest);
+        let save_path = match self.net {
+            0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
+            _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+        };
 
-            let db = DB::open_default(save_path.clone()).unwrap();
-            db.put(hash_key, hash_input).unwrap();
+        let db = DB::open_default(save_path.clone()).unwrap();
+        db.put(hash_key, hash_input).unwrap();
 
-            // Save each transaction
-            for (tx_hash, tx_value) in &tx {
-                let tx_input = Bytes::from(serialize(tx_value).unwrap());
-                db.put(tx_hash, tx_input).unwrap();
-            }
-
-            let _ = DB::destroy(&Options::default(), save_path.clone());
-
-            return Response {
-                success: true,
-                reason: "Block received and added",
-            };
+        // Save each transaction
+        for (tx_hash, tx_value) in &tx {
+            let tx_input = Bytes::from(serialize(tx_value).unwrap());
+            db.put(tx_hash, tx_input).unwrap();
         }
 
-        Response {
-            success: false,
-            reason: "Peer not whitelisted to edit the chain",
-        }
+        let _ = DB::destroy(&Options::default(), save_path.clone());
+
+        return Response {
+            success: true,
+            reason: "Block received and added",
+        };
     }
 
     fn receive_contracts(&self, contract: Contract) -> Response {

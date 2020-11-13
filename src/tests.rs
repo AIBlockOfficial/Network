@@ -98,8 +98,8 @@ async fn send_block_to_storage() {
         let storage = network.storage("storage").unwrap();
         match storage.handle_next_event().await {
             Some(Ok(Response {
-                success: false,
-                reason: "Peer not whitelisted to edit the chain",
+                success: true,
+                reason: "Block received and added",
             })) => (),
             other => panic!("Unexpected result: {:?}", other),
         }
