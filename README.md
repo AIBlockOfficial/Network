@@ -51,6 +51,12 @@ Similarly, you can run a miner node and provide a compute node address:
 cargo run --bin miner -- --connect 127.0.0.1:12345
 ```
 
+Similarly, you can run a storage node and provide a compute node address:
+
+```
+cargo run --bin storage -- --ip 127.0.0.1 --port 12345
+```
+
 To enable log output, set this environment variable:
 
 ```
