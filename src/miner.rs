@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 
-use crate::wallet::{create_address, save_to_wallet, WalletStore};
+use crate::wallet::{construct_address, save_transactions_to_wallet, WalletStore};
 
 use crate::interfaces::{
     ComputeMessage, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
@@ -308,7 +308,7 @@ impl MinerNode {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
             let (pk, sk) = sign::gen_keypair();
-            let address = create_address(pk, 0);
+            let address = construct_address(pk, 0);
 
             let current_coinbase = construct_coinbase_tx(12, block.header.time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
@@ -324,8 +324,8 @@ impl MinerNode {
             };
 
             // Create address and save to wallet
-            let address = create_address(pk, 0);
-            let _save_result = save_to_wallet(address, wallet_content);
+            let address = construct_address(pk, 0);
+            let _save_result = save_transactions_to_wallet(address, wallet_content);
 
             // Construct PoW block for mining
             let mut pow = ProofOfWorkBlock {
