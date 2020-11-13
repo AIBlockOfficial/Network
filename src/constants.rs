@@ -47,6 +47,9 @@ pub const DB_PATH_LIVE: &'static str = "live";
 /// Path to wallet DB
 pub const WALLET_PATH: &'static str = "src/wallet/wallet";
 
+/// Key for local addresses in wallet
+pub const ADDRESS_KEY: &'static str = "a";
+
 /*------- LIMIT CONSTANTS -------*/
 
 /// Limit for the transaction pool per compute node
