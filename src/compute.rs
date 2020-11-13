@@ -137,6 +137,11 @@ impl ComputeNode {
         })
     }
 
+    /// Seed the inital value of the utxo_set
+    pub fn seed_uxto_set(&self, uxto_set: BTreeMap<String, Transaction>) {
+        *self.utxo_set.lock().unwrap() = uxto_set;
+    }
+
     /// Returns the compute node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()

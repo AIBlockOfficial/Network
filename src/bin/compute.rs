@@ -5,7 +5,10 @@ use clap::{App, Arg};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
 };
-use naom::primitives::{asset::Asset, transaction::TxConstructor};
+use naom::primitives::{
+    asset::Asset,
+    transaction::{Transaction, TxConstructor},
+};
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{thread, time};
@@ -48,39 +51,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut node = node.clone();
 
         // Kick off with fake transactions
-        let (pk, sk) = sign::gen_keypair();
-        let t_hash = vec![0, 0, 0];
-        let signature = sign::sign_detached(&hex::encode(t_hash.clone()).as_bytes(), &sk);
+        {
+            let (pk, sk) = sign::gen_keypair();
+            let t_hash = vec![0, 0, 0];
+            let signature = sign::sign_detached(&hex::encode(t_hash.clone()).as_bytes(), &sk);
 
-        let tx_const = TxConstructor {
-            t_hash: hex::encode(t_hash),
-            prev_n: 0,
-            b_hash: hex::encode(vec![0]),
-            signatures: vec![signature],
-            pub_keys: vec![pk],
-        };
+            let tx_const = TxConstructor {
+                t_hash: hex::encode(t_hash),
+                prev_n: 0,
+                b_hash: hex::encode(vec![0]),
+                signatures: vec![signature],
+                pub_keys: vec![pk],
+            };
+            let tx_const_t_hash = tx_const.t_hash.clone();
 
-        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-        let payment_tx = construct_payment_tx(
-            tx_ins,
-            hex::encode(vec![0, 0, 0]),
-            None,
-            None,
-            Asset::Token(4),
-            4,
-        );
+            let tx_ins = construct_payment_tx_ins(vec![tx_const]);
+            let payment_tx = construct_payment_tx(
+                tx_ins,
+                hex::encode(vec![0, 0, 0]),
+                None,
+                None,
+                Asset::Token(4),
+                4,
+            );
 
-        println!("");
-        println!("Getting hash");
-        println!("");
+            println!("");
+            println!("Getting hash");
+            println!("");
 
-        let t_hash = construct_tx_hash(&payment_tx);
+            let t_hash = construct_tx_hash(&payment_tx);
 
-        let mut transactions = BTreeMap::new();
-        transactions.insert(t_hash, payment_tx);
+            let mut transactions = BTreeMap::new();
+            transactions.insert(t_hash, payment_tx);
 
-        let resp = node.receive_transactions(transactions);
-        println!("initial receive_transactions Response: {:?}", resp);
+            let mut seed_uxto = BTreeMap::new();
+            seed_uxto.insert(tx_const_t_hash, Transaction::new());
+            node.seed_uxto_set(seed_uxto);
+
+            let resp = node.receive_transactions(transactions);
+            println!("initial receive_transactions Response: {:?}", resp);
+        }
 
         async move {
             while let Some(response) = node.handle_next_event().await {
