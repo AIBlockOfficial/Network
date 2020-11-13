@@ -20,8 +20,9 @@ mod wallet;
 
 pub use compute::ComputeNode;
 pub use constants::PARTITION_LIMIT;
-pub use interfaces::{ComputeInterface, MinerInterface, Response};
+pub use interfaces::{ComputeInterface, MinerInterface, Response, StorageInterface};
 pub use miner::MinerNode;
+pub use storage::StorageNode;
 pub use utils::command_input_to_socket;
 
 #[cfg(not(features = "mock"))]
