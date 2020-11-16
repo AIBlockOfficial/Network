@@ -1,10 +1,19 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::interfaces::{
-    Asset, CommMessage::HandshakeRequest, Contract, NodeType, Response, UseInterface, UserRequest,
+    CommMessage::HandshakeRequest, ComputeRequest, Contract, NodeType, Response, UseInterface,
+    UserRequest,
 };
-
+use naom::primitives::asset::Asset;
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use naom::primitives::transaction_utils::{
+    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+};
+use naom::script::lang::Script;
+use crate::wallet::generate_payment_address;
 use bincode::deserialize;
 use bytes::Bytes;
+use sodiumoxide::crypto::sign::ed25519::PublicKey;
+use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, info_span, warn};
@@ -68,16 +77,18 @@ pub struct AssetInTransit {
 #[derive(Debug, Clone)]
 pub struct UserNode {
     node: Node,
-    assets: Vec<Asset>,
-    network: usize,
+    pub assets: Vec<Asset>,
+    pub amount: u64,
+    pub next_payment: Option<Transaction>,
 }
 
 impl UserNode {
-    pub async fn new(address: SocketAddr, network: usize) -> Result<UserNode> {
+    pub async fn new(comms_address: SocketAddr) -> Result<UserNode> {
         Ok(UserNode {
-            node: Node::new(address, 2, NodeType::User).await?,
+            node: Node::new(comms_address, 2, NodeType::User).await?,
             assets: Vec::new(),
-            network: network,
+            amount: 0,
+            next_payment: None,
         })
     }
 
@@ -136,8 +147,87 @@ impl UserNode {
         use UserRequest::*;
         match req {
             AdvertiseContract { contract, peers } => self.check_contract(contract, peers),
-            SendAssets { assets } => self.receive_assets(assets),
+            SendAddressRequest => self.receive_payment_address_request(),
+            SendPaymentAddress { address } => self.make_payment_transaction(address),
         }
+    }
+
+    /// Sends the next internal payment transaction to be processed by the connected Compute
+    /// node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute_peer`    - Compute peer to send the payment tx to
+    pub async fn send_next_payment_to_compute(&mut self, compute_peer: SocketAddr) -> Result<()> {
+        let _peer_span = info_span!("sending next payment transaction for processing");
+        let mut tx_to_send: BTreeMap<String, Transaction> = BTreeMap::new();
+        let hash = construct_tx_hash(&self.next_payment.as_ref().unwrap());
+
+        tx_to_send.insert(hash, self.next_payment.clone().unwrap());
+        self.next_payment = None;
+
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendTransactions {
+                    transactions: tx_to_send,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Creates a new payment transaction and assigns it as an internal attribute
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address to assign the payment transaction to
+    pub fn make_payment_transaction(&mut self, address: String) -> Response {
+        // let payment_tx = construct_payment_tx(
+        //     tx_ins,
+        //     address,
+        //     None,
+        //     None,
+        //     Asset::Token(self.amount),
+        //     self.amount,
+        // );
+        // self.next_payment = Some(payment_tx);
+
+        Response {
+            success: true,
+            reason: "Next payment transaction successfully constructed",
+        }
+    }
+
+    /// Sends a request for a payment address
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Socket address of peer to request from
+    pub async fn send_address_request(&mut self, peer: SocketAddr) -> Result<()> {
+        let _peer_span = info_span!("sending payment address request");
+
+        self.node
+            .send(peer, UserRequest::SendAddressRequest)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Sends a payment address from a request
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Socket address of peer to send the address to
+    pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
+        let address = generate_payment_address(0).await;
+        println!("Address to send: {:?}", address);
+
+        self.node
+            .send(peer, UserRequest::SendPaymentAddress { address: address })
+            .await?;
+        Ok(())
     }
 }
 
@@ -149,12 +239,10 @@ impl UseInterface for UserNode {
         }
     }
 
-    fn receive_assets(&mut self, assets: Vec<Asset>) -> Response {
-        self.assets = assets;
-
+    fn receive_payment_address_request(&self) -> Response {
         Response {
             success: true,
-            reason: "Successfully received assets",
+            reason: "New address ready to be sent",
         }
     }
 }

@@ -1,11 +1,13 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
+use crate::wallet::{
+    construct_address, generate_payment_address, save_transactions_to_wallet, WalletStore,
+};
 use crate::interfaces::{
-    ComputeMessage, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
+    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
-use crate::wallet::{construct_address, save_transactions_to_wallet, WalletStore};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -229,7 +231,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeMessage::SendPoW {
+                ComputeRequest::SendPoW {
                     pow: pow_promise,
                     coinbase,
                 },
@@ -247,7 +249,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeMessage::SendPartitionEntry {
+                ComputeRequest::SendPartitionEntry {
                     partition_entry: partition_entry,
                 },
             )
@@ -260,7 +262,7 @@ impl MinerNode {
         let _peer_span = info_span!("sending partition participation request");
 
         self.node
-            .send(compute, ComputeMessage::SendPartitionRequest {})
+            .send(compute, ComputeRequest::SendPartitionRequest {})
             .await?;
 
         Ok(())
