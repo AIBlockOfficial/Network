@@ -2,15 +2,12 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::interfaces::{
     Asset, CommMessage::HandshakeRequest, Contract, NodeType, Response, UseInterface, UserRequest,
 };
-use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
-use naom::script::lang::Script;
 
 use bincode::deserialize;
 use bytes::Bytes;
-use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::{error::Error, fmt, net::SocketAddr};
-use tokio::{sync::RwLock, task};
-use tracing::{debug, info, info_span, warn};
+use tokio::task;
+use tracing::{debug, info_span, warn};
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, UserError>;
@@ -135,7 +132,7 @@ impl UserNode {
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
+    fn handle_request(&mut self, _peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
         match req {
             AdvertiseContract { contract, peers } => self.check_contract(contract, peers),
@@ -145,7 +142,7 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn check_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response {
+    fn check_contract<UserNode>(&self, _contract: Contract, _peers: Vec<UserNode>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",

@@ -170,12 +170,12 @@ impl MinerNode {
 
     /// Handles a compute request.
     /// TODO: Find something to do with win_coinbase. Allows to know winner
-    fn handle_request(&mut self, peer: SocketAddr, req: MineRequest) -> Response {
+    fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
         use MineRequest::*;
         println!("RECEIVED REQUEST: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase } => Response {
+            NotifyBlockFound { win_coinbase: _ } => Response {
                 success: true,
                 reason: "Block found",
             },

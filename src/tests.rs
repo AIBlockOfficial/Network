@@ -3,7 +3,6 @@
 use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
 
 #[tokio::test(threaded_scheduler)]
 async fn proof_of_work() {

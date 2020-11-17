@@ -4,15 +4,11 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig};
-use crate::interfaces::{ComputeInterface, MinerInterface};
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::task::JoinHandle;
-use tracing::{error, field, info_span, trace};
-use tracing_futures::Instrument;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {

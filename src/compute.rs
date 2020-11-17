@@ -19,9 +19,7 @@ use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::task;
-use tokio::time::delay_for;
 
 use std::{
     collections::HashMap,
@@ -355,7 +353,7 @@ impl ComputeNode {
     ///
     /// * `size`    - Size of the file in bytes
     pub fn generate_garbage_block(&mut self, size: usize) {
-        let garbage_block = vec![0; size];
+        let _garbage_block = vec![0; size];
         // self.current_block = garbage_block;
     }
 
@@ -560,7 +558,7 @@ impl ComputeNode {
     /// Receives the light POW for partition inclusion
     fn receive_partition_entry(
         &mut self,
-        peer: SocketAddr,
+        _peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
         let mut pow_mut = partition_entry.clone();

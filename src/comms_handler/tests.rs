@@ -22,7 +22,7 @@ async fn direct_messages() {
     n2.connect_to(n1.address()).await.unwrap();
     n2.send(n1.address(), "Hello").await.unwrap();
 
-    if let Some(Event::NewFrame { peer, frame }) = n1.next_event().await {
+    if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
         let recv_frame: &str = deserialize(&frame).unwrap();
         assert_eq!(recv_frame, "Hello");
     }
