@@ -72,7 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx_const = TxConstructor {
                 t_hash: hex::encode(t_hash),
                 prev_n: 0,
-                b_hash: hex::encode(vec![0]),
                 signatures: vec![signature],
                 pub_keys: vec![pk],
             };
