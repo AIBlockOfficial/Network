@@ -16,7 +16,7 @@ async fn proof_of_work() {
     ];
     let miners_count = miner_nodes.len();
 
-    let mut network = Network::create_from_config(NetworkConfig {
+    let mut network = Network::create_from_config(&NetworkConfig {
         initial_port: 10000,
         miner_nodes,
         compute_nodes: vec!["compute".to_string()],
@@ -45,7 +45,6 @@ async fn proof_of_work() {
     }
 
     {
-        let storage_node_addr = network.get_address("storage").unwrap();
         let comp = network.compute("compute").unwrap();
 
         for _i in 0..miners_count {
@@ -73,7 +72,7 @@ async fn proof_of_work() {
 async fn send_block_to_storage() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let mut network = Network::create_from_config(NetworkConfig {
+    let mut network = Network::create_from_config(&NetworkConfig {
         initial_port: 10010,
         miner_nodes: Vec::new(),
         compute_nodes: vec!["compute".to_string()],
@@ -82,9 +81,7 @@ async fn send_block_to_storage() {
     .await;
 
     {
-        let storage_node_addr = network.get_address("storage").unwrap();
         let comp = network.compute("compute").unwrap();
-        comp.storage_addr = storage_node_addr.clone();
         comp.current_block = Some(Block::new());
 
         let mut c = comp.clone();

@@ -1,0 +1,20 @@
+compute_node_idx = 0
+
+#first node is leader
+[[compute_nodes]]
+address = "127.0.0.1:12300"
+
+[[compute_nodes]]
+address = "127.0.0.1:12301"
+
+[[storage_nodes]]
+address = "127.0.0.1:8080"
+
+[[storage_nodes]]
+address = "127.0.0.1:8081"
+
+[[miner_nodes]]
+address = "127.0.0.1:12340"
+
+[[miner_nodes]]
+address = "127.0.0.1:12341"
