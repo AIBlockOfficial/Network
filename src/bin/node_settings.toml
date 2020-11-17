@@ -1,4 +1,6 @@
 compute_node_idx = 0
+storage_node_idx = 0
+use_live_db = 0
 
 #first node is leader
 [[compute_nodes]]

@@ -3,7 +3,7 @@
 //! correctness of the compute, miner, & storage modules.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{ComputeNodeConfig, NodeSpec};
+use crate::configurations::{ComputeNodeConfig, NodeSpec, StorageNodeConfig};
 use crate::interfaces::{ComputeInterface, MinerInterface};
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -32,17 +32,17 @@ pub struct NetworkConfig {
 }
 
 pub struct NetworkInstanceInfo {
-    pub miner_nodes: Vec<(String, SocketAddr)>,
-    pub compute_nodes: Vec<(String, SocketAddr)>,
-    pub storage_nodes: Vec<(String, SocketAddr)>,
+    pub miner_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<NodeSpec>,
+    pub storage_nodes: Vec<NodeSpec>,
 }
 
 impl Network {
     pub async fn create_from_config(config: &NetworkConfig) -> Self {
-        let config = Self::init_instance_info(config);
-        let miner_nodes = Self::init_miners(&config).await;
-        let compute_nodes = Self::init_compute(&config).await;
-        let storage_nodes = Self::init_storage(&config).await;
+        let info = Self::init_instance_info(config);
+        let miner_nodes = Self::init_miners(&config, &info).await;
+        let compute_nodes = Self::init_compute(&config, &info).await;
+        let storage_nodes = Self::init_storage(&config, &info).await;
         Self {
             miner_nodes,
             compute_nodes,
@@ -51,97 +51,82 @@ impl Network {
     }
 
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
-        let initial_miner_port = config.initial_port;
-        let initial_compute_port = initial_miner_port + config.miner_nodes.len() as u16;
-        let initial_storage_port = initial_compute_port + config.compute_nodes.len() as u16;
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let next_port = config.initial_port;
+
+        let (next_port, miner_nodes) = Self::node_specs(ip, next_port, config.miner_nodes.len());
+        let (next_port, compute_nodes) =
+            Self::node_specs(ip, next_port, config.compute_nodes.len());
+        let (_next_port, storage_nodes) =
+            Self::node_specs(ip, next_port, config.storage_nodes.len());
 
         NetworkInstanceInfo {
-            miner_nodes: config
-                .miner_nodes
-                .iter()
-                .enumerate()
-                .map(|(idx, name)| {
-                    (
-                        name.clone(),
-                        SocketAddr::new(ip, initial_miner_port + idx as u16),
-                    )
-                })
-                .collect(),
-            compute_nodes: config
-                .compute_nodes
-                .iter()
-                .enumerate()
-                .map(|(idx, name)| {
-                    (
-                        name.clone(),
-                        SocketAddr::new(ip, initial_compute_port + idx as u16),
-                    )
-                })
-                .collect(),
-            storage_nodes: config
-                .storage_nodes
-                .iter()
-                .enumerate()
-                .map(|(idx, name)| {
-                    (
-                        name.clone(),
-                        SocketAddr::new(ip, initial_storage_port + idx as u16),
-                    )
-                })
-                .collect(),
+            miner_nodes,
+            compute_nodes,
+            storage_nodes,
         }
     }
 
-    async fn init_miners(config: &NetworkInstanceInfo) -> BTreeMap<String, MinerNode> {
-        let mut map = BTreeMap::new();
-
-        for (name, addr) in &config.miner_nodes {
-            map.insert(name.clone(), MinerNode::new(addr.clone()).await.unwrap());
-        }
-
-        map
+    fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeSpec>) {
+        (
+            initial_port + node_len as u16,
+            (0..node_len)
+                .map(|idx| NodeSpec {
+                    address: SocketAddr::new(ip, initial_port + idx as u16),
+                })
+                .collect(),
+        )
     }
 
-    async fn init_storage(config: &NetworkInstanceInfo) -> BTreeMap<String, StorageNode> {
+    async fn init_miners(
+        config: &NetworkConfig,
+        info: &NetworkInstanceInfo,
+    ) -> BTreeMap<String, MinerNode> {
         let mut map = BTreeMap::new();
 
-        for (name, addr) in &config.storage_nodes {
-            let net_test: usize = 0;
+        for (name, spec) in config.miner_nodes.iter().zip(info.miner_nodes.iter()) {
             map.insert(
                 name.clone(),
-                StorageNode::new(addr.clone(), net_test).await.unwrap(),
+                MinerNode::new(spec.address.clone()).await.unwrap(),
             );
         }
 
         map
     }
 
-    async fn init_compute(config: &NetworkInstanceInfo) -> BTreeMap<String, ComputeNode> {
+    async fn init_storage(
+        config: &NetworkConfig,
+        info: &NetworkInstanceInfo,
+    ) -> BTreeMap<String, StorageNode> {
         let mut map = BTreeMap::new();
 
-        let compute_config = ComputeNodeConfig {
-            compute_node_idx: 0,
-            compute_nodes: config
-                .compute_nodes
-                .iter()
-                .map(|(name, addr)| NodeSpec {
-                    address: addr.clone(),
-                })
-                .collect(),
-            storage_nodes: config
-                .storage_nodes
-                .iter()
-                .map(|(name, addr)| NodeSpec {
-                    address: addr.clone(),
-                })
-                .collect(),
-        };
+        for (idx, name) in config.storage_nodes.iter().enumerate() {
+            let storage_config = StorageNodeConfig {
+                storage_node_idx: idx,
+                use_live_db: 0,
+                compute_nodes: info.compute_nodes.clone(),
+                storage_nodes: info.storage_nodes.clone(),
+            };
+            map.insert(
+                name.clone(),
+                StorageNode::new(storage_config).await.unwrap(),
+            );
+        }
 
-        for (idx, (name, addr)) in config.compute_nodes.iter().enumerate() {
+        map
+    }
+
+    async fn init_compute(
+        config: &NetworkConfig,
+        info: &NetworkInstanceInfo,
+    ) -> BTreeMap<String, ComputeNode> {
+        let mut map = BTreeMap::new();
+
+        for (idx, name) in config.compute_nodes.iter().enumerate() {
             let compute_config = ComputeNodeConfig {
                 compute_node_idx: idx,
-                ..compute_config.clone()
+                compute_nodes: info.compute_nodes.clone(),
+                storage_nodes: info.storage_nodes.clone(),
             };
             map.insert(
                 name.clone(),

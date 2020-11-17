@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node};
+use crate::configurations::StorageNodeConfig;
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
@@ -22,6 +23,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug)]
 pub enum StorageError {
+    ConfigError(&'static str),
     Network(CommsError),
     Serialization(bincode::Error),
 }
@@ -29,6 +31,7 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConfigError(err) => write!(f, "Config error: {}", err),
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
         }
@@ -38,6 +41,7 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
         }
@@ -65,12 +69,19 @@ pub struct StorageNode {
 }
 
 impl StorageNode {
-    pub async fn new(address: SocketAddr, net: usize) -> Result<StorageNode> {
+    pub async fn new(config: StorageNodeConfig) -> Result<StorageNode> {
+        let addr = config
+            .storage_nodes
+            .get(config.storage_node_idx)
+            .ok_or(StorageError::ConfigError("Invalid storage index"))?
+            .address
+            .clone();
+
         Ok(StorageNode {
-            node: Node::new(address, PEER_LIMIT, NodeType::Storage).await?,
+            node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
             whitelisted: HashMap::new(),
             block: Block::new(),
-            net: net,
+            net: config.use_live_db,
         })
     }
 
