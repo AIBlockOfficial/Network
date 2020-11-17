@@ -9,6 +9,7 @@ use naom::primitives::{asset::Asset, transaction::TxConstructor};
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{thread, time};
+use system::configurations::StorageNodeConfig;
 use system::{Response, StorageInterface, StorageNode};
 
 #[tokio::main]
@@ -18,37 +19,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("Zenotta Storage Node")
         .about("Runs a basic storage node.")
         .arg(
-            Arg::with_name("ip")
-                .long("ip")
-                .value_name("ADDRESS")
-                .help("Run the storage node at the given IP address (defaults to 0.0.0.0)")
+            Arg::with_name("config")
+                .long("config")
+                .short("c")
+                .help("Run the storage node using the given config file.")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("port")
-                .short("p")
-                .long("port")
-                .help("Run the storage node at the given port number (defaults to 0)")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("db")
-                .long("db")
-                .help("Run the storage node with test database if 0 (defaults to 0)")
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the specified storage node index from config file")
                 .takes_value(true),
         )
         .get_matches();
 
-    let endpoint = format!(
-        "{}:{}",
-        matches.value_of("ip").unwrap_or("0.0.0.0"),
-        matches.value_of("port").unwrap_or("0")
-    )
-    .parse()
-    .unwrap();
-    let db_type = matches.value_of("db").unwrap_or("0").parse().unwrap();
+    let config = {
+        let mut settings = config::Config::default();
+        let setting_file = matches
+            .value_of("config")
+            .unwrap_or("src/bin/node_settings.toml");
 
-    let node = StorageNode::new(endpoint, db_type).await?;
+        settings
+            .merge(config::File::with_name(setting_file))
+            .unwrap();
+
+        let mut config: StorageNodeConfig = settings.try_into().unwrap();
+        config.storage_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
+        config
+    };
+    println!("Start node with config {:?}", config);
+    let node = StorageNode::new(config).await?;
 
     println!("Started node at {}", node.address());
 

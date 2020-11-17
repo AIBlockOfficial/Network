@@ -12,7 +12,11 @@ use naom::primitives::{
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{thread, time};
+use system::configurations::ComputeNodeConfig;
 use system::{ComputeInterface, ComputeNode, Response};
+
+use config;
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,28 +25,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("Zenotta Compute Node")
         .about("Runs a basic compute node.")
         .arg(
-            Arg::with_name("ip")
-                .long("ip")
-                .value_name("ADDRESS")
-                .help("Run the compute node at the given IP address (defaults to 0.0.0.0)")
+            Arg::with_name("config")
+                .long("config")
+                .short("c")
+                .help("Run the compute node using the given config file.")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("port")
-                .short("p")
-                .long("port")
-                .help("Run the compute node at the given port number (defaults to 0)")
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the specified compute node index from config file")
                 .takes_value(true),
         )
         .get_matches();
 
-    let endpoint = format!(
-        "{}:{}",
-        matches.value_of("ip").unwrap_or("0.0.0.0"),
-        matches.value_of("port").unwrap_or("0")
-    );
+    let config = {
+        let mut settings = config::Config::default();
+        let setting_file = matches
+            .value_of("config")
+            .unwrap_or("src/bin/node_settings.toml");
 
-    let node = ComputeNode::new(endpoint.parse().unwrap()).await?;
+        settings
+            .merge(config::File::with_name(setting_file))
+            .unwrap();
+
+        let mut config: ComputeNodeConfig = settings.try_into().unwrap();
+        config.compute_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
+        config
+    };
+    println!("Start node with config {:?}", config);
+    let node = ComputeNode::new(config).await?;
 
     println!("Started node at {}", node.address());
 
@@ -59,7 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx_const = TxConstructor {
                 t_hash: hex::encode(t_hash),
                 prev_n: 0,
-                b_hash: hex::encode(vec![0]),
                 signatures: vec![signature],
                 pub_keys: vec![pk],
             };

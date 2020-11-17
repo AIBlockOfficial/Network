@@ -5,6 +5,7 @@
 
 mod comms_handler;
 mod compute;
+pub mod configurations;
 mod constants;
 mod interfaces;
 pub mod key_creation;

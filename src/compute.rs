@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::configurations::ComputeNodeConfig;
 use crate::constants::{
     BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
     UNICORN_LIMIT,
@@ -42,6 +43,7 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 
 #[derive(Debug)]
 pub enum ComputeError {
+    ConfigError(&'static str),
     Network(CommsError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
@@ -50,6 +52,7 @@ pub enum ComputeError {
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConfigError(err) => write!(f, "Config error: {}", err),
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
@@ -60,6 +63,7 @@ impl fmt::Display for ComputeError {
 impl Error for ComputeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
@@ -117,9 +121,25 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `address` - Address for the current compute node
-    pub async fn new(address: SocketAddr) -> Result<ComputeNode> {
+    pub async fn new(config: ComputeNodeConfig) -> Result<ComputeNode> {
+        let compute_node_idx = config
+            .compute_node_idx
+            .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
+        let addr = config
+            .compute_nodes
+            .get(compute_node_idx)
+            .ok_or(ComputeError::ConfigError("Invalid compute index"))?
+            .address
+            .clone();
+        let storage_addr = config
+            .storage_nodes
+            .get(0)
+            .ok_or(ComputeError::ConfigError("Invalid storage index"))?
+            .address
+            .clone();
+
         Ok(ComputeNode {
-            node: Node::new(address, PEER_LIMIT, NodeType::Compute).await?,
+            node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_block: None,
@@ -133,7 +153,7 @@ impl ComputeNode {
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
-            storage_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            storage_addr,
         })
     }
 
