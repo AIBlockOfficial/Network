@@ -1,16 +1,7 @@
 //! App to run a storage node.
 
-use async_std::task;
 use clap::{App, Arg};
-use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
-};
-use naom::primitives::{asset::Asset, transaction::TxConstructor};
-use sodiumoxide::crypto::sign;
-use std::collections::BTreeMap;
-use std::net::SocketAddr;
-use std::{thread, time};
-use system::{Response, UseInterface, UserNode};
+use system::{Response, UserNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,7 +114,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Next payment transaction successfully constructed",
                     }) => {
-                        //let _ = node.send_next_payment_to_compute(compute_node_connected.unwrap()).await.unwrap();
+                        let _ = node
+                            .send_payment_to_compute(
+                                compute_node_connected.unwrap(),
+                                node.next_payment.clone().unwrap(),
+                            )
+                            .await
+                            .unwrap();
+                        node.next_payment = None;
+
+                        if node.return_payment.is_some() {
+                            let _ = node
+                                .send_payment_to_compute(
+                                    compute_node_connected.unwrap(),
+                                    node.return_payment.clone().unwrap(),
+                                )
+                                .await
+                                .unwrap();
+                            node.return_payment = None;
+                        }
                     }
                     Ok(Response {
                         success: true,

@@ -8,6 +8,7 @@ use naom::primitives::{
 };
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Determines whether the passed value is within bounds of

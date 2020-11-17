@@ -330,6 +330,9 @@ pub enum UserRequest {
     SendPaymentAddress {
         address: String,
     },
+    SendPaymentTransaction {
+        transaction: Transaction,
+    },
     SendAddressRequest,
 }
 
@@ -343,6 +346,7 @@ impl fmt::Debug for UserRequest {
                 ref peers,
             } => write!(f, "AdvertiseContract"),
             SendPaymentAddress { ref address } => write!(f, "SendPaymentAddress"),
+            SendPaymentTransaction { ref transaction } => write!(f, "SendPaymentTransaction"),
             SendAddressRequest => write!(f, "SendAddressRequest"),
         }
     }

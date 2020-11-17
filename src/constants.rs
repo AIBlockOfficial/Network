@@ -50,6 +50,9 @@ pub const WALLET_PATH: &'static str = "src/wallet/wallet";
 /// Key for local addresses in wallet
 pub const ADDRESS_KEY: &'static str = "a";
 
+/// Key for a running total of wallet funds
+pub const FUND_KEY: &'static str = "f";
+
 /*------- LIMIT CONSTANTS -------*/
 
 /// Limit for the transaction pool per compute node
