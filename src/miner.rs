@@ -1,12 +1,11 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::configurations::MinerNodeConfig;
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
-
-use crate::wallet::{construct_address, save_transactions_to_wallet, WalletStore};
-
 use crate::interfaces::{
     ComputeMessage, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
+use crate::wallet::{construct_address, save_transactions_to_wallet, WalletStore};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -35,6 +34,7 @@ pub type Result<T> = std::result::Result<T, MinerError>;
 
 #[derive(Debug)]
 pub enum MinerError {
+    ConfigError(&'static str),
     Network(CommsError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
@@ -43,6 +43,7 @@ pub enum MinerError {
 impl fmt::Display for MinerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConfigError(err) => write!(f, "Config error: {}", err),
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
@@ -53,6 +54,7 @@ impl fmt::Display for MinerError {
 impl Error for MinerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
             Self::AsyncTask(e) => Some(e),
             Self::Serialization(ref e) => Some(e),
@@ -96,9 +98,18 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `comms_address`   - endpoint address used for communications
-    pub async fn new(comms_address: SocketAddr) -> Result<MinerNode> {
+    pub async fn new(config: MinerNodeConfig) -> Result<MinerNode> {
+        let miner_node_idx = config
+            .miner_node_idx
+            .ok_or(MinerError::ConfigError("Invalid miner index"))?;
+        let addr = config
+            .miner_nodes
+            .get(miner_node_idx)
+            .ok_or(MinerError::ConfigError("Invalid miner index"))?
+            .address
+            .clone();
         Ok(MinerNode {
-            node: Node::new(comms_address, PEER_LIMIT, NodeType::Miner).await?,
+            node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             partition_key: gen_key(),

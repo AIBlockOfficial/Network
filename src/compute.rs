@@ -122,9 +122,12 @@ impl ComputeNode {
     ///
     /// * `address` - Address for the current compute node
     pub async fn new(config: ComputeNodeConfig) -> Result<ComputeNode> {
+        let compute_node_idx = config
+            .compute_node_idx
+            .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
         let addr = config
             .compute_nodes
-            .get(config.compute_node_idx)
+            .get(compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid compute index"))?
             .address
             .clone();

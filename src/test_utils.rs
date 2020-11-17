@@ -3,7 +3,7 @@
 //! correctness of the compute, miner, & storage modules.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{ComputeNodeConfig, NodeSpec, StorageNodeConfig};
+use crate::configurations::{ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig};
 use crate::interfaces::{ComputeInterface, MinerInterface};
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -84,11 +84,15 @@ impl Network {
     ) -> BTreeMap<String, MinerNode> {
         let mut map = BTreeMap::new();
 
-        for (name, spec) in config.miner_nodes.iter().zip(info.miner_nodes.iter()) {
-            map.insert(
-                name.clone(),
-                MinerNode::new(spec.address.clone()).await.unwrap(),
-            );
+        for (idx, name) in config.miner_nodes.iter().enumerate() {
+            let miner_config = MinerNodeConfig {
+                miner_node_idx: Some(idx),
+                miner_compute_node_idx: None,
+                compute_nodes: info.compute_nodes.clone(),
+                storage_nodes: info.storage_nodes.clone(),
+                miner_nodes: info.miner_nodes.clone(),
+            };
+            map.insert(name.clone(), MinerNode::new(miner_config).await.unwrap());
         }
 
         map
@@ -102,7 +106,7 @@ impl Network {
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
             let storage_config = StorageNodeConfig {
-                storage_node_idx: idx,
+                storage_node_idx: Some(idx),
                 use_live_db: 0,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
@@ -124,7 +128,7 @@ impl Network {
 
         for (idx, name) in config.compute_nodes.iter().enumerate() {
             let compute_config = ComputeNodeConfig {
-                compute_node_idx: idx,
+                compute_node_idx: Some(idx),
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
             };

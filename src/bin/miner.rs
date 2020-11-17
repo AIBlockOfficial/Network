@@ -2,6 +2,7 @@
 
 use clap::{App, Arg};
 use std::time::SystemTime;
+use system::configurations::MinerNodeConfig;
 use system::{MinerNode, Response};
 
 #[tokio::main]
@@ -11,44 +12,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("Zenotta Mining Node")
         .about("Runs a basic miner node.")
         .arg(
-            Arg::with_name("ip")
-                .long("ip")
-                .value_name("ADDRESS")
-                .help("Run the miner node at the given IP address (defaults to 0.0.0.0)")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("port")
-                .short("p")
-                .long("port")
-                .help("Run the miner node at the given port number (defaults to 0)")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("connect")
+            Arg::with_name("config")
+                .long("config")
                 .short("c")
-                .long("connect")
-                .help("(Optional) Endpoint address of a compute node that the miner should connect to")
+                .help("Run the miner node using the given config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the specified miner node index from config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("compute_index")
+                .long("compute_index")
+                .help("Endpoint index of a compute node that the miner should connect to")
                 .takes_value(true),
         )
         .get_matches();
+
+    let config = {
+        let mut settings = config::Config::default();
+        let setting_file = matches
+            .value_of("config")
+            .unwrap_or("src/bin/node_settings.toml");
+
+        settings
+            .merge(config::File::with_name(setting_file))
+            .unwrap();
+
+        let mut config: MinerNodeConfig = settings.try_into().unwrap();
+
+        config.miner_node_idx = matches
+            .value_of("index")
+            .map(|idx| idx.parse().unwrap())
+            .or(config.miner_node_idx)
+            .or(Some(0));
+
+        config.miner_compute_node_idx = matches
+            .value_of("compute_index")
+            .map(|idx| idx.parse().unwrap())
+            .or(config.miner_compute_node_idx);
+
+        config
+    };
+    println!("Start node with config {:?}", config);
 
     let endpoint = format!(
         "{}:{}",
         matches.value_of("ip").unwrap_or("0.0.0.0"),
         matches.value_of("port").unwrap_or("0")
     );
+    let compute_node_connected = config
+        .miner_compute_node_idx
+        .and_then(|idx| config.compute_nodes.get(idx))
+        .map(|spec| spec.address.clone());
 
-    let mut node = MinerNode::new(endpoint.parse().unwrap()).await?;
-    let mut compute_node_connected = None;
-
+    let mut node = MinerNode::new(config).await?;
     println!("Started node at {}", node.address());
 
-    if let Some(compute_node) = matches.value_of("connect") {
-        compute_node_connected = Some(compute_node.parse().unwrap());
-
+    if let Some(compute_node) = compute_node_connected {
         // Connect to a compute node.
-        node.connect_to(compute_node_connected.unwrap()).await?;
+        node.connect_to(compute_node).await?;
     }
 
     let now = SystemTime::now();

@@ -45,9 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
 
         let mut config: StorageNodeConfig = settings.try_into().unwrap();
-        if let Some(index) = matches.value_of("index") {
-            config.storage_node_idx = index.parse().unwrap();
-        }
+        config.storage_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
         config
     };
     println!("Start node with config {:?}", config);

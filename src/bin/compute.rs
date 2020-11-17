@@ -51,9 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
 
         let mut config: ComputeNodeConfig = settings.try_into().unwrap();
-        if let Some(index) = matches.value_of("index") {
-            config.compute_node_idx = index.parse().unwrap();
-        }
+        config.compute_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
         config
     };
     println!("Start node with config {:?}", config);

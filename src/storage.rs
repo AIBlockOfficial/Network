@@ -70,9 +70,12 @@ pub struct StorageNode {
 
 impl StorageNode {
     pub async fn new(config: StorageNodeConfig) -> Result<StorageNode> {
+        let storage_node_idx = config
+            .storage_node_idx
+            .ok_or(StorageError::ConfigError("Invalid storage index"))?;
         let addr = config
             .storage_nodes
-            .get(config.storage_node_idx)
+            .get(storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?
             .address
             .clone();
