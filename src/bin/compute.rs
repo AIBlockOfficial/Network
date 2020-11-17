@@ -1,6 +1,5 @@
 //! App to run a compute node.
 
-use async_std::task;
 use clap::{App, Arg};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -11,12 +10,10 @@ use naom::primitives::{
 };
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
-use std::{thread, time};
 use system::configurations::ComputeNodeConfig;
 use system::{ComputeInterface, ComputeNode, Response};
 
 use config;
-use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

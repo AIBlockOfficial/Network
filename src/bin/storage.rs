@@ -1,16 +1,8 @@
 //! App to run a storage node.
 
-use async_std::task;
 use clap::{App, Arg};
-use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
-};
-use naom::primitives::{asset::Asset, transaction::TxConstructor};
-use sodiumoxide::crypto::sign;
-use std::collections::BTreeMap;
-use std::{thread, time};
 use system::configurations::StorageNodeConfig;
-use system::{Response, StorageInterface, StorageNode};
+use system::{Response, StorageNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

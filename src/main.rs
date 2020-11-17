@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 extern crate async_std;
 extern crate chrono;
 extern crate crypto;

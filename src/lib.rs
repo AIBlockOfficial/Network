@@ -1,7 +1,7 @@
 //! # Art
 //!
 //! A library for modeling artistic concepts.
-#![allow(warnings)]
+#![allow(unused)]
 
 mod comms_handler;
 mod compute;
