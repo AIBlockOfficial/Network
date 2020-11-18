@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate async_std;
 extern crate chrono;
 extern crate crypto;
@@ -29,13 +31,12 @@ pub(crate) use comms_handler::Node;
 #[cfg(features = "mock")]
 pub(crate) use mock::Node;
 
-use sodiumoxide::crypto::sign;
-
-use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST};
-use crate::sha3::Digest;
-use bincode::{deserialize, serialize};
-use bytes::Bytes;
-use sha3::Sha3_256;
+//use sodiumoxide::crypto::sign;
+//use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST};
+//use crate::sha3::Digest;
+//use bincode::{deserialize, serialize};
+//use bytes::Bytes;
+//use sha3::Sha3_256;
 
 fn main() {
     // Payment variables

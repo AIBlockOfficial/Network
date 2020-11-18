@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 /// available tokens in the supply.
 ///
 /// TODO: Currently placeholder, needs to be filled in once requirements known
-pub fn is_valid_amount(value: &u64) -> bool {
+pub fn is_valid_amount(_value: &u64) -> bool {
     true
 }
 

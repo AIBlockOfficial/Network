@@ -11,7 +11,6 @@ pub struct UnicornShard {
 impl UnicornShard {
     /// Generate a new UnicornShard instance
     pub fn new() -> UnicornShard {
-        let static_add: String = "".to_string();
         let pow = ProofOfWork {
             address: "".to_string(),
             nonce: Vec::new(),

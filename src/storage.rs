@@ -140,7 +140,7 @@ impl StorageNode {
 }
 
 impl StorageInterface for StorageNode {
-    fn get_history(&self, start_time: &u64, end_time: &u64) -> Response {
+    fn get_history(&self, _start_time: &u64, _end_time: &u64) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
@@ -156,14 +156,14 @@ impl StorageInterface for StorageNode {
         }
     }
 
-    fn get_unicorn_table(&self, n_last_items: Option<u64>) -> Response {
+    fn get_unicorn_table(&self, _n_last_items: Option<u64>) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
         }
     }
 
-    fn receive_pow(&self, pow: ProofOfWork) -> Response {
+    fn receive_pow(&self, _pow: ProofOfWork) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
@@ -172,7 +172,7 @@ impl StorageInterface for StorageNode {
 
     fn receive_block(
         &mut self,
-        peer: SocketAddr,
+        _peer: SocketAddr,
         block: Block,
         tx: BTreeMap<String, Transaction>,
     ) -> Response {
@@ -207,7 +207,7 @@ impl StorageInterface for StorageNode {
         };
     }
 
-    fn receive_contracts(&self, contract: Contract) -> Response {
+    fn receive_contracts(&self, _contract: Contract) -> Response {
         Response {
             success: false,
             reason: "Not implemented yet",
