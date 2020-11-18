@@ -764,20 +764,12 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        let mut valid_tx = BTreeMap::new();
-
-        for (hash, tx) in &transactions {
-            if !tx.is_coinbase()
-                && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
-            {
-                valid_tx.insert(hash.clone(), tx.clone());
-
-                // Only add if there is space
-                if self.current_block_tx.len() + 1 < BLOCK_SIZE_IN_TX {
-                    self.current_block_tx.insert(hash.clone(), tx.clone());
-                }
-            }
-        }
+        let valid_tx: BTreeMap<_, _> = transactions
+            .iter()
+            .filter(|(_, tx)| !tx.is_coinbase())
+            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set.lock().unwrap()))
+            .map(|(hash, tx)| (hash.clone(), tx.clone()))
+            .collect();
 
         // At this point the tx's are considered valid
         self.tx_pool.append(&mut valid_tx.clone());
