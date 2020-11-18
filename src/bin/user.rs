@@ -114,9 +114,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Next payment transaction successfully constructed",
                     }) => {
+                        // Send the payment to compute node
                         let _ = node
                             .send_payment_to_compute(
                                 compute_node_connected.unwrap(),
+                                node.next_payment.clone().unwrap(),
+                            )
+                            .await
+                            .unwrap();
+
+                        // Send the payment to the receiving user
+                        let _ = node
+                            .send_payment_to_receiver(
+                                pair_user_node_connected.unwrap(),
                                 node.next_payment.clone().unwrap(),
                             )
                             .await

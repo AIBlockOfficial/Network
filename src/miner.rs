@@ -1,13 +1,13 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
-use crate::wallet::{
-    construct_address, generate_payment_address, save_transactions_to_wallet, TransactionStore,
-};
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
+use crate::wallet::{
+    construct_address, generate_payment_address, save_transactions_to_wallet, TransactionStore,
+};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;

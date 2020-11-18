@@ -1,4 +1,4 @@
-use crate::constants::{ADDRESS_KEY, WALLET_PATH};
+use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::transaction::Transaction;
@@ -92,7 +92,7 @@ pub async fn save_address_to_wallet(address: String, keys: AddressStore) -> Resu
 ///
 /// * `tx_to_save`  - All transactions that are required to be saved to wallet
 pub async fn save_transactions_to_wallet(
-    tx_to_save: BTreeMap<String, TransactionStore>
+    tx_to_save: BTreeMap<String, TransactionStore>,
 ) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
         let db = DB::open_default(WALLET_PATH).unwrap();
@@ -124,6 +124,40 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
     second_hash.truncate(16);
 
     hex::encode(second_hash)
+}
+
+/// Saves a received payment to the local wallet
+///
+/// ### Arguments
+///
+/// * `hash`    - Hash of the transaction
+/// * `amount`  - Amount of tokens in the payment
+pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Error> {
+    Ok(task::spawn_blocking(move || {
+        let mut fund_store = FundStore {
+            running_total: 0,
+            transactions: BTreeMap::new(),
+        };
+
+        // Wallet DB handling
+        let db = DB::open_default(WALLET_PATH).unwrap();
+        let fund_store_state = match db.get(FUND_KEY) {
+            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
+            Ok(None) => None,
+            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+        };
+        if let Some(store) = fund_store_state {
+            fund_store = store;
+        }
+        // Update the running total and add the transaction to the tab list
+        fund_store.running_total += amount;
+        fund_store.transactions.insert(hash, amount);
+        // Save to disk
+        db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
+            .unwrap();
+        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+    })
+    .await?)
 }
 
 #[cfg(test)]

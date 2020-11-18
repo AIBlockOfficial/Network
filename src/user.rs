@@ -4,18 +4,17 @@ use crate::interfaces::{
     CommMessage::HandshakeRequest, ComputeRequest, Contract, NodeType, Response, UseInterface,
     UserRequest,
 };
-use naom::primitives::asset::Asset;
-use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
-use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
-};
-use naom::script::lang::Script;
 use crate::wallet::{
-    construct_address, generate_payment_address, save_address_to_wallet,
+    construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
     save_transactions_to_wallet, AddressStore, FundStore, TransactionStore,
 };
 use bincode::deserialize;
 use bytes::Bytes;
+use naom::primitives::asset::Asset;
+use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
+use naom::primitives::transaction_utils::{
+    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+};
 
 use bincode::serialize;
 use rocksdb::{Options, DB};
@@ -174,7 +173,7 @@ impl UserNode {
         compute_peer: SocketAddr,
         payment_tx: Transaction,
     ) -> Result<()> {
-        let _peer_span = info_span!("sending payment transaction for processing");
+        let _peer_span = info_span!("sending payment transaction to compute node for processing");
         let mut tx_to_send: BTreeMap<String, Transaction> = BTreeMap::new();
         let hash = construct_tx_hash(&payment_tx);
 
@@ -205,7 +204,7 @@ impl UserNode {
             total_add += out.amount;
         }
 
-        let _ = self.save_payment_to_wallet(hash, total_add);
+        let _ = save_payment_to_wallet(hash, total_add);
 
         Response {
             success: true,
@@ -395,38 +394,29 @@ impl UserNode {
         tx_ins[0].clone()
     }
 
-    /// Saves a received payment to the local wallet
+    /// Sends a payment transaction to the receiving party
     ///
     /// ### Arguments
     ///
-    /// * `hash`    - Hash of the transaction
-    /// * `amount`  - Amount of tokens in the payment
-    pub async fn save_payment_to_wallet(&mut self, hash: String, amount: u64) -> Result<()> {
-        Ok(task::spawn_blocking(move || {
-            let mut fund_store = FundStore {
-                running_total: 0,
-                transactions: BTreeMap::new(),
-            };
+    /// * `peer`        - Peer to send the transaction to
+    /// * `transaction` - The transaction to be sent
+    pub async fn send_payment_to_receiver(
+        &mut self,
+        peer: SocketAddr,
+        transaction: Transaction,
+    ) -> Result<()> {
+        let _peer_span = info_span!("sending payment transaction to receiver");
 
-            // Wallet DB handling
-            let db = DB::open_default(WALLET_PATH).unwrap();
-            let fund_store_state = match db.get(FUND_KEY) {
-                Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-                Ok(None) => None,
-                Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-            };
-            if let Some(store) = fund_store_state {
-                fund_store = store;
-            }
-            // Update the running total and add the transaction to the tab list
-            fund_store.running_total += amount;
-            fund_store.transactions.insert(hash, amount);
-            // Save to disk
-            db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
-                .unwrap();
-            let _ = DB::destroy(&Options::default(), WALLET_PATH);
-        })
-        .await?)
+        self.node
+            .send(
+                peer,
+                UserRequest::SendPaymentTransaction {
+                    transaction: transaction,
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 
     /// Sends a request for a payment address
