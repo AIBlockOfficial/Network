@@ -93,7 +93,7 @@ impl Network {
         for (idx, name) in config.miner_nodes.iter().enumerate() {
             let miner_config = MinerNodeConfig {
                 miner_node_idx: idx,
-                miner_compute_node_idx: None,
+                miner_compute_node_idx: 0,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 miner_nodes: info.miner_nodes.clone(),

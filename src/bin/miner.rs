@@ -31,6 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Endpoint index of a compute node that the miner should connect to")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("compute_connect")
+                .long("compute_connect")
+                .help("connect to the compute node"),
+        )
         .get_matches();
 
     let config = {
@@ -40,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("src/bin/node_settings.toml");
 
         settings.set_default("miner_node_idx", 0).unwrap();
+        settings.set_default("miner_compute_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
@@ -56,14 +62,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Start node with config {:?}", config);
 
     let endpoint = format!(
-        "{}:{}",
-        matches.value_of("ip").unwrap_or("0.0.0.0"),
-        matches.value_of("port").unwrap_or("0")
+        "{}",
+        config
+            .miner_nodes
+            .get(config.miner_node_idx)
+            .unwrap()
+            .address
     );
-    let compute_node_connected = config
-        .miner_compute_node_idx
-        .and_then(|idx| config.compute_nodes.get(idx))
-        .map(|spec| spec.address.clone());
+    let compute_node_connected = if matches.is_present("compute_connect") {
+        Some(
+            config
+                .compute_nodes
+                .get(config.miner_compute_node_idx)
+                .unwrap()
+                .address
+                .clone(),
+        )
+    } else {
+        None
+    };
 
     let mut node = MinerNode::new(config).await?;
     println!("Started node at {}", node.address());

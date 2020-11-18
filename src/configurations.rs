@@ -37,7 +37,7 @@ pub struct MinerNodeConfig {
     /// Index of the current node in compute_addrs
     pub miner_node_idx: usize,
     /// Use test database if 0
-    pub miner_compute_node_idx: Option<usize>,
+    pub miner_compute_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
