@@ -45,6 +45,7 @@ pub fn get_partition_entry_key(p_list: Vec<ProofOfWork>) -> Vec<u8> {
 
 pub fn create_valid_transaction(
     t_hash_hex: &String,
+    receiver_addr_hex: &String,
     pub_key: &PublicKey,
     secret_key: &SecretKey,
 ) -> (String, Transaction) {
@@ -60,7 +61,7 @@ pub fn create_valid_transaction(
     let tx_ins = construct_payment_tx_ins(vec![tx_const]);
     let payment_tx = construct_payment_tx(
         tx_ins,
-        hex::encode(vec![0, 0, 0]),
+        receiver_addr_hex.clone(),
         None,
         None,
         Asset::Token(4),

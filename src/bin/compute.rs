@@ -3,8 +3,7 @@
 use clap::{App, Arg};
 use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
-use std::collections::BTreeMap;
-use system::configurations::ComputeNodeConfig;
+use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;
 use system::{ComputeInterface, ComputeNode, Response};
 
@@ -32,19 +31,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .get_matches();
 
-    let config = {
+    let (setup, config) = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("compute_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
+        if let Some(index) = matches.value_of("index") {
+            settings.set("compute_node_idx", index).unwrap();
+        }
 
-        let mut config: ComputeNodeConfig = settings.try_into().unwrap();
-        config.compute_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
-        config
+        let setup: ComputeNodeSetup = settings.clone().try_into().unwrap();
+        let config: ComputeNodeConfig = settings.try_into().unwrap();
+        (setup, config)
     };
     println!("Start node with config {:?}", config);
     let node = ComputeNode::new(config).await?;
@@ -55,24 +58,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn({
         let mut node = node.clone();
 
-        // Kick off with fake transactions
+        // Add initial UXTO
+
         {
-            let intial_t_hash = "000000".to_owned();
-            let (pk, sk) = sign::gen_keypair();
-            let (t_hash, payment_tx) = create_valid_transaction(&intial_t_hash, &pk, &sk);
-
-            let transactions = {
-                let mut m = BTreeMap::new();
-                m.insert(t_hash, payment_tx);
-                m
-            };
-            let seed_uxto = {
-                let mut m = BTreeMap::new();
-                m.insert(intial_t_hash, Transaction::new());
-                m
-            };
-
+            let seed_uxto = setup
+                .compute_seed_uxto
+                .iter()
+                .map(|hash| (hash.clone(), Transaction::new()))
+                .collect();
             node.seed_uxto_set(seed_uxto);
+        }
+
+        // Kick off with some transactions
+        {
+            let (pk, sk) = sign::gen_keypair();
+
+            let transactions = setup
+                .compute_initial_transactions
+                .iter()
+                .map(|transaction| {
+                    create_valid_transaction(
+                        &transaction.t_hash,
+                        &transaction.receiver_address,
+                        &pk,
+                        &sk,
+                    )
+                })
+                .collect();
+
             let resp = node.receive_transactions(transactions);
             println!("initial receive_transactions Response: {:?}", resp);
             node.generate_block();

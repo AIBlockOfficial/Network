@@ -11,7 +11,7 @@ pub struct NodeSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeConfig {
     /// Index of the current node in compute_nodes
-    pub compute_node_idx: Option<usize>,
+    pub compute_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
@@ -22,7 +22,7 @@ pub struct ComputeNodeConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageNodeConfig {
     /// Index of the current node in compute_nodes
-    pub storage_node_idx: Option<usize>,
+    pub storage_node_idx: usize,
     /// Use test database if 0
     pub use_live_db: usize,
     /// All compute nodes addresses
@@ -35,13 +35,27 @@ pub struct StorageNodeConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinerNodeConfig {
     /// Index of the current node in compute_addrs
-    pub miner_node_idx: Option<usize>,
+    pub miner_node_idx: usize,
     /// Use test database if 0
-    pub miner_compute_node_idx: Option<usize>,
+    pub miner_compute_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
     /// All miner nodes addresses
     pub miner_nodes: Vec<NodeSpec>,
+}
+
+/// Configuration option for initial transactions for a compute node
+#[derive(Debug, Clone, Deserialize)]
+pub struct InititalTransactions {
+    pub t_hash: String,
+    pub receiver_address: String,
+}
+
+/// Configuration option for setup of compute node
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComputeNodeSetup {
+    pub compute_seed_uxto: Vec<String>,
+    pub compute_initial_transactions: Vec<InititalTransactions>,
 }
