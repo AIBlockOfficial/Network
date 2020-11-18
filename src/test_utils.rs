@@ -92,7 +92,7 @@ impl Network {
 
         for (idx, name) in config.miner_nodes.iter().enumerate() {
             let miner_config = MinerNodeConfig {
-                miner_node_idx: Some(idx),
+                miner_node_idx: idx,
                 miner_compute_node_idx: None,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
@@ -112,7 +112,7 @@ impl Network {
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
             let storage_config = StorageNodeConfig {
-                storage_node_idx: Some(idx),
+                storage_node_idx: idx,
                 use_live_db: 0,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
@@ -134,7 +134,7 @@ impl Network {
 
         for (idx, name) in config.compute_nodes.iter().enumerate() {
             let compute_config = ComputeNodeConfig {
-                compute_node_idx: Some(idx),
+                compute_node_idx: idx,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
             };

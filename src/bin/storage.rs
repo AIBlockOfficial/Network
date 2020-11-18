@@ -32,12 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("storage_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
+        if let Some(index) = matches.value_of("index") {
+            settings.set("storage_node_idx", index).unwrap();
+        }
 
-        let mut config: StorageNodeConfig = settings.try_into().unwrap();
-        config.storage_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
+        let config: StorageNodeConfig = settings.try_into().unwrap();
         config
     };
     println!("Start node with config {:?}", config);

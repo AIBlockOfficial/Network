@@ -99,12 +99,9 @@ impl MinerNode {
     ///
     /// * `comms_address`   - endpoint address used for communications
     pub async fn new(config: MinerNodeConfig) -> Result<MinerNode> {
-        let miner_node_idx = config
-            .miner_node_idx
-            .ok_or(MinerError::ConfigError("Invalid miner index"))?;
         let addr = config
             .miner_nodes
-            .get(miner_node_idx)
+            .get(config.miner_node_idx)
             .ok_or(MinerError::ConfigError("Invalid miner index"))?
             .address
             .clone();

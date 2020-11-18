@@ -38,12 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("compute_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
+        if let Some(index) = matches.value_of("index") {
+            settings.set("compute_node_idx", index).unwrap();
+        }
 
-        let mut config: ComputeNodeConfig = settings.try_into().unwrap();
-        config.compute_node_idx = Some(matches.value_of("index").unwrap_or("0").parse().unwrap());
+        let config: ComputeNodeConfig = settings.try_into().unwrap();
         config
     };
     println!("Start node with config {:?}", config);
