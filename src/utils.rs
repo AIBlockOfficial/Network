@@ -1,4 +1,13 @@
 use crate::interfaces::ProofOfWork;
+use naom::primitives::transaction_utils::{
+    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+};
+use naom::primitives::{
+    asset::Asset,
+    transaction::{Transaction, TxConstructor},
+};
+use sodiumoxide::crypto::sign;
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Determines whether the passed value is within bounds of
@@ -32,4 +41,31 @@ pub fn get_partition_entry_key(p_list: Vec<ProofOfWork>) -> Vec<u8> {
     }
 
     key
+}
+
+pub fn create_valid_transaction(
+    t_hash_hex: &String,
+    pub_key: &PublicKey,
+    secret_key: &SecretKey,
+) -> (String, Transaction) {
+    let signature = sign::sign_detached(&t_hash_hex.as_bytes(), &secret_key);
+
+    let tx_const = TxConstructor {
+        t_hash: t_hash_hex.clone(),
+        prev_n: 0,
+        signatures: vec![signature],
+        pub_keys: vec![pub_key.clone()],
+    };
+
+    let tx_ins = construct_payment_tx_ins(vec![tx_const]);
+    let payment_tx = construct_payment_tx(
+        tx_ins,
+        hex::encode(vec![0, 0, 0]),
+        None,
+        None,
+        Asset::Token(4),
+        4,
+    );
+    let t_hash = construct_tx_hash(&payment_tx);
+    (t_hash, payment_tx)
 }
