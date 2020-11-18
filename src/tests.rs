@@ -23,8 +23,11 @@ async fn create_block() {
 
     let (seed_uxto, transactions, t_hash) = {
         let intial_t_hash = "000000".to_owned();
+        let receiver_addr = "000000".to_owned();
+
         let (pk, sk) = sign::gen_keypair();
-        let (t_hash, payment_tx) = create_valid_transaction(&intial_t_hash, &pk, &sk);
+        let (t_hash, payment_tx) =
+            create_valid_transaction(&intial_t_hash, &receiver_addr, &pk, &sk);
 
         let transactions = {
             let mut m = BTreeMap::new();

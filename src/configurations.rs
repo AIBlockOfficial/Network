@@ -45,3 +45,17 @@ pub struct MinerNodeConfig {
     /// All miner nodes addresses
     pub miner_nodes: Vec<NodeSpec>,
 }
+
+/// Configuration option for initial transactions for a compute node
+#[derive(Debug, Clone, Deserialize)]
+pub struct InititalTransactions {
+    pub t_hash: String,
+    pub receiver_address: String,
+}
+
+/// Configuration option for setup of compute node
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComputeNodeSetup {
+    pub compute_seed_uxto: Vec<String>,
+    pub compute_initial_transactions: Vec<InititalTransactions>,
+}
