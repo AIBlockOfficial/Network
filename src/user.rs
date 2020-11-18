@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
+use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
 use crate::interfaces::{
     CommMessage::HandshakeRequest, ComputeRequest, Contract, NodeType, Response, UseInterface,
     UserRequest,
@@ -92,7 +92,7 @@ pub struct UserNode {
 impl UserNode {
     pub async fn new(comms_address: SocketAddr) -> Result<UserNode> {
         Ok(UserNode {
-            node: Node::new(comms_address, 2, NodeType::User).await?,
+            node: Node::new(comms_address, PEER_LIMIT, NodeType::User).await?,
             assets: Vec::new(),
             amount: 0,
             next_payment: None,
@@ -154,7 +154,6 @@ impl UserNode {
     fn handle_request(&mut self, _peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
         match req {
-            AdvertiseContract { contract, peers } => self.check_contract(contract, peers),
             SendAddressRequest => self.receive_payment_address_request(),
             SendPaymentTransaction { transaction } => self.receive_payment_transaction(transaction),
             SendPaymentAddress { address } => self.make_payment_transactions(address).unwrap(),
@@ -451,13 +450,6 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn check_contract<UserNode>(&self, _contract: Contract, _peers: Vec<UserNode>) -> Response {
-        Response {
-            success: false,
-            reason: "Not implemented yet",
-        }
-    }
-
     fn receive_payment_address_request(&self) -> Response {
         Response {
             success: true,

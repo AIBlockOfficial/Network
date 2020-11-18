@@ -56,6 +56,6 @@ pub struct InititalTransactions {
 /// Configuration option for setup of compute node
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
-    pub compute_seed_uxto: Vec<String>,
+    pub compute_seed_utxo: Vec<String>,
     pub compute_initial_transactions: Vec<InititalTransactions>,
 }

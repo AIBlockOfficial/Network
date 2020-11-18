@@ -323,16 +323,8 @@ pub trait ComputeInterface {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
-    AdvertiseContract {
-        contract: Contract,
-        peers: Vec<SocketAddr>,
-    },
-    SendPaymentAddress {
-        address: String,
-    },
-    SendPaymentTransaction {
-        transaction: Transaction,
-    },
+    SendPaymentAddress { address: String },
+    SendPaymentTransaction { transaction: Transaction },
     SendAddressRequest,
 }
 
@@ -341,10 +333,6 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
-            AdvertiseContract {
-                ref contract,
-                ref peers,
-            } => write!(f, "AdvertiseContract"),
             SendPaymentAddress { ref address } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { ref transaction } => write!(f, "SendPaymentTransaction"),
             SendAddressRequest => write!(f, "SendAddressRequest"),
@@ -353,14 +341,6 @@ impl fmt::Debug for UserRequest {
 }
 
 pub trait UseInterface {
-    /// Checks an advertised contract with a set of peers
-    ///
-    /// ### Arguments
-    ///
-    /// * `contract`    - Contract to check
-    /// * `peers`       - Peers with whom the contract is arranged
-    fn check_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response;
-
     /// Receives a request for a new payment address to be produced
     fn receive_payment_address_request(&self) -> Response;
 }

@@ -153,8 +153,8 @@ impl ComputeNode {
     }
 
     /// Seed the inital value of the utxo_set
-    pub fn seed_uxto_set(&self, uxto_set: BTreeMap<String, Transaction>) {
-        *self.utxo_set.lock().unwrap() = uxto_set;
+    pub fn seed_utxo_set(&self, utxo_set: BTreeMap<String, Transaction>) {
+        *self.utxo_set.lock().unwrap() = utxo_set;
     }
 
     /// Returns the compute node's public endpoint.

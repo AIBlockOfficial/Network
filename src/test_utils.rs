@@ -8,6 +8,7 @@ use crate::configurations::{ComputeNodeConfig, MinerNodeConfig, NodeSpec, Storag
 use crate::interfaces::NodeType;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
+use crate::user::UserNode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -17,7 +18,7 @@ pub struct Network {
     miner_nodes: BTreeMap<String, MinerNode>,
     compute_nodes: BTreeMap<String, ComputeNode>,
     storage_nodes: BTreeMap<String, StorageNode>,
-    user_nodes: BTreeMap<String, Node>,
+    user_nodes: BTreeMap<String, UserNode>,
 }
 
 /// Represents a virtual network configuration.
@@ -150,15 +151,12 @@ impl Network {
     async fn init_users(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
-    ) -> BTreeMap<String, Node> {
+    ) -> BTreeMap<String, UserNode> {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.user_nodes.iter().enumerate() {
             let spec = info.user_nodes.get(idx).unwrap();
-            map.insert(
-                name.clone(),
-                Node::new(spec.address, 2, NodeType::User).await.unwrap(),
-            );
+            map.insert(name.clone(), UserNode::new(spec.address).await.unwrap());
         }
 
         map
@@ -180,7 +178,7 @@ impl Network {
         self.storage_nodes.get_mut(name)
     }
 
-    pub fn user(&mut self, name: &str) -> Option<&mut Node> {
+    pub fn user(&mut self, name: &str) -> Option<&mut UserNode> {
         self.user_nodes.get_mut(name)
     }
 
