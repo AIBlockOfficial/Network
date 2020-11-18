@@ -2,8 +2,10 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
+use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig};
+use crate::interfaces::NodeType;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,7 @@ pub struct Network {
     miner_nodes: BTreeMap<String, MinerNode>,
     compute_nodes: BTreeMap<String, ComputeNode>,
     storage_nodes: BTreeMap<String, StorageNode>,
+    user_nodes: BTreeMap<String, Node>,
 }
 
 /// Represents a virtual network configuration.
@@ -25,12 +28,14 @@ pub struct NetworkConfig {
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
+    pub user_nodes: Vec<String>,
 }
 
 pub struct NetworkInstanceInfo {
     pub miner_nodes: Vec<NodeSpec>,
     pub compute_nodes: Vec<NodeSpec>,
     pub storage_nodes: Vec<NodeSpec>,
+    pub user_nodes: Vec<NodeSpec>,
 }
 
 impl Network {
@@ -39,10 +44,13 @@ impl Network {
         let miner_nodes = Self::init_miners(&config, &info).await;
         let compute_nodes = Self::init_compute(&config, &info).await;
         let storage_nodes = Self::init_storage(&config, &info).await;
+        let user_nodes = Self::init_users(&config, &info).await;
+
         Self {
             miner_nodes,
             compute_nodes,
             storage_nodes,
+            user_nodes,
         }
     }
 
@@ -53,13 +61,15 @@ impl Network {
         let (next_port, miner_nodes) = Self::node_specs(ip, next_port, config.miner_nodes.len());
         let (next_port, compute_nodes) =
             Self::node_specs(ip, next_port, config.compute_nodes.len());
-        let (_next_port, storage_nodes) =
+        let (next_port, storage_nodes) =
             Self::node_specs(ip, next_port, config.storage_nodes.len());
+        let (_next_port, user_nodes) = Self::node_specs(ip, next_port, config.user_nodes.len());
 
         NetworkInstanceInfo {
             miner_nodes,
             compute_nodes,
             storage_nodes,
+            user_nodes,
         }
     }
 
@@ -137,6 +147,23 @@ impl Network {
         map
     }
 
+    async fn init_users(
+        config: &NetworkConfig,
+        info: &NetworkInstanceInfo,
+    ) -> BTreeMap<String, Node> {
+        let mut map = BTreeMap::new();
+
+        for (idx, name) in config.user_nodes.iter().enumerate() {
+            let spec = info.user_nodes.get(idx).unwrap();
+            map.insert(
+                name.clone(),
+                Node::new(spec.address, 2, NodeType::User).await.unwrap(),
+            );
+        }
+
+        map
+    }
+
     pub fn miner(&mut self, name: &str) -> Option<&mut MinerNode> {
         self.miner_nodes.get_mut(name)
     }
@@ -153,6 +180,10 @@ impl Network {
         self.storage_nodes.get_mut(name)
     }
 
+    pub fn user(&mut self, name: &str) -> Option<&mut Node> {
+        self.user_nodes.get_mut(name)
+    }
+
     pub fn get_address(&mut self, name: &str) -> Option<SocketAddr> {
         if let Some(miner) = self.miner_nodes.get(name) {
             return Some(miner.address());
@@ -162,6 +193,9 @@ impl Network {
         }
         if let Some(storage) = self.storage_nodes.get(name) {
             return Some(storage.address());
+        }
+        if let Some(user) = self.user_nodes.get(name) {
+            return Some(user.address());
         }
         None
     }

@@ -1,16 +1,11 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
-};
-use naom::primitives::{
-    asset::Asset,
-    transaction::{Transaction, TxConstructor},
-};
+use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use system::configurations::ComputeNodeConfig;
+use system::create_valid_transaction;
 use system::{ComputeInterface, ComputeNode, Response};
 
 use config;
@@ -62,43 +57,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Kick off with fake transactions
         {
+            let intial_t_hash = "000000".to_owned();
             let (pk, sk) = sign::gen_keypair();
-            let t_hash = vec![0, 0, 0];
-            let signature = sign::sign_detached(&hex::encode(t_hash.clone()).as_bytes(), &sk);
+            let (t_hash, payment_tx) = create_valid_transaction(&intial_t_hash, &pk, &sk);
 
-            let tx_const = TxConstructor {
-                t_hash: hex::encode(t_hash),
-                prev_n: 0,
-                signatures: vec![signature],
-                pub_keys: vec![pk],
+            let transactions = {
+                let mut m = BTreeMap::new();
+                m.insert(t_hash, payment_tx);
+                m
             };
-            let tx_const_t_hash = tx_const.t_hash.clone();
+            let seed_uxto = {
+                let mut m = BTreeMap::new();
+                m.insert(intial_t_hash, Transaction::new());
+                m
+            };
 
-            let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-            let payment_tx = construct_payment_tx(
-                tx_ins,
-                hex::encode(vec![0, 0, 0]),
-                None,
-                None,
-                Asset::Token(4),
-                4,
-            );
-
-            println!("");
-            println!("Getting hash");
-            println!("");
-
-            let t_hash = construct_tx_hash(&payment_tx);
-
-            let mut transactions = BTreeMap::new();
-            transactions.insert(t_hash, payment_tx);
-
-            let mut seed_uxto = BTreeMap::new();
-            seed_uxto.insert(tx_const_t_hash, Transaction::new());
             node.seed_uxto_set(seed_uxto);
-
             let resp = node.receive_transactions(transactions);
             println!("initial receive_transactions Response: {:?}", resp);
+            node.generate_block();
         }
 
         let storage_connected = {

@@ -24,7 +24,7 @@ pub use constants::PARTITION_LIMIT;
 pub use interfaces::{ComputeInterface, MinerInterface, Response, StorageInterface};
 pub use miner::MinerNode;
 pub use storage::StorageNode;
-pub use utils::command_input_to_socket;
+pub use utils::{command_input_to_socket, create_valid_transaction};
 
 #[cfg(not(features = "mock"))]
 pub(crate) use comms_handler::Node;

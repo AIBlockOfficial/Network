@@ -791,11 +791,6 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        // Create new block if needed
-        if self.current_block.is_none() {
-            self.current_block = Some(Block::new());
-        }
-
         if valid_tx.len() < transactions.len() {
             return Response {
                 success: true,
