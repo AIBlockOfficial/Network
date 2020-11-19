@@ -4,11 +4,12 @@ use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
 };
+use crate::utils::get_db_options;
 use sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use rocksdb::{DBCompressionType, Options, DB};
+use rocksdb::DB;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -187,8 +188,7 @@ impl StorageInterface for StorageNode {
             _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
         };
 
-        let mut opts = Options::default();
-        opts.set_compression_type(DBCompressionType::Snappy);
+        let opts = get_db_options();
         let db = DB::open(&opts, save_path.clone()).unwrap();
         db.put(hash_key, hash_input).unwrap();
 

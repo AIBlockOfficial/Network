@@ -42,18 +42,18 @@ async fn create_block() {
         (seed_utxo, transactions, t_hash, payment_tx)
     };
 
-    {
-        let compute_node_addr = network.get_address("compute").unwrap().clone();
-        let user = network.user("user").unwrap();
+    // {
+    //     let compute_node_addr = network.get_address("compute").unwrap().clone();
+    //     let user = network.user("user").unwrap();
 
-        let mut u = user.clone();
-        tokio::spawn(async move {
-            u.connect_to(compute_node_addr).await.unwrap();
-            u.send_payment_to_compute(compute_node_addr, tx.clone())
-                .await
-                .unwrap();
-        });
-    }
+    //     let mut u = user.clone();
+    //     tokio::spawn(async move {
+    //         u.connect_to(compute_node_addr).await.unwrap();
+    //         u.send_payment_to_compute(compute_node_addr, tx.clone())
+    //             .await
+    //             .unwrap();
+    //     });
+    // }
 
     // {
     //     let compute = network.compute("compute").unwrap();

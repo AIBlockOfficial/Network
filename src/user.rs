@@ -4,6 +4,7 @@ use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
 use crate::interfaces::{
     CommMessage::HandshakeRequest, ComputeRequest, NodeType, Response, UseInterface, UserRequest,
 };
+use crate::utils::get_db_options;
 use crate::wallet::{
     construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
     save_transactions_to_wallet, AddressStore, FundStore, TransactionStore,
@@ -17,7 +18,7 @@ use naom::primitives::transaction_utils::{
 };
 
 use bincode::serialize;
-use rocksdb::{DBCompressionType, Options, DB};
+use rocksdb::DB;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
@@ -260,8 +261,7 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let mut opts = Options::default();
-        opts.set_compression_type(DBCompressionType::Snappy);
+        let opts = get_db_options();
         let db = DB::open(&opts, WALLET_PATH).unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
