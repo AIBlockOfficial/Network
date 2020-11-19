@@ -8,7 +8,7 @@ use sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use rocksdb::{Options, DB};
+use rocksdb::{DBCompressionType, Options, DB};
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -187,7 +187,9 @@ impl StorageInterface for StorageNode {
             _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
         };
 
-        let db = DB::open_default(save_path.clone()).unwrap();
+        let mut opts = Options::default();
+        opts.set_compression_type(DBCompressionType::Snappy);
+        let db = DB::open(&opts, save_path.clone()).unwrap();
         db.put(hash_key, hash_input).unwrap();
 
         // Save each transaction
@@ -196,7 +198,7 @@ impl StorageInterface for StorageNode {
             db.put(tx_hash, tx_input).unwrap();
         }
 
-        let _ = DB::destroy(&Options::default(), save_path.clone());
+        let _ = DB::destroy(&opts, save_path.clone());
 
         return Response {
             success: true,

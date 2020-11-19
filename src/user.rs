@@ -17,7 +17,7 @@ use naom::primitives::transaction_utils::{
 };
 
 use bincode::serialize;
-use rocksdb::{Options, DB};
+use rocksdb::{DBCompressionType, Options, DB};
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
@@ -260,7 +260,9 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let db = DB::open_default(WALLET_PATH).unwrap();
+        let mut opts = Options::default();
+        opts.set_compression_type(DBCompressionType::Snappy);
+        let db = DB::open(&opts, WALLET_PATH).unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -320,7 +322,7 @@ impl UserNode {
         // Save the updated fund store to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+        let _ = DB::destroy(&opts, WALLET_PATH);
 
         tx_ins
     }
