@@ -1,6 +1,6 @@
 //! Test suite for the network functions.
 
-use crate::interfaces::{ComputeRequest, Response};
+use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
 use naom::primitives::block::Block;
@@ -21,7 +21,7 @@ async fn create_block() {
     })
     .await;
 
-    let (seed_utxo, transactions, t_hash, tx) = {
+    let (seed_utxo, _transactions, t_hash, tx) = {
         let intial_t_hash = "000000".to_owned();
         let receiver_addr = "000000".to_owned();
 
@@ -42,39 +42,39 @@ async fn create_block() {
         (seed_utxo, transactions, t_hash, payment_tx)
     };
 
-    // {
-    //     let compute_node_addr = network.get_address("compute").unwrap().clone();
-    //     let user = network.user("user").unwrap();
+    {
+        let compute_node_addr = network.get_address("compute").unwrap().clone();
+        let user = network.user("user").unwrap();
 
-    //     let mut u = user.clone();
-    //     tokio::spawn(async move {
-    //         u.connect_to(compute_node_addr).await.unwrap();
-    //         u.send_payment_to_compute(compute_node_addr, tx.clone())
-    //             .await
-    //             .unwrap();
-    //     });
-    // }
+        let mut u = user.clone();
+        tokio::spawn(async move {
+            u.connect_to(compute_node_addr).await.unwrap();
+            u.send_payment_to_compute(compute_node_addr, tx.clone())
+                .await
+                .unwrap();
+        });
+    }
 
-    // {
-    //     let compute = network.compute("compute").unwrap();
-    //     compute.seed_utxo_set(seed_utxo);
-    //     match compute.handle_next_event().await {
-    //         Some(Ok(Response {
-    //             success: true,
-    //             reason: "All transactions successfully added to tx pool",
-    //         })) => (),
-    //         other => panic!("Unexpected result: {:?}", other),
-    //     }
+    {
+        let compute = network.compute("compute").unwrap();
+        compute.seed_utxo_set(seed_utxo);
+        match compute.handle_next_event().await {
+            Some(Ok(Response {
+                success: true,
+                reason: "All transactions successfully added to tx pool",
+            })) => (),
+            other => panic!("Unexpected result: {:?}", other),
+        }
 
-    //     assert!(compute.current_block.is_none());
-    //     compute.generate_block();
+        assert!(compute.current_block.is_none());
+        compute.generate_block();
 
-    //     let block_transactions = compute
-    //         .current_block
-    //         .as_ref()
-    //         .map(|b| b.transactions.clone());
-    //     assert_eq!(block_transactions, Some(vec![t_hash]));
-    // }
+        let block_transactions = compute
+            .current_block
+            .as_ref()
+            .map(|b| b.transactions.clone());
+        assert_eq!(block_transactions, Some(vec![t_hash]));
+    }
 }
 
 #[tokio::test(threaded_scheduler)]

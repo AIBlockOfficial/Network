@@ -2,7 +2,7 @@
 
 use clap::{App, Arg};
 use system::configurations::UserNodeConfig;
-use system::{Response, UseInterface, UserNode};
+use system::{Response, UserNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
