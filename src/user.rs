@@ -1,8 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node};
+use crate::configurations::UserNodeConfig;
 use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
 use crate::interfaces::{
-    CommMessage::HandshakeRequest, ComputeRequest, Contract, NodeType, Response, UseInterface,
-    UserRequest,
+    CommMessage::HandshakeRequest, ComputeRequest, NodeType, Response, UseInterface, UserRequest,
 };
 use crate::wallet::{
     construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
@@ -29,6 +29,7 @@ pub type Result<T> = std::result::Result<T, UserError>;
 
 #[derive(Debug)]
 pub enum UserError {
+    ConfigError(&'static str),
     Network(CommsError),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
@@ -37,9 +38,10 @@ pub enum UserError {
 impl fmt::Display for UserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UserError::Network(err) => write!(f, "Network error: {}", err),
-            UserError::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            UserError::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {}", err),
+            Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
+            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
         }
     }
 }
@@ -47,6 +49,7 @@ impl fmt::Display for UserError {
 impl Error for UserError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
@@ -85,16 +88,24 @@ pub struct UserNode {
     node: Node,
     pub assets: Vec<Asset>,
     pub amount: u64,
+    pub trading_peer: Option<SocketAddr>,
     pub next_payment: Option<Transaction>,
     pub return_payment: Option<Transaction>,
 }
 
 impl UserNode {
-    pub async fn new(comms_address: SocketAddr) -> Result<UserNode> {
+    pub async fn new(config: UserNodeConfig) -> Result<UserNode> {
+        let addr = config
+            .user_nodes
+            .get(config.user_node_idx)
+            .ok_or(UserError::ConfigError("Invalid user index"))?
+            .address
+            .clone();
         Ok(UserNode {
-            node: Node::new(comms_address, PEER_LIMIT, NodeType::User).await?,
+            node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
             assets: Vec::new(),
             amount: 0,
+            trading_peer: None,
             next_payment: None,
             return_payment: None,
         })
@@ -151,12 +162,14 @@ impl UserNode {
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, _peer: SocketAddr, req: UserRequest) -> Response {
+    fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
+        println!("RECEIVED REQUEST: {:?}", req);
+
         match req {
-            SendAddressRequest => self.receive_payment_address_request(),
+            SendAddressRequest => self.receive_payment_address_request(peer),
             SendPaymentTransaction { transaction } => self.receive_payment_transaction(transaction),
-            SendPaymentAddress { address } => self.make_payment_transactions(address).unwrap(),
+            SendPaymentAddress { address } => self.make_payment_transactions(address),
         }
     }
 
@@ -216,7 +229,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `address` - Address to assign the payment transaction to
-    pub fn make_payment_transactions(&mut self, address: String) -> Result<Response> {
+    pub fn make_payment_transactions(&mut self, address: String) -> Response {
         let tx_ins = self.fetch_inputs_for_payment(self.amount);
 
         let payment_tx = construct_payment_tx(
@@ -229,10 +242,10 @@ impl UserNode {
         );
         self.next_payment = Some(payment_tx);
 
-        Ok(Response {
+        Response {
             success: true,
             reason: "Next payment transaction successfully constructed",
-        })
+        }
     }
 
     /// Fetches valid TxIns based on the wallet's running total and available unspent
@@ -425,6 +438,7 @@ impl UserNode {
     /// * `peer`    - Socket address of peer to request from
     pub async fn send_address_request(&mut self, peer: SocketAddr) -> Result<()> {
         let _peer_span = info_span!("sending payment address request");
+        println!("Sending request for payment address to peer: {:?}", peer);
 
         self.node
             .send(peer, UserRequest::SendAddressRequest)
@@ -450,7 +464,9 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn receive_payment_address_request(&self) -> Response {
+    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response {
+        self.trading_peer = Some(peer);
+
         Response {
             success: true,
             reason: "New address ready to be sent",

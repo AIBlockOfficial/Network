@@ -20,6 +20,12 @@ address = "127.0.0.1:12340"
 [[miner_nodes]]
 address = "127.0.0.1:12341"
 
+[[user_nodes]]
+address = "127.0.0.1:12342"
+
+[[user_nodes]]
+address = "127.0.0.1:12343"
+
 [[compute_initial_transactions]]
 t_hash = "000000"
 receiver_address = "000010"

@@ -323,9 +323,9 @@ pub trait ComputeInterface {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
+    SendAddressRequest,
     SendPaymentAddress { address: String },
     SendPaymentTransaction { transaction: Transaction },
-    SendAddressRequest,
 }
 
 impl fmt::Debug for UserRequest {
@@ -333,14 +333,18 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
+            SendAddressRequest => write!(f, "SendAddressRequest"),
             SendPaymentAddress { ref address } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { ref transaction } => write!(f, "SendPaymentTransaction"),
-            SendAddressRequest => write!(f, "SendAddressRequest"),
         }
     }
 }
 
 pub trait UseInterface {
     /// Receives a request for a new payment address to be produced
-    fn receive_payment_address_request(&self) -> Response;
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Peer who made the request
+    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response;
 }

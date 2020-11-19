@@ -2,10 +2,10 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
-use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
-use crate::configurations::{ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig};
-use crate::interfaces::NodeType;
+use crate::configurations::{
+    ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
+};
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
@@ -98,6 +98,7 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 miner_nodes: info.miner_nodes.clone(),
+                user_nodes: info.user_nodes.clone(),
             };
             map.insert(name.clone(), MinerNode::new(miner_config).await.unwrap());
         }
@@ -117,6 +118,7 @@ impl Network {
                 use_live_db: 0,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
+                user_nodes: info.user_nodes.clone(),
             };
             map.insert(
                 name.clone(),
@@ -138,6 +140,7 @@ impl Network {
                 compute_node_idx: idx,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
+                user_nodes: info.user_nodes.clone(),
             };
             map.insert(
                 name.clone(),
@@ -155,8 +158,17 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.user_nodes.iter().enumerate() {
-            let spec = info.user_nodes.get(idx).unwrap();
-            map.insert(name.clone(), UserNode::new(spec.address).await.unwrap());
+            let user_config = UserNodeConfig {
+                user_node_idx: idx,
+                user_compute_node_idx: 0,
+                peer_user_node_idx: 0,
+                compute_nodes: info.compute_nodes.clone(),
+                storage_nodes: info.storage_nodes.clone(),
+                miner_nodes: info.miner_nodes.clone(),
+                user_nodes: info.user_nodes.clone(),
+            };
+
+            map.insert(name.clone(), UserNode::new(user_config).await.unwrap());
         }
 
         map

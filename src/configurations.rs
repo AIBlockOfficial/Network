@@ -16,6 +16,8 @@ pub struct ComputeNodeConfig {
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
+    /// All user nodes addresses
+    pub user_nodes: Vec<NodeSpec>,
 }
 
 /// Configuration option for a storage node
@@ -29,6 +31,8 @@ pub struct StorageNodeConfig {
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
+    /// All user nodes addresses
+    pub user_nodes: Vec<NodeSpec>,
 }
 
 /// Configuration option for a storage node
@@ -44,6 +48,27 @@ pub struct MinerNodeConfig {
     pub storage_nodes: Vec<NodeSpec>,
     /// All miner nodes addresses
     pub miner_nodes: Vec<NodeSpec>,
+    /// All user nodes addresses
+    pub user_nodes: Vec<NodeSpec>,
+}
+
+/// Configuration option for a user node
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserNodeConfig {
+    /// Index of the current node in user_addrs
+    pub user_node_idx: usize,
+    /// Use test database if 0
+    pub user_compute_node_idx: usize,
+    /// Peer node index in user_nodes
+    pub peer_user_node_idx: usize,
+    /// All compute nodes addresses
+    pub compute_nodes: Vec<NodeSpec>,
+    /// All storage nodes addresses: only use first
+    pub storage_nodes: Vec<NodeSpec>,
+    /// All miner nodes addresses
+    pub miner_nodes: Vec<NodeSpec>,
+    /// All peer user nodes addresses
+    pub user_nodes: Vec<NodeSpec>,
 }
 
 /// Configuration option for initial transactions for a compute node

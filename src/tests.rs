@@ -196,27 +196,25 @@ async fn receive_payment_tx_user() {
     let user2_addr = network.get_address("user2").unwrap();
     let user = network.user("user1").unwrap();
 
-    // {
-    //     let mut u = user.clone();
-    //     tokio::spawn(async move {
-    //         u.connect_to(user2_addr).await.unwrap();
-    //         u.connect_to(compute_node_addr).await.unwrap();
-    //         u.amount = 10;
+    {
+        let mut u = user.clone();
+        tokio::spawn(async move {
+            u.connect_to(user2_addr).await.unwrap();
+            u.connect_to(compute_node_addr).await.unwrap();
+            u.amount = 10;
 
-    //         u.send_address_request(user2_addr)
-    //         .await
-    //         .unwrap();
-    //     });
-    // }
+            u.send_address_request(user2_addr).await.unwrap();
+        });
+    }
 
-    // {
-    //     let u2 = network.user("user2").unwrap();
-    //     match u2.handle_next_event().await {
-    //         Some(Ok(Response {
-    //             success: true,
-    //             reason: "New address ready to be sent",
-    //         })) => return (),
-    //         other => panic!("Unexpected result: {:?}", other),
-    //     }
-    // }
+    {
+        let u2 = network.user("user2").unwrap();
+        match u2.handle_next_event().await {
+            Some(Ok(Response {
+                success: true,
+                reason: "New address ready to be sent",
+            })) => return (),
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
 }
