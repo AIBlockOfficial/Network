@@ -106,6 +106,8 @@ pub enum CommMessage {
     },
 }
 
+///============ STORAGE NODE ============///
+
 /// Encapsulates storage requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
@@ -196,23 +198,7 @@ pub trait StorageInterface {
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
-/// Encapsulates miner requests
-#[derive(Serialize, Deserialize, Clone)]
-pub enum ComputeRequest {
-    SendPoW { pow: Vec<u8> },
-    SendTx { tx: Vec<Transaction> },
-}
-
-impl fmt::Debug for ComputeRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ComputeRequest::*;
-
-        match *self {
-            SendPoW { ref pow } => write!(f, "SendPoW"),
-            SendTx { ref tx } => write!(f, "SendTx"),
-        }
-    }
-}
+///============ MINER NODE ============///
 
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
@@ -236,9 +222,20 @@ impl fmt::Debug for MineRequest {
     }
 }
 
+pub trait MinerInterface {
+    /// Receives a new block to be mined
+    ///
+    /// ### Arguments
+    ///
+    /// * `pre_block` - New block to be mined
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
+}
+
+///============ COMPUTE NODE ============///
+
 /// Encapsulates compute requests & responses.
 #[derive(Serialize, Deserialize, Clone)]
-pub enum ComputeMessage {
+pub enum ComputeRequest {
     SendPoW {
         pow: ProofOfWorkBlock,
         coinbase: Transaction,
@@ -252,9 +249,9 @@ pub enum ComputeMessage {
     SendPartitionRequest,
 }
 
-impl fmt::Debug for ComputeMessage {
+impl fmt::Debug for ComputeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ComputeMessage::*;
+        use ComputeRequest::*;
 
         match *self {
             SendPoW {
@@ -321,25 +318,14 @@ pub trait ComputeInterface {
     fn validate_pow(pow: &mut ProofOfWork) -> bool;
 }
 
-pub trait MinerInterface {
-    /// Receives a new block to be mined
-    ///
-    /// ### Arguments
-    ///
-    /// * `pre_block` - New block to be mined
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
-}
+///============ USER NODE ============///
 
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
-    AdvertiseContract {
-        contract: Contract,
-        peers: Vec<SocketAddr>,
-    },
-    SendAssets {
-        assets: Vec<Asset>,
-    },
+    SendAddressRequest,
+    SendPaymentAddress { address: String },
+    SendPaymentTransaction { transaction: Transaction },
 }
 
 impl fmt::Debug for UserRequest {
@@ -347,28 +333,18 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
-            AdvertiseContract {
-                ref contract,
-                ref peers,
-            } => write!(f, "AdvertiseContract"),
-            SendAssets { ref assets } => write!(f, "SendAsset"),
+            SendAddressRequest => write!(f, "SendAddressRequest"),
+            SendPaymentAddress { ref address } => write!(f, "SendPaymentAddress"),
+            SendPaymentTransaction { ref transaction } => write!(f, "SendPaymentTransaction"),
         }
     }
 }
 
 pub trait UseInterface {
-    /// Checks an advertised contract with a set of peers
+    /// Receives a request for a new payment address to be produced
     ///
     /// ### Arguments
     ///
-    /// * `contract`    - Contract to check
-    /// * `peers`       - Peers with whom the contract is arranged
-    fn check_contract<UserNode>(&self, contract: Contract, peers: Vec<UserNode>) -> Response;
-
-    /// Receives an asset/s, which could be tokens or data assets
-    ///
-    /// ### Arguments
-    ///
-    /// * `assets`  - Assets to receive
-    fn receive_assets(&mut self, assets: Vec<Asset>) -> Response;
+    /// * `peer`    - Peer who made the request
+    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response;
 }

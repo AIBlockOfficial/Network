@@ -44,10 +44,10 @@
 //! `CommMessage` has two message types: [`Direct`](crate::interfaces::CommMessage::Direct) (used for one-to-one communication between peers) and
 //! [`Gossip`](crate::interfaces::CommMessage::Gossip) (used for multicast). Both have a parameter that's called `payload` which can contain an arbitrary
 //! sequence of bytes (`Vec<u8>`). Usually, however, it should be interpreted as a serialized message specific to a given node type. For example, it can
-//! encapsulate a [`ComputeMessage`](crate::interfaces::ComputeMessage) if a message is being sent within a compute ring.
+//! encapsulate a [`ComputeRequest`](crate::interfaces::ComputeRequest) if a message is being sent within a compute ring.
 //!
 //! Usually, a single message type handles both requests and responses (i.e., instead of having separate `ComputeRequest` or `ComputeResponse` enums, we
-//! but both types of messages within a single `ComputeMessage` type). This simplifies deserialization and handling of these
+//! but both types of messages within a single `ComputeRequest` type). This simplifies deserialization and handling of these
 //! messages.
 //!
 //! ## Multicast

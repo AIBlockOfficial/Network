@@ -4,11 +4,12 @@ use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
 };
+use crate::utils::get_db_options;
 use sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use rocksdb::{Options, DB};
+use rocksdb::DB;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -187,7 +188,8 @@ impl StorageInterface for StorageNode {
             _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
         };
 
-        let db = DB::open_default(save_path.clone()).unwrap();
+        let opts = get_db_options();
+        let db = DB::open(&opts, save_path.clone()).unwrap();
         db.put(hash_key, hash_input).unwrap();
 
         // Save each transaction
@@ -196,7 +198,7 @@ impl StorageInterface for StorageNode {
             db.put(tx_hash, tx_input).unwrap();
         }
 
-        let _ = DB::destroy(&Options::default(), save_path.clone());
+        let _ = DB::destroy(&opts, save_path.clone());
 
         return Response {
             success: true,

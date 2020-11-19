@@ -2,16 +2,19 @@ use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
 use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
 use crate::interfaces::{
-    ComputeMessage, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
+    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
-use crate::wallet::{construct_address, save_transactions_to_wallet, WalletStore};
+use crate::wallet::{
+    construct_address, generate_payment_address, save_transactions_to_wallet, TransactionStore,
+};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use std::{
+    collections::BTreeMap,
     convert::TryInto,
     error::Error,
     fmt,
@@ -229,7 +232,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeMessage::SendPoW {
+                ComputeRequest::SendPoW {
                     pow: pow_promise,
                     coinbase,
                 },
@@ -247,7 +250,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeMessage::SendPartitionEntry {
+                ComputeRequest::SendPartitionEntry {
                     partition_entry: partition_entry,
                 },
             )
@@ -260,7 +263,7 @@ impl MinerNode {
         let _peer_span = info_span!("sending partition participation request");
 
         self.node
-            .send(compute, ComputeMessage::SendPartitionRequest {})
+            .send(compute, ComputeRequest::SendPartitionRequest {})
             .await?;
 
         Ok(())
@@ -322,18 +325,20 @@ impl MinerNode {
             let coinbase_hash = construct_tx_hash(&current_coinbase);
 
             let mut block_for_pow = block.clone();
-            block_for_pow.transactions.push(coinbase_hash);
-
-            // Create wallet content
-            let wallet_content = WalletStore {
-                secret_key: sk,
-                transactions: vec![current_coinbase.clone()],
-                net: 0,
-            };
+            block_for_pow.transactions.push(coinbase_hash.clone());
 
             // Create address and save to wallet
             let address = construct_address(pk, 0);
-            let _save_result = save_transactions_to_wallet(address, wallet_content);
+
+            // Create wallet content
+            let transaction_store = TransactionStore {
+                address: address,
+                net: 0,
+            };
+            let mut tx_to_save = BTreeMap::new();
+            tx_to_save.insert(coinbase_hash, transaction_store);
+
+            let _save_result = save_transactions_to_wallet(tx_to_save);
 
             // Construct PoW block for mining
             let mut pow = ProofOfWorkBlock {

@@ -10,6 +10,17 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use rocksdb::{DBCompressionType, Options};
+
+/// Creates a set of DB opening options for rocksDB instances
+pub fn get_db_options() -> Options {
+    let mut opts = Options::default();
+    opts.create_if_missing(true);
+    opts.set_compression_type(DBCompressionType::Snappy);
+
+    opts
+}
+
 /// Determines whether the passed value is within bounds of
 /// available tokens in the supply.
 ///

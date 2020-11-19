@@ -58,15 +58,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn({
         let mut node = node.clone();
 
-        // Add initial UXTO
+        // Add initial utxo
 
         {
-            let seed_uxto = setup
-                .compute_seed_uxto
+            let seed_utxo = setup
+                .compute_seed_utxo
                 .iter()
                 .map(|hash| (hash.clone(), Transaction::new()))
                 .collect();
-            node.seed_uxto_set(seed_uxto);
+            node.seed_utxo_set(seed_utxo);
         }
 
         // Kick off with some transactions

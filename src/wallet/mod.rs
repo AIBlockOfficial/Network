@@ -1,4 +1,4 @@
-use crate::constants::{ADDRESS_KEY, WALLET_PATH};
+use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::transaction::Transaction;
@@ -13,9 +13,8 @@ use tokio::task;
 
 /// Data structure for wallet storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletStore {
-    pub secret_key: SecretKey,
-    pub transactions: Vec<Transaction>,
+pub struct TransactionStore {
+    pub address: String,
     pub net: usize,
 }
 
@@ -23,6 +22,14 @@ pub struct WalletStore {
 pub struct AddressStore {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
+}
+
+/// A reference to fund stores, where `transactions` contains the hash
+/// of the transaction and a `u64` of its holding amount
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundStore {
+    pub running_total: u64, // TODO: Needs to be big int at some point
+    pub transactions: BTreeMap<String, u64>,
 }
 
 /// Generates a new payment address, saving the related keys to the wallet
@@ -83,33 +90,18 @@ pub async fn save_address_to_wallet(address: String, keys: AddressStore) -> Resu
 ///
 /// ### Arguments
 ///
-/// * `address`         - Address to save to wallet
-/// * `save_content`    - The content to save for the given address
+/// * `tx_to_save`  - All transactions that are required to be saved to wallet
 pub async fn save_transactions_to_wallet(
-    address: String,
-    save_content: WalletStore,
+    tx_to_save: BTreeMap<String, TransactionStore>,
 ) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
         let db = DB::open_default(WALLET_PATH).unwrap();
-        let mut wallet_content = save_content.clone();
-
-        // Check whether the address was used before
-        let existing_address_content: Option<WalletStore> = match db.get(address.clone()) {
-            Ok(Some(content)) => Some(deserialize(&content).unwrap()),
-            Ok(None) => None,
-            Err(e) => panic!("Failed to get address from wallet with error: {:?}", e),
-        };
-
-        // Update transactions if pre-existing
-        if let Some(content) = existing_address_content {
-            wallet_content
-                .transactions
-                .append(&mut content.transactions.clone());
+        let keys: Vec<_> = tx_to_save.keys().cloned().collect();
+        for key in keys {
+            let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
+            db.put(key.clone(), input).unwrap();
         }
 
-        let hash_input = Bytes::from(serialize(&wallet_content).unwrap());
-
-        db.put(address.clone(), hash_input).unwrap();
         let _ = DB::destroy(&Options::default(), WALLET_PATH);
     })
     .await?)
@@ -132,6 +124,40 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
     second_hash.truncate(16);
 
     hex::encode(second_hash)
+}
+
+/// Saves a received payment to the local wallet
+///
+/// ### Arguments
+///
+/// * `hash`    - Hash of the transaction
+/// * `amount`  - Amount of tokens in the payment
+pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Error> {
+    Ok(task::spawn_blocking(move || {
+        let mut fund_store = FundStore {
+            running_total: 0,
+            transactions: BTreeMap::new(),
+        };
+
+        // Wallet DB handling
+        let db = DB::open_default(WALLET_PATH).unwrap();
+        let fund_store_state = match db.get(FUND_KEY) {
+            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
+            Ok(None) => None,
+            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+        };
+        if let Some(store) = fund_store_state {
+            fund_store = store;
+        }
+        // Update the running total and add the transaction to the tab list
+        fund_store.running_total += amount;
+        fund_store.transactions.insert(hash, amount);
+        // Save to disk
+        db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
+            .unwrap();
+        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+    })
+    .await?)
 }
 
 #[cfg(test)]

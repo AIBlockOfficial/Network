@@ -5,7 +5,7 @@ use crate::constants::{
     UNICORN_LIMIT,
 };
 use crate::interfaces::{
-    ComputeInterface, ComputeMessage, Contract, MineRequest, NodeType, ProofOfWork,
+    ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
@@ -153,8 +153,8 @@ impl ComputeNode {
     }
 
     /// Seed the inital value of the utxo_set
-    pub fn seed_uxto_set(&self, uxto_set: BTreeMap<String, Transaction>) {
-        *self.utxo_set.lock().unwrap() = uxto_set;
+    pub fn seed_utxo_set(&self, utxo_set: BTreeMap<String, Transaction>) {
+        *self.utxo_set.lock().unwrap() = utxo_set;
     }
 
     /// Returns the compute node's public endpoint.
@@ -509,7 +509,7 @@ impl ComputeNode {
     /// Hanldes a new incoming message from a peer.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<ComputeMessage>(&frame).map_err(|error| {
+            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
                 error
             })?;
@@ -524,8 +524,8 @@ impl ComputeNode {
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: ComputeMessage) -> Response {
-        use ComputeMessage::*;
+    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
+        use ComputeRequest::*;
 
         match req {
             SendPoW { pow, coinbase } => self.receive_pow(peer, pow, coinbase),
