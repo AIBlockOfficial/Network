@@ -1,9 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
-use crate::interfaces::{
-    CommMessage::HandshakeRequest, ComputeRequest, NodeType, Response, UseInterface, UserRequest,
-};
+use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::utils::get_db_options;
 use crate::wallet::{
     construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
@@ -120,15 +118,6 @@ impl UserNode {
     /// Connect to a peer on the network.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
-        self.node
-            .send(
-                peer,
-                HandshakeRequest {
-                    node_type: NodeType::Miner,
-                    public_address: self.node.address(),
-                },
-            )
-            .await?;
         Ok(())
     }
 
