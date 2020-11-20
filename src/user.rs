@@ -242,6 +242,7 @@ impl UserNode {
     /// transactions
     ///
     /// TODO: Replace errors here with Error enum types that the Result can return
+    /// TODO: Possibly sort addresses found ascending, so that smaller amounts are consumed
     ///
     /// ### Arguments
     ///
@@ -368,7 +369,7 @@ impl UserNode {
     /// * `output_vals` - Outpoint information required for TxIn
     /// * `db`          - Pointer to the wallet DB instance
     pub fn construct_tx_in_from_prev_out(&mut self, tx_hash: String, db: &DB) -> TxIn {
-        let address_store: BTreeMap<String, AddressStore> = match db.get(ADDRESS_KEY) {
+        let mut address_store: BTreeMap<String, AddressStore> = match db.get(ADDRESS_KEY) {
             Ok(Some(list)) => deserialize(&list).unwrap(),
             Ok(None) => panic!("No address store present in wallet"),
             Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -380,17 +381,24 @@ impl UserNode {
             Err(e) => panic!("Error accessing wallet: {:?}", e),
         };
 
-        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
+        let needed_store: &AddressStore = address_store.get(&tx_store.address.clone()).unwrap();
+
         let pub_key = needed_store.public_key.clone();
         let s_key = needed_store.secret_key.clone();
         let signature = sign::sign_detached(tx_hash.as_bytes(), &s_key);
 
         let tx_const = TxConstructor {
-            t_hash: tx_hash,
+            t_hash: tx_hash.clone(),
             prev_n: 0,
             signatures: vec![signature],
             pub_keys: vec![pub_key],
         };
+
+        // Update the values in the wallet
+        db.delete(&tx_hash).unwrap();
+        address_store.remove(&tx_store.address);
+        db.put(ADDRESS_KEY, Bytes::from(serialize(&address_store).unwrap()))
+            .unwrap();
 
         let tx_ins = construct_payment_tx_ins(vec![tx_const]);
 

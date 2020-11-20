@@ -431,6 +431,7 @@ impl ComputeNode {
     }
 
     /// Sends notification of a block find to partition participants
+    /// TODO: Have this match the winner so that they can update their own running total
     ///
     /// ### Arguments
     ///
