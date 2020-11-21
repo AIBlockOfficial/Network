@@ -5,9 +5,7 @@ use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
 use crate::utils::get_partition_entry_key;
-use crate::wallet::{
-    construct_address, generate_payment_address, save_transactions_to_wallet, TransactionStore,
-};
+use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -318,7 +316,7 @@ impl MinerNode {
     ) -> Result<(ProofOfWorkBlock, Transaction)> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
-            let (pk, sk) = sign::gen_keypair();
+            let (pk, _sk) = sign::gen_keypair();
             let address = construct_address(pk, 0);
 
             let current_coinbase = construct_coinbase_tx(12, block.header.time, address);

@@ -1,7 +1,6 @@
 use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::transaction::Transaction;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
