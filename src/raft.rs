@@ -6,10 +6,15 @@ use tokio::time::{timeout_at, Instant};
 use raft::prelude::*;
 use raft::storage::MemStorage;
 
-type CommitedSender = mpsc::Sender<Vec<u8>>;
-type CommitedReceiver = mpsc::Receiver<Vec<u8>>;
+type CommitedSender = mpsc::Sender<Vec<Vec<u8>>>;
+type CommitedReceiver = mpsc::Receiver<Vec<Vec<u8>>>;
 type MsgSender = mpsc::Sender<Msg>;
 type MsgReceiver = mpsc::Receiver<Msg>;
+
+// struct BlockInfo {
+//     pub transactions: Vec<String>,
+//     pub current_block_tx: BTreeMap<String, Transaction>,
+// }
 
 struct ComputeNodeRaft {}
 
@@ -121,15 +126,16 @@ fn update_ready_mut_store(node: &mut RawNode<MemStorage>, ready: &mut Ready) {
 
 async fn apply_committed_entries(ready: &mut Ready, committed_tx: &mut CommitedSender) {
     if let Some(mut committed_entries) = ready.committed_entries.take() {
-        for mut entry in committed_entries.drain(..) {
-            if entry.get_data().is_empty() {
-                // Skip emtpy entry sent when the peer becomes Leader.
-                continue;
-            }
+        let committed: Vec<_> = committed_entries
+            .drain(..)
+            // Skip emtpy entry sent when the peer becomes Leader.
+            .filter(|entry| !entry.get_data().is_empty())
+            .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
+            .map(|mut entry| entry.take_data())
+            .collect();
 
-            if entry.get_entry_type() == EntryType::EntryNormal {
-                committed_tx.send(entry.take_data()).await.unwrap();
-            }
+        if !committed.is_empty() {
+            committed_tx.send(committed).await.unwrap();
         }
     }
 }
@@ -152,7 +158,7 @@ async fn test_send_proposal_is_commited() {
         .await
         .unwrap();
     let commited_data = committed_rx.recv().await.unwrap();
-    assert_eq!(commited_data, proposed_data);
+    assert_eq!(commited_data, vec![proposed_data]);
 
     // Close raft loop
     drop(msg_tx);
