@@ -58,9 +58,22 @@ The path can be changed as needed. Once done you can build the project using `ca
 
 ## Git Flow
 
-When working on this repo, please ensure that any branches you may create pull from `master` regularly. In doing this you 
+**When working on this repo, please ensure that any branches you may create pull from `develop` regularly. In doing this you 
 ensure that your local version has the latest code for the project and minimizes the possibility of unnecessary merge 
-conflicts.
+conflicts.**
+
+Zenotta's Git flow generally involves working on each new task in a new branch, which you should checkout from `develop` and can be done as in the following example
+
+```
+git checkout -b branch_name
+```
+
+where `branch_name` would be replaced with your chosen branch name. There is no general branch naming convention aside from two cases:
+
+- *New features*: These should be prefixed with `feature:` and then the branch name (eg. `feature:new_cool_feature`)
+- *Bugfixes*: These should be prefixed with `bugfix:` and then the branch name (eg. `bugfix:new_damn_bug`)
+
+Beyond this, it is only expected that branches have sensible naming that describes what the branch involves or is for.
 
 ..
 
