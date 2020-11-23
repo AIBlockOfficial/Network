@@ -2,6 +2,8 @@
 
 A repo for the development of the Zenotta Network Protocol (ZNP).
 
+[[_TOC_]]
+
 ..
 
 ## Setup
@@ -31,7 +33,7 @@ sudo apt-get install llvm
 sudo apt-get install libclang-dev
 ```
 
-### Project Setup
+### Repo Setup
 
 You can then set up the project on your local machine using the following steps:
 
