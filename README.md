@@ -5,8 +5,20 @@ A repo for the development of the Zenotta Network Protocol (ZNP).
 ..
 
 ## Setup
+The Zenotta Network Protocol (in fact, almost all of Zenotta's code) runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
 
-You can set up the project on your local machine using the following steps:
+```
+curl https://sh.rustup.rs -sSf | sh
+```
+
+When asked how to proceed, simply selecting the option `1) Proceed with installation` is generally the best. You can then run the following to update the `PATH` variable and check whether everything installed correctly:
+
+```
+source $HOME/.cargo/env
+rustc --version
+```
+
+If the terminal responds with the `rustc` version you're currently running then everything went well and you're ready to go. You can then set up the project on your local machine using the following steps:
 
 - Clone this repo using one of the options in Gitlab
 - From your terminal, move into the cloned folder on your local machine
