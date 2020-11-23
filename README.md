@@ -18,7 +18,22 @@ source $HOME/.cargo/env
 rustc --version
 ```
 
-If the terminal responds with the `rustc` version you're currently running then everything went well and you're ready to go. You can then set up the project on your local machine using the following steps:
+If the terminal responds with the `rustc` version you're currently running then everything went well and you're ready to go. 
+
+### Linux
+
+Linux (Ubuntu 20.04.01 LTS) may require extra package installations depending on what you've developed before. The following package installs assume a completely new machine instance, and should cover everything you need to get going:
+
+```
+sudo apt install build-essential
+sudo apt-get install m4
+sudo apt-get install llvm
+sudo apt-get install libclang-dev
+```
+
+### Project Setup
+
+You can then set up the project on your local machine using the following steps:
 
 - Clone this repo using one of the options in Gitlab
 - From your terminal, move into the cloned folder on your local machine
