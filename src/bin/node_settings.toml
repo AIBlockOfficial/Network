@@ -21,7 +21,7 @@ address = "127.0.0.1:12340"
 address = "127.0.0.1:12341"
 
 [[user_nodes]]
-address = "127.0.0.1:12342"
+address = "54.201.17.168:12342"
 
 [[user_nodes]]
 address = "127.0.0.1:12343"
