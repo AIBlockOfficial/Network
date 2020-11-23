@@ -7,28 +7,28 @@ use raft::prelude::*;
 use raft::storage::MemStorage;
 
 type RaftData = Vec<u8>;
-type CommitedSender = mpsc::Sender<Vec<RaftData>>;
-type CommitedReceiver = mpsc::Receiver<Vec<RaftData>>;
-type MsgSender = mpsc::Sender<Msg>;
-type MsgReceiver = mpsc::Receiver<Msg>;
+type CommitSender = mpsc::Sender<Vec<RaftData>>;
+type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
+type RaftCmdSender = mpsc::Sender<RaftCmd>;
+type RaftCmdReceiver = mpsc::Receiver<RaftCmd>;
 type RaftMsgSender = mpsc::Sender<Message>;
 type RaftMsgReceiver = mpsc::Receiver<Message>;
 
 struct RaftConfig {
     cfg: Config,
-    msg_rx: MsgReceiver,
-    committed_tx: CommitedSender,
+    cmd_rx: RaftCmdReceiver,
+    committed_tx: CommitSender,
     msg_out_tx: RaftMsgSender,
     timeout_duration: Duration,
 }
 
-enum Msg {
+enum RaftCmd {
     Propose { data: RaftData },
     Raft(Message),
     Close,
 }
 
-impl fmt::Debug for Msg {
+impl fmt::Debug for RaftCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Propose { ref data, .. } => write!(f, "Propose {:?}", data),
@@ -41,7 +41,7 @@ impl fmt::Debug for Msg {
 async fn run_raft_loop(raft_config: RaftConfig) {
     let RaftConfig {
         cfg,
-        mut msg_rx,
+        mut cmd_rx,
         mut committed_tx,
         mut msg_out_tx,
         timeout_duration,
@@ -54,17 +54,17 @@ async fn run_raft_loop(raft_config: RaftConfig) {
     let mut propose_data_backlog = Vec::new();
 
     loop {
-        match timeout_at(timeout_at_time, msg_rx.recv()).await {
-            Ok(Some(Msg::Propose { data })) => {
+        match timeout_at(timeout_at_time, cmd_rx.recv()).await {
+            Ok(Some(RaftCmd::Propose { data })) => {
                 propose_data_backlog.push(data);
             }
-            Ok(Some(Msg::Raft(m))) => node.step(m).unwrap(),
+            Ok(Some(RaftCmd::Raft(m))) => node.step(m).unwrap(),
             Err(_) => {
                 // Timeout
                 timeout_at_time = Instant::now() + timeout_duration;
                 node.tick();
             }
-            Ok(Some(Msg::Close)) | Ok(None) => {
+            Ok(Some(RaftCmd::Close)) | Ok(None) => {
                 // Disconnected
                 return;
             }
@@ -83,7 +83,7 @@ async fn run_raft_loop(raft_config: RaftConfig) {
 
 async fn process_ready(
     node: &mut RawNode<MemStorage>,
-    committed_tx: &mut CommitedSender,
+    committed_tx: &mut CommitSender,
     msg_out_tx: &mut RaftMsgSender,
 ) {
     if !node.has_ready() {
@@ -129,7 +129,7 @@ fn update_ready_mut_store(node: &mut RawNode<MemStorage>, ready: &mut Ready) {
     }
 }
 
-async fn apply_committed_entries(ready: &mut Ready, committed_tx: &mut CommitedSender) {
+async fn apply_committed_entries(ready: &mut Ready, committed_tx: &mut CommitSender) {
     if let Some(mut committed_entries) = ready.committed_entries.take() {
         let committed: Vec<_> = committed_entries
             .drain(..)
@@ -154,8 +154,8 @@ mod tests {
     struct TestNode {
         pub raft_config: Option<RaftConfig>,
         pub msg_out_rx: Option<RaftMsgReceiver>,
-        pub msg_tx: MsgSender,
-        pub committed_rx: CommitedReceiver,
+        pub cmd_tx: RaftCmdSender,
+        pub committed_rx: CommitReceiver,
     }
 
     #[tokio::test(threaded_scheduler)]
@@ -176,7 +176,7 @@ mod tests {
     async fn send_proposal_check_commited(num_peers: u64) {
         let mut join_handles = Vec::new();
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
-        let msg_txs: Vec<_> = test_nodes.iter().map(|node| node.msg_tx.clone()).collect();
+        let msg_txs: Vec<_> = test_nodes.iter().map(|node| node.cmd_tx.clone()).collect();
 
         // Setup RAFT: Raft loops and Raft message dispatching loops.
         for test_node in &mut test_nodes {
@@ -215,7 +215,7 @@ mod tests {
 
         // Close raft loop so spawned task can complete and wait for completion.
         for test_node in &mut test_nodes {
-            test_node.msg_tx.send(Msg::Close).await.unwrap();
+            test_node.cmd_tx.send(RaftCmd::Close).await.unwrap();
         }
         join_all(join_handles).await;
     }
@@ -223,13 +223,13 @@ mod tests {
     async fn dispatch_messages_loop(
         mut msg_out_rx: RaftMsgReceiver,
         peer_indexes: HashMap<u64, usize>,
-        mut msg_txs: Vec<MsgSender>,
+        mut msg_txs: Vec<RaftCmdSender>,
     ) {
         loop {
             match msg_out_rx.recv().await {
                 Some(msg) => {
                     let to_index = peer_indexes[&msg.to];
-                    msg_txs[to_index].send(Msg::Raft(msg)).await.unwrap();
+                    msg_txs[to_index].send(RaftCmd::Raft(msg)).await.unwrap();
                 }
                 None => {
                     // Disconnected
@@ -240,7 +240,11 @@ mod tests {
     }
 
     async fn send_proposal(test_node: &mut TestNode, data: RaftData) {
-        test_node.msg_tx.send(Msg::Propose { data }).await.unwrap();
+        test_node
+            .cmd_tx
+            .send(RaftCmd::Propose { data })
+            .await
+            .unwrap();
     }
 
     async fn recv_commited(test_nodes: &mut Vec<TestNode>) -> Vec<Vec<RaftData>> {
@@ -273,7 +277,7 @@ mod tests {
     }
 
     fn test_config(peer_id: u64, peers: &Vec<u64>) -> TestNode {
-        let (msg_tx, msg_rx) = mpsc::channel(100);
+        let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (committed_tx, committed_rx) = mpsc::channel(100);
         let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
 
@@ -283,7 +287,7 @@ mod tests {
                 peers: peers.clone(),
                 ..Default::default()
             },
-            msg_rx,
+            cmd_rx,
             committed_tx,
             msg_out_tx,
             timeout_duration: Duration::from_millis(1),
@@ -291,7 +295,7 @@ mod tests {
 
         TestNode {
             raft_config: Some(raft_config),
-            msg_tx,
+            cmd_tx,
             committed_rx,
             msg_out_rx: Some(msg_out_rx),
         }
