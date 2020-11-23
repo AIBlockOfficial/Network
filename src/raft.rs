@@ -6,20 +6,20 @@ use tokio::time::{timeout_at, Instant};
 use raft::prelude::*;
 use raft::storage::MemStorage;
 
-type CommitedSender = mpsc::Sender<Vec<Vec<u8>>>;
-type CommitedReceiver = mpsc::Receiver<Vec<Vec<u8>>>;
+type RaftData = Vec<u8>;
+type CommitedSender = mpsc::Sender<Vec<RaftData>>;
+type CommitedReceiver = mpsc::Receiver<Vec<RaftData>>;
 type MsgSender = mpsc::Sender<Msg>;
 type MsgReceiver = mpsc::Receiver<Msg>;
 
-// struct BlockInfo {
-//     pub transactions: Vec<String>,
-//     pub current_block_tx: BTreeMap<String, Transaction>,
-// }
-
-struct ComputeNodeRaft {}
+struct RaftConfig {
+    msg_rx: MsgReceiver,
+    committed_tx: CommitedSender,
+    timeout_duration: Duration,
+}
 
 enum Msg {
-    Propose { data: Vec<u8> },
+    Propose { data: RaftData },
     Raft(Message),
 }
 
@@ -32,7 +32,12 @@ impl fmt::Debug for Msg {
     }
 }
 
-async fn run_raft_loop(mut msg_rx: MsgReceiver, mut committed_tx: CommitedSender) {
+async fn run_raft_loop(raft_config: RaftConfig) {
+    let RaftConfig {
+        mut msg_rx,
+        mut committed_tx,
+        timeout_duration,
+    } = raft_config;
     let cfg = Config {
         id: 1,
         peers: vec![1],
@@ -42,21 +47,13 @@ async fn run_raft_loop(mut msg_rx: MsgReceiver, mut committed_tx: CommitedSender
 
     let storage = MemStorage::new();
     let mut node = RawNode::new(&cfg, storage, peers).unwrap();
-
-    // Wait until leader elected (few 10's of ticks).
-    while node.raft.leader_id != node.raft.id {
-        node.tick();
-        process_ready(&mut node, &mut committed_tx).await;
-    }
-
-    let timeout_duration = Duration::from_millis(100);
     let mut timeout_at_time = Instant::now() + timeout_duration;
+    let mut propose_data_backlog = Vec::new();
 
     loop {
         match timeout_at(timeout_at_time, msg_rx.recv()).await {
             Ok(Some(Msg::Propose { data })) => {
-                let context = Vec::new();
-                node.propose(context, data).unwrap();
+                propose_data_backlog.push(data);
             }
             Ok(Some(Msg::Raft(m))) => node.step(m).unwrap(),
             Err(_) => {
@@ -67,6 +64,13 @@ async fn run_raft_loop(mut msg_rx: MsgReceiver, mut committed_tx: CommitedSender
             Ok(None) => {
                 // Disconnected
                 return;
+            }
+        }
+
+        if node.raft.leader_id != raft::INVALID_ID {
+            for data in propose_data_backlog.drain(..) {
+                let context = Vec::new();
+                node.propose(context, data).unwrap();
             }
         }
 
@@ -146,7 +150,12 @@ async fn test_send_proposal_is_commited() {
     let (committed_tx, mut committed_rx) = mpsc::channel(100);
 
     let main_handle = tokio::spawn(async move {
-        run_raft_loop(msg_rx, committed_tx).await;
+        run_raft_loop(RaftConfig {
+            msg_rx,
+            committed_tx,
+            timeout_duration: Duration::from_millis(1),
+        })
+        .await;
     });
 
     // Send a proposal and wait for it to be commited
