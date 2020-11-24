@@ -13,11 +13,12 @@ pub type RaftCmdReceiver = mpsc::Receiver<RaftCmd>;
 pub type RaftMsgSender = mpsc::Sender<Message>;
 pub type RaftMsgReceiver = mpsc::Receiver<Message>;
 
-// struct RaftNode {
-//     pub msg_out_rx: RaftMsgReceiver,
-//     pub cmd_tx: RaftCmdSender,
-//     pub committed_rx: CommitReceiver,
-// }
+/// Channels needed to interact with the running raft instance.
+pub struct RaftNodeChannels {
+    pub msg_out_rx: RaftMsgReceiver,
+    pub cmd_tx: RaftCmdSender,
+    pub committed_rx: CommitReceiver,
+}
 
 /// Fields necessary for launching a Raft loop.
 pub struct RaftConfig {
@@ -60,6 +61,31 @@ pub enum RaftCmd {
     Propose { data: RaftData },
     Raft(RaftMessageWrapper),
     Close,
+}
+
+/// Create the RaftConfig and needed channels to run the loop.
+pub fn init_config(
+    node_cfg: Config,
+    tick_timeout_duration: Duration,
+) -> (RaftConfig, RaftNodeChannels) {
+    let (cmd_tx, cmd_rx) = mpsc::channel(100);
+    let (committed_tx, committed_rx) = mpsc::channel(100);
+    let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
+
+    (
+        RaftConfig {
+            cfg: node_cfg,
+            cmd_rx,
+            committed_tx,
+            msg_out_tx,
+            tick_timeout_duration,
+        },
+        RaftNodeChannels {
+            cmd_tx,
+            committed_rx,
+            msg_out_rx: msg_out_rx,
+        },
+    )
 }
 
 /// Async RAFT loop processing inputs and populating output channels.
@@ -307,27 +333,20 @@ mod tests {
     }
 
     fn test_config(peer_id: u64, peers: &Vec<u64>) -> TestNode {
-        let (cmd_tx, cmd_rx) = mpsc::channel(100);
-        let (committed_tx, committed_rx) = mpsc::channel(100);
-        let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
-
-        let raft_config = RaftConfig {
-            cfg: Config {
+        let (raft_config, node_channels) = init_config(
+            Config {
                 id: peer_id,
                 peers: peers.clone(),
                 ..Default::default()
             },
-            cmd_rx,
-            committed_tx,
-            msg_out_tx,
-            tick_timeout_duration: Duration::from_millis(1),
-        };
+            Duration::from_millis(1),
+        );
 
         TestNode {
             raft_config: Some(raft_config),
-            cmd_tx,
-            committed_rx,
-            msg_out_rx: Some(msg_out_rx),
+            cmd_tx: node_channels.cmd_tx,
+            committed_rx: node_channels.committed_rx,
+            msg_out_rx: Some(node_channels.msg_out_rx),
         }
     }
 }
