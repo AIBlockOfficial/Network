@@ -63,135 +63,151 @@ pub enum RaftCmd {
     Close,
 }
 
-/// Create the RaftConfig and needed channels to run the loop.
-pub fn init_config(
-    node_cfg: Config,
+pub struct RaftNode {
+    /// Runing raft node.
+    node: RawNode<MemStorage>,
+    /// Backlog of raft proposal while leader unavailable.
+    propose_data_backlog: Vec<RaftData>,
+    /// Input command and messages.
+    cmd_rx: RaftCmdReceiver,
+    /// Output commited data.
+    committed_tx: CommitSender,
+    /// Ouput raft messages that need to be dispatched to appropriate peers.
+    msg_out_tx: RaftMsgSender,
+    /// Tick timeout duration.
     tick_timeout_duration: Duration,
-) -> (RaftConfig, RaftNodeChannels) {
-    let (cmd_tx, cmd_rx) = mpsc::channel(100);
-    let (committed_tx, committed_rx) = mpsc::channel(100);
-    let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
-
-    (
-        RaftConfig {
-            cfg: node_cfg,
-            cmd_rx,
-            committed_tx,
-            msg_out_tx,
-            tick_timeout_duration,
-        },
-        RaftNodeChannels {
-            cmd_tx,
-            committed_rx,
-            msg_out_rx: msg_out_rx,
-        },
-    )
+    /// Tick timeout expiration time.
+    tick_timeout_at: Instant,
 }
 
-/// Async RAFT loop processing inputs and populating output channels.
-pub async fn run_raft_loop(raft_config: RaftConfig) {
-    let RaftConfig {
-        cfg,
-        mut cmd_rx,
-        mut committed_tx,
-        mut msg_out_tx,
-        tick_timeout_duration,
-    } = raft_config;
-    let peers = vec![];
+impl RaftNode {
+    pub fn new(raft_config: RaftConfig) -> Self {
+        let peers = vec![];
+        let storage = MemStorage::new();
+        let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
 
-    let storage = MemStorage::new();
-    let mut node = RawNode::new(&cfg, storage, peers).unwrap();
-    let mut timeout_at_time = Instant::now() + tick_timeout_duration;
-    let mut propose_data_backlog = Vec::new();
+        Self {
+            node: RawNode::new(&raft_config.cfg, storage, peers).unwrap(),
+            propose_data_backlog: Vec::new(),
+            cmd_rx: raft_config.cmd_rx,
+            committed_tx: raft_config.committed_tx,
+            msg_out_tx: raft_config.msg_out_tx,
+            tick_timeout_duration: raft_config.tick_timeout_duration,
+            tick_timeout_at,
+        }
+    }
 
-    loop {
-        match timeout_at(timeout_at_time, cmd_rx.recv()).await {
+    /// Create the RaftConfig and needed channels to run the loop.
+    pub fn init_config(
+        node_cfg: Config,
+        tick_timeout_duration: Duration,
+    ) -> (RaftConfig, RaftNodeChannels) {
+        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (committed_tx, committed_rx) = mpsc::channel(100);
+        let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
+
+        (
+            RaftConfig {
+                cfg: node_cfg,
+                cmd_rx,
+                committed_tx,
+                msg_out_tx,
+                tick_timeout_duration,
+            },
+            RaftNodeChannels {
+                cmd_tx,
+                committed_rx,
+                msg_out_rx: msg_out_rx,
+            },
+        )
+    }
+
+    /// Async RAFT loop processing inputs and populating output channels.
+    pub async fn next_event(&mut self) -> Option<()> {
+        match timeout_at(self.tick_timeout_at, self.cmd_rx.recv()).await {
             Ok(Some(RaftCmd::Propose { data })) => {
-                propose_data_backlog.push(data);
+                self.propose_data_backlog.push(data);
             }
-            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => node.step(m).unwrap(),
+            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => self.node.step(m).unwrap(),
             Err(_) => {
                 // Timeout
-                timeout_at_time = Instant::now() + tick_timeout_duration;
-                node.tick();
+                self.tick_timeout_at = Instant::now() + self.tick_timeout_duration;
+                self.node.tick();
             }
             Ok(Some(RaftCmd::Close)) | Ok(None) => {
                 // Disconnected
-                return;
+                return None;
             }
         }
 
-        if node.raft.leader_id != raft::INVALID_ID {
-            for data in propose_data_backlog.drain(..) {
+        if self.node.raft.leader_id != raft::INVALID_ID {
+            for data in self.propose_data_backlog.drain(..) {
                 let context = Vec::new();
-                node.propose(context, data).unwrap();
+                self.node.propose(context, data).unwrap();
             }
         }
 
-        process_ready(&mut node, &mut committed_tx, &mut msg_out_tx).await;
-    }
-}
-
-async fn process_ready(
-    node: &mut RawNode<MemStorage>,
-    committed_tx: &mut CommitSender,
-    msg_out_tx: &mut RaftMsgSender,
-) {
-    if !node.has_ready() {
-        return;
+        self.process_ready().await;
+        Some(())
     }
 
-    let mut ready = node.ready();
+    async fn process_ready(&mut self) {
+        if !self.node.has_ready() {
+            return;
+        }
 
-    let is_leader = node.raft.leader_id == node.raft.id;
-    if is_leader {
-        send_messages_to_peers(msg_out_tx, &mut ready).await;
-        update_ready_mut_store(node, &mut ready);
-    } else {
-        update_ready_mut_store(node, &mut ready);
-        send_messages_to_peers(msg_out_tx, &mut ready).await;
+        let mut ready = self.node.ready();
+
+        let is_leader = self.node.raft.leader_id == self.node.raft.id;
+        if is_leader {
+            self.send_messages_to_peers(&mut ready).await;
+            self.update_ready_mut_store(&mut ready);
+        } else {
+            self.update_ready_mut_store(&mut ready);
+            self.send_messages_to_peers(&mut ready).await;
+        }
+
+        self.apply_committed_entries(&mut ready).await;
+        self.node.advance(ready);
     }
 
-    apply_committed_entries(&mut ready, committed_tx).await;
-
-    node.advance(ready);
-}
-
-async fn send_messages_to_peers(msg_out_tx: &mut RaftMsgSender, ready: &mut Ready) {
-    for msg in ready.messages.drain(..) {
-        msg_out_tx.send(msg).await.unwrap();
-    }
-}
-
-fn update_ready_mut_store(node: &mut RawNode<MemStorage>, ready: &mut Ready) {
-    if !raft::is_empty_snap(ready.snapshot()) {
-        node.mut_store()
-            .wl()
-            .apply_snapshot(ready.snapshot().clone())
-            .unwrap();
+    async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
+        for msg in ready.messages.drain(..) {
+            self.msg_out_tx.send(msg).await.unwrap();
+        }
     }
 
-    if !ready.entries().is_empty() {
-        node.mut_store().wl().append(ready.entries()).unwrap();
+    fn update_ready_mut_store(&mut self, ready: &mut Ready) {
+        if !raft::is_empty_snap(ready.snapshot()) {
+            self.node
+                .mut_store()
+                .wl()
+                .apply_snapshot(ready.snapshot().clone())
+                .unwrap();
+        }
+
+        if !ready.entries().is_empty() {
+            self.node.mut_store().wl().append(ready.entries()).unwrap();
+        }
+
+        if let Some(hs) = ready.hs() {
+            self.node.mut_store().wl().set_hardstate(hs.clone());
+        }
     }
 
-    if let Some(hs) = ready.hs() {
-        node.mut_store().wl().set_hardstate(hs.clone());
-    }
-}
+    async fn apply_committed_entries(&mut self, ready: &mut Ready) {
+        if let Some(mut committed_entries) = ready.committed_entries.take() {
+            let committed: Vec<_> = committed_entries
+                .drain(..)
+                // Skip emtpy entry sent when the peer becomes Leader.
+                .filter(|entry| !entry.get_data().is_empty())
+                .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
+                .map(|mut entry| entry.take_data())
+                .collect();
 
-async fn apply_committed_entries(ready: &mut Ready, committed_tx: &mut CommitSender) {
-    if let Some(mut committed_entries) = ready.committed_entries.take() {
-        let committed: Vec<_> = committed_entries
-            .drain(..)
-            // Skip emtpy entry sent when the peer becomes Leader.
-            .filter(|entry| !entry.get_data().is_empty())
-            .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
-            .map(|mut entry| entry.take_data())
-            .collect();
-
-        if !committed.is_empty() {
-            committed_tx.send(committed).await.unwrap();
+            if !committed.is_empty() {
+                self.committed_tx.send(committed).await.unwrap();
+            }
         }
     }
 }
@@ -273,6 +289,19 @@ mod tests {
         join_all(join_handles).await;
     }
 
+    async fn run_raft_loop(raft_config: RaftConfig) {
+        let mut raft_node = RaftNode::new(raft_config);
+        loop {
+            match raft_node.next_event().await {
+                Some(_) => (),
+                None => {
+                    // complete
+                    return;
+                }
+            }
+        }
+    }
+
     async fn dispatch_messages_loop(
         mut msg_out_rx: RaftMsgReceiver,
         peer_indexes: HashMap<u64, usize>,
@@ -333,7 +362,7 @@ mod tests {
     }
 
     fn test_config(peer_id: u64, peers: &Vec<u64>) -> TestNode {
-        let (raft_config, node_channels) = init_config(
+        let (raft_config, node_channels) = RaftNode::init_config(
             Config {
                 id: peer_id,
                 peers: peers.clone(),

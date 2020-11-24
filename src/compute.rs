@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{
     BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
@@ -97,6 +98,7 @@ pub struct DruidDroplet {
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
+    node_raft: ComputeRaft,
     pub current_block: Option<Block>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub current_block_tx: BTreeMap<String, Transaction>,
@@ -135,6 +137,7 @@ impl ComputeNode {
 
         Ok(ComputeNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
+            node_raft: ComputeRaft::new(),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_block: None,
@@ -497,18 +500,24 @@ impl ComputeNode {
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
-        let event = self.node.next_event().await?;
-        self.handle_event(event).await.into()
+        loop {
+            tokio::select! {
+                event = self.node.next_event() => {
+                    return self.handle_event(event?).into();
+                }
+                _ = self.node_raft.next_event() => ()
+            }
+        }
     }
 
-    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+    fn handle_event(&mut self, event: Event) -> Result<Response> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame)?),
         }
     }
 
     /// Hanldes a new incoming message from a peer.
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+    fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
             let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
