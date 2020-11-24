@@ -1,7 +1,9 @@
 use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
+use crate::utils::get_db_options;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use rocksdb::{Options, DB};
+use naom::primitives::transaction::Transaction;
+use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sign;
@@ -32,6 +34,7 @@ pub struct FundStore {
 }
 
 /// Generates a new payment address, saving the related keys to the wallet
+/// TODO: Add static address capability for frequent payments
 ///
 /// ### Arguments
 ///
@@ -63,7 +66,8 @@ pub async fn save_address_to_wallet(address: String, keys: AddressStore) -> Resu
         let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
 
         // Wallet DB handling
-        let db = DB::open_default(WALLET_PATH).unwrap();
+        let opts = get_db_options();
+        let db = DB::open(&opts, WALLET_PATH).unwrap();
         let address_list_state = match db.get(ADDRESS_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -80,7 +84,7 @@ pub async fn save_address_to_wallet(address: String, keys: AddressStore) -> Resu
         // Save to disk
         db.put(ADDRESS_KEY, Bytes::from(serialize(&address_list).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+        let _ = DB::destroy(&opts, WALLET_PATH);
     })
     .await?)
 }
@@ -94,14 +98,15 @@ pub async fn save_transactions_to_wallet(
     tx_to_save: BTreeMap<String, TransactionStore>,
 ) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
-        let db = DB::open_default(WALLET_PATH).unwrap();
+        let opts = get_db_options();
+        let db = DB::open(&opts, WALLET_PATH).unwrap();
         let keys: Vec<_> = tx_to_save.keys().cloned().collect();
         for key in keys {
             let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
             db.put(key.clone(), input).unwrap();
         }
 
-        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+        let _ = DB::destroy(&opts, WALLET_PATH);
     })
     .await?)
 }
@@ -139,7 +144,8 @@ pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Err
         };
 
         // Wallet DB handling
-        let db = DB::open_default(WALLET_PATH).unwrap();
+        let opts = get_db_options();
+        let db = DB::open(&opts, WALLET_PATH).unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -154,7 +160,7 @@ pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Err
         // Save to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&Options::default(), WALLET_PATH);
+        let _ = DB::destroy(&opts, WALLET_PATH);
     })
     .await?)
 }
