@@ -1,56 +1,81 @@
-use std::fmt;
+use raft::prelude::*;
+use raft::storage::MemStorage;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{timeout_at, Instant};
 
-use raft::prelude::*;
-use raft::storage::MemStorage;
+pub type RaftData = Vec<u8>;
+pub type CommitSender = mpsc::Sender<Vec<RaftData>>;
+pub type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
+pub type RaftCmdSender = mpsc::Sender<RaftCmd>;
+pub type RaftCmdReceiver = mpsc::Receiver<RaftCmd>;
+pub type RaftMsgSender = mpsc::Sender<Message>;
+pub type RaftMsgReceiver = mpsc::Receiver<Message>;
 
-type RaftData = Vec<u8>;
-type CommitSender = mpsc::Sender<Vec<RaftData>>;
-type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
-type RaftCmdSender = mpsc::Sender<RaftCmd>;
-type RaftCmdReceiver = mpsc::Receiver<RaftCmd>;
-type RaftMsgSender = mpsc::Sender<Message>;
-type RaftMsgReceiver = mpsc::Receiver<Message>;
+// struct RaftNode {
+//     pub msg_out_rx: RaftMsgReceiver,
+//     pub cmd_tx: RaftCmdSender,
+//     pub committed_rx: CommitReceiver,
+// }
 
-struct RaftConfig {
+/// Fields necessary for launching a Raft loop.
+pub struct RaftConfig {
+    /// Raft RawNode config.
     cfg: Config,
+    /// Input command and messages.
     cmd_rx: RaftCmdReceiver,
+    /// Output commited data.
     committed_tx: CommitSender,
+    /// Ouput raft messages that need to be dispatched to appropriate peers.
     msg_out_tx: RaftMsgSender,
-    timeout_duration: Duration,
+    /// Tick timeout duration.
+    tick_timeout_duration: Duration,
 }
 
-enum RaftCmd {
-    Propose { data: RaftData },
-    Raft(Message),
-    Close,
-}
+/// Wrapper for raft Messages enabling Serialize/Deserialize
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaftMessageWrapper(Message);
 
-impl fmt::Debug for RaftCmd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Propose { ref data, .. } => write!(f, "Propose {:?}", data),
-            Self::Raft(ref msg) => write!(f, "Raft {:?}", msg),
-            Self::Close => write!(f, "Close"),
-        }
+impl Serialize for RaftMessageWrapper {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use protobuf::Message;
+        let bytes = self.0.write_to_bytes().map_err(serde::ser::Error::custom)?;
+        bytes.serialize(s)
     }
 }
 
-async fn run_raft_loop(raft_config: RaftConfig) {
+impl<'a> Deserialize<'a> for RaftMessageWrapper {
+    fn deserialize<D: Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
+        Ok(RaftMessageWrapper(
+            protobuf::parse_from_bytes::<Message>(&bytes).map_err(serde::de::Error::custom)?,
+        ))
+    }
+}
+
+/// Input command/messages to the raft loop.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RaftCmd {
+    Propose { data: RaftData },
+    Raft(RaftMessageWrapper),
+    Close,
+}
+
+/// Async RAFT loop processing inputs and populating output channels.
+pub async fn run_raft_loop(raft_config: RaftConfig) {
     let RaftConfig {
         cfg,
         mut cmd_rx,
         mut committed_tx,
         mut msg_out_tx,
-        timeout_duration,
+        tick_timeout_duration,
     } = raft_config;
     let peers = vec![];
 
     let storage = MemStorage::new();
     let mut node = RawNode::new(&cfg, storage, peers).unwrap();
-    let mut timeout_at_time = Instant::now() + timeout_duration;
+    let mut timeout_at_time = Instant::now() + tick_timeout_duration;
     let mut propose_data_backlog = Vec::new();
 
     loop {
@@ -58,10 +83,10 @@ async fn run_raft_loop(raft_config: RaftConfig) {
             Ok(Some(RaftCmd::Propose { data })) => {
                 propose_data_backlog.push(data);
             }
-            Ok(Some(RaftCmd::Raft(m))) => node.step(m).unwrap(),
+            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => node.step(m).unwrap(),
             Err(_) => {
                 // Timeout
-                timeout_at_time = Instant::now() + timeout_duration;
+                timeout_at_time = Instant::now() + tick_timeout_duration;
                 node.tick();
             }
             Ok(Some(RaftCmd::Close)) | Ok(None) => {
@@ -173,6 +198,8 @@ mod tests {
         send_proposal_check_commited(20).await;
     }
 
+    // Setup a peer group running all raft loops and dispatching messages.
+    // Verify proposal are committed by all peers regardless of the proposer.
     async fn send_proposal_check_commited(num_peers: u64) {
         let mut join_handles = Vec::new();
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
@@ -229,7 +256,10 @@ mod tests {
             match msg_out_rx.recv().await {
                 Some(msg) => {
                     let to_index = peer_indexes[&msg.to];
-                    msg_txs[to_index].send(RaftCmd::Raft(msg)).await.unwrap();
+                    msg_txs[to_index]
+                        .send(RaftCmd::Raft(RaftMessageWrapper(msg)))
+                        .await
+                        .unwrap();
                 }
                 None => {
                     // Disconnected
@@ -290,7 +320,7 @@ mod tests {
             cmd_rx,
             committed_tx,
             msg_out_tx,
-            timeout_duration: Duration::from_millis(1),
+            tick_timeout_duration: Duration::from_millis(1),
         };
 
         TestNode {
