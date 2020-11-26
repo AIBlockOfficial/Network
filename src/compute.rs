@@ -27,6 +27,7 @@ use std::{
     convert::TryInto,
     error::Error,
     fmt,
+    future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
@@ -137,7 +138,7 @@ impl ComputeNode {
 
         Ok(ComputeNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
-            node_raft: ComputeRaft::new(),
+            node_raft: ComputeRaft::new(&config),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_block: None,
@@ -265,6 +266,16 @@ impl ComputeNode {
         } else {
             println!("Transactions for dual double entry execution are invalid");
         }
+    }
+
+    pub async fn vote_generate_block(&mut self) {
+        let propose = if self.last_block_hash.is_empty() {
+            // ensure result as commited block and not ignored.
+            vec![1]
+        } else {
+            self.last_block_hash.as_bytes().to_vec()
+        };
+        self.node_raft.propose(propose).await;
     }
 
     /// Processes the next batch of transactions from the floating tx pool
@@ -497,53 +508,86 @@ impl ComputeNode {
         println!("Flooding commit to peers not implemented");
     }
 
+    /// Return the raft loop to spawn in it own task.
+    pub fn raft_loop(&self) -> impl Future<Output = ()> {
+        let mut node_raft = self.node_raft.clone();
+        async move {
+            node_raft.run_raft_loop().await;
+        }
+    }
+
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         loop {
             tokio::select! {
                 event = self.node.next_event() => {
-                    return self.handle_event(event?).into();
+                    match self.handle_event(event?).await.transpose() {
+                        res @ Some(_) => return res,
+                        None => (),
+                    }
                 }
-                _ = self.node_raft.next_event() => ()
+                Some(_) = self.node_raft.next_commit() => {
+                    self.generate_block();
+                    return Some(Ok(Response{
+                        success: true,
+                        reason: "Block committed",
+                    }));
+                }
+                Some((addr, msg)) = self.node_raft.next_msg() => {
+                    self.node.send(
+                        addr,
+                        ComputeRequest::RaftCmd(msg)).await.unwrap();
+
+                }
             }
         }
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<Response> {
+    async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame)?),
+            Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
         }
     }
 
     /// Hanldes a new incoming message from a peer.
-    fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
-        info_span!("peer", ?peer).in_scope(|| {
+    async fn handle_new_frame(
+        &mut self,
+        peer: SocketAddr,
+        frame: Bytes,
+    ) -> Result<Option<Response>> {
+        let _peer_span = info_span!("peer", ?peer);
+        {
             let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
                 error
             })?;
 
-            info_span!("request", ?req).in_scope(|| {
-                let response = self.handle_request(peer, req);
+            let _req_span = info_span!("request", ?req);
+            {
+                let response = self.handle_request(peer, req).await;
                 debug!(?response, ?peer, "response");
 
                 Ok(response)
-            })
-        })
+            }
+        }
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
+    async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
 
         match req {
-            SendPoW { pow, coinbase } => self.receive_pow(peer, pow, coinbase),
+            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
             SendPartitionEntry { partition_entry } => {
-                self.receive_partition_entry(peer, partition_entry)
+                Some(self.receive_partition_entry(peer, partition_entry))
             }
-            SendTransactions { transactions } => self.receive_transactions(transactions),
-            SendPartitionRequest => self.receive_partition_request(peer),
+            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            SendPartitionRequest => Some(self.receive_partition_request(peer)),
+            RaftCmd(msg) => {
+                self.node_raft.received_message(msg).await;
+                None
+            }
         }
     }
 

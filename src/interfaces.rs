@@ -1,5 +1,5 @@
 #![allow(unused)]
-//use crate::raft::RaftCmd;
+use crate::raft::RaftMessageWrapper;
 use crate::unicorn::UnicornShard;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -248,7 +248,7 @@ pub enum ComputeRequest {
         transactions: BTreeMap<String, Transaction>,
     },
     SendPartitionRequest,
-    //RaftCmd(RaftCmd),
+    RaftCmd(RaftMessageWrapper),
 }
 
 impl fmt::Debug for ComputeRequest {
@@ -265,6 +265,7 @@ impl fmt::Debug for ComputeRequest {
             } => write!(f, "SendPartitionEntry"),
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            RaftCmd(_) => write!(f, "RaftCmd"),
         }
     }
 }

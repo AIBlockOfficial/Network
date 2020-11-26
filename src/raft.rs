@@ -36,7 +36,7 @@ pub struct RaftConfig {
 
 /// Wrapper for raft Messages enabling Serialize/Deserialize
 #[derive(Clone, Debug, PartialEq)]
-pub struct RaftMessageWrapper(Message);
+pub struct RaftMessageWrapper(pub Message);
 
 impl Serialize for RaftMessageWrapper {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -123,7 +123,20 @@ impl RaftNode {
     }
 
     /// Async RAFT loop processing inputs and populating output channels.
-    pub async fn next_event(&mut self) -> Option<()> {
+    pub async fn run_raft_loop(&mut self) {
+        loop {
+            match self.next_event().await {
+                Some(_) => (),
+                None => {
+                    // complete
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Async RAFT loop processing inputs and populating output channels.
+    async fn next_event(&mut self) -> Option<()> {
         match timeout_at(self.tick_timeout_at, self.cmd_rx.recv()).await {
             Ok(Some(RaftCmd::Propose { data })) => {
                 self.propose_data_backlog.push(data);
@@ -291,15 +304,7 @@ mod tests {
 
     async fn run_raft_loop(raft_config: RaftConfig) {
         let mut raft_node = RaftNode::new(raft_config);
-        loop {
-            match raft_node.next_event().await {
-                Some(_) => (),
-                None => {
-                    // complete
-                    return;
-                }
-            }
-        }
+        raft_node.run_raft_loop().await;
     }
 
     async fn dispatch_messages_loop(
@@ -311,10 +316,9 @@ mod tests {
             match msg_out_rx.recv().await {
                 Some(msg) => {
                     let to_index = peer_indexes[&msg.to];
-                    msg_txs[to_index]
+                    let _ = msg_txs[to_index]
                         .send(RaftCmd::Raft(RaftMessageWrapper(msg)))
-                        .await
-                        .unwrap();
+                        .await;
                 }
                 None => {
                     // Disconnected
