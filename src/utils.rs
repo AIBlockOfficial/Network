@@ -1,4 +1,8 @@
 use crate::interfaces::ProofOfWork;
+use crate::wallet::{
+    construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
+    AddressStore, TransactionStore,
+};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
 };
@@ -8,6 +12,7 @@ use naom::primitives::{
 };
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use rocksdb::{DBCompressionType, Options};
@@ -19,6 +24,42 @@ pub fn get_db_options() -> Options {
     opts.set_compression_type(DBCompressionType::Snappy);
 
     opts
+}
+
+/// Creates a "fake" transaction to save to the local wallet
+/// for testing. The transaction will contain 4 tokens
+///
+/// NOTE: This is a test util function
+pub async fn create_and_save_fake_to_wallet() -> Result<(), Box<dyn std::error::Error>> {
+    let (pk, sk) = sign::gen_keypair();
+    let final_address = construct_address(pk, 0);
+    let address_keys = AddressStore {
+        public_key: pk,
+        secret_key: sk.clone(),
+    };
+
+    let (pkb, _sk) = sign::gen_keypair();
+    let receiver_addr = construct_address(pkb, 0);
+    let (t_hash, _payment_tx) =
+        create_valid_transaction(&"00000".to_owned(), &receiver_addr, &pk, &sk);
+
+    // Save address store
+    let _save_a_result = save_address_to_wallet(final_address.clone(), address_keys).await;
+
+    // Save fund store
+    let _save_f_result = save_payment_to_wallet(t_hash.clone(), 4).await;
+
+    // Save transaction store
+    let mut t_store = BTreeMap::new();
+    let t_map = TransactionStore {
+        address: final_address,
+        net: 0,
+    };
+    t_store.insert(t_hash, t_map);
+    println!("TX STORE: {:?}", t_store);
+    let _save_t_result = save_transactions_to_wallet(t_store).await;
+
+    Ok(())
 }
 
 /// Determines whether the passed value is within bounds of

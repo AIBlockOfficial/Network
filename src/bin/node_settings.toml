@@ -21,7 +21,7 @@ address = "0.0.0.0:12340"
 address = "0.0.0.0:12341"
 
 [[user_nodes]]
-address = "0.0.0.0:12342"
+address = "35.161.167.59:12342"
 
 [[user_nodes]]
 address = "0.0.0.0:12343"

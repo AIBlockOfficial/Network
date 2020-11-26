@@ -100,6 +100,7 @@ pub async fn save_transactions_to_wallet(
         let opts = get_db_options();
         let db = DB::open(&opts, WALLET_PATH).unwrap();
         let keys: Vec<_> = tx_to_save.keys().cloned().collect();
+
         for key in keys {
             let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
             db.put(key.clone(), input).unwrap();

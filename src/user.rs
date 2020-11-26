@@ -81,6 +81,13 @@ pub struct AssetInTransit {
     pub amount: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReturnPayment {
+    pub tx_in: TxIn,
+    pub amount: u64,
+    pub transaction: Transaction,
+}
+
 /// An instance of a MinerNode
 #[derive(Debug, Clone)]
 pub struct UserNode {
@@ -89,7 +96,7 @@ pub struct UserNode {
     pub amount: u64,
     pub trading_peer: Option<SocketAddr>,
     pub next_payment: Option<Transaction>,
-    pub return_payment: Option<Transaction>,
+    pub return_payment: Option<ReturnPayment>,
 }
 
 impl UserNode {
@@ -286,15 +293,18 @@ impl UserNode {
             // If we've overshot
             if current_amount + amount_made > amount_required {
                 let diff = amount_required - amount_made;
-                fund_store.running_total -= diff;
+
+                fund_store.running_total -= current_amount;
                 amount_made = amount_required;
 
                 // Add a new return payment transaction
-                let _ = self.construct_return_payment_tx(
-                    tx_hashes[i].clone(),
-                    current_amount - diff,
-                    &db,
-                );
+                let return_tx_in =
+                    self.construct_tx_in_from_prev_out(tx_hashes[i].clone(), &db, false);
+                self.return_payment = Some(ReturnPayment {
+                    tx_in: return_tx_in,
+                    amount: current_amount - diff,
+                    transaction: Transaction::new(),
+                });
             }
             // Else add to used stack
             else {
@@ -303,7 +313,7 @@ impl UserNode {
             }
 
             // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hashes[i].clone(), &db);
+            let tx_in = self.construct_tx_in_from_prev_out(tx_hashes[i].clone(), &db, true);
             tx_ins.push(tx_in);
 
             fund_store.transactions.remove(&tx_hashes[i]);
@@ -325,11 +335,10 @@ impl UserNode {
     /// * `return_amt`  - The amount to send to the return address
     pub async fn construct_return_payment_tx(
         &mut self,
-        tx_hash: String,
+        tx_in: TxIn,
         return_amt: u64,
-        db: &DB,
     ) -> Result<()> {
-        let tx_ins = vec![self.construct_tx_in_from_prev_out(tx_hash, db)];
+        let tx_ins = vec![tx_in];
         let (pk, sk) = sign::gen_keypair();
         let address = construct_address(pk, 0);
 
@@ -355,8 +364,15 @@ impl UserNode {
         let mut tx_for_wallet = BTreeMap::new();
         tx_for_wallet.insert(construct_tx_hash(&payment_tx), tx_store);
 
+        // Update saves to the wallet
         let _ = save_transactions_to_wallet(tx_for_wallet).await;
-        self.return_payment = Some(payment_tx);
+        let _ = save_payment_to_wallet(construct_tx_hash(&payment_tx), return_amt).await;
+
+        // Completely reallocate the payment tx; required because an unwrap will just
+        // consume self
+        let mut current_r_payment = self.return_payment.clone().unwrap();
+        current_r_payment.transaction = payment_tx;
+        self.return_payment = Some(current_r_payment);
 
         Ok(())
     }
@@ -368,7 +384,12 @@ impl UserNode {
     /// * `tx_hash`     - Hash to the output to fetch
     /// * `output_vals` - Outpoint information required for TxIn
     /// * `db`          - Pointer to the wallet DB instance
-    pub fn construct_tx_in_from_prev_out(&mut self, tx_hash: String, db: &DB) -> TxIn {
+    pub fn construct_tx_in_from_prev_out(
+        &mut self,
+        tx_hash: String,
+        db: &DB,
+        remove_from_wallet: bool,
+    ) -> TxIn {
         let mut address_store: BTreeMap<String, AddressStore> = match db.get(ADDRESS_KEY) {
             Ok(Some(list)) => deserialize(&list).unwrap(),
             Ok(None) => panic!("No address store present in wallet"),
@@ -394,11 +415,14 @@ impl UserNode {
             pub_keys: vec![pub_key],
         };
 
-        // Update the values in the wallet
-        db.delete(&tx_hash).unwrap();
-        address_store.remove(&tx_store.address);
-        db.put(ADDRESS_KEY, Bytes::from(serialize(&address_store).unwrap()))
-            .unwrap();
+        if remove_from_wallet {
+            // Update the values in the wallet
+            db.delete(&tx_hash).unwrap();
+
+            address_store.remove(&tx_store.address);
+            db.put(ADDRESS_KEY, Bytes::from(serialize(&address_store).unwrap()))
+                .unwrap();
+        }
 
         let tx_ins = construct_payment_tx_ins(vec![tx_const]);
 
