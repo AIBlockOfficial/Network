@@ -11,11 +11,13 @@ extern crate sodiumoxide;
 
 mod comms_handler;
 mod compute;
+mod compute_raft;
 mod configurations;
 mod constants;
 mod interfaces;
 mod key_creation;
 mod miner;
+mod raft;
 mod storage;
 #[cfg(test)]
 mod test_utils;

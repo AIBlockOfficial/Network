@@ -132,6 +132,8 @@ pub struct Node {
     // TODO: this requires further work - a list of seen gossip messages can grow unbounded,
     // and it requires to be purged periodically in order to conserve resources.
     seen_gossip_messages: Arc<RwLock<HashSet<Token>>>,
+    /// Connect to all unknown contacts in HandshakeResponse
+    connect_to_handshake_contacts: bool,
 }
 
 pub(crate) struct Peer {
@@ -191,10 +193,15 @@ impl Node {
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
+            connect_to_handshake_contacts: false,
         };
         node.listen(listener)?;
 
         Ok(node)
+    }
+
+    pub fn set_connect_to_handshake_contacts(&mut self, value: bool) {
+        self.connect_to_handshake_contacts = value;
     }
 
     /// Handles the listener.
@@ -255,7 +262,8 @@ impl Node {
 
         if force_add && is_full {
             // TODO: make sure it's disconnected and shut down gracefully
-            let _ = peers.drain().take(1);
+            let peer = peers.drain().take(1);
+            warn!("Remove peer full: {:?}", peer);
         }
 
         if !is_full {
@@ -450,96 +458,100 @@ impl Node {
         self.listener_address
     }
 
-    /// Handles incoming messages from a peer.
+    /// Handles incoming messages from a peer waiting for an handshake.
     ///
     /// ### Arguments
     /// * `peer_addr`    - address of a remote peer.
     /// * `send_tx`      - a queue to send messages to the peer.
     /// * `messages`     - stream of incoming messages.
-    /// * `is_initiator` - If `true`, this peer has connected to us. If `false`, then _we_ are
-    ///                    connecting to this peer.
-    async fn handle_peer_recv(
+    async fn handle_peer_recv_handshake(
         &self,
         peer_addr: SocketAddr,
         send_tx: mpsc::Sender<std::result::Result<Bytes, io::Error>>,
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
-        is_initiator: bool,
-    ) {
-        let mut peer_state = if is_initiator {
-            PeerState::WaitingForHandshake
-        } else {
-            PeerState::Ready
-        };
-
+    ) -> Result<SocketAddr> {
         while let Some(message) = messages.next().await {
             trace!(?message);
 
-            match peer_state {
-                PeerState::WaitingForHandshake => match message {
-                    CommMessage::HandshakeRequest {
-                        node_type,
-                        public_address,
-                    } => {
-                        trace!(?peer_addr, ?public_address, ?node_type, "HandshakeRequest");
+            match message {
+                CommMessage::HandshakeRequest {
+                    node_type,
+                    public_address,
+                } => {
+                    trace!(?peer_addr, ?public_address, ?node_type, "HandshakeRequest");
 
-                        peer_state = PeerState::Ready;
+                    match self
+                        .handle_handshake_request(
+                            peer_addr,
+                            public_address,
+                            send_tx.clone(),
+                            node_type,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            return Ok(public_address);
+                        }
+                        Err(CommsError::PeerDuplicate) => {
+                            // Drop a duplicate connection.
+                            warn!(?public_address, "duplicate peer");
+                            return Err(CommsError::PeerDuplicate);
+                        }
+                        Err(error) => warn!(?error, "handle_handshake_request"),
+                    }
+                }
+                other => {
+                    warn!(
+                        ?other,
+                        "Received unexpected message while waiting for a handshake; ignoring"
+                    );
+                }
+            };
+        }
 
-                        match self
-                            .handle_handshake_request(
-                                peer_addr,
-                                public_address,
-                                send_tx.clone(),
-                                node_type,
-                            )
-                            .await
-                        {
-                            Ok(()) => {}
-                            Err(CommsError::PeerDuplicate) => {
-                                // Drop a duplicate connection.
-                                warn!(?public_address, "duplicate peer");
-                                return;
-                            }
-                            Err(error) => warn!(?error, "handle_handshake_request"),
-                        }
-                    }
-                    other => {
-                        warn!(
-                            ?other,
-                            "Received unexpected message while waiting for a handshake; ignoring"
-                        );
-                    }
-                },
-                PeerState::Ready => match message {
-                    CommMessage::HandshakeResponse { contacts } => {
-                        trace!(?contacts, "HandshakeResponse");
+        Ok(peer_addr)
+    }
 
-                        if let Err(error) =
-                            self.handle_handshake_response(peer_addr, contacts).await
-                        {
-                            warn!(?error, "handle_handshake_response");
-                        }
+    /// Handles incoming messages from a peer not waiting for an handshake.
+    ///
+    /// ### Arguments
+    /// * `peer_addr`    - address of a remote peer.
+    /// * `messages`     - stream of incoming messages.
+    async fn handle_peer_recv(
+        &self,
+        peer_addr: SocketAddr,
+        mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
+    ) {
+        while let Some(message) = messages.next().await {
+            trace!(?message);
+            match message {
+                CommMessage::HandshakeResponse { contacts } => {
+                    trace!(?contacts, "HandshakeResponse");
+
+                    if let Err(error) = self.handle_handshake_response(peer_addr, contacts).await {
+                        warn!(?error, "handle_handshake_response");
                     }
-                    CommMessage::Direct {
-                        payload: frame,
-                        id: _,
-                    } => {
-                        if let Err(error) = self.event_tx.send(Event::NewFrame {
-                            peer: peer_addr,
-                            frame,
-                        }) {
-                            warn!(?error, ?peer_addr, "event_tx.send");
-                        }
+                }
+                CommMessage::Direct {
+                    payload: frame,
+                    id: _,
+                } => {
+                    if let Err(error) = self.event_tx.send(Event::NewFrame {
+                        peer: peer_addr,
+                        frame,
+                    }) {
+                        warn!(?error, ?peer_addr, "event_tx.send");
                     }
-                    CommMessage::Gossip { payload, ttl, id } => {
-                        trace!(?payload, ?ttl, ?id, "gossip");
-                        if let Err(error) = self.handle_gossip(peer_addr, payload, ttl, id).await {
-                            warn!(?error, "handle_gossip");
-                        }
+                }
+                CommMessage::Gossip { payload, ttl, id } => {
+                    trace!(?payload, ?ttl, ?id, "gossip");
+                    if let Err(error) = self.handle_gossip(peer_addr, payload, ttl, id).await {
+                        warn!(?error, "handle_gossip");
                     }
-                    other => {
-                        warn!(?other, "Received unexpected message; ignoring");
-                    }
-                },
+                }
+                other => {
+                    warn!(?other, "Received unexpected message; ignoring");
+                }
             }
         }
     }
@@ -664,17 +676,22 @@ impl Node {
 
         trace!(?known_peers, ?unknown_peers);
 
-        // Connect to all previously unknown peers (in the background - i.e. we don't wait for these connections to succeed).
-        for &peer in unknown_peers {
-            let mut node = self.clone();
-            tokio::spawn(
-                async move {
-                    if let Err(error) = node.connect_to(peer).await {
-                        warn!(?error, "connect_to failed");
+        if self.connect_to_handshake_contacts {
+            // TODO: Fix this as connections arriving from both directions do not work.
+            // Connect to all previously unknown peers (in the background - i.e. we don't wait for these connections to succeed).
+            for &peer in unknown_peers {
+                let mut node = self.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(error) = node.connect_to(peer).await {
+                            warn!(?error, "connect_to failed");
+                        }
                     }
-                }
-                .instrument(info_span!(parent: &self.span, "handshake_response_connect", ?peer)),
-            );
+                    .instrument(
+                        info_span!(parent: &self.span, "handshake_response_connect", ?peer),
+                    ),
+                );
+            }
         }
 
         Ok(())
@@ -722,11 +739,47 @@ impl Node {
             let send_tx = send_tx.clone();
             let peers = self.peers.clone();
             async move {
-                node.handle_peer_recv(peer_addr, send_tx, messages, is_initiator)
-                    .await;
+                let mut messages = messages;
+                let public_address = if is_initiator {
+                    match node
+                        .handle_peer_recv_handshake(peer_addr, send_tx, &mut messages)
+                        .await
+                    {
+                        Ok(public_address) => {
+                            // Update key to public address so we know where to route messages
+                            {
+                                let mut peers_list = peers.write().await;
+                                if let Some(peer) = peers_list.remove(&peer_addr) {
+                                    trace!(
+                                        "Move peer to public address: {} -> {}",
+                                        peer_addr,
+                                        public_address
+                                    );
+                                    peers_list.insert(public_address, peer);
+                                    public_address
+                                } else {
+                                    // Peer not present
+                                    return;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            // Drop error connection
+                            warn!("Remove peer: {}, err: {:?}", peer_addr, err);
+                            let mut peers_list = peers.write().await;
+                            let _ = peers_list.remove(&peer_addr);
+                            return;
+                        }
+                    }
+                } else {
+                    peer_addr
+                };
+
+                node.handle_peer_recv(public_address, messages).await;
                 // Since we don't wait for any messages from this peer, we can drop the connection.
+                warn!("Remove peer: {}", public_address);
                 let mut peers_list = peers.write().await;
-                let _ = peers_list.remove(&peer_addr);
+                let _ = peers_list.remove(&public_address);
             }
             .instrument(span)
         });

@@ -42,9 +42,10 @@ async fn multicast() {
     let mut nodes = Vec::with_capacity(NUM_NODES);
 
     for _i in 0..NUM_NODES {
-        let node = Node::new("127.0.0.1:0".parse().unwrap(), NUM_NODES, NodeType::Compute)
+        let mut node = Node::new("127.0.0.1:0".parse().unwrap(), NUM_NODES, NodeType::Compute)
             .await
             .unwrap();
+        node.set_connect_to_handshake_contacts(true);
         nodes.push(node);
     }
 

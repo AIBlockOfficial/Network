@@ -1,4 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
+use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{
     BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
@@ -26,6 +27,7 @@ use std::{
     convert::TryInto,
     error::Error,
     fmt,
+    future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
@@ -97,6 +99,7 @@ pub struct DruidDroplet {
 #[derive(Debug, Clone)]
 pub struct ComputeNode {
     node: Node,
+    node_raft: ComputeRaft,
     pub current_block: Option<Block>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub current_block_tx: BTreeMap<String, Transaction>,
@@ -135,6 +138,7 @@ impl ComputeNode {
 
         Ok(ComputeNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
+            node_raft: ComputeRaft::new(&config),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_block: None,
@@ -167,10 +171,25 @@ impl ComputeNode {
         self.current_block.is_some()
     }
 
-    /// Connect to a peer on the network.
+    /// Connect to a storage peer on the network.
     pub async fn connect_to_storage(&mut self) -> Result<()> {
         self.node.connect_to(self.storage_addr).await?;
         Ok(())
+    }
+
+    /// Connect to a compute peer on the network.
+    pub fn connect_to_computes(&self) -> impl Future<Output = Result<()>> {
+        let peers: Vec<SocketAddr> = self.node_raft.compute_peer_to_connect().cloned().collect();
+        let mut node = self.node.clone();
+        async move {
+            for peer in peers {
+                info!(?peer, "Try to connect to");
+                let res = node.connect_to(peer.clone()).await;
+                info!(?peer, ?res, "Try to connect to result-");
+                res?;
+            }
+            Ok(())
+        }
     }
 
     /// Processes a dual double entry transaction
@@ -262,6 +281,16 @@ impl ComputeNode {
         } else {
             println!("Transactions for dual double entry execution are invalid");
         }
+    }
+
+    pub async fn vote_generate_block(&mut self) {
+        let propose = if self.last_block_hash.is_empty() {
+            // ensure result as commited block and not ignored.
+            vec![1]
+        } else {
+            self.last_block_hash.as_bytes().to_vec()
+        };
+        self.node_raft.propose(propose).await;
     }
 
     /// Processes the next batch of transactions from the floating tx pool
@@ -494,47 +523,88 @@ impl ComputeNode {
         println!("Flooding commit to peers not implemented");
     }
 
+    /// Return the raft loop to spawn in it own task.
+    pub fn raft_loop(&self) -> impl Future<Output = ()> {
+        let mut node_raft = self.node_raft.clone();
+        async move {
+            node_raft.run_raft_loop().await;
+        }
+    }
+
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
-        let event = self.node.next_event().await?;
-        self.handle_event(event).await.into()
+        loop {
+            tokio::select! {
+                event = self.node.next_event() => {
+                    match self.handle_event(event?).await.transpose() {
+                        res @ Some(_) => return res,
+                        None => (),
+                    }
+                }
+                Some(_) = self.node_raft.next_commit() => {
+                    self.generate_block();
+                    return Some(Ok(Response{
+                        success: true,
+                        reason: "Block committed",
+                    }));
+                }
+                Some((addr, msg)) = self.node_raft.next_msg() => {
+                    let result = self.node.send(
+                        addr,
+                        ComputeRequest::RaftCmd(msg)).await;
+                    info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
+                    //result.unwrap();
+
+                }
+            }
+        }
     }
 
-    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+    async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+            Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
         }
     }
 
     /// Hanldes a new incoming message from a peer.
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
-        info_span!("peer", ?peer).in_scope(|| {
+    async fn handle_new_frame(
+        &mut self,
+        peer: SocketAddr,
+        frame: Bytes,
+    ) -> Result<Option<Response>> {
+        let _peer_span = info_span!("peer", ?peer);
+        {
             let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
                 error
             })?;
 
-            info_span!("request", ?req).in_scope(|| {
-                let response = self.handle_request(peer, req);
+            let _req_span = info_span!("request", ?req);
+            {
+                let response = self.handle_request(peer, req).await;
                 debug!(?response, ?peer, "response");
 
                 Ok(response)
-            })
-        })
+            }
+        }
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Response {
+    async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
 
         match req {
-            SendPoW { pow, coinbase } => self.receive_pow(peer, pow, coinbase),
+            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
             SendPartitionEntry { partition_entry } => {
-                self.receive_partition_entry(peer, partition_entry)
+                Some(self.receive_partition_entry(peer, partition_entry))
             }
-            SendTransactions { transactions } => self.receive_transactions(transactions),
-            SendPartitionRequest => self.receive_partition_request(peer),
+            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            SendPartitionRequest => Some(self.receive_partition_request(peer)),
+            RaftCmd(msg) => {
+                self.node_raft.received_message(msg).await;
+                None
+            }
         }
     }
 
@@ -764,20 +834,12 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        let mut valid_tx = BTreeMap::new();
-
-        for (hash, tx) in &transactions {
-            if !tx.is_coinbase()
-                && tx_ins_are_valid(tx.clone().inputs, &self.utxo_set.lock().unwrap())
-            {
-                valid_tx.insert(hash.clone(), tx.clone());
-
-                // Only add if there is space
-                if self.current_block_tx.len() + 1 < BLOCK_SIZE_IN_TX {
-                    self.current_block_tx.insert(hash.clone(), tx.clone());
-                }
-            }
-        }
+        let valid_tx: BTreeMap<_, _> = transactions
+            .iter()
+            .filter(|(_, tx)| !tx.is_coinbase())
+            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set.lock().unwrap()))
+            .map(|(hash, tx)| (hash.clone(), tx.clone()))
+            .collect();
 
         // At this point the tx's are considered valid
         self.tx_pool.append(&mut valid_tx.clone());
