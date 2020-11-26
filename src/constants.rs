@@ -59,7 +59,7 @@ pub const FUND_KEY: &'static str = "f";
 pub const TX_POOL_LIMIT: usize = 10000000;
 
 /// Limit for the number of peers a compute node may have
-pub const PEER_LIMIT: usize = 6;
+pub const PEER_LIMIT: usize = 50;
 
 /// Limit for the number of PoWs a compute node may have for UnicornShard creation
 pub const UNICORN_LIMIT: usize = 5;

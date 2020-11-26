@@ -171,10 +171,25 @@ impl ComputeNode {
         self.current_block.is_some()
     }
 
-    /// Connect to a peer on the network.
+    /// Connect to a storage peer on the network.
     pub async fn connect_to_storage(&mut self) -> Result<()> {
         self.node.connect_to(self.storage_addr).await?;
         Ok(())
+    }
+
+    /// Connect to a compute peer on the network.
+    pub fn connect_to_computes(&self) -> impl Future<Output = Result<()>> {
+        let peers: Vec<SocketAddr> = self.node_raft.compute_peer_to_connect().cloned().collect();
+        let mut node = self.node.clone();
+        async move {
+            for peer in peers {
+                info!(?peer, "Try to connect to");
+                let res = node.connect_to(peer.clone()).await;
+                info!(?peer, ?res, "Try to connect to result-");
+                res?;
+            }
+            Ok(())
+        }
     }
 
     /// Processes a dual double entry transaction
@@ -535,9 +550,11 @@ impl ComputeNode {
                     }));
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
-                    self.node.send(
+                    let result = self.node.send(
                         addr,
-                        ComputeRequest::RaftCmd(msg)).await.unwrap();
+                        ComputeRequest::RaftCmd(msg)).await;
+                    info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
+                    //result.unwrap();
 
                 }
             }

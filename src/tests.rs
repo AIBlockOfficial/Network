@@ -9,6 +9,9 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use tokio::sync::Barrier;
+use tracing::{info, info_span};
 
 #[tokio::test(threaded_scheduler)]
 async fn create_block() {
@@ -48,14 +51,32 @@ async fn create_block() {
 }
 
 #[tokio::test(threaded_scheduler)]
-async fn create_block_raft() {
+async fn create_block_raft_1_node() {
+    create_block_raft(10200, 1).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn create_block_raft_2_nodes() {
+    create_block_raft(10210, 2).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn create_block_raft_3_nodes() {
+    create_block_raft(10240, 3).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn create_block_raft_20_nodes() {
+    create_block_raft(10340, 20).await;
+}
+
+async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let num_compute = 1;
-    let network_config = complete_network_config_with_n_compute(10200, num_compute);
+    let network_config = complete_network_config_with_n_compute(initial_port, compute_count);
     let mut network = Network::create_from_config(&network_config)
         .await
         .spawn_raft_loops()
@@ -79,17 +100,31 @@ async fn create_block_raft() {
 
     {
         let mut join_handles = Vec::new();
+        let barrier = Arc::new(Barrier::new(network_config.compute_nodes.len()));
         for compute_name in &network_config.compute_nodes {
+            let barrier = barrier.clone();
             let compute_name = compute_name.clone();
             let mut compute = network.take_compute(&compute_name).unwrap();
 
             join_handles.push(async move {
+                let _peer_span = info_span!("peer", ?compute_name);
+                info!(?compute_name, "Start wait for evt");
                 compute_handle_event_for_node(&mut compute, "Block committed").await;
-                (compute_name, compute)
+                info!(?compute_name, "Start wait for completion");
+
+                let result = tokio::select!(
+                    _ = barrier.wait() => (),
+                    _ = compute_handle_event_for_node(&mut compute, "Never Complete") => (),
+                );
+                info!(?compute_name, ?result, "Stop wait for evt");
+                Some((compute_name, compute))
             });
         }
-        for (name, c) in join_all(join_handles).await {
-            network.add_back_compute(name, c);
+
+        for result in join_all(join_handles).await {
+            if let Some((name, c)) = result {
+                network.add_back_compute(name, c);
+            }
         }
     }
 

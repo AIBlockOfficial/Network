@@ -16,6 +16,7 @@ pub struct ComputeRaft {
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
     committed_rx: Arc<Mutex<CommitReceiver>>,
     peer_addr: HashMap<u64, SocketAddr>,
+    compute_peers_to_connect: Vec<SocketAddr>,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -30,20 +31,30 @@ impl ComputeRaft {
             .map(|idx| idx as u64 + 1)
             .collect();
 
-        let peer_addr: HashMap<u64, SocketAddr> = peers
+        let peer_addr_vec: Vec<(u64, SocketAddr)> = peers
             .iter()
             .zip(config.compute_nodes.iter())
             .map(|(idx, spec)| (*idx, spec.address))
             .collect();
+        let peer_addr: HashMap<u64, SocketAddr> = peer_addr_vec.iter().cloned().collect();
+        let peer_id = peers[config.compute_node_idx];
 
         let (raft_config, raft_channels) = RaftNode::init_config(
             raft::Config {
-                id: peers[config.compute_node_idx],
+                id: peer_id,
                 peers,
+                tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
             Duration::from_millis(10),
         );
+
+        // TODO: Connect to all other peers once connection can succeed from both sides.
+        let compute_peers_to_connect = peer_addr_vec
+            .iter()
+            .filter(|(idx, _)| *idx > peer_id)
+            .map(|(_, addr)| addr.clone())
+            .collect();
 
         ComputeRaft {
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
@@ -51,7 +62,12 @@ impl ComputeRaft {
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
             committed_rx: Arc::new(Mutex::new(raft_channels.committed_rx)),
             peer_addr,
+            compute_peers_to_connect,
         }
+    }
+
+    pub fn compute_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
+        self.compute_peers_to_connect.iter()
     }
 
     /// Blocks & waits for a next event from a peer.

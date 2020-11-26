@@ -12,6 +12,9 @@ use crate::user::UserNode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use tokio::sync::Barrier;
+use tracing::info;
 use tracing::info_span;
 use tracing_futures::Instrument;
 
@@ -58,10 +61,27 @@ impl Network {
     }
 
     pub async fn spawn_raft_loops(self) -> Self {
+        let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
         for (name, c) in &self.compute_nodes {
+            let barrier = barrier.clone();
+            let name = name.clone();
+            let address = c.address();
+            let connect_all = c.connect_to_computes();
             let raft_loop = c.raft_loop();
-            let peer_span = info_span!("compute_node", ?name);
-            tokio::spawn(async move { raft_loop.await }.instrument(peer_span));
+            let peer_span = info_span!("compute_node", ?name, ?address);
+            tokio::spawn(
+                async move {
+                    // Need to connect first so Raft messages can be sent.
+                    info!("Start connect to peers");
+                    let result = connect_all.await;
+                    info!(?result, "Peer connect complete");
+                    barrier.wait().await;
+                    info!("All Peer connected: start raft");
+                    raft_loop.await;
+                    info!("raft complete");
+                }
+                .instrument(peer_span),
+            );
         }
 
         self
