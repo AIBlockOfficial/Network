@@ -136,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(peer_user_node) = peer_user_node_connected {
+        println!("ADDRESS: {:?}", peer_user_node);
         // Connect to a peer user node for payment.
         node.connect_to(peer_user_node).await?;
 
@@ -187,11 +188,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap();
                         node.next_payment = None;
 
-                        if node.return_payment.is_some() {
+                        if let Some(r_payment) = node.return_payment.clone() {
+                            // Handle return payment construction
+                            let _ = node
+                                .construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
+                                .await
+                                .unwrap();
+                            let return_payment = node.clone().return_payment;
+
                             let _ = node
                                 .send_payment_to_compute(
                                     compute_node_connected.unwrap(),
-                                    node.return_payment.clone().unwrap(),
+                                    return_payment.unwrap().transaction.clone(),
                                 )
                                 .await
                                 .unwrap();
