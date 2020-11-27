@@ -96,7 +96,7 @@ pub struct DruidDroplet {
     tx: BTreeMap<String, Transaction>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,

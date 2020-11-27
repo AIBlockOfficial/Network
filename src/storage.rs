@@ -61,7 +61,7 @@ impl From<bincode::Error> for StorageError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StorageNode {
     node: Node,
     whitelisted: HashMap<SocketAddr, bool>,
