@@ -145,8 +145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // REQUEST HANDLING
-    tokio::spawn({
-        let mut node = node.clone();
+    let main_loop_handle = tokio::spawn({
+        let mut node = node;
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -194,12 +194,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
                                 .await
                                 .unwrap();
-                            let return_payment = node.clone().return_payment;
+                            let return_payment = node.return_payment.clone();
 
                             let _ = node
                                 .send_payment_to_compute(
                                     compute_node_connected.unwrap(),
-                                    return_payment.unwrap().transaction.clone(),
+                                    return_payment.unwrap().transaction,
                                 )
                                 .await
                                 .unwrap();
@@ -226,5 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    loop {}
+    let (result,) = tokio::join!(main_loop_handle);
+    result.unwrap();
+    Ok(())
 }

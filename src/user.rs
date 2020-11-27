@@ -89,7 +89,7 @@ pub struct ReturnPayment {
 }
 
 /// An instance of a MinerNode
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UserNode {
     node: Node,
     pub assets: Vec<Asset>,

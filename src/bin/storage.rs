@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Started node at {}", node.address());
 
     // REQUEST HANDLING
-    tokio::spawn({
-        let mut node = node.clone();
+    let main_loop_handle = tokio::spawn({
+        let mut node = node;
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -81,5 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    loop {}
+    let (result,) = tokio::join!(main_loop_handle);
+    result.unwrap();
+    Ok(())
 }

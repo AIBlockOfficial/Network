@@ -82,7 +82,7 @@ impl From<task::JoinError> for MinerError {
 }
 
 /// An instance of a MinerNode
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MinerNode {
     node: Node,
     pub partition_key: Key,

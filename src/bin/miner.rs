@@ -90,10 +90,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(compute_node).await?;
     }
 
-    let now = SystemTime::now();
+    // Send any requests to the compute node here
 
-    tokio::spawn({
-        let mut node = node.clone();
+    // Send partition request
+    println!("MINER ADDRESS: {:?}", node.address());
+    let _result = node
+        .send_partition_request(compute_node_connected.unwrap())
+        .await
+        .unwrap();
+
+    let now = SystemTime::now();
+    let main_loop_handle = tokio::spawn({
+        let mut node = node;
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -170,15 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Send any requests to the compute node here
-
-    // Send partition request
-    println!("MINER ADDRESS: {:?}", node.address());
-
-    let _result = node
-        .send_partition_request(compute_node_connected.unwrap())
-        .await
-        .unwrap();
-
-    loop {}
+    let (result,) = tokio::join!(main_loop_handle);
+    result.unwrap();
+    Ok(())
 }

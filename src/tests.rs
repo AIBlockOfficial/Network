@@ -321,12 +321,8 @@ async fn spawn_connect_and_send_pow(
 
     tokio::spawn(async move {
         let mut m = m.lock().await;
-        let mut m2 = m.clone();
-        let (pow, _conn) = tokio::join!(
-            m2.generate_pow_for_block(miner_block),
-            m.connect_to(compute_node_addr)
-        );
-        let (pow, transaction) = pow.unwrap();
+        let _conn = m.connect_to(compute_node_addr).await;
+        let (pow, transaction) = m.generate_pow_for_block(miner_block).await.unwrap();
         m.send_pow(compute_node_addr, pow, transaction)
             .await
             .unwrap();
