@@ -9,6 +9,7 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tracing::{info, info_span};
@@ -32,13 +33,14 @@ async fn create_block() {
     //
     // Act
     //
-    spawn_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await;
-    compute_handle_event(
-        &mut network,
-        "compute1",
-        "All transactions successfully added to tx pool",
-    )
-    .await;
+    tokio::join!(
+        task_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await,
+        compute_handle_event(
+            &mut network,
+            "compute1",
+            "All transactions successfully added to tx pool",
+        )
+    );
     let block_transaction_before =
         compute_current_block_transactions(&mut network, "compute1").await;
     compute_generate_block(&mut network, "compute1").await;
@@ -86,13 +88,14 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
 
     let (seed_utxo, _transactions, t_hash, tx) = valid_transactions();
     compute_seed_utxo(&mut network, "compute1", &seed_utxo).await;
-    spawn_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await;
-    compute_handle_event(
-        &mut network,
-        "compute1",
-        "All transactions successfully added to tx pool",
-    )
-    .await;
+    tokio::join!(
+        task_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await,
+        compute_handle_event(
+            &mut network,
+            "compute1",
+            "All transactions successfully added to tx pool",
+        )
+    );
 
     //
     // Act
@@ -154,9 +157,11 @@ async fn proof_of_work() {
     //
     // Act
     //
-    spawn_connect_and_send_pow(&mut network, "miner1", "compute1", &block).await;
-    spawn_connect_and_send_pow(&mut network, "miner2", "compute1", &block).await;
-    spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await;
+    tokio::join!(
+        task_spawn_connect_and_send_pow(&mut network, "miner1", "compute1", &block).await,
+        task_spawn_connect_and_send_pow(&mut network, "miner2", "compute1", &block).await,
+        task_spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await,
+    );
 
     let block_hash_before = compute_block_hash(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
@@ -181,26 +186,30 @@ async fn send_block_to_storage() {
         .spawn_raft_loops()
         .await;
 
-    {
-        let comp = network.compute("compute1").unwrap().clone();
-        tokio::spawn(async move {
-            let mut c = comp.lock().await;
-            c.current_block = Some(Block::new());
-            c.connect_to_storage().await.unwrap();
-            let _write_to_store = c.send_block_to_storage().await.unwrap();
-        });
-    }
-
-    {
-        let mut storage = network.storage("storage1").unwrap().lock().await;
-        match storage.handle_next_event().await {
-            Some(Ok(Response {
-                success: true,
-                reason: "Block received and added",
-            })) => (),
-            other => panic!("Unexpected result: {:?}", other),
+    tokio::join!(
+        {
+            let comp = network.compute("compute1").unwrap().clone();
+            async move {
+                let mut c = comp.lock().await;
+                c.current_block = Some(Block::new());
+                c.connect_to_storage().await.unwrap();
+                let _write_to_store = c.send_block_to_storage().await.unwrap();
+            }
+        },
+        {
+            let storage = network.storage("storage1").unwrap().clone();
+            async move {
+                let mut storage = storage.lock().await;
+                match storage.handle_next_event().await {
+                    Some(Ok(Response {
+                        success: true,
+                        reason: "Block received and added",
+                    })) => (),
+                    other => panic!("Unexpected result: {:?}", other),
+                }
+            }
         }
-    }
+    );
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -217,28 +226,32 @@ async fn receive_payment_tx_user() {
     let compute_node_addr = network.get_address("compute1").await.unwrap();
     let user2_addr = network.get_address("user2").await.unwrap();
 
-    {
-        let u = network.user("user1").unwrap().clone();
-        tokio::spawn(async move {
-            let mut u = u.lock().await;
-            u.connect_to(user2_addr).await.unwrap();
-            u.connect_to(compute_node_addr).await.unwrap();
-            u.amount = 10;
+    tokio::join!(
+        {
+            let u = network.user("user1").unwrap().clone();
+            async move {
+                let mut u = u.lock().await;
+                u.connect_to(user2_addr).await.unwrap();
+                u.connect_to(compute_node_addr).await.unwrap();
+                u.amount = 10;
 
-            u.send_address_request(user2_addr).await.unwrap();
-        });
-    }
-
-    {
-        let mut u2 = network.user("user2").unwrap().lock().await;
-        match u2.handle_next_event().await {
-            Some(Ok(Response {
-                success: true,
-                reason: "New address ready to be sent",
-            })) => return (),
-            other => panic!("Unexpected result: {:?}", other),
+                u.send_address_request(user2_addr).await.unwrap();
+            }
+        },
+        {
+            let u2 = network.user("user2").unwrap().clone();
+            async move {
+                let mut u2 = u2.lock().await;
+                match u2.handle_next_event().await {
+                    Some(Ok(Response {
+                        success: true,
+                        reason: "New address ready to be sent",
+                    })) => return (),
+                    other => panic!("Unexpected result: {:?}", other),
+                }
+            }
         }
-    }
+    );
 }
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
@@ -288,45 +301,45 @@ async fn compute_current_block_transactions(
     c.current_block.as_ref().map(|b| b.transactions.clone())
 }
 
-async fn spawn_connect_and_send_payment_to_compute(
+async fn task_connect_and_send_payment_to_compute(
     network: &mut Network,
     from_user: &str,
     to_compute: &str,
     tx: &Transaction,
-) {
+) -> impl Future<Output = ()> {
     let compute_node_addr = network.get_address(to_compute).await.unwrap().clone();
     let user = network.user(from_user).unwrap();
     let tx = tx.clone();
     let u = user.clone();
 
-    tokio::spawn(async move {
+    async move {
         let mut u = u.lock().await;
         u.connect_to(compute_node_addr).await.unwrap();
         u.send_payment_to_compute(compute_node_addr, tx)
             .await
             .unwrap();
-    });
+    }
 }
 
-async fn spawn_connect_and_send_pow(
+async fn task_spawn_connect_and_send_pow(
     network: &mut Network,
     from_miner: &str,
     to_compute: &str,
     block: &Block,
-) {
+) -> impl Future<Output = ()> {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let miner = network.miner(from_miner).unwrap();
     let m = miner.clone();
     let miner_block = block.clone();
 
-    tokio::spawn(async move {
+    async move {
         let mut m = m.lock().await;
         let _conn = m.connect_to(compute_node_addr).await;
         let (pow, transaction) = m.generate_pow_for_block(miner_block).await.unwrap();
         m.send_pow(compute_node_addr, pow, transaction)
             .await
             .unwrap();
-    });
+    }
 }
 
 fn valid_transactions() -> (
