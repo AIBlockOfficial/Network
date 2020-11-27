@@ -108,7 +108,6 @@ pub struct ComputeNode {
     pub last_block_hash: String,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
-    pub tx_pool: BTreeMap<String, Transaction>,
     pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
@@ -145,7 +144,6 @@ impl ComputeNode {
             current_block_tx: BTreeMap::new(),
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
-            tx_pool: BTreeMap::new(),
             last_block_hash: "".to_string(),
             last_coinbase_hash: None,
             utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
@@ -284,13 +282,9 @@ impl ComputeNode {
     }
 
     pub async fn vote_generate_block(&mut self) {
-        let propose = if self.last_block_hash.is_empty() {
-            // ensure result as commited block and not ignored.
-            vec![1]
-        } else {
-            self.last_block_hash.as_bytes().to_vec()
-        };
-        self.node_raft.propose(propose).await;
+        self.node_raft
+            .propose_block(self.last_block_hash.clone())
+            .await;
     }
 
     /// Processes the next batch of transactions from the floating tx pool
@@ -338,14 +332,15 @@ impl ComputeNode {
     /// Updates the internal state of an empty tx list for the current block
     fn update_current_block_tx(&mut self) {
         if self.current_block_tx.len() == 0 {
-            while self.current_block_tx.len() < BLOCK_SIZE_IN_TX && self.tx_pool.len() > 0 {
+            let tx_pool = self.node_raft.commited_tx_pool();
+            while self.current_block_tx.len() < BLOCK_SIZE_IN_TX && tx_pool.len() > 0 {
                 let tx_hashes: Vec<String> =
-                    self.tx_pool.keys().into_iter().map(|x| x.clone()).collect();
+                    tx_pool.keys().into_iter().map(|x| x.clone()).collect();
 
-                let new_entry = self.tx_pool.get(&tx_hashes[0]).unwrap();
+                let new_entry = tx_pool.get(&tx_hashes[0]).unwrap();
                 self.current_block_tx
                     .insert(tx_hashes[0].clone(), new_entry.clone());
-                self.tx_pool.remove(&tx_hashes[0]);
+                tx_pool.remove(&tx_hashes[0]);
             }
         }
     }
@@ -542,19 +537,21 @@ impl ComputeNode {
                         None => (),
                     }
                 }
-                Some(_) = self.node_raft.next_commit() => {
-                    self.generate_block();
-                    return Some(Ok(Response{
-                        success: true,
-                        reason: "Block committed",
-                    }));
+                Some(commit_data) = self.node_raft.next_commit() => {
+                    if let Some(_block) = self.node_raft.received_commit(commit_data) {
+                        self.generate_block();
+                        return Some(Ok(Response{
+                            success: true,
+                            reason: "Block committed",
+                        }));
+                    }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
                     let result = self.node.send(
                         addr,
                         ComputeRequest::RaftCmd(msg)).await;
                     info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
-                    //result.unwrap();
+
 
                 }
             }
@@ -599,7 +596,11 @@ impl ComputeNode {
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
-            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            SendTransactions { transactions } => {
+                let result = Some(self.receive_transactions(transactions));
+                self.node_raft.propose_local_transactions().await;
+                result
+            }
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
             RaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -827,7 +828,7 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        if self.tx_pool.len() + transactions.len() > TX_POOL_LIMIT {
+        if self.node_raft.tx_pool_len() + transactions.len() > TX_POOL_LIMIT {
             return Response {
                 success: false,
                 reason: "Transaction pool for this compute node is full",
@@ -842,16 +843,17 @@ impl ComputeInterface for ComputeNode {
             .collect();
 
         // At this point the tx's are considered valid
-        self.tx_pool.append(&mut valid_tx.clone());
+        let valid_tx_len = valid_tx.len();
+        self.node_raft.append_to_tx_pool(valid_tx);
 
-        if valid_tx.len() == 0 {
+        if valid_tx_len == 0 {
             return Response {
                 success: false,
                 reason: "No valid transactions provided",
             };
         }
 
-        if valid_tx.len() < transactions.len() {
+        if valid_tx_len < transactions.len() {
             return Response {
                 success: true,
                 reason: "Some transactions invalid. Adding valid transactions only",
