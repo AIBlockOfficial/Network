@@ -37,6 +37,7 @@ pub struct Network {
 #[derive(Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub initial_port: u16,
+    pub compute_raft: bool,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
@@ -58,15 +59,21 @@ impl Network {
         let storage_nodes = Self::init_storage(&config, &info).await;
         let user_nodes = Self::init_users(&config, &info).await;
 
-        Self {
+        let result = Self {
             miner_nodes,
             compute_nodes,
             storage_nodes,
             user_nodes,
+        };
+
+        if config.compute_raft {
+            result.spawn_raft_loops().await
+        } else {
+            result
         }
     }
 
-    pub async fn spawn_raft_loops(self) -> Self {
+    async fn spawn_raft_loops(self) -> Self {
         let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
         for (name, c) in &self.compute_nodes {
             let c = c.lock().await;
@@ -178,7 +185,9 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.compute_nodes.iter().enumerate() {
+            let compute_raft = if config.compute_raft { 1 } else { 0 };
             let compute_config = ComputeNodeConfig {
+                compute_raft,
                 compute_node_idx: idx,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),

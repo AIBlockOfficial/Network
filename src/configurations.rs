@@ -18,6 +18,8 @@ pub struct ComputeNodeConfig {
     pub storage_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
+    /// Whether compute node will use raft or act independently (0)
+    pub compute_raft: usize,
 }
 
 /// Configuration option for a storage node
