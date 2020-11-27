@@ -133,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "All transactions successfully added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
-                        println!("CURRENT BLOCK: {:?}", node.clone().current_block);
+                        println!("CURRENT BLOCK: {:?}", node.current_block);
                     }
                     Ok(Response {
                         success: true,

@@ -14,16 +14,22 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Barrier;
+use tokio::sync::Mutex;
 use tracing::info;
 use tracing::info_span;
 use tracing_futures::Instrument;
 
+pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
+pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
+pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
+pub type ArcUserNode = Arc<Mutex<UserNode>>;
+
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
-    miner_nodes: BTreeMap<String, MinerNode>,
-    compute_nodes: BTreeMap<String, ComputeNode>,
-    storage_nodes: BTreeMap<String, StorageNode>,
-    user_nodes: BTreeMap<String, UserNode>,
+    miner_nodes: BTreeMap<String, ArcMinerNode>,
+    compute_nodes: BTreeMap<String, ArcComputeNode>,
+    storage_nodes: BTreeMap<String, ArcStorageNode>,
+    user_nodes: BTreeMap<String, ArcUserNode>,
 }
 
 /// Represents a virtual network configuration.
@@ -63,6 +69,7 @@ impl Network {
     pub async fn spawn_raft_loops(self) -> Self {
         let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
         for (name, c) in &self.compute_nodes {
+            let c = c.lock().await;
             let barrier = barrier.clone();
             let name = name.clone();
             let address = c.address();
@@ -120,7 +127,7 @@ impl Network {
     async fn init_miners(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
-    ) -> BTreeMap<String, MinerNode> {
+    ) -> BTreeMap<String, ArcMinerNode> {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.miner_nodes.iter().enumerate() {
@@ -132,7 +139,10 @@ impl Network {
                 miner_nodes: info.miner_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
             };
-            map.insert(name.clone(), MinerNode::new(miner_config).await.unwrap());
+            map.insert(
+                name.clone(),
+                Arc::new(Mutex::new(MinerNode::new(miner_config).await.unwrap())),
+            );
         }
 
         map
@@ -141,7 +151,7 @@ impl Network {
     async fn init_storage(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
-    ) -> BTreeMap<String, StorageNode> {
+    ) -> BTreeMap<String, ArcStorageNode> {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
@@ -154,7 +164,7 @@ impl Network {
             };
             map.insert(
                 name.clone(),
-                StorageNode::new(storage_config).await.unwrap(),
+                Arc::new(Mutex::new(StorageNode::new(storage_config).await.unwrap())),
             );
         }
 
@@ -164,7 +174,7 @@ impl Network {
     async fn init_compute(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
-    ) -> BTreeMap<String, ComputeNode> {
+    ) -> BTreeMap<String, ArcComputeNode> {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.compute_nodes.iter().enumerate() {
@@ -176,7 +186,7 @@ impl Network {
             };
             map.insert(
                 name.clone(),
-                ComputeNode::new(compute_config).await.unwrap(),
+                Arc::new(Mutex::new(ComputeNode::new(compute_config).await.unwrap())),
             );
         }
 
@@ -186,7 +196,7 @@ impl Network {
     async fn init_users(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
-    ) -> BTreeMap<String, UserNode> {
+    ) -> BTreeMap<String, ArcUserNode> {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.user_nodes.iter().enumerate() {
@@ -200,52 +210,47 @@ impl Network {
                 user_nodes: info.user_nodes.clone(),
             };
 
-            map.insert(name.clone(), UserNode::new(user_config).await.unwrap());
+            map.insert(
+                name.clone(),
+                Arc::new(Mutex::new(UserNode::new(user_config).await.unwrap())),
+            );
         }
 
         map
     }
 
-    pub fn miner(&mut self, name: &str) -> Option<&mut MinerNode> {
+    pub fn miner(&mut self, name: &str) -> Option<&mut ArcMinerNode> {
         self.miner_nodes.get_mut(name)
     }
 
-    pub fn miners_iter_mut(&mut self) -> impl Iterator<Item = &mut MinerNode> {
+    pub fn miners_iter_mut(&mut self) -> impl Iterator<Item = &mut ArcMinerNode> {
         self.miner_nodes.values_mut()
     }
 
-    pub fn compute(&mut self, name: &str) -> Option<&mut ComputeNode> {
+    pub fn compute(&mut self, name: &str) -> Option<&mut ArcComputeNode> {
         self.compute_nodes.get_mut(name)
     }
 
-    pub fn take_compute(&mut self, name: &str) -> Option<ComputeNode> {
-        self.compute_nodes.remove(name)
-    }
-
-    pub fn add_back_compute(&mut self, name: String, node: ComputeNode) {
-        self.compute_nodes.insert(name, node);
-    }
-
-    pub fn storage(&mut self, name: &str) -> Option<&mut StorageNode> {
+    pub fn storage(&mut self, name: &str) -> Option<&mut ArcStorageNode> {
         self.storage_nodes.get_mut(name)
     }
 
-    pub fn user(&mut self, name: &str) -> Option<&mut UserNode> {
+    pub fn user(&mut self, name: &str) -> Option<&mut ArcUserNode> {
         self.user_nodes.get_mut(name)
     }
 
-    pub fn get_address(&mut self, name: &str) -> Option<SocketAddr> {
+    pub async fn get_address(&mut self, name: &str) -> Option<SocketAddr> {
         if let Some(miner) = self.miner_nodes.get(name) {
-            return Some(miner.address());
+            return Some(miner.lock().await.address());
         }
         if let Some(compute) = self.compute_nodes.get(name) {
-            return Some(compute.address());
+            return Some(compute.lock().await.address());
         }
         if let Some(storage) = self.storage_nodes.get(name) {
-            return Some(storage.address());
+            return Some(storage.lock().await.address());
         }
         if let Some(user) = self.user_nodes.get(name) {
-            return Some(user.address());
+            return Some(user.lock().await.address());
         }
         None
     }
