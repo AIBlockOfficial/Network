@@ -104,30 +104,12 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let block_transaction_before =
         compute_current_block_transactions(&mut network, "compute1").await;
 
-    {
-        let mut join_handles = Vec::new();
-        let barrier = Arc::new(Barrier::new(network_config.compute_nodes.len()));
-        for compute_name in &network_config.compute_nodes {
-            let barrier = barrier.clone();
-            let compute_name = compute_name.clone();
-            let compute = network.compute(&compute_name).unwrap().clone();
-
-            join_handles.push(async move {
-                let mut compute = compute.lock().await;
-                let _peer_span = info_span!("peer", ?compute_name);
-                info!(?compute_name, "Start wait for evt");
-                compute_handle_event_for_node(&mut compute, "Block committed").await;
-                info!(?compute_name, "Start wait for completion");
-
-                let result = tokio::select!(
-                    _ = barrier.wait() => (),
-                    _ = compute_handle_event_for_node(&mut compute, "Never Complete") => (),
-                );
-                info!(?compute_name, ?result, "Stop wait for evt");
-            });
-        }
-        let _ = join_all(join_handles).await;
-    }
+    compute_raft_group_all_handle_event(
+        &mut network,
+        &network_config.compute_nodes,
+        "Block committed",
+    )
+    .await;
 
     let block_transaction_after =
         compute_current_block_transactions(&mut network, "compute1").await;
@@ -267,6 +249,37 @@ async fn compute_handle_event_for_node(c: &mut ComputeNode, reason_str: &str) {
         })) if reason == reason_str => (),
         other => panic!("Unexpected result: {:?}", other),
     }
+}
+
+async fn compute_raft_group_all_handle_event(
+    network: &mut Network,
+    compute_group: &[String],
+    reason_str: &str,
+) {
+    let mut join_handles = Vec::new();
+    let barrier = Arc::new(Barrier::new(compute_group.len()));
+    for compute_name in compute_group {
+        let barrier = barrier.clone();
+        let compute_name = compute_name.clone();
+        let compute = network.compute(&compute_name).unwrap().clone();
+
+        join_handles.push(async move {
+            let _peer_span = info_span!("peer", ?compute_name);
+            info!("Start wait for event");
+
+            let mut compute = compute.lock().await;
+            compute_handle_event_for_node(&mut compute, reason_str).await;
+
+            info!("Start wait for completion of other in raft group");
+            let result = tokio::select!(
+               _ = barrier.wait() => (),
+               _ = compute_handle_event_for_node(&mut compute, "Not an event") => (),
+            );
+
+            info!("Stop wait for event: {:?}", result);
+        });
+    }
+    let _ = join_all(join_handles).await;
 }
 
 async fn compute_seed_utxo(
