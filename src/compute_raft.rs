@@ -4,12 +4,12 @@ use crate::raft::{
 };
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
 pub struct ComputeRaft {
     raft_node: Arc<Mutex<RaftNode>>,
     cmd_tx: RaftCmdSender,
@@ -71,8 +71,11 @@ impl ComputeRaft {
     }
 
     /// Blocks & waits for a next event from a peer.
-    pub async fn run_raft_loop(&mut self) {
-        self.raft_node.lock().await.run_raft_loop().await;
+    pub fn raft_loop(&self) -> impl Future<Output = ()> {
+        let raft_node = self.raft_node.clone();
+        async move {
+            raft_node.lock().await.run_raft_loop().await;
+        }
     }
 
     /// Blocks & waits for a next commit from a peer.

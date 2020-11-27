@@ -525,16 +525,16 @@ impl ComputeNode {
 
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
-        let mut node_raft = self.node_raft.clone();
-        async move {
-            node_raft.run_raft_loop().await;
-        }
+        self.node_raft.raft_loop()
     }
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         loop {
+            // State machines are not keept between iterations or calls.
+            // All selection calls (between = and =>), need to be dropable
+            // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
                     match self.handle_event(event?).await.transpose() {
