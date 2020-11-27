@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 pub struct ComputeRaft {
+    use_raft: bool,
     raft_node: Arc<Mutex<RaftNode>>,
     cmd_tx: RaftCmdSender,
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
@@ -57,6 +58,7 @@ impl ComputeRaft {
             .collect();
 
         ComputeRaft {
+            use_raft: config.compute_raft != 0,
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
             cmd_tx: raft_channels.cmd_tx,
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
@@ -73,8 +75,11 @@ impl ComputeRaft {
     /// Blocks & waits for a next event from a peer.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         let raft_node = self.raft_node.clone();
+        let use_raft = self.use_raft;
         async move {
-            raft_node.lock().await.run_raft_loop().await;
+            if use_raft {
+                raft_node.lock().await.run_raft_loop().await;
+            }
         }
     }
 

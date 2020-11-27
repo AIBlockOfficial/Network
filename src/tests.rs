@@ -22,10 +22,7 @@ async fn create_block() {
     // Arrange
     //
     let network_config = complete_network_config(10000);
-    let mut network = Network::create_from_config(&network_config)
-        .await
-        .spawn_raft_loops()
-        .await;
+    let mut network = Network::create_from_config(&network_config).await;
 
     let (seed_utxo, _transactions, t_hash, tx) = valid_transactions();
     compute_seed_utxo(&mut network, "compute1", &seed_utxo).await;
@@ -80,11 +77,8 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute(initial_port, compute_count);
-    let mut network = Network::create_from_config(&network_config)
-        .await
-        .spawn_raft_loops()
-        .await;
+    let network_config = complete_network_config_with_n_compute_raft(initial_port, compute_count);
+    let mut network = Network::create_from_config(&network_config).await;
 
     let (seed_utxo, _transactions, t_hash, tx) = valid_transactions();
     compute_seed_utxo(&mut network, "compute1", &seed_utxo).await;
@@ -129,10 +123,7 @@ async fn proof_of_work() {
     // Arrange
     //
     let network_config = complete_network_config_with_n_miners(10010, 3);
-    let mut network = Network::create_from_config(&network_config)
-        .await
-        .spawn_raft_loops()
-        .await;
+    let mut network = Network::create_from_config(&network_config).await;
 
     let block = Block::new();
 
@@ -163,10 +154,7 @@ async fn send_block_to_storage() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let network_config = complete_network_config(10020);
-    let mut network = Network::create_from_config(&network_config)
-        .await
-        .spawn_raft_loops()
-        .await;
+    let mut network = Network::create_from_config(&network_config).await;
 
     tokio::join!(
         {
@@ -200,10 +188,7 @@ async fn receive_payment_tx_user() {
 
     let mut network_config = complete_network_config(10030);
     network_config.user_nodes.push("user2".to_string());
-    let mut network = Network::create_from_config(&network_config)
-        .await
-        .spawn_raft_loops()
-        .await;
+    let mut network = Network::create_from_config(&network_config).await;
 
     let compute_node_addr = network.get_address("compute1").await.unwrap();
     let user2_addr = network.get_address("user2").await.unwrap();
@@ -383,6 +368,7 @@ fn valid_transactions() -> (
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
+        compute_raft: false,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
@@ -398,11 +384,12 @@ fn complete_network_config_with_n_miners(initial_port: u16, miner_count: usize) 
     cfg
 }
 
-fn complete_network_config_with_n_compute(
+fn complete_network_config_with_n_compute_raft(
     initial_port: u16,
     compute_count: usize,
 ) -> NetworkConfig {
     let mut cfg = complete_network_config(initial_port);
+    cfg.compute_raft = true;
     cfg.compute_nodes = (0..compute_count)
         .map(|idx| format!("compute{}", idx + 1))
         .collect();
