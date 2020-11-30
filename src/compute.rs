@@ -105,7 +105,6 @@ pub struct ComputeNode {
     pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
-    pub last_block_hash: String,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
     pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
@@ -144,7 +143,6 @@ impl ComputeNode {
             current_block_tx: BTreeMap::new(),
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
-            last_block_hash: "".to_string(),
             last_coinbase_hash: None,
             utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
             request_list: BTreeMap::new(),
@@ -283,8 +281,12 @@ impl ComputeNode {
 
     pub async fn vote_generate_block(&mut self) {
         self.node_raft
-            .propose_block(self.last_block_hash.clone())
+            .propose_block(self.node_raft.get_last_block_hash().clone())
             .await;
+    }
+
+    pub fn get_last_block_hash(&self) -> &String {
+        self.node_raft.get_last_block_hash()
     }
 
     /// Processes the next batch of transactions from the floating tx pool
@@ -306,9 +308,6 @@ impl ComputeNode {
             .map(|x| x.clone())
             .collect();
 
-        next_block.header.time = 1;
-        next_block.header.previous_hash = Some(self.last_block_hash.clone());
-
         if tx_hashes.len() > 0 {
             // If there are more transactions than block can handle
             if self.current_block_tx.len() > BLOCK_SIZE_IN_TX {
@@ -325,6 +324,8 @@ impl ComputeNode {
                 }
             }
 
+            next_block.header.time = 1;
+            next_block.header.previous_hash = Some(self.node_raft.get_last_block_hash().clone());
             self.current_block = Some(next_block);
         }
     }
@@ -788,7 +789,8 @@ impl ComputeInterface for ComputeNode {
         // Update latest block hash
         let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
         let latest_block_h = Sha3_256::digest(&block_s).to_vec();
-        self.last_block_hash = hex::encode(latest_block_h);
+        self.node_raft
+            .set_local_last_block_hash(hex::encode(latest_block_h));
 
         // Update internal UTXO
         self.utxo_set

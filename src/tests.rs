@@ -290,7 +290,7 @@ async fn compute_vote_generate_block(network: &mut Network, compute: &str) {
 
 async fn compute_block_hash(network: &mut Network, compute: &str) -> String {
     let c = network.compute(compute).unwrap().lock().await;
-    c.last_block_hash.clone()
+    c.get_last_block_hash().clone()
 }
 
 async fn compute_raft_group_all_current_block_transactions(

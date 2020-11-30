@@ -20,16 +20,28 @@ pub enum ComputeRaftItem {
     Transactions(BTreeMap<String, Transaction>),
 }
 
+/// Consensused Compute fields and consensus managment.
 pub struct ComputeRaft {
+    // false if RAFT is bypassed.
     use_raft: bool,
+    /// Raft node used for running loop: only use for run_raft_loop.
     raft_node: Arc<Mutex<RaftNode>>,
+    /// Channel to send command to the running RaftNode.
     cmd_tx: RaftCmdSender,
+    /// Channel to receive messages from the running RaftNode to pass arround.
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
+    /// Channel to receive commited entries from the running RaftNode to process.
     committed_rx: Arc<Mutex<CommitReceiver>>,
+    /// Map to the address of the peers.
     peer_addr: HashMap<u64, SocketAddr>,
+    /// Collection of the peer this node is responsible to connect to.
     compute_peers_to_connect: Vec<SocketAddr>,
+    /// Committed transaction pool.
     tx_pool: BTreeMap<String, Transaction>,
+    /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
+    /// Block to propose: should contain all needed information.
+    local_last_block_hash: String,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -79,6 +91,7 @@ impl ComputeRaft {
             compute_peers_to_connect,
             tx_pool: BTreeMap::new(),
             local_tx_pool: BTreeMap::new(),
+            local_last_block_hash: "".to_string(),
         }
     }
 
@@ -157,5 +170,13 @@ impl ComputeRaft {
         } else {
             self.tx_pool.append(&mut transactions);
         }
+    }
+
+    pub fn set_local_last_block_hash(&mut self, value: String) {
+        self.local_last_block_hash = value;
+    }
+
+    pub fn get_last_block_hash(&self) -> &String {
+        &self.local_last_block_hash
     }
 }
