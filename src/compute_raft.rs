@@ -18,6 +18,7 @@ use tracing::warn;
 pub enum ComputeRaftItem {
     Block(String),
     Transactions(BTreeMap<String, Transaction>),
+    DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -38,8 +39,12 @@ pub struct ComputeRaft {
     compute_peers_to_connect: Vec<SocketAddr>,
     /// Committed transaction pool.
     tx_pool: BTreeMap<String, Transaction>,
+    /// Committed DRUID transactions.
+    tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
+    /// Local DRUID transaction pool.
+    local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Block to propose: should contain all needed information.
     local_last_block_hash: String,
 }
@@ -90,7 +95,9 @@ impl ComputeRaft {
             peer_addr,
             compute_peers_to_connect,
             tx_pool: BTreeMap::new(),
+            tx_druid_pool: Vec::new(),
             local_tx_pool: BTreeMap::new(),
+            local_tx_druid_pool: Vec::new(),
             local_last_block_hash: "".to_string(),
         }
     }
@@ -122,6 +129,9 @@ impl ComputeRaft {
                 Ok(ComputeRaftItem::Transactions(mut transactions)) => {
                     self.tx_pool.append(&mut transactions);
                 }
+                Ok(ComputeRaftItem::DruidTransactions(mut transactions)) => {
+                    self.tx_druid_pool.append(&mut transactions);
+                }
                 Ok(ComputeRaftItem::Block(block)) => {
                     last_commit_block = Some(block);
                 }
@@ -151,6 +161,12 @@ impl ComputeRaft {
         self.propose_item(&ComputeRaftItem::Transactions(tx)).await;
     }
 
+    pub async fn propose_local_druid_transactions(&mut self) {
+        let tx = std::mem::take(&mut self.local_tx_druid_pool);
+        self.propose_item(&ComputeRaftItem::DruidTransactions(tx))
+            .await;
+    }
+
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         let data = serialize(item).unwrap();
         self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
@@ -178,5 +194,17 @@ impl ComputeRaft {
 
     pub fn get_last_block_hash(&self) -> &String {
         &self.local_last_block_hash
+    }
+
+    pub fn append_to_tx_druid_pool(&mut self, transactions: BTreeMap<String, Transaction>) {
+        if self.use_raft {
+            self.local_tx_druid_pool.push(transactions);
+        } else {
+            self.tx_druid_pool.push(transactions);
+        }
+    }
+
+    pub fn commited_tx_druid_pool(&mut self) -> &mut Vec<BTreeMap<String, Transaction>> {
+        &mut self.tx_druid_pool
     }
 }

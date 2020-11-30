@@ -204,11 +204,12 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `transaction` - Transaction to process
-    pub fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
+    pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
         if let Some(druid) = transaction.clone().druid {
             // If this transaction is meant to join others
             if self.druid_pool.contains_key(&druid) {
                 self.process_tx_druid(druid, transaction);
+                self.node_raft.propose_local_druid_transactions().await;
 
                 return Response {
                     success: true,
@@ -273,20 +274,21 @@ impl ComputeNode {
         }
 
         if txs_valid {
-            for (h, tx) in &mut droplet.tx.clone().iter() {
-                self.current_block
-                    .as_mut()
-                    .unwrap()
-                    .transactions
-                    .push(h.to_string());
-                self.current_block_tx.insert(h.to_string(), tx.clone());
-            }
+            self.node_raft.append_to_tx_druid_pool(droplet.tx);
 
             println!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );
         } else {
             println!("Transactions for dual double entry execution are invalid");
+        }
+    }
+
+    fn update_committed_dde_tx(&mut self, block: &mut Block) {
+        for mut txs in self.node_raft.commited_tx_druid_pool().drain(..) {
+            // Process a set of transactions from a single DRUID droplet.
+            block.transactions.extend(txs.keys().cloned());
+            self.current_block_tx.append(&mut txs);
         }
     }
 
@@ -308,6 +310,9 @@ impl ComputeNode {
     /// ### Arguments
     pub fn generate_block(&mut self) {
         let mut next_block = Block::new();
+
+        // Update current_block_tx and next_block from tx droid pool.
+        self.update_committed_dde_tx(&mut next_block);
 
         // Update current_block_tx from tx pool if needed
         self.update_current_block_tx();
