@@ -1,6 +1,6 @@
 //! Test suite for the network functions.
 
-use crate::compute::ComputeNode;
+use crate::compute::{ComputeNode, MinedBlock};
 use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
@@ -128,6 +128,7 @@ async fn proof_of_work() {
     let mut network = Network::create_from_config(&network_config).await;
 
     let block = Block::new();
+    compute_set_current_block(&mut network, "compute1", block.clone()).await;
 
     //
     // Act
@@ -140,8 +141,8 @@ async fn proof_of_work() {
 
     let block_hash_before = compute_block_hash(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
+    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
+    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
     let block_hash_after = compute_block_hash(&mut network, "compute1").await;
 
     //
@@ -163,7 +164,12 @@ async fn send_block_to_storage() {
             let comp = network.compute("compute1").unwrap().clone();
             async move {
                 let mut c = comp.lock().await;
-                c.current_block = Some(Block::new());
+                c.current_mined_block = Some(MinedBlock {
+                    nonce: Vec::new(),
+                    block: Block::new(),
+                    block_tx: BTreeMap::new(),
+                    mining_transaction: Transaction::new(),
+                });
                 c.connect_to_storage().await.unwrap();
                 let _write_to_store = c.send_block_to_storage().await.unwrap();
             }
@@ -225,15 +231,21 @@ async fn receive_payment_tx_user() {
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, reason_str).await;
+    compute_handle_event_for_node(&mut c, true, reason_str).await;
 }
 
-async fn compute_handle_event_for_node(c: &mut ComputeNode, reason_str: &str) {
+async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    compute_handle_event_for_node(&mut c, false, reason_str).await;
+}
+
+async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
     match c.handle_next_event().await {
-        Some(Ok(Response {
-            success: true,
-            reason,
-        })) if reason == reason_str => (),
+        Some(Ok(Response { success, reason }))
+            if success == success_val && reason == reason_val =>
+        {
+            ()
+        }
         other => panic!("Unexpected result: {:?}", other),
     }
 }
@@ -255,12 +267,12 @@ async fn compute_raft_group_all_handle_event(
             info!("Start wait for event");
 
             let mut compute = compute.lock().await;
-            compute_handle_event_for_node(&mut compute, reason_str).await;
+            compute_handle_event_for_node(&mut compute, true, reason_str).await;
 
             info!("Start wait for completion of other in raft group");
             let result = tokio::select!(
                _ = barrier.wait() => (),
-               _ = compute_handle_event_for_node(&mut compute, "Not an event") => (),
+               _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
             );
 
             info!("Stop wait for event: {:?}", result);
@@ -276,6 +288,11 @@ async fn compute_seed_utxo(
 ) {
     let c = network.compute(compute).unwrap().lock().await;
     c.seed_utxo_set(seed_utxo.clone());
+}
+
+async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.current_block = Some(block);
 }
 
 async fn compute_generate_block(network: &mut Network, compute: &str) {

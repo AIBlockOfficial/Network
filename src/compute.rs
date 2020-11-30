@@ -91,6 +91,15 @@ impl From<task::JoinError> for ComputeError {
 
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Clone)]
+pub struct MinedBlock {
+    pub nonce: Vec<u8>,
+    pub block: Block,
+    pub block_tx: BTreeMap<String, Transaction>,
+    pub mining_transaction: Transaction,
+}
+
+/// Druid pool structure for checking and holding participants
+#[derive(Debug, Clone)]
 pub struct DruidDroplet {
     participants: usize,
     tx: BTreeMap<String, Transaction>,
@@ -100,6 +109,7 @@ pub struct DruidDroplet {
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
+    pub current_mined_block: Option<MinedBlock>,
     pub current_block: Option<Block>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub current_block_tx: BTreeMap<String, Transaction>,
@@ -139,6 +149,7 @@ impl ComputeNode {
             node_raft: ComputeRaft::new(&config),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
+            current_mined_block: None,
             current_block: None,
             current_block_tx: BTreeMap::new(),
             druid_pool: BTreeMap::new(),
@@ -163,8 +174,8 @@ impl ComputeNode {
     }
 
     /// Check if the node has a current block.
-    pub fn has_current_block(&self) -> bool {
-        self.current_block.is_some()
+    pub fn has_current_mined_block(&self) -> bool {
+        self.current_mined_block.is_some()
     }
 
     /// Connect to a storage peer on the network.
@@ -476,8 +487,11 @@ impl ComputeNode {
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = std::mem::take(&mut self.current_block).unwrap();
-        let tx = std::mem::take(&mut self.current_block_tx);
+        let mined_block = self.current_mined_block.take().unwrap();
+
+        // TODO: include the mining transaction.
+        let block = mined_block.block;
+        let tx = mined_block.block_tx;
 
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
@@ -769,6 +783,14 @@ impl ComputeInterface for ComputeNode {
         info!(?address, "Received PoW");
         let mut pow_block = pow.clone();
 
+        if self.current_block.is_none() {
+            // TODO: Verify the pow block is expected block.
+            return Response {
+                success: false,
+                reason: "Not mining given block",
+            };
+        }
+
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
                 success: false,
@@ -783,21 +805,36 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        // Update latest coinbase to notify winner
-        self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
-
-        // Update latest block hash
-        let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
-        let latest_block_h = Sha3_256::digest(&block_s).to_vec();
-        self.node_raft
-            .set_local_last_block_hash(hex::encode(latest_block_h));
-
         // Update internal UTXO
         self.utxo_set
             .lock()
             .unwrap()
             .append(&mut self.current_block_tx.clone());
         update_utxo_set(&mut self.utxo_set);
+
+        // Update latest coinbase to notify winner
+        self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
+
+        // Update latest block hash
+        {
+            let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
+            let latest_block_h = Sha3_256::digest(&block_s).to_vec();
+            self.node_raft
+                .set_local_last_block_hash(hex::encode(latest_block_h));
+        }
+
+        // Mining to mined block
+        self.current_mined_block = {
+            let block = std::mem::take(&mut self.current_block).unwrap();
+            let block_tx = std::mem::take(&mut self.current_block_tx);
+
+            Some(MinedBlock {
+                nonce: pow.nonce,
+                block,
+                block_tx,
+                mining_transaction: coinbase,
+            })
+        };
 
         Response {
             success: true,
