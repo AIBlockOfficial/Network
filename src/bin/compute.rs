@@ -123,8 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Received PoW successfully",
                     }) => {
                         if storage_connected && node.has_current_mined_block() {
-                            println!("Send Block to strage");
-                            println!("CURRENT BLOCK: {:?}", node.current_mined_block);
+                            println!("Send Block to storage");
+                            println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
                             let _write_to_store = node.send_block_to_storage().await.unwrap();
                         }
                         let _flood = node.flood_block_found_notification().await.unwrap();
@@ -134,7 +134,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "All transactions successfully added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
-                        println!("CURRENT BLOCK: {:?}", node.current_block);
                     }
                     Ok(Response {
                         success: true,

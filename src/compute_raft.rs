@@ -3,6 +3,7 @@ use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
 use bincode::{deserialize, serialize};
+use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -41,6 +42,10 @@ pub struct ComputeRaft {
     tx_pool: BTreeMap<String, Transaction>,
     /// Committed DRUID transactions.
     tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
+    /// Current block ready to mine (consensused).
+    current_block: Option<Block>,
+    /// All transactions present in current_block (consensused).
+    current_block_tx: BTreeMap<String, Transaction>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
@@ -96,6 +101,8 @@ impl ComputeRaft {
             compute_peers_to_connect,
             tx_pool: BTreeMap::new(),
             tx_druid_pool: Vec::new(),
+            current_block: None,
+            current_block_tx: BTreeMap::new(),
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
             local_last_block_hash: "".to_string(),
@@ -206,5 +213,24 @@ impl ComputeRaft {
 
     pub fn commited_tx_druid_pool(&mut self) -> &mut Vec<BTreeMap<String, Transaction>> {
         &mut self.tx_druid_pool
+    }
+
+    pub fn set_committed_mining_block(
+        &mut self,
+        block: Block,
+        block_tx: BTreeMap<String, Transaction>,
+    ) {
+        self.current_block = Some(block);
+        self.current_block_tx = block_tx;
+    }
+
+    pub fn get_mining_block(&self) -> &Option<Block> {
+        &self.current_block
+    }
+
+    pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
+        let block = std::mem::take(&mut self.current_block).unwrap();
+        let block_tx = std::mem::take(&mut self.current_block_tx);
+        (block, block_tx)
     }
 }

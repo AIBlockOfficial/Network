@@ -292,7 +292,7 @@ async fn compute_seed_utxo(
 
 async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.current_block = Some(block);
+    c.set_committed_mining_block(block, BTreeMap::new());
 }
 
 async fn compute_generate_block(network: &mut Network, compute: &str) {
@@ -331,7 +331,9 @@ async fn compute_current_block_transactions(
     compute: &str,
 ) -> Option<Vec<String>> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.current_block.as_ref().map(|b| b.transactions.clone())
+    c.get_mining_block()
+        .as_ref()
+        .map(|b| b.transactions.clone())
 }
 
 async fn task_connect_and_send_payment_to_compute(

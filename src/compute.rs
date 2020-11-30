@@ -110,9 +110,7 @@ pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
     pub current_mined_block: Option<MinedBlock>,
-    pub current_block: Option<Block>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
-    pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<String>,
@@ -150,8 +148,6 @@ impl ComputeNode {
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
-            current_block: None,
-            current_block_tx: BTreeMap::new(),
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
             last_coinbase_hash: None,
@@ -284,11 +280,15 @@ impl ComputeNode {
         }
     }
 
-    fn update_committed_dde_tx(&mut self, block: &mut Block) {
+    fn update_committed_dde_tx(
+        &mut self,
+        block: &mut Block,
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
         for mut txs in self.node_raft.commited_tx_druid_pool().drain(..) {
             // Process a set of transactions from a single DRUID droplet.
             block.transactions.extend(txs.keys().cloned());
-            self.current_block_tx.append(&mut txs);
+            block_tx.append(&mut txs);
         }
     }
 
@@ -302,6 +302,18 @@ impl ComputeNode {
         self.node_raft.get_last_block_hash()
     }
 
+    pub fn get_mining_block(&self) -> &Option<Block> {
+        self.node_raft.get_mining_block()
+    }
+
+    pub fn set_committed_mining_block(
+        &mut self,
+        block: Block,
+        block_tx: BTreeMap<String, Transaction>,
+    ) {
+        self.node_raft.set_committed_mining_block(block, block_tx)
+    }
+
     /// Processes the next batch of transactions from the floating tx pool
     /// to create the next block
     ///
@@ -310,55 +322,41 @@ impl ComputeNode {
     /// ### Arguments
     pub fn generate_block(&mut self) {
         let mut next_block = Block::new();
+        let mut next_block_tx = BTreeMap::new();
 
         // Update current_block_tx and next_block from tx droid pool.
-        self.update_committed_dde_tx(&mut next_block);
+        self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
 
         // Update current_block_tx from tx pool if needed
-        self.update_current_block_tx();
+        self.update_current_block_tx(&mut next_block, &mut next_block_tx);
 
-        let mut tx_hashes: Vec<String> = self
-            .current_block_tx
-            .keys()
-            .into_iter()
-            .map(|x| x.clone())
-            .collect();
-
-        if tx_hashes.len() > 0 {
-            // If there are more transactions than block can handle
-            if self.current_block_tx.len() > BLOCK_SIZE_IN_TX {
-                while !next_block.is_full() {
-                    let next_hash = tx_hashes.pop().unwrap();
-                    next_block.transactions.push(next_hash);
-                }
-
-            // If there are fewer transactions than a full block
-            } else {
-                while tx_hashes.len() > 0 {
-                    let next_hash = tx_hashes.pop().unwrap();
-                    next_block.transactions.push(next_hash);
-                }
-            }
-
+        if next_block_tx.len() > 0 {
             next_block.header.time = 1;
             next_block.header.previous_hash = Some(self.node_raft.get_last_block_hash().clone());
-            self.current_block = Some(next_block);
+            self.node_raft
+                .set_committed_mining_block(next_block, next_block_tx)
         }
     }
 
     /// Updates the internal state of an empty tx list for the current block
-    fn update_current_block_tx(&mut self) {
-        if self.current_block_tx.len() == 0 {
+    fn update_current_block_tx(
+        &mut self,
+        block: &mut Block,
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
+        if block_tx.len() == 0 {
             let tx_pool = self.node_raft.commited_tx_pool();
-            while self.current_block_tx.len() < BLOCK_SIZE_IN_TX && tx_pool.len() > 0 {
-                let tx_hashes: Vec<String> =
-                    tx_pool.keys().into_iter().map(|x| x.clone()).collect();
+            let mut txs = {
+                let mut txs = std::mem::take(tx_pool);
+                if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
+                    // Set back overflowing transactions.
+                    *tx_pool = txs.split_off(&max_key);
+                }
+                txs
+            };
 
-                let new_entry = tx_pool.get(&tx_hashes[0]).unwrap();
-                self.current_block_tx
-                    .insert(tx_hashes[0].clone(), new_entry.clone());
-                tx_pool.remove(&tx_hashes[0]);
-            }
+            block.transactions.extend(txs.keys().cloned());
+            block_tx.append(&mut txs);
         }
     }
 
@@ -439,9 +437,10 @@ impl ComputeNode {
     ///
     /// * `peer`    - Address to send to
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
-        println!("BLOCK TO SEND: {:?}", self.current_block);
+        println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         println!("");
-        let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
+        let block_to_send =
+            Bytes::from(serialize(self.node_raft.get_mining_block()).unwrap()).to_vec();
 
         self.node
             .send(
@@ -788,7 +787,7 @@ impl ComputeInterface for ComputeNode {
         info!(?address, "Received PoW");
         let mut pow_block = pow.clone();
 
-        if self.current_block.is_none() {
+        if self.node_raft.get_mining_block().is_none() {
             // TODO: Verify the pow block is expected block.
             return Response {
                 success: false,
@@ -810,11 +809,11 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        // Take mining block info: no more mining for it.
+        let (block, block_tx) = self.node_raft.take_mining_block();
+
         // Update internal UTXO
-        self.utxo_set
-            .lock()
-            .unwrap()
-            .append(&mut self.current_block_tx.clone());
+        self.utxo_set.lock().unwrap().append(&mut block_tx.clone());
         update_utxo_set(&mut self.utxo_set);
 
         // Update latest coinbase to notify winner
@@ -828,18 +827,13 @@ impl ComputeInterface for ComputeNode {
                 .set_local_last_block_hash(hex::encode(latest_block_h));
         }
 
-        // Mining to mined block
-        self.current_mined_block = {
-            let block = std::mem::take(&mut self.current_block).unwrap();
-            let block_tx = std::mem::take(&mut self.current_block_tx);
-
-            Some(MinedBlock {
-                nonce: pow.nonce,
-                block,
-                block_tx,
-                mining_transaction: coinbase,
-            })
-        };
+        // Set mined block
+        self.current_mined_block = Some(MinedBlock {
+            nonce: pow.nonce,
+            block,
+            block_tx,
+            mining_transaction: coinbase,
+        });
 
         Response {
             success: true,
