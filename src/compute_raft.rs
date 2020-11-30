@@ -1,4 +1,5 @@
 use crate::configurations::ComputeNodeConfig;
+use crate::constants::BLOCK_SIZE_IN_TX;
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
@@ -42,6 +43,8 @@ pub struct ComputeRaft {
     tx_pool: BTreeMap<String, Transaction>,
     /// Committed DRUID transactions.
     tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
+    /// Header to use for next block if ready to generate.
+    tx_previous_hash: Option<String>,
     /// Current block ready to mine (consensused).
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
@@ -101,6 +104,7 @@ impl ComputeRaft {
             compute_peers_to_connect,
             tx_pool: BTreeMap::new(),
             tx_druid_pool: Vec::new(),
+            tx_previous_hash: None,
             current_block: None,
             current_block_tx: BTreeMap::new(),
             local_tx_pool: BTreeMap::new(),
@@ -129,8 +133,7 @@ impl ComputeRaft {
         self.committed_rx.lock().await.recv().await
     }
 
-    pub fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<String> {
-        let mut last_commit_block = None;
+    pub fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
         for data in raft_data.drain(..) {
             match deserialize::<ComputeRaftItem>(&data) {
                 Ok(ComputeRaftItem::Transactions(mut transactions)) => {
@@ -139,13 +142,22 @@ impl ComputeRaft {
                 Ok(ComputeRaftItem::DruidTransactions(mut transactions)) => {
                     self.tx_druid_pool.append(&mut transactions);
                 }
-                Ok(ComputeRaftItem::Block(block)) => {
-                    last_commit_block = Some(block);
+                Ok(ComputeRaftItem::Block(previous_hash)) => {
+                    // TODO: Ensure that tx_pool & tx_druid_pool are not populated further
+                    //       before generating the block.
+                    self.tx_previous_hash = Some(previous_hash);
                 }
                 Err(error) => warn!(?error, "ComputeRaftItem-deserialize"),
             }
         }
-        last_commit_block
+
+        if self.tx_previous_hash.is_some()
+            && (!self.tx_pool.is_empty() || !self.tx_druid_pool.is_empty())
+        {
+            Some(())
+        } else {
+            None
+        }
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -159,7 +171,8 @@ impl ComputeRaft {
         self.cmd_tx.send(RaftCmd::Raft(msg)).await.unwrap();
     }
 
-    pub async fn propose_block(&mut self, block: String) {
+    pub async fn propose_block(&mut self) {
+        let block = std::mem::take(&mut self.local_last_block_hash);
         self.propose_item(&ComputeRaftItem::Block(block)).await;
     }
 
@@ -196,11 +209,15 @@ impl ComputeRaft {
     }
 
     pub fn set_local_last_block_hash(&mut self, value: String) {
-        self.local_last_block_hash = value;
+        if self.use_raft {
+            self.local_last_block_hash = value;
+        } else {
+            self.tx_previous_hash = Some(value);
+        }
     }
 
-    pub fn get_last_block_hash(&self) -> &String {
-        &self.local_last_block_hash
+    pub fn get_committed_previous_hash(&self) -> &Option<String> {
+        &self.tx_previous_hash
     }
 
     pub fn append_to_tx_druid_pool(&mut self, transactions: BTreeMap<String, Transaction>) {
@@ -232,5 +249,68 @@ impl ComputeRaft {
         let block = std::mem::take(&mut self.current_block).unwrap();
         let block_tx = std::mem::take(&mut self.current_block_tx);
         (block, block_tx)
+    }
+
+    pub fn generate_block(&mut self) {
+        let mut next_block = Block::new();
+        let mut next_block_tx = BTreeMap::new();
+
+        // Update current_block_tx and next_block from tx droid pool.
+        self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
+
+        // Update current_block_tx from tx pool if needed
+        self.update_current_block_tx(&mut next_block, &mut next_block_tx);
+
+        if next_block_tx.len() > 0 {
+            self.update_block_header(&mut next_block);
+            self.set_committed_mining_block(next_block, next_block_tx)
+        }
+    }
+
+    fn update_committed_dde_tx(
+        &mut self,
+        block: &mut Block,
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
+        for mut txs in self.tx_druid_pool.drain(..) {
+            // Process a set of transactions from a single DRUID droplet.
+            block.transactions.extend(txs.keys().cloned());
+            block_tx.append(&mut txs);
+        }
+    }
+
+    /// Updates the internal state of an empty tx list for the current block
+    fn update_current_block_tx(
+        &mut self,
+        block: &mut Block,
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
+        if block_tx.len() == 0 {
+            let mut txs = {
+                let mut txs = std::mem::take(&mut self.tx_pool);
+                if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
+                    // Set back overflowing transactions.
+                    self.tx_pool = txs.split_off(&max_key);
+                }
+                txs
+            };
+
+            block.transactions.extend(txs.keys().cloned());
+            block_tx.append(&mut txs);
+        }
+    }
+
+    fn update_block_header(&mut self, block: &mut Block) {
+        let previous_hash = {
+            let previous_hash = std::mem::take(&mut self.tx_previous_hash);
+            if self.use_raft {
+                previous_hash.unwrap()
+            } else {
+                previous_hash.unwrap_or(String::new())
+            }
+        };
+
+        block.header.time = 1;
+        block.header.previous_hash = Some(previous_hash);
     }
 }

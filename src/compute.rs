@@ -2,8 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{
-    BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
-    UNICORN_LIMIT,
+    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
 };
 use crate::interfaces::{
     ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
@@ -280,26 +279,12 @@ impl ComputeNode {
         }
     }
 
-    fn update_committed_dde_tx(
-        &mut self,
-        block: &mut Block,
-        block_tx: &mut BTreeMap<String, Transaction>,
-    ) {
-        for mut txs in self.node_raft.commited_tx_druid_pool().drain(..) {
-            // Process a set of transactions from a single DRUID droplet.
-            block.transactions.extend(txs.keys().cloned());
-            block_tx.append(&mut txs);
-        }
-    }
-
     pub async fn vote_generate_block(&mut self) {
-        self.node_raft
-            .propose_block(self.node_raft.get_last_block_hash().clone())
-            .await;
+        self.node_raft.propose_block().await;
     }
 
-    pub fn get_last_block_hash(&self) -> &String {
-        self.node_raft.get_last_block_hash()
+    pub fn get_committed_previous_hash(&self) -> &Option<String> {
+        self.node_raft.get_committed_previous_hash()
     }
 
     pub fn get_mining_block(&self) -> &Option<Block> {
@@ -321,43 +306,7 @@ impl ComputeNode {
     ///
     /// ### Arguments
     pub fn generate_block(&mut self) {
-        let mut next_block = Block::new();
-        let mut next_block_tx = BTreeMap::new();
-
-        // Update current_block_tx and next_block from tx droid pool.
-        self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
-
-        // Update current_block_tx from tx pool if needed
-        self.update_current_block_tx(&mut next_block, &mut next_block_tx);
-
-        if next_block_tx.len() > 0 {
-            next_block.header.time = 1;
-            next_block.header.previous_hash = Some(self.node_raft.get_last_block_hash().clone());
-            self.node_raft
-                .set_committed_mining_block(next_block, next_block_tx)
-        }
-    }
-
-    /// Updates the internal state of an empty tx list for the current block
-    fn update_current_block_tx(
-        &mut self,
-        block: &mut Block,
-        block_tx: &mut BTreeMap<String, Transaction>,
-    ) {
-        if block_tx.len() == 0 {
-            let tx_pool = self.node_raft.commited_tx_pool();
-            let mut txs = {
-                let mut txs = std::mem::take(tx_pool);
-                if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
-                    // Set back overflowing transactions.
-                    *tx_pool = txs.split_off(&max_key);
-                }
-                txs
-            };
-
-            block.transactions.extend(txs.keys().cloned());
-            block_tx.append(&mut txs);
-        }
+        self.node_raft.generate_block();
     }
 
     /// Validates PoW for a full block
@@ -557,7 +506,7 @@ impl ComputeNode {
                     }
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
-                    if let Some(_block) = self.node_raft.received_commit(commit_data) {
+                    if let Some(_) = self.node_raft.received_commit(commit_data) {
                         self.generate_block();
                         return Some(Ok(Response{
                             success: true,
