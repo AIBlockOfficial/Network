@@ -255,22 +255,22 @@ impl ComputeRaft {
         (block, block_tx)
     }
 
+    /// Processes the next batch of transactions from the floating tx pool
+    /// to create the next block
+    ///
+    /// TODO: Label previous block time
     pub fn generate_block(&mut self) {
         let mut next_block = Block::new();
         let mut next_block_tx = BTreeMap::new();
 
-        // Update current_block_tx and next_block from tx droid pool.
         self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
-
-        // Update current_block_tx from tx pool if needed
         self.update_current_block_tx(&mut next_block, &mut next_block_tx);
+        self.update_block_header(&mut next_block);
 
-        if next_block_tx.len() > 0 {
-            self.update_block_header(&mut next_block);
-            self.set_committed_mining_block(next_block, next_block_tx)
-        }
+        self.set_committed_mining_block(next_block, next_block_tx)
     }
 
+    /// Apply all consensused transactions to the block
     fn update_committed_dde_tx(
         &mut self,
         block: &mut Block,
@@ -283,25 +283,23 @@ impl ComputeRaft {
         }
     }
 
-    /// Updates the internal state of an empty tx list for the current block
+    /// Apply all consensused transactions to the block until BLOCK_SIZE_IN_TX
     fn update_current_block_tx(
         &mut self,
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        if block_tx.len() == 0 {
-            let mut txs = {
-                let mut txs = std::mem::take(&mut self.consensused.tx_pool);
-                if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
-                    // Set back overflowing transactions.
-                    self.consensused.tx_pool = txs.split_off(&max_key);
-                }
-                txs
-            };
+        let mut txs = {
+            let mut txs = std::mem::take(&mut self.consensused.tx_pool);
+            if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
+                // Set back overflowing transactions.
+                self.consensused.tx_pool = txs.split_off(&max_key);
+            }
+            txs
+        };
 
-            block.transactions.extend(txs.keys().cloned());
-            block_tx.append(&mut txs);
-        }
+        block.transactions.extend(txs.keys().cloned());
+        block_tx.append(&mut txs);
     }
 
     fn update_block_header(&mut self, block: &mut Block) {

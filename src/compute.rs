@@ -299,12 +299,6 @@ impl ComputeNode {
         self.node_raft.set_committed_mining_block(block, block_tx)
     }
 
-    /// Processes the next batch of transactions from the floating tx pool
-    /// to create the next block
-    ///
-    /// TODO: Label previous block time
-    ///
-    /// ### Arguments
     pub fn generate_block(&mut self) {
         self.node_raft.generate_block();
     }
