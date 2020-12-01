@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Barrier;
-use tracing::{info, info_span};
+use tracing::{error_span, info};
+use tracing_futures::Instrument;
 
 #[tokio::test(threaded_scheduler)]
 async fn create_block() {
@@ -262,21 +263,24 @@ async fn compute_raft_group_all_handle_event(
         let compute_name = compute_name.clone();
         let compute = network.compute(&compute_name).unwrap().clone();
 
-        join_handles.push(async move {
-            let _peer_span = info_span!("peer", ?compute_name);
-            info!("Start wait for event");
+        let peer_span = error_span!("peer", ?compute_name);
+        join_handles.push(
+            async move {
+                info!("Start wait for event");
 
-            let mut compute = compute.lock().await;
-            compute_handle_event_for_node(&mut compute, true, reason_str).await;
+                let mut compute = compute.lock().await;
+                compute_handle_event_for_node(&mut compute, true, reason_str).await;
 
-            info!("Start wait for completion of other in raft group");
-            let result = tokio::select!(
-               _ = barrier.wait() => (),
-               _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
-            );
+                info!("Start wait for completion of other in raft group");
+                let result = tokio::select!(
+                   _ = barrier.wait() => (),
+                   _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
+                );
 
-            info!("Stop wait for event: {:?}", result);
-        });
+                info!("Stop wait for event: {:?}", result);
+            }
+            .instrument(peer_span),
+        );
     }
     let _ = join_all(join_handles).await;
 }

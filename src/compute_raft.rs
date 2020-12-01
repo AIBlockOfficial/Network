@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
@@ -231,6 +231,7 @@ impl ComputeRaft {
     }
 
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
+        debug!("propose_item: {:?}", item);
         let data = serialize(item).unwrap();
         self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
     }

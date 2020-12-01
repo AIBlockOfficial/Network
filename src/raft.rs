@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{timeout_at, Instant};
+use tracing::trace;
 
 pub type RaftData = Vec<u8>;
 pub type CommitSender = mpsc::Sender<Vec<RaftData>>;
@@ -141,7 +142,10 @@ impl RaftNode {
             Ok(Some(RaftCmd::Propose { data })) => {
                 self.propose_data_backlog.push(data);
             }
-            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => self.node.step(m).unwrap(),
+            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => {
+                trace!("next_event receive message({}, {:?})", self.node.raft.id, m);
+                self.node.step(m).unwrap()
+            }
             Err(_) => {
                 // Timeout
                 self.tick_timeout_at = Instant::now() + self.tick_timeout_duration;
@@ -186,6 +190,7 @@ impl RaftNode {
 
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
         for msg in ready.messages.drain(..) {
+            trace!("send_messages_to_peers({}, {:?})", self.node.raft.id, msg);
             self.msg_out_tx.send(msg).await.unwrap();
         }
     }

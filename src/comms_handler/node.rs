@@ -523,7 +523,7 @@ impl Node {
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) {
         while let Some(message) = messages.next().await {
-            trace!(?message);
+            trace!(?message, "handle_peer_recv");
             match message {
                 CommMessage::HandshakeResponse { contacts } => {
                     trace!(?contacts, "HandshakeResponse");

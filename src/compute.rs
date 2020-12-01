@@ -35,7 +35,8 @@ use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_tx_hash, update_utxo_set};
 use naom::script::utils::tx_ins_are_valid;
 
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, error_span, info, trace, warn};
+use tracing_futures::Instrument;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -494,12 +495,14 @@ impl ComputeNode {
             // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
+                    trace!("handle_next_event evt {:?}", event);
                     match self.handle_event(event?).await.transpose() {
                         res @ Some(_) => return res,
                         None => (),
                     }
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
+                    trace!("handle_next_event commit {:?}", commit_data);
                     if let Some(_) = self.node_raft.received_commit(commit_data).await {
                         self.generate_block();
                         return Some(Ok(Response{
@@ -509,6 +512,7 @@ impl ComputeNode {
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
+                    trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     let result = self.node.send(
                         addr,
                         ComputeRequest::RaftCmd(msg)).await;
@@ -522,7 +526,12 @@ impl ComputeNode {
 
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
+            Event::NewFrame { peer, frame } => {
+                let peer_span = error_span!("peer", ?peer);
+                self.handle_new_frame(peer, frame)
+                    .instrument(peer_span)
+                    .await
+            }
         }
     }
 
@@ -532,26 +541,22 @@ impl ComputeNode {
         peer: SocketAddr,
         frame: Bytes,
     ) -> Result<Option<Response>> {
-        let _peer_span = info_span!("peer", ?peer);
-        {
-            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
-                warn!(?error, "frame-deserialize");
-                error
-            })?;
+        let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+            warn!(?error, "frame-deserialize");
+            error
+        })?;
 
-            let _req_span = info_span!("request", ?req);
-            {
-                let response = self.handle_request(peer, req).await;
-                debug!(?response, ?peer, "response");
+        let req_span = error_span!("request", ?req);
+        let response = self.handle_request(peer, req).instrument(req_span).await;
+        debug!(?response, ?peer, "response");
 
-                Ok(response)
-            }
-        }
+        Ok(response)
     }
 
     /// Handles a compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
+        trace!("handle_request");
 
         match req {
             SendPoW { pow, coinbase } => {
