@@ -500,7 +500,7 @@ impl ComputeNode {
                     }
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
-                    if let Some(_) = self.node_raft.received_commit(commit_data) {
+                    if let Some(_) = self.node_raft.received_commit(commit_data).await {
                         self.generate_block();
                         return Some(Ok(Response{
                             success: true,
@@ -768,10 +768,11 @@ impl ComputeInterface for ComputeNode {
 
         // Update latest block hash
         {
+            let latest_block_time = pow_block.block.header.time;
             let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
             let latest_block_h = Sha3_256::digest(&block_s).to_vec();
             self.node_raft
-                .set_local_last_block_hash(hex::encode(latest_block_h));
+                .set_local_last_block_hash_and_time(hex::encode(latest_block_h), latest_block_time);
         }
 
         // Set mined block

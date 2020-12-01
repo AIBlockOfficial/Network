@@ -18,7 +18,7 @@ use tracing::warn;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
-    Block(String),
+    Block((String, u32)),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
@@ -33,6 +33,8 @@ pub struct ComputeConsensused {
     tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Header to use for next block if ready to generate.
     tx_previous_hash: Option<String>,
+    /// Index of the last block,
+    tx_previous_block_idx: u32,
     /// Current block ready to mine (consensused).
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
@@ -50,7 +52,8 @@ pub struct ComputeRaft {
     /// Channel to receive messages from the running RaftNode to pass arround.
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
     /// Channel to receive commited entries from the running RaftNode to process.
-    committed_rx: Arc<Mutex<CommitReceiver>>,
+    /// and extra data not processed yet.
+    committed_rx: Arc<Mutex<(CommitReceiver, Vec<RaftData>)>>,
     /// Map to the address of the peers.
     peer_addr: HashMap<u64, SocketAddr>,
     /// Collection of the peer this node is responsible to connect to.
@@ -62,7 +65,7 @@ pub struct ComputeRaft {
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Block to propose: should contain all needed information.
-    local_last_block_hash: Option<String>,
+    local_last_block_hash_and_time: Option<(String, u32)>,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -103,8 +106,8 @@ impl ComputeRaft {
             .collect();
 
         let use_raft = config.compute_raft != 0;
-        let (consensused, local_last_block_hash) = if use_raft {
-            (ComputeConsensused::default(), Some(String::new()))
+        let (consensused, local_last_block_hash_and_time) = if use_raft {
+            (ComputeConsensused::default(), Some((String::new(), 1)))
         } else {
             let mut consensused = ComputeConsensused::default();
             consensused.tx_previous_hash = Some(String::new());
@@ -116,13 +119,13 @@ impl ComputeRaft {
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
             cmd_tx: raft_channels.cmd_tx,
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
-            committed_rx: Arc::new(Mutex::new(raft_channels.committed_rx)),
+            committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, Vec::new()))),
             peer_addr,
             compute_peers_to_connect,
             consensused,
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
-            local_last_block_hash,
+            local_last_block_hash_and_time,
         }
     }
 
@@ -143,11 +146,23 @@ impl ComputeRaft {
 
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
-        self.committed_rx.lock().await.recv().await
+        let mut committed_rx = self.committed_rx.lock().await;
+
+        if !committed_rx.1.is_empty() {
+            return Some(std::mem::take(&mut committed_rx.1));
+        }
+
+        committed_rx.0.recv().await
     }
 
-    pub fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
+    pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
+        let mut committed_rx = self.committed_rx.lock().await;
         for data in raft_data.drain(..) {
+            if self.consensused.tx_previous_hash.is_some() {
+                committed_rx.1.push(data);
+                continue;
+            }
+
             match deserialize::<ComputeRaftItem>(&data) {
                 Ok(ComputeRaftItem::Transactions(mut transactions)) => {
                     self.consensused.tx_pool.append(&mut transactions);
@@ -155,22 +170,23 @@ impl ComputeRaft {
                 Ok(ComputeRaftItem::DruidTransactions(mut transactions)) => {
                     self.consensused.tx_druid_pool.append(&mut transactions);
                 }
-                Ok(ComputeRaftItem::Block(previous_hash)) => {
-                    // TODO: Ensure that tx_pool & tx_druid_pool are not populated further
-                    //       before generating the block.
-                    self.consensused.tx_previous_hash = Some(previous_hash);
+                Ok(ComputeRaftItem::Block((previous_hash, previous_idx))) => {
+                    if self.consensused.tx_previous_block_idx < previous_idx
+                        && (!self.consensused.tx_pool.is_empty()
+                            || !self.consensused.tx_druid_pool.is_empty())
+                    {
+                        // New block:
+                        // Must not populate further tx_pool & tx_druid_pool
+                        // before generating block.
+                        self.consensused.tx_previous_hash = Some(previous_hash);
+                        self.consensused.tx_previous_block_idx = previous_idx;
+                    }
                 }
                 Err(error) => warn!(?error, "ComputeRaftItem-deserialize"),
             }
         }
 
-        if self.consensused.tx_previous_hash.is_some()
-            && (!self.consensused.tx_pool.is_empty() || !self.consensused.tx_druid_pool.is_empty())
-        {
-            Some(())
-        } else {
-            None
-        }
+        self.consensused.tx_previous_hash.as_ref().map(|_| ())
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -185,11 +201,12 @@ impl ComputeRaft {
     }
 
     pub async fn propose_block(&mut self) {
-        if let Some(block) = std::mem::take(&mut self.local_last_block_hash) {
+        if let Some(block) = std::mem::take(&mut self.local_last_block_hash_and_time) {
             if self.use_raft {
                 self.propose_item(&ComputeRaftItem::Block(block)).await;
             } else {
-                self.consensused.tx_previous_hash = Some(block);
+                self.consensused.tx_previous_hash = Some(block.0);
+                self.consensused.tx_previous_block_idx = block.1;
             }
         }
     }
@@ -230,8 +247,8 @@ impl ComputeRaft {
         self.local_tx_pool.append(&mut transactions);
     }
 
-    pub fn set_local_last_block_hash(&mut self, value: String) {
-        self.local_last_block_hash = Some(value);
+    pub fn set_local_last_block_hash_and_time(&mut self, hash: String, time: u32) {
+        self.local_last_block_hash_and_time = Some((hash, time));
     }
 
     pub fn get_committed_previous_hash(&self) -> &Option<String> {
@@ -315,7 +332,7 @@ impl ComputeRaft {
     fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.consensused.tx_previous_hash).unwrap();
 
-        block.header.time = 1;
+        block.header.time = self.consensused.tx_previous_block_idx + 1;
         block.header.previous_hash = Some(previous_hash);
     }
 }
