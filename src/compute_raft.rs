@@ -62,7 +62,7 @@ pub struct ComputeRaft {
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Block to propose: should contain all needed information.
-    local_last_block_hash: String,
+    local_last_block_hash: Option<String>,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -102,18 +102,27 @@ impl ComputeRaft {
             .map(|(_, addr)| addr.clone())
             .collect();
 
+        let use_raft = config.compute_raft != 0;
+        let (consensused, local_last_block_hash) = if use_raft {
+            (ComputeConsensused::default(), Some(String::new()))
+        } else {
+            let mut consensused = ComputeConsensused::default();
+            consensused.tx_previous_hash = Some(String::new());
+            (consensused, None)
+        };
+
         ComputeRaft {
-            use_raft: config.compute_raft != 0,
+            use_raft,
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
             cmd_tx: raft_channels.cmd_tx,
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
             committed_rx: Arc::new(Mutex::new(raft_channels.committed_rx)),
             peer_addr,
             compute_peers_to_connect,
-            consensused: Default::default(),
+            consensused,
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
-            local_last_block_hash: "".to_string(),
+            local_last_block_hash,
         }
     }
 
@@ -176,19 +185,32 @@ impl ComputeRaft {
     }
 
     pub async fn propose_block(&mut self) {
-        let block = std::mem::take(&mut self.local_last_block_hash);
-        self.propose_item(&ComputeRaftItem::Block(block)).await;
+        if let Some(block) = std::mem::take(&mut self.local_last_block_hash) {
+            if self.use_raft {
+                self.propose_item(&ComputeRaftItem::Block(block)).await;
+            } else {
+                self.consensused.tx_previous_hash = Some(block);
+            }
+        }
     }
 
     pub async fn propose_local_transactions(&mut self) {
-        let tx = std::mem::take(&mut self.local_tx_pool);
-        self.propose_item(&ComputeRaftItem::Transactions(tx)).await;
+        let mut tx = std::mem::take(&mut self.local_tx_pool);
+        if self.use_raft {
+            self.propose_item(&ComputeRaftItem::Transactions(tx)).await;
+        } else {
+            self.consensused.tx_pool.append(&mut tx);
+        }
     }
 
     pub async fn propose_local_druid_transactions(&mut self) {
-        let tx = std::mem::take(&mut self.local_tx_druid_pool);
-        self.propose_item(&ComputeRaftItem::DruidTransactions(tx))
-            .await;
+        let mut tx = std::mem::take(&mut self.local_tx_druid_pool);
+        if self.use_raft {
+            self.propose_item(&ComputeRaftItem::DruidTransactions(tx))
+                .await;
+        } else {
+            self.consensused.tx_druid_pool.append(&mut tx);
+        }
     }
 
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
@@ -205,19 +227,11 @@ impl ComputeRaft {
     }
 
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
-        if self.use_raft {
-            self.local_tx_pool.append(&mut transactions);
-        } else {
-            self.consensused.tx_pool.append(&mut transactions);
-        }
+        self.local_tx_pool.append(&mut transactions);
     }
 
     pub fn set_local_last_block_hash(&mut self, value: String) {
-        if self.use_raft {
-            self.local_last_block_hash = value;
-        } else {
-            self.consensused.tx_previous_hash = Some(value);
-        }
+        self.local_last_block_hash = Some(value);
     }
 
     pub fn get_committed_previous_hash(&self) -> &Option<String> {
@@ -225,11 +239,7 @@ impl ComputeRaft {
     }
 
     pub fn append_to_tx_druid_pool(&mut self, transactions: BTreeMap<String, Transaction>) {
-        if self.use_raft {
-            self.local_tx_druid_pool.push(transactions);
-        } else {
-            self.consensused.tx_druid_pool.push(transactions);
-        }
+        self.local_tx_druid_pool.push(transactions);
     }
 
     pub fn commited_tx_druid_pool(&mut self) -> &mut Vec<BTreeMap<String, Transaction>> {
@@ -303,14 +313,7 @@ impl ComputeRaft {
     }
 
     fn update_block_header(&mut self, block: &mut Block) {
-        let previous_hash = {
-            let previous_hash = std::mem::take(&mut self.consensused.tx_previous_hash);
-            if self.use_raft {
-                previous_hash.unwrap()
-            } else {
-                previous_hash.unwrap_or(String::new())
-            }
-        };
+        let previous_hash = std::mem::take(&mut self.consensused.tx_previous_hash).unwrap();
 
         block.header.time = 1;
         block.header.previous_hash = Some(previous_hash);

@@ -554,7 +554,11 @@ impl ComputeNode {
         use ComputeRequest::*;
 
         match req {
-            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
+            SendPoW { pow, coinbase } => {
+                let result = Some(self.receive_pow(peer, pow, coinbase));
+                self.node_raft.propose_block().await;
+                result
+            }
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
