@@ -280,14 +280,6 @@ impl ComputeNode {
         }
     }
 
-    pub async fn vote_generate_block(&mut self) {
-        self.node_raft.propose_block().await;
-    }
-
-    pub fn get_committed_previous_hash(&self) -> &Option<String> {
-        self.node_raft.get_committed_previous_hash()
-    }
-
     pub fn get_mining_block(&self) -> &Option<Block> {
         self.node_raft.get_mining_block()
     }
@@ -517,8 +509,10 @@ impl ComputeNode {
                         addr,
                         ComputeRequest::RaftCmd(msg)).await;
                     info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
-
-
+                }
+                _ = self.node_raft.timeout_propose_block() => {
+                    trace!("handle_next_event timeout");
+                    self.node_raft.propose_block_at_timeout().await;
                 }
             }
         }
@@ -561,7 +555,7 @@ impl ComputeNode {
         match req {
             SendPoW { pow, coinbase } => {
                 let result = Some(self.receive_pow(peer, pow, coinbase));
-                self.node_raft.propose_block().await;
+                self.node_raft.propose_block_at_timeout().await;
                 result
             }
             SendPartitionEntry { partition_entry } => {

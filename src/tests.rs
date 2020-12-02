@@ -96,7 +96,6 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     //
     // Act
     //
-    compute_vote_generate_block(&mut network, "compute1").await;
     let block_transaction_before =
         compute_raft_group_all_current_block_transactions(&mut network, compute_nodes).await;
 
@@ -140,17 +139,17 @@ async fn proof_of_work() {
         task_spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await,
     );
 
-    let block_hash_before = compute_block_hash(&mut network, "compute1").await;
+    let block_before = compute_mined_block_time(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
     compute_handle_error(&mut network, "compute1", "Not mining given block").await;
     compute_handle_error(&mut network, "compute1", "Not mining given block").await;
-    let block_hash_after = compute_block_hash(&mut network, "compute1").await;
+    let block_after = compute_mined_block_time(&mut network, "compute1").await;
 
     //
     // Assert
     //
-    assert_eq!(block_hash_before.len(), 0);
-    assert_eq!(block_hash_after.len(), 64);
+    assert_eq!(block_before, None);
+    assert_eq!(block_after, Some(0));
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -304,16 +303,12 @@ async fn compute_generate_block(network: &mut Network, compute: &str) {
     c.generate_block();
 }
 
-async fn compute_vote_generate_block(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.vote_generate_block().await;
-}
-
-async fn compute_block_hash(network: &mut Network, compute: &str) -> String {
+async fn compute_mined_block_time(network: &mut Network, compute: &str) -> Option<u32> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.get_committed_previous_hash()
+    c.current_mined_block
+        .as_ref()
+        .map(|b| b.block.header.time)
         .clone()
-        .unwrap_or(String::new())
 }
 
 async fn compute_raft_group_all_current_block_transactions(
