@@ -30,7 +30,7 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_tx_hash, update_utxo_set};
+use naom::primitives::transaction_utils::{construct_tx_hash, get_inputs_previous_out_hash};
 use naom::script::utils::tx_ins_are_valid;
 
 use tracing::{debug, error_span, info, trace, warn};
@@ -757,9 +757,14 @@ impl ComputeInterface for ComputeNode {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
 
-        // Update internal UTXO
-        self.utxo_set.append(&mut block_tx.clone());
-        update_utxo_set(&mut self.utxo_set);
+        // Update internal UTXO: Minimal update, block_tx transaction could
+        // only depend on self.utxo_set
+        {
+            for hash in get_inputs_previous_out_hash(block_tx.values()) {
+                self.utxo_set.remove(hash);
+            }
+            self.utxo_set.append(&mut block_tx.clone());
+        }
 
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
