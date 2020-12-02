@@ -289,7 +289,7 @@ async fn compute_seed_utxo(
     compute: &str,
     seed_utxo: &BTreeMap<String, Transaction>,
 ) {
-    let c = network.compute(compute).unwrap().lock().await;
+    let mut c = network.compute(compute).unwrap().lock().await;
     c.seed_utxo_set(seed_utxo.clone());
 }
 
