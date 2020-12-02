@@ -760,7 +760,7 @@ impl ComputeInterface for ComputeNode {
 
         // Update internal UTXO
         self.utxo_set.lock().unwrap().append(&mut block_tx.clone());
-        update_utxo_set(&mut self.utxo_set);
+        update_utxo_set(&mut self.utxo_set.lock().unwrap());
 
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
