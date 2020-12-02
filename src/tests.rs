@@ -1,6 +1,6 @@
 //! Test suite for the network functions.
 
-use crate::compute::ComputeNode;
+use crate::compute::{ComputeNode, MinedBlock};
 use crate::interfaces::Response;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
@@ -12,10 +12,11 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Barrier;
-use tracing::{info, info_span};
+use tracing::{error_span, info};
+use tracing_futures::Instrument;
 
 #[tokio::test(threaded_scheduler)]
-async fn create_block() {
+async fn create_block_no_raft() {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
@@ -40,7 +41,7 @@ async fn create_block() {
     );
     let block_transaction_before =
         compute_current_block_transactions(&mut network, "compute1").await;
-    compute_generate_block(&mut network, "compute1").await;
+    compute_handle_event(&mut network, "compute1", "Block committed").await;
     let block_transaction_after =
         compute_current_block_transactions(&mut network, "compute1").await;
 
@@ -95,7 +96,6 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     //
     // Act
     //
-    compute_vote_generate_block(&mut network, "compute1").await;
     let block_transaction_before =
         compute_raft_group_all_current_block_transactions(&mut network, compute_nodes).await;
 
@@ -128,6 +128,7 @@ async fn proof_of_work() {
     let mut network = Network::create_from_config(&network_config).await;
 
     let block = Block::new();
+    compute_set_current_block(&mut network, "compute1", block.clone()).await;
 
     //
     // Act
@@ -138,17 +139,17 @@ async fn proof_of_work() {
         task_spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await,
     );
 
-    let block_hash_before = compute_block_hash(&mut network, "compute1").await;
+    let block_before = compute_mined_block_time(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    let block_hash_after = compute_block_hash(&mut network, "compute1").await;
+    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
+    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
+    let block_after = compute_mined_block_time(&mut network, "compute1").await;
 
     //
     // Assert
     //
-    assert_eq!(block_hash_before.len(), 0);
-    assert_eq!(block_hash_after.len(), 64);
+    assert_eq!(block_before, None);
+    assert_eq!(block_after, Some(0));
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -163,7 +164,12 @@ async fn send_block_to_storage() {
             let comp = network.compute("compute1").unwrap().clone();
             async move {
                 let mut c = comp.lock().await;
-                c.current_block = Some(Block::new());
+                c.current_mined_block = Some(MinedBlock {
+                    nonce: Vec::new(),
+                    block: Block::new(),
+                    block_tx: BTreeMap::new(),
+                    mining_transaction: Transaction::new(),
+                });
                 c.connect_to_storage().await.unwrap();
                 let _write_to_store = c.send_block_to_storage().await.unwrap();
             }
@@ -225,15 +231,21 @@ async fn receive_payment_tx_user() {
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, reason_str).await;
+    compute_handle_event_for_node(&mut c, true, reason_str).await;
 }
 
-async fn compute_handle_event_for_node(c: &mut ComputeNode, reason_str: &str) {
+async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    compute_handle_event_for_node(&mut c, false, reason_str).await;
+}
+
+async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
     match c.handle_next_event().await {
-        Some(Ok(Response {
-            success: true,
-            reason,
-        })) if reason == reason_str => (),
+        Some(Ok(Response { success, reason }))
+            if success == success_val && reason == reason_val =>
+        {
+            ()
+        }
         other => panic!("Unexpected result: {:?}", other),
     }
 }
@@ -250,21 +262,24 @@ async fn compute_raft_group_all_handle_event(
         let compute_name = compute_name.clone();
         let compute = network.compute(&compute_name).unwrap().clone();
 
-        join_handles.push(async move {
-            let _peer_span = info_span!("peer", ?compute_name);
-            info!("Start wait for event");
+        let peer_span = error_span!("peer", ?compute_name);
+        join_handles.push(
+            async move {
+                info!("Start wait for event");
 
-            let mut compute = compute.lock().await;
-            compute_handle_event_for_node(&mut compute, reason_str).await;
+                let mut compute = compute.lock().await;
+                compute_handle_event_for_node(&mut compute, true, reason_str).await;
 
-            info!("Start wait for completion of other in raft group");
-            let result = tokio::select!(
-               _ = barrier.wait() => (),
-               _ = compute_handle_event_for_node(&mut compute, "Not an event") => (),
-            );
+                info!("Start wait for completion of other in raft group");
+                let result = tokio::select!(
+                   _ = barrier.wait() => (),
+                   _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
+                );
 
-            info!("Stop wait for event: {:?}", result);
-        });
+                info!("Stop wait for event: {:?}", result);
+            }
+            .instrument(peer_span),
+        );
     }
     let _ = join_all(join_handles).await;
 }
@@ -278,19 +293,17 @@ async fn compute_seed_utxo(
     c.seed_utxo_set(seed_utxo.clone());
 }
 
-async fn compute_generate_block(network: &mut Network, compute: &str) {
+async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.generate_block();
+    c.set_committed_mining_block(block, BTreeMap::new());
 }
 
-async fn compute_vote_generate_block(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.vote_generate_block().await;
-}
-
-async fn compute_block_hash(network: &mut Network, compute: &str) -> String {
+async fn compute_mined_block_time(network: &mut Network, compute: &str) -> Option<u32> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.last_block_hash.clone()
+    c.current_mined_block
+        .as_ref()
+        .map(|b| b.block.header.time)
+        .clone()
 }
 
 async fn compute_raft_group_all_current_block_transactions(
@@ -314,7 +327,9 @@ async fn compute_current_block_transactions(
     compute: &str,
 ) -> Option<Vec<String>> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.current_block.as_ref().map(|b| b.transactions.clone())
+    c.get_mining_block()
+        .as_ref()
+        .map(|b| b.transactions.clone())
 }
 
 async fn task_connect_and_send_payment_to_compute(

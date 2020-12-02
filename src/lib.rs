@@ -24,7 +24,7 @@ mod wallet;
 
 pub use compute::ComputeNode;
 pub use constants::{PARTITION_LIMIT, WALLET_PATH};
-pub use interfaces::{ComputeInterface, MinerInterface, Response, StorageInterface, UseInterface};
+pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface, UseInterface};
 pub use miner::MinerNode;
 pub use storage::StorageNode;
 pub use user::UserNode;

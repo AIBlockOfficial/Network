@@ -1,13 +1,12 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
+use config;
 use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;
-use system::{ComputeInterface, ComputeNode, Response};
-
-use config;
+use system::{ComputeNode, ComputeRequest, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,6 +54,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Started node at {}", node.address());
 
+    // RAFT HANDLING
+    let raft_loop_handle = {
+        let connect_all = node.connect_to_computes();
+        let raft_loop = node.raft_loop();
+        tokio::spawn(async move {
+            // Need to connect first so Raft messages can be sent.
+            println!("Start connect to compute peers");
+            let result = connect_all.await;
+            println!("Peer connect complete, start Raft: {:?}", result);
+            raft_loop.await;
+            println!("Raft complete");
+        })
+    };
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -87,9 +100,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect();
 
-            let resp = node.receive_transactions(transactions);
-            println!("initial receive_transactions Response: {:?}", resp);
-            node.generate_block();
+            let resp = node.inject_next_event(
+                "0.0.0.0:6666".parse().unwrap(),
+                ComputeRequest::SendTransactions { transactions },
+            );
+            println!("initial transactions inject Response: {:?}", resp);
         }
 
         let storage_connected = {
@@ -122,9 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        if storage_connected && node.has_current_block() {
-                            println!("Send Block to strage");
-                            println!("CURRENT BLOCK: {:?}", node.current_block);
+                        if storage_connected && node.has_current_mined_block() {
+                            println!("Send Block to storage");
+                            println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
                             let _write_to_store = node.send_block_to_storage().await.unwrap();
                         }
                         let _flood = node.flood_block_found_notification().await.unwrap();
@@ -134,7 +149,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "All transactions successfully added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
-                        println!("CURRENT BLOCK: {:?}", node.current_block);
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Block committed",
+                    }) => {
+                        println!("Block ready to be mined: {:?}", node.get_mining_block());
                     }
                     Ok(Response {
                         success: true,
@@ -156,7 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let (result,) = tokio::join!(main_loop_handle);
-    result.unwrap();
+    let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
+    main.unwrap();
+    raft.unwrap();
     Ok(())
 }

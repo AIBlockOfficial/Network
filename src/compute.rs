@@ -2,8 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{
-    BLOCK_SIZE, BLOCK_SIZE_IN_TX, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT,
-    UNICORN_LIMIT,
+    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
 };
 use crate::interfaces::{
     ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
@@ -15,6 +14,7 @@ use crate::Node;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
@@ -36,7 +36,8 @@ use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_tx_hash, update_utxo_set};
 use naom::script::utils::tx_ins_are_valid;
 
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, error_span, info, trace, warn};
+use tracing_futures::Instrument;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -91,6 +92,15 @@ impl From<task::JoinError> for ComputeError {
 
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Clone)]
+pub struct MinedBlock {
+    pub nonce: Vec<u8>,
+    pub block: Block,
+    pub block_tx: BTreeMap<String, Transaction>,
+    pub mining_transaction: Transaction,
+}
+
+/// Druid pool structure for checking and holding participants
+#[derive(Debug, Clone)]
 pub struct DruidDroplet {
     participants: usize,
     tx: BTreeMap<String, Transaction>,
@@ -100,12 +110,10 @@ pub struct DruidDroplet {
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
-    pub current_block: Option<Block>,
+    pub current_mined_block: Option<MinedBlock>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
-    pub current_block_tx: BTreeMap<String, Transaction>,
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
-    pub last_block_hash: String,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
     pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
@@ -140,11 +148,9 @@ impl ComputeNode {
             node_raft: ComputeRaft::new(&config),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
-            current_block: None,
-            current_block_tx: BTreeMap::new(),
+            current_mined_block: None,
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
-            last_block_hash: "".to_string(),
             last_coinbase_hash: None,
             utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
             request_list: BTreeMap::new(),
@@ -165,14 +171,22 @@ impl ComputeNode {
     }
 
     /// Check if the node has a current block.
-    pub fn has_current_block(&self) -> bool {
-        self.current_block.is_some()
+    pub fn has_current_mined_block(&self) -> bool {
+        self.current_mined_block.is_some()
     }
 
     /// Connect to a storage peer on the network.
     pub async fn connect_to_storage(&mut self) -> Result<()> {
         self.node.connect_to(self.storage_addr).await?;
         Ok(())
+    }
+
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
     /// Connect to a compute peer on the network.
@@ -195,11 +209,12 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `transaction` - Transaction to process
-    pub fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
+    pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
         if let Some(druid) = transaction.clone().druid {
             // If this transaction is meant to join others
             if self.druid_pool.contains_key(&druid) {
                 self.process_tx_druid(druid, transaction);
+                self.node_raft.propose_local_druid_transactions().await;
 
                 return Response {
                     success: true,
@@ -264,14 +279,7 @@ impl ComputeNode {
         }
 
         if txs_valid {
-            for (h, tx) in &mut droplet.tx.clone().iter() {
-                self.current_block
-                    .as_mut()
-                    .unwrap()
-                    .transactions
-                    .push(h.to_string());
-                self.current_block_tx.insert(h.to_string(), tx.clone());
-            }
+            self.node_raft.append_to_tx_druid_pool(droplet.tx);
 
             println!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
@@ -281,68 +289,16 @@ impl ComputeNode {
         }
     }
 
-    pub async fn vote_generate_block(&mut self) {
-        self.node_raft
-            .propose_block(self.last_block_hash.clone())
-            .await;
+    pub fn get_mining_block(&self) -> &Option<Block> {
+        self.node_raft.get_mining_block()
     }
 
-    /// Processes the next batch of transactions from the floating tx pool
-    /// to create the next block
-    ///
-    /// TODO: Label previous block time
-    ///
-    /// ### Arguments
-    pub fn generate_block(&mut self) {
-        let mut next_block = Block::new();
-
-        // Update current_block_tx from tx pool if needed
-        self.update_current_block_tx();
-
-        let mut tx_hashes: Vec<String> = self
-            .current_block_tx
-            .keys()
-            .into_iter()
-            .map(|x| x.clone())
-            .collect();
-
-        next_block.header.time = 1;
-        next_block.header.previous_hash = Some(self.last_block_hash.clone());
-
-        if tx_hashes.len() > 0 {
-            // If there are more transactions than block can handle
-            if self.current_block_tx.len() > BLOCK_SIZE_IN_TX {
-                while !next_block.is_full() {
-                    let next_hash = tx_hashes.pop().unwrap();
-                    next_block.transactions.push(next_hash);
-                }
-
-            // If there are fewer transactions than a full block
-            } else {
-                while tx_hashes.len() > 0 {
-                    let next_hash = tx_hashes.pop().unwrap();
-                    next_block.transactions.push(next_hash);
-                }
-            }
-
-            self.current_block = Some(next_block);
-        }
-    }
-
-    /// Updates the internal state of an empty tx list for the current block
-    fn update_current_block_tx(&mut self) {
-        if self.current_block_tx.len() == 0 {
-            let tx_pool = self.node_raft.commited_tx_pool();
-            while self.current_block_tx.len() < BLOCK_SIZE_IN_TX && tx_pool.len() > 0 {
-                let tx_hashes: Vec<String> =
-                    tx_pool.keys().into_iter().map(|x| x.clone()).collect();
-
-                let new_entry = tx_pool.get(&tx_hashes[0]).unwrap();
-                self.current_block_tx
-                    .insert(tx_hashes[0].clone(), new_entry.clone());
-                tx_pool.remove(&tx_hashes[0]);
-            }
-        }
+    pub fn set_committed_mining_block(
+        &mut self,
+        block: Block,
+        block_tx: BTreeMap<String, Transaction>,
+    ) {
+        self.node_raft.set_committed_mining_block(block, block_tx)
     }
 
     /// Validates PoW for a full block
@@ -422,9 +378,10 @@ impl ComputeNode {
     ///
     /// * `peer`    - Address to send to
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
-        println!("BLOCK TO SEND: {:?}", self.current_block);
+        println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         println!("");
-        let block_to_send = Bytes::from(serialize(&self.current_block).unwrap()).to_vec();
+        let block_to_send =
+            Bytes::from(serialize(self.node_raft.get_mining_block()).unwrap()).to_vec();
 
         self.node
             .send(
@@ -475,8 +432,11 @@ impl ComputeNode {
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = std::mem::take(&mut self.current_block).unwrap();
-        let tx = std::mem::take(&mut self.current_block_tx);
+        let mined_block = self.current_mined_block.take().unwrap();
+
+        // TODO: include the mining transaction.
+        let block = mined_block.block;
+        let tx = mined_block.block_tx;
 
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
@@ -532,14 +492,16 @@ impl ComputeNode {
             // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
+                    trace!("handle_next_event evt {:?}", event);
                     match self.handle_event(event?).await.transpose() {
                         res @ Some(_) => return res,
                         None => (),
                     }
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
-                    if let Some(_block) = self.node_raft.received_commit(commit_data) {
-                        self.generate_block();
+                    trace!("handle_next_event commit {:?}", commit_data);
+                    if let Some(_) = self.node_raft.received_commit(commit_data).await {
+                        self.node_raft.generate_block();
                         return Some(Ok(Response{
                             success: true,
                             reason: "Block committed",
@@ -547,12 +509,19 @@ impl ComputeNode {
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
+                    trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     let result = self.node.send(
                         addr,
                         ComputeRequest::RaftCmd(msg)).await;
                     info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
-
-
+                }
+                _ = self.node_raft.timeout_propose_block() => {
+                    trace!("handle_next_event timeout block");
+                    self.node_raft.propose_block_at_timeout().await;
+                }
+                _ = self.node_raft.timeout_propose_transactions() => {
+                    trace!("handle_next_event timeout transactions");
+                    self.node_raft.propose_local_transactions_at_timeout().await;
                 }
             }
         }
@@ -560,7 +529,12 @@ impl ComputeNode {
 
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => self.handle_new_frame(peer, frame).await,
+            Event::NewFrame { peer, frame } => {
+                let peer_span = error_span!("peer", ?peer);
+                self.handle_new_frame(peer, frame)
+                    .instrument(peer_span)
+                    .await
+            }
         }
     }
 
@@ -570,37 +544,29 @@ impl ComputeNode {
         peer: SocketAddr,
         frame: Bytes,
     ) -> Result<Option<Response>> {
-        let _peer_span = info_span!("peer", ?peer);
-        {
-            let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
-                warn!(?error, "frame-deserialize");
-                error
-            })?;
+        let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+            warn!(?error, "frame-deserialize");
+            error
+        })?;
 
-            let _req_span = info_span!("request", ?req);
-            {
-                let response = self.handle_request(peer, req).await;
-                debug!(?response, ?peer, "response");
+        let req_span = error_span!("request", ?req);
+        let response = self.handle_request(peer, req).instrument(req_span).await;
+        debug!(?response, ?peer, "response");
 
-                Ok(response)
-            }
-        }
+        Ok(response)
     }
 
     /// Handles a compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
+        trace!("handle_request");
 
         match req {
             SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
-            SendTransactions { transactions } => {
-                let result = Some(self.receive_transactions(transactions));
-                self.node_raft.propose_local_transactions().await;
-                result
-            }
+            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
             RaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -768,6 +734,14 @@ impl ComputeInterface for ComputeNode {
         info!(?address, "Received PoW");
         let mut pow_block = pow.clone();
 
+        if self.node_raft.get_mining_block().is_none() {
+            // TODO: Verify the pow block is expected block.
+            return Response {
+                success: false,
+                reason: "Not mining given block",
+            };
+        }
+
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
                 success: false,
@@ -782,20 +756,32 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        // Take mining block info: no more mining for it.
+        let (block, block_tx) = self.node_raft.take_mining_block();
+
+        // Update internal UTXO
+        self.utxo_set.lock().unwrap().append(&mut block_tx.clone());
+        update_utxo_set(&mut self.utxo_set);
+
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
 
         // Update latest block hash
-        let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
-        let latest_block_h = Sha3_256::digest(&block_s).to_vec();
-        self.last_block_hash = hex::encode(latest_block_h);
+        {
+            let latest_block_time = pow_block.block.header.time;
+            let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
+            let latest_block_h = Sha3_256::digest(&block_s).to_vec();
+            self.node_raft
+                .set_local_last_block_hash_and_time(hex::encode(latest_block_h), latest_block_time);
+        }
 
-        // Update internal UTXO
-        self.utxo_set
-            .lock()
-            .unwrap()
-            .append(&mut self.current_block_tx.clone());
-        update_utxo_set(&mut self.utxo_set);
+        // Set mined block
+        self.current_mined_block = Some(MinedBlock {
+            nonce: pow.nonce,
+            block,
+            block_tx,
+            mining_transaction: coinbase,
+        });
 
         Response {
             success: true,

@@ -453,6 +453,18 @@ impl Node {
         self.event_rx.lock().await.recv().await
     }
 
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        let payload = Bytes::from(serialize(&data)?);
+        Ok(self.event_tx.send(Event::NewFrame {
+            peer: from_peer_addr,
+            frame: payload,
+        })?)
+    }
+
     /// Returns this node's listener address.
     pub fn address(&self) -> SocketAddr {
         self.listener_address
@@ -523,7 +535,7 @@ impl Node {
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) {
         while let Some(message) = messages.next().await {
-            trace!(?message);
+            trace!(?message, "handle_peer_recv");
             match message {
                 CommMessage::HandshakeResponse { contacts } => {
                     trace!(?contacts, "HandshakeResponse");
