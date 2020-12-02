@@ -292,10 +292,6 @@ impl ComputeNode {
         self.node_raft.set_committed_mining_block(block, block_tx)
     }
 
-    pub fn generate_block(&mut self) {
-        self.node_raft.generate_block();
-    }
-
     /// Validates PoW for a full block
     ///
     /// ### Arguments
@@ -496,7 +492,7 @@ impl ComputeNode {
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
                     if let Some(_) = self.node_raft.received_commit(commit_data).await {
-                        self.generate_block();
+                        self.node_raft.generate_block();
                         return Some(Ok(Response{
                             success: true,
                             reason: "Block committed",
@@ -511,8 +507,12 @@ impl ComputeNode {
                     info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
                 }
                 _ = self.node_raft.timeout_propose_block() => {
-                    trace!("handle_next_event timeout");
+                    trace!("handle_next_event timeout block");
                     self.node_raft.propose_block_at_timeout().await;
+                }
+                _ = self.node_raft.timeout_propose_transactions() => {
+                    trace!("handle_next_event timeout transactions");
+                    self.node_raft.propose_local_transactions_at_timeout().await;
                 }
             }
         }
@@ -553,19 +553,11 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
-            SendPoW { pow, coinbase } => {
-                let result = Some(self.receive_pow(peer, pow, coinbase));
-                self.node_raft.propose_block_at_timeout().await;
-                result
-            }
+            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
-            SendTransactions { transactions } => {
-                let result = Some(self.receive_transactions(transactions));
-                self.node_raft.propose_local_transactions().await;
-                result
-            }
+            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
             RaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;

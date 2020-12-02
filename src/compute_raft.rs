@@ -73,6 +73,8 @@ pub struct ComputeRaft {
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
     propose_block_timeout_at: Instant,
+    /// Timeout expiration time for transactions poposal.
+    propose_transactions_timeout_at: Instant,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -113,15 +115,10 @@ impl ComputeRaft {
             .collect();
 
         let use_raft = config.compute_raft != 0;
-        let (consensused, local_last_block_hash_and_time) = if use_raft {
-            (ComputeConsensused::default(), Some((String::new(), 1)))
-        } else {
-            let mut consensused = ComputeConsensused::default();
-            consensused.tx_previous_hash = Some(String::new());
-            (consensused, None)
-        };
         let propose_block_timeout_duration = Duration::from_millis(100);
         let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
+        let propose_transactions_timeout_at =
+            Instant::now() + (propose_block_timeout_duration / 10);
 
         ComputeRaft {
             use_raft,
@@ -132,12 +129,13 @@ impl ComputeRaft {
             committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, Vec::new()))),
             peer_addr,
             compute_peers_to_connect,
-            consensused,
+            consensused: ComputeConsensused::default(),
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
-            local_last_block_hash_and_time,
+            local_last_block_hash_and_time: Some((String::new(), 1)),
             propose_block_timeout_duration,
             propose_block_timeout_at,
+            propose_transactions_timeout_at,
         }
     }
 
@@ -220,6 +218,21 @@ impl ComputeRaft {
         self.cmd_tx.send(RaftCmd::Raft(msg)).await.unwrap();
     }
 
+    pub async fn timeout_propose_block(&self) {
+        Self::timeout_at(self.propose_block_timeout_at).await;
+    }
+
+    pub async fn timeout_propose_transactions(&self) {
+        Self::timeout_at(self.propose_transactions_timeout_at).await;
+    }
+
+    async fn timeout_at(timeout: Instant) {
+        match timeout_at(timeout, future::pending::<()>()).await {
+            Ok(()) => panic!("pending completed"),
+            Err(_) => (),
+        }
+    }
+
     pub async fn propose_block_at_timeout(&mut self) {
         if self.propose_block_timeout_at > Instant::now() {
             // Not ready yet
@@ -229,46 +242,41 @@ impl ComputeRaft {
 
         if let Some(block) = std::mem::take(&mut self.local_last_block_hash_and_time) {
             if self.first_raft_peer {
-                if self.use_raft {
-                    self.propose_item(&ComputeRaftItem::Block(block)).await;
-                } else {
-                    self.consensused.tx_previous_hash = Some(block.0);
-                    self.consensused.tx_previous_block_idx = block.1;
-                }
+                self.propose_item(&ComputeRaftItem::Block(block)).await;
             }
         }
     }
 
-    pub async fn timeout_propose_block(&self) {
-        match timeout_at(self.propose_block_timeout_at, future::pending::<()>()).await {
-            Ok(()) => panic!("pending completed"),
-            Err(_) => (),
+    pub async fn propose_local_transactions_at_timeout(&mut self) {
+        if self.propose_transactions_timeout_at > Instant::now() {
+            // Not ready yet
+            return;
         }
-    }
+        self.propose_transactions_timeout_at =
+            Instant::now() + (self.propose_block_timeout_duration / 10);
 
-    pub async fn propose_local_transactions(&mut self) {
-        let mut tx = std::mem::take(&mut self.local_tx_pool);
-        if self.use_raft {
+        let tx = std::mem::take(&mut self.local_tx_pool);
+        if !tx.is_empty() {
             self.propose_item(&ComputeRaftItem::Transactions(tx)).await;
-        } else {
-            self.consensused.tx_pool.append(&mut tx);
         }
     }
 
     pub async fn propose_local_druid_transactions(&mut self) {
-        let mut tx = std::mem::take(&mut self.local_tx_druid_pool);
-        if self.use_raft {
+        let tx = std::mem::take(&mut self.local_tx_druid_pool);
+        if !tx.is_empty() {
             self.propose_item(&ComputeRaftItem::DruidTransactions(tx))
                 .await;
-        } else {
-            self.consensused.tx_druid_pool.append(&mut tx);
         }
     }
 
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         debug!("propose_item: {:?}", item);
         let data = serialize(item).unwrap();
-        self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
+        if self.use_raft {
+            self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
+        } else {
+            self.committed_rx.lock().await.1.push(data);
+        }
     }
 
     pub fn commited_tx_pool(&mut self) -> &mut BTreeMap<String, Transaction> {

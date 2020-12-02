@@ -16,7 +16,7 @@ use tracing::{error_span, info};
 use tracing_futures::Instrument;
 
 #[tokio::test(threaded_scheduler)]
-async fn create_block() {
+async fn create_block_no_raft() {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
@@ -41,7 +41,7 @@ async fn create_block() {
     );
     let block_transaction_before =
         compute_current_block_transactions(&mut network, "compute1").await;
-    compute_generate_block(&mut network, "compute1").await;
+    compute_handle_event(&mut network, "compute1", "Block committed").await;
     let block_transaction_after =
         compute_current_block_transactions(&mut network, "compute1").await;
 
@@ -296,11 +296,6 @@ async fn compute_seed_utxo(
 async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
     let mut c = network.compute(compute).unwrap().lock().await;
     c.set_committed_mining_block(block, BTreeMap::new());
-}
-
-async fn compute_generate_block(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.generate_block();
 }
 
 async fn compute_mined_block_time(network: &mut Network, compute: &str) -> Option<u32> {

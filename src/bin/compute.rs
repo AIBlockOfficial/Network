@@ -89,7 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let resp = node.receive_transactions(transactions);
             println!("initial receive_transactions Response: {:?}", resp);
-            node.generate_block();
         }
 
         let storage_connected = {
@@ -134,6 +133,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "All transactions successfully added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Block committed",
+                    }) => {
+                        println!("Block ready to be mined: {:?}", node.get_mining_block());
                     }
                     Ok(Response {
                         success: true,
