@@ -1,9 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{
-    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
-};
+use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response, StorageRequest,
@@ -522,6 +520,7 @@ impl ComputeNode {
                 _ = self.node_raft.timeout_propose_transactions() => {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
+                    self.node_raft.propose_local_druid_transactions().await;
                 }
             }
         }
@@ -814,7 +813,7 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        if self.node_raft.tx_pool_len() + transactions.len() > TX_POOL_LIMIT {
+        if !self.node_raft.tx_pool_can_accept(transactions.len()) {
             return Response {
                 success: false,
                 reason: "Transaction pool for this compute node is full",
