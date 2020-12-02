@@ -107,14 +107,19 @@ impl ComputeRaft {
             Duration::from_millis(10),
         );
 
-        // TODO: Connect to all other peers once connection can succeed from both sides.
-        let compute_peers_to_connect = peer_addr_vec
-            .iter()
-            .filter(|(idx, _)| *idx > peer_id)
-            .map(|(_, addr)| addr.clone())
-            .collect();
-
         let use_raft = config.compute_raft != 0;
+
+        // TODO: Connect to all other peers once connection can succeed from both sides.
+        let compute_peers_to_connect = if use_raft {
+            peer_addr_vec
+                .iter()
+                .filter(|(idx, _)| *idx > peer_id)
+                .map(|(_, addr)| addr.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let propose_block_timeout_duration = Duration::from_millis(100);
         let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
         let propose_transactions_timeout_at =
