@@ -74,6 +74,8 @@ pub struct ComputeRaft {
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
     propose_block_timeout_at: Instant,
+    /// Min duration between each transaction poposal.
+    propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
     propose_transactions_timeout_at: Instant,
 }
@@ -106,7 +108,7 @@ impl ComputeRaft {
                 tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
-            Duration::from_millis(10),
+            Duration::from_millis(config.compute_raft_tick_timeout as u64),
         );
 
         let use_raft = config.compute_raft != 0;
@@ -122,10 +124,14 @@ impl ComputeRaft {
             Vec::new()
         };
 
-        let propose_block_timeout_duration = Duration::from_millis(100);
+        let propose_block_timeout_duration =
+            Duration::from_millis(config.compute_block_timeout as u64);
         let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
+
+        let propose_transactions_timeout_duration =
+            Duration::from_millis(config.compute_transaction_timeout as u64);
         let propose_transactions_timeout_at =
-            Instant::now() + (propose_block_timeout_duration / 10);
+            Instant::now() + propose_transactions_timeout_duration;
 
         ComputeRaft {
             use_raft,
@@ -142,6 +148,7 @@ impl ComputeRaft {
             local_last_block_hash_and_time: Some((String::new(), 1)),
             propose_block_timeout_duration,
             propose_block_timeout_at,
+            propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
         }
     }
@@ -264,7 +271,7 @@ impl ComputeRaft {
     /// Reset timeout, and propose local transactions if available.
     pub async fn propose_local_transactions_at_timeout(&mut self) {
         self.propose_transactions_timeout_at =
-            Instant::now() + (self.propose_block_timeout_duration / 10);
+            Instant::now() + self.propose_transactions_timeout_duration;
 
         let tx = std::mem::take(&mut self.local_tx_pool);
         if !tx.is_empty() {

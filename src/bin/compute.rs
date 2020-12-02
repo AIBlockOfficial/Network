@@ -39,6 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings.set_default("compute_node_idx", 0).unwrap();
         settings.set_default("compute_raft", 0).unwrap();
         settings
+            .set_default("compute_raft_tick_timeout", 10)
+            .unwrap();
+        settings.set_default("compute_block_timeout", 1000).unwrap();
+        settings
+            .set_default("compute_transaction_timeout", 100)
+            .unwrap();
+        settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
         if let Some(index) = matches.value_of("index") {

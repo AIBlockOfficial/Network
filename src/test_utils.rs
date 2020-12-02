@@ -192,6 +192,9 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
+                compute_raft_tick_timeout: 10,
+                compute_block_timeout: 100,
+                compute_transaction_timeout: 50,
             };
             map.insert(
                 name.clone(),
