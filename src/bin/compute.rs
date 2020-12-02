@@ -1,13 +1,12 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
+use config;
 use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;
-use system::{ComputeInterface, ComputeNode, Response};
-
-use config;
+use system::{ComputeNode, ComputeRequest, Response};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,8 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect();
 
-            let resp = node.receive_transactions(transactions);
-            println!("initial receive_transactions Response: {:?}", resp);
+            let resp = node.inject_next_event(
+                "0.0.0.0:6666".parse().unwrap(),
+                ComputeRequest::SendTransactions { transactions },
+            );
+            println!("initial transactions inject Response: {:?}", resp);
         }
 
         let storage_connected = {

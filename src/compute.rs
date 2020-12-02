@@ -14,6 +14,7 @@ use crate::Node;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
@@ -178,6 +179,14 @@ impl ComputeNode {
     pub async fn connect_to_storage(&mut self) -> Result<()> {
         self.node.connect_to(self.storage_addr).await?;
         Ok(())
+    }
+
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
     /// Connect to a compute peer on the network.

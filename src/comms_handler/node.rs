@@ -453,6 +453,18 @@ impl Node {
         self.event_rx.lock().await.recv().await
     }
 
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        let payload = Bytes::from(serialize(&data)?);
+        Ok(self.event_tx.send(Event::NewFrame {
+            peer: from_peer_addr,
+            frame: payload,
+        })?)
+    }
+
     /// Returns this node's listener address.
     pub fn address(&self) -> SocketAddr {
         self.listener_address
