@@ -6,8 +6,9 @@ use crate::raft::{
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::future::{self, Future};
 use std::net::SocketAddr;
@@ -41,6 +42,8 @@ pub struct ComputeConsensused {
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
+    /// UTXO set containain the valid transaction to use as previous input hashes.
+    utxo_set: BTreeMap<String, Transaction>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -133,6 +136,16 @@ impl ComputeRaft {
         let propose_transactions_timeout_at =
             Instant::now() + propose_transactions_timeout_duration;
 
+        let consensused = {
+            let mut consensused = ComputeConsensused::default();
+            consensused.utxo_set = config
+                .compute_seed_utxo
+                .iter()
+                .map(|hash| (hash.clone(), Transaction::new()))
+                .collect();
+            consensused
+        };
+
         ComputeRaft {
             use_raft,
             first_raft_peer: config.compute_node_idx == 0 || !use_raft,
@@ -142,7 +155,7 @@ impl ComputeRaft {
             committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, Vec::new()))),
             peer_addr,
             compute_peers_to_connect,
-            consensused: ComputeConsensused::default(),
+            consensused,
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
             local_last_block_hash_and_time: Some((String::new(), 1)),
@@ -330,6 +343,12 @@ impl ComputeRaft {
         block: Block,
         block_tx: BTreeMap<String, Transaction>,
     ) {
+        // Transaction only depend on mined block: append at the end.
+        // The block is about to be mined, all transaction accepted can be used
+        // to accept next block transactions.
+        // TODO: Roll back append and removal if block rejected by miners.
+        self.consensused.utxo_set.append(&mut block_tx.clone());
+
         self.consensused.current_block = Some(block);
         self.consensused.current_block_tx = block_tx;
     }
@@ -337,6 +356,10 @@ impl ComputeRaft {
     /// Current block to mine or being mined.
     pub fn get_mining_block(&self) -> &Option<Block> {
         &self.consensused.current_block
+    }
+
+    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+        &self.consensused.utxo_set
     }
 
     /// Take mining block when mining is completed, use to populate mined block.
@@ -367,20 +390,31 @@ impl ComputeRaft {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        for mut txs in self.consensused.tx_druid_pool.drain(..) {
-            // Process a set of transactions from a single DRUID droplet.
-            block.transactions.extend(txs.keys().cloned());
-            block_tx.append(&mut txs);
+        let mut tx_druid_pool = std::mem::take(&mut self.consensused.tx_druid_pool);
+        for txs in tx_druid_pool.drain(..) {
+            if !self.find_invalid_new_txs(&txs).is_empty() {
+                // Drop invalid DRUID droplet
+                continue;
+            }
+
+            // Process valid set of transactions from a single DRUID droplet.
+            self.update_current_block_tx_with_given_valid_txs(txs, block, block_tx);
         }
     }
 
-    /// Apply all consensused transactions to the block until BLOCK_SIZE_IN_TX
+    /// Apply all valid consensused transactions to the block until BLOCK_SIZE_IN_TX
     fn update_current_block_tx(
         &mut self,
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        let mut txs = {
+        // Clean tx_pool of invalid transactions for this block.
+        for invalid in self.find_invalid_new_txs(&self.consensused.tx_pool) {
+            self.consensused.tx_pool.remove(&invalid);
+        }
+
+        // Select subset of transaction to fill the block.
+        let txs = {
             let mut txs = std::mem::take(&mut self.consensused.tx_pool);
             if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
                 // Set back overflowing transactions.
@@ -389,8 +423,8 @@ impl ComputeRaft {
             txs
         };
 
-        block.transactions.extend(txs.keys().cloned());
-        block_tx.append(&mut txs);
+        // Process valid set of transactions.
+        self.update_current_block_tx_with_given_valid_txs(txs, block, block_tx);
     }
 
     /// Apply the consensused information for the header.
@@ -399,5 +433,45 @@ impl ComputeRaft {
 
         block.header.time = self.consensused.tx_previous_block_idx + 1;
         block.header.previous_hash = Some(previous_hash);
+    }
+
+    /// Apply set of valid transactions to the block.
+    fn update_current_block_tx_with_given_valid_txs(
+        &mut self,
+        mut txs: BTreeMap<String, Transaction>,
+        block: &mut Block,
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
+        for hash in get_inputs_previous_out_hash(txs.values()) {
+            // All previous hash in valid txs set are present and must be removed.
+            self.consensused.utxo_set.remove(hash).unwrap();
+        }
+        block.transactions.extend(txs.keys().cloned());
+        block_tx.append(&mut txs);
+    }
+
+    /// Find transactions for the current block.
+    pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
+        let mut invalid = Vec::new();
+
+        let mut removed_all = HashSet::new();
+        for (hash_tx, value) in new_txs.iter() {
+            let mut removed_roll_back = Vec::new();
+
+            for hash_in in get_inputs_previous_out_hash(Some(value).into_iter()) {
+                if self.consensused.utxo_set.contains_key(hash_in) && removed_all.insert(hash_in) {
+                    removed_roll_back.push(hash_in);
+                } else {
+                    // Entry is invalid: roll back, mark entry and check next one.
+                    for h in removed_roll_back {
+                        removed_all.remove(h);
+                    }
+                    invalid.push(hash_tx.clone());
+                    break;
+                }
+            }
+        }
+
+        invalid
     }
 }

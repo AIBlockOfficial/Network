@@ -26,6 +26,8 @@ pub struct ComputeNodeConfig {
     pub compute_block_timeout: usize,
     /// Index of the current node in compute_nodes
     pub compute_transaction_timeout: usize,
+    /// Transaction hash to use to seed utxo.
+    pub compute_seed_utxo: Vec<String>,
 }
 
 /// Configuration option for a storage node
@@ -89,6 +91,5 @@ pub struct InititalTransactions {
 /// Configuration option for setup of compute node
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
-    pub compute_seed_utxo: Vec<String>,
     pub compute_initial_transactions: Vec<InititalTransactions>,
 }
