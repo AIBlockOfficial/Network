@@ -475,3 +475,174 @@ impl ComputeRaft {
         invalid
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::configurations::NodeSpec;
+    use crate::utils::create_valid_transaction;
+    use sodiumoxide::crypto::sign;
+    use std::collections::BTreeSet;
+
+    #[tokio::test]
+    async fn generate_current_block_no_raft() {
+        //
+        // Arrange
+        //
+        let seed_utxo = [
+            // 1: (Skip "000003")
+            "000000", "000001", "000002", // 2: (Skip "000012")
+            "000010", "000011", // 3:
+            "000020", "000021", "000023", // 4:
+            "000030", "000031",
+        ];
+        let mut node = new_test_node(&seed_utxo);
+        let mut expected_block_addr_to_hashes = BTreeMap::new();
+        let mut expected_unused_utxo_hashes = Vec::<&str>::new();
+
+        // 1. Add 2 valid and 2 double spend and one spent transactions
+        // Keep only 2 valids, and first double spent by hash.
+        node.append_to_tx_pool(valid_transaction(
+            &["000000", "000001", "000003"],
+            &["000100", "000101", "000103"],
+            &mut expected_block_addr_to_hashes,
+        ));
+        node.append_to_tx_pool(valid_transaction(
+            &["000000", "000002"],
+            &["000200", "000202"],
+            &mut expected_block_addr_to_hashes,
+        ));
+        expected_block_addr_to_hashes.remove(key_with_max_value(
+            &expected_block_addr_to_hashes,
+            "000100",
+            "000200",
+        ));
+        expected_block_addr_to_hashes.remove("000103");
+        // 2. Add double spend and spent within DRUID droplet
+        // Drop all
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000010", "000010"],
+            &["000310", "000311"],
+            &mut BTreeMap::new(),
+        ));
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000011", "000012"],
+            &["000311", "000312"],
+            &mut BTreeMap::new(),
+        ));
+        expected_unused_utxo_hashes.extend(&["000010", "000011"]);
+        // 3. Add double spend between DRUID droplet
+        // Keep first one added
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000020", "000023"],
+            &["000420", "000423"],
+            &mut expected_block_addr_to_hashes,
+        ));
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000021", "000023"],
+            &["000521", "000523"],
+            &mut BTreeMap::new(),
+        ));
+        expected_unused_utxo_hashes.extend(&["000021"]);
+        // 4. Add double spend between DRUID droplet and transaction
+        // Keep DRUID droplet
+        node.append_to_tx_pool(valid_transaction(
+            &["000030"],
+            &["000621"],
+            &mut BTreeMap::new(),
+        ));
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000030", "000031"],
+            &["000730", "000731"],
+            &mut expected_block_addr_to_hashes,
+        ));
+
+        //
+        // Act
+        //
+        node.propose_local_transactions_at_timeout().await;
+        node.propose_local_druid_transactions().await;
+        node.propose_block_at_timeout().await;
+        let commit = node.next_commit().await.unwrap();
+        let _need_block = node.received_commit(commit).await.unwrap();
+        node.generate_block();
+
+        //
+        // Assert
+        //
+        let expected_block_t_hashes: BTreeSet<String> =
+            expected_block_addr_to_hashes.values().cloned().collect();
+        let expected_utxo_t_hashes: BTreeSet<String> = expected_unused_utxo_hashes
+            .iter()
+            .map(|h| h.to_string())
+            .chain(expected_block_t_hashes.iter().cloned())
+            .collect();
+
+        let actual_block_t_hashes: Option<BTreeSet<String>> = node
+            .get_mining_block()
+            .as_ref()
+            .map(|b| b.transactions.iter().cloned().collect());
+        let actual_block_tx_t_hashes: BTreeSet<String> =
+            node.consensused.current_block_tx.keys().cloned().collect();
+        let actual_utxo_t_hashes: BTreeSet<String> =
+            node.get_committed_utxo_set().keys().cloned().collect();
+
+        assert_eq!(Some(expected_block_t_hashes.clone()), actual_block_t_hashes);
+        assert_eq!(expected_block_t_hashes, actual_block_tx_t_hashes);
+        assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
+        assert_eq!(node.consensused.tx_pool.len(), 0);
+        assert_eq!(node.consensused.tx_druid_pool.len(), 0);
+        assert_eq!(node.consensused.tx_previous_hash, None);
+    }
+
+    fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
+        let compute_node = NodeSpec {
+            address: "0.0.0.0:0".parse().unwrap(),
+        };
+        let compute_config = ComputeNodeConfig {
+            compute_raft: 0,
+            compute_node_idx: 0,
+            compute_nodes: vec![compute_node],
+            storage_nodes: vec![],
+            user_nodes: vec![],
+            compute_raft_tick_timeout: 10,
+            compute_block_timeout: 100,
+            compute_transaction_timeout: 50,
+            compute_seed_utxo: seed_utxo.iter().map(|v| v.to_string()).collect(),
+        };
+        ComputeRaft::new(&compute_config)
+    }
+
+    fn valid_transaction<'a>(
+        intial_t_hashes: &[&str],
+        receiver_addrs: &[&str],
+        new_hashes: &mut BTreeMap<String, String>,
+    ) -> BTreeMap<String, Transaction> {
+        let (pk, sk) = sign::gen_keypair();
+
+        let txs: Vec<_> = intial_t_hashes
+            .iter()
+            .copied()
+            .zip(receiver_addrs.iter().copied())
+            .map(|(hash, addr)| (create_valid_transaction(hash, addr, &pk, &sk), addr))
+            .collect();
+
+        new_hashes.extend(
+            txs.iter()
+                .map(|((h, _), addr)| (addr.to_string(), h.clone())),
+        );
+        txs.into_iter().map(|(tx, _)| tx).collect()
+    }
+
+    pub fn key_with_max_value<'a>(
+        map: &BTreeMap<String, String>,
+        key1: &'a str,
+        key2: &'a str,
+    ) -> &'a str {
+        if map[key1] < map[key2] {
+            key2
+        } else {
+            key1
+        }
+    }
+}

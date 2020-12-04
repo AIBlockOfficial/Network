@@ -96,15 +96,15 @@ pub fn get_partition_entry_key(p_list: Vec<ProofOfWork>) -> Vec<u8> {
 }
 
 pub fn create_valid_transaction(
-    t_hash_hex: &String,
-    receiver_addr_hex: &String,
+    t_hash_hex: &str,
+    receiver_addr_hex: &str,
     pub_key: &PublicKey,
     secret_key: &SecretKey,
 ) -> (String, Transaction) {
     let signature = sign::sign_detached(&t_hash_hex.as_bytes(), &secret_key);
 
     let tx_const = TxConstructor {
-        t_hash: t_hash_hex.clone(),
+        t_hash: t_hash_hex.to_string(),
         prev_n: 0,
         signatures: vec![signature],
         pub_keys: vec![pub_key.clone()],
@@ -113,7 +113,7 @@ pub fn create_valid_transaction(
     let tx_ins = construct_payment_tx_ins(vec![tx_const]);
     let payment_tx = construct_payment_tx(
         tx_ins,
-        receiver_addr_hex.clone(),
+        receiver_addr_hex.to_string(),
         None,
         None,
         Asset::Token(4),

@@ -364,11 +364,11 @@ async fn task_spawn_connect_and_send_pow(
 }
 
 fn valid_transactions() -> (BTreeMap<String, Transaction>, String, Transaction) {
-    let intial_t_hash = SEED_UTXO[0].to_owned();
-    let receiver_addr = "000001".to_owned();
+    let intial_t_hash = SEED_UTXO[0];
+    let receiver_addr = "000001";
 
     let (pk, sk) = sign::gen_keypair();
-    let (t_hash, payment_tx) = create_valid_transaction(&intial_t_hash, &receiver_addr, &pk, &sk);
+    let (t_hash, payment_tx) = create_valid_transaction(intial_t_hash, receiver_addr, &pk, &sk);
 
     let transactions = {
         let mut m = BTreeMap::new();
