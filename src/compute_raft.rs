@@ -92,8 +92,12 @@ pub struct ComputeRaft {
     propose_transactions_timeout_at: Instant,
     /// Proposed items in flight.
     proposed_in_flight: BTreeMap<ComputeRaftKey, RaftData>,
-    /// Proposed transaction in flight lenght.
+    /// Proposed transaction in flight length.
     proposed_tx_pool_len: usize,
+    /// Maximum transaction in flight length.
+    proposed_tx_pool_len_max: usize,
+    /// Maximum transaction consensused and in flight for proposing more.
+    proposed_and_consensused_tx_pool_len_max: usize,
     /// The last id of a proposed item.
     proposed_last_id: u64,
 }
@@ -122,7 +126,7 @@ impl ComputeRaft {
         let (raft_config, raft_channels) = RaftNode::init_config(
             raft::Config {
                 id: peer_id,
-                peers,
+                peers: peers.clone(),
                 tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
@@ -181,6 +185,8 @@ impl ComputeRaft {
             propose_transactions_timeout_at,
             proposed_in_flight: BTreeMap::new(),
             proposed_tx_pool_len: 0,
+            proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers.len(),
+            proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             proposed_last_id: 0,
         }
     }
@@ -319,7 +325,12 @@ impl ComputeRaft {
         self.propose_transactions_timeout_at =
             Instant::now() + self.propose_transactions_timeout_duration;
 
-        let txs = std::mem::take(&mut self.local_tx_pool);
+        let max_add = self
+            .proposed_and_consensused_tx_pool_len_max
+            .saturating_sub(self.proposed_and_consensused_tx_pool_len());
+
+        let max_propose_len = std::cmp::min(max_add, self.proposed_tx_pool_len_max);
+        let txs = Self::take_first_n(max_propose_len, &mut self.local_tx_pool);
         if !txs.is_empty() {
             self.proposed_tx_pool_len += txs.len();
             self.propose_item(&ComputeRaftItem::Transactions(txs)).await;
@@ -362,7 +373,12 @@ impl ComputeRaft {
 
     /// Current tx_pool lenght handled by this node.
     fn combined_tx_pool_len(&self) -> usize {
-        self.local_tx_pool.len() + self.proposed_tx_pool_len + self.consensused.tx_pool.len()
+        self.local_tx_pool.len() + self.proposed_and_consensused_tx_pool_len()
+    }
+
+    /// Current proposed tx_pool lenght handled by this node.
+    fn proposed_and_consensused_tx_pool_len(&self) -> usize {
+        self.proposed_tx_pool_len + self.consensused.tx_pool.len()
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -460,14 +476,7 @@ impl ComputeRaft {
         }
 
         // Select subset of transaction to fill the block.
-        let txs = {
-            let mut txs = std::mem::take(&mut self.consensused.tx_pool);
-            if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
-                // Set back overflowing transactions.
-                self.consensused.tx_pool = txs.split_off(&max_key);
-            }
-            txs
-        };
+        let txs = Self::take_first_n(BLOCK_SIZE_IN_TX, &mut self.consensused.tx_pool);
 
         // Process valid set of transactions.
         self.update_current_block_tx_with_given_valid_txs(txs, block, block_tx);
@@ -519,6 +528,15 @@ impl ComputeRaft {
         }
 
         invalid
+    }
+
+    fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
+        let mut result = std::mem::take(from);
+        if let Some(max_key) = result.keys().nth(n).cloned() {
+            // Set back overflowing in from.
+            *from = result.split_off(&max_key);
+        }
+        result
     }
 }
 
@@ -647,39 +665,70 @@ mod test {
         // Arrange
         //
         let mut node = new_test_node(&[]);
+        node.proposed_and_consensused_tx_pool_len_max = 3;
+        node.proposed_tx_pool_len_max = 2;
 
         //
         // Act
         //
-        let c_len_no_tx = node.combined_tx_pool_len();
+        let mut actual_combined_local_flight_consensused = Vec::new();
+        let mut collect_info = |node: &ComputeRaft| {
+            actual_combined_local_flight_consensused.push((
+                node.combined_tx_pool_len(),
+                node.local_tx_pool.len(),
+                node.proposed_tx_pool_len,
+                node.consensused.tx_pool.len(),
+            ))
+        };
+        collect_info(&node);
 
         node.append_to_tx_pool(valid_transaction(
-            &["000000", "000001", "000003"],
-            &["000100", "000101", "000103"],
+            &["000000", "000001", "000003", "000004", "000005", "000006"],
+            &["000100", "000101", "000103", "000104", "000105", "000106"],
             &mut BTreeMap::new(),
         ));
         node.append_to_tx_druid_pool(valid_transaction(
-            &["000004", "000005"],
-            &["000104", "000105"],
+            &["000010", "000011"],
+            &["000200", "000200"],
             &mut BTreeMap::new(),
         ));
-        let c_len_before = node.combined_tx_pool_len();
+        collect_info(&node);
 
-        node.propose_local_transactions_at_timeout().await;
-        node.propose_local_druid_transactions().await;
-        let c_len_during = node.combined_tx_pool_len();
+        for _ in 0..3 {
+            node.propose_local_transactions_at_timeout().await;
+            node.propose_local_druid_transactions().await;
+            collect_info(&node);
 
-        let commit = node.next_commit().await.unwrap();
-        let _need_block = node.received_commit(commit).await;
-        let c_len_after = node.combined_tx_pool_len();
+            tokio::select! {
+                commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
+                _ = ComputeRaft::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
+            }
+            collect_info(&node);
+        }
 
         //
         // Assert
         //
-        assert_eq!(c_len_no_tx, 0);
-        assert_eq!(c_len_before, 3);
-        assert_eq!(c_len_during, 3);
-        assert_eq!(c_len_after, 3);
+        assert_eq!(
+            actual_combined_local_flight_consensused,
+            vec![
+                // Start
+                (0, 0, 0, 0),
+                // Transaction appended
+                (6, 6, 0, 0),
+                // Process 1st time out and commit: 2 in flight then consensused
+                (6, 4, 2, 0),
+                (6, 4, 0, 2),
+                // Process 2nd time out and commit: 1 in flight then consensused
+                // (max reached)
+                (6, 3, 1, 2),
+                (6, 3, 0, 3),
+                // Process 3rd time out and commit: 0 in flight then consensused
+                // (max reached)
+                (6, 3, 0, 3),
+                (6, 3, 0, 3)
+            ]
+        );
     }
 
     fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
