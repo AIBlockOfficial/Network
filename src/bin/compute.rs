@@ -2,7 +2,6 @@
 
 use clap::{App, Arg};
 use config;
-use naom::primitives::transaction::Transaction;
 use sodiumoxide::crypto::sign;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;
@@ -78,17 +77,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
-
-        // Add initial utxo
-
-        {
-            let seed_utxo = setup
-                .compute_seed_utxo
-                .iter()
-                .map(|hash| (hash.clone(), Transaction::new()))
-                .collect();
-            node.seed_utxo_set(seed_utxo);
-        }
 
         // Kick off with some transactions
         {

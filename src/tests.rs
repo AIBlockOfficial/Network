@@ -15,6 +15,8 @@ use tokio::sync::Barrier;
 use tracing::{error_span, info};
 use tracing_futures::Instrument;
 
+const SEED_UTXO: [&str; 1] = ["000000"];
+
 #[tokio::test(threaded_scheduler)]
 async fn create_block_no_raft() {
     let _ = tracing_subscriber::fmt::try_init();
@@ -24,9 +26,7 @@ async fn create_block_no_raft() {
     //
     let network_config = complete_network_config(10000);
     let mut network = Network::create_from_config(&network_config).await;
-
-    let (seed_utxo, _transactions, t_hash, tx) = valid_transactions();
-    compute_seed_utxo(&mut network, "compute1", &seed_utxo).await;
+    let (_transactions, t_hash, tx) = valid_transactions();
 
     //
     // Act
@@ -81,9 +81,8 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let network_config = complete_network_config_with_n_compute_raft(initial_port, compute_count);
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
+    let (_transactions, t_hash, tx) = valid_transactions();
 
-    let (seed_utxo, _transactions, t_hash, tx) = valid_transactions();
-    compute_seed_utxo(&mut network, "compute1", &seed_utxo).await;
     tokio::join!(
         task_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await,
         compute_handle_event(
@@ -284,15 +283,6 @@ async fn compute_raft_group_all_handle_event(
     let _ = join_all(join_handles).await;
 }
 
-async fn compute_seed_utxo(
-    network: &mut Network,
-    compute: &str,
-    seed_utxo: &BTreeMap<String, Transaction>,
-) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.seed_utxo_set(seed_utxo.clone());
-}
-
 async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
     let mut c = network.compute(compute).unwrap().lock().await;
     c.set_committed_mining_block(block, BTreeMap::new());
@@ -373,29 +363,20 @@ async fn task_spawn_connect_and_send_pow(
     }
 }
 
-fn valid_transactions() -> (
-    BTreeMap<String, Transaction>,
-    BTreeMap<String, Transaction>,
-    String,
-    Transaction,
-) {
-    let intial_t_hash = "000000".to_owned();
-    let receiver_addr = "000000".to_owned();
+fn valid_transactions() -> (BTreeMap<String, Transaction>, String, Transaction) {
+    let intial_t_hash = SEED_UTXO[0];
+    let receiver_addr = "000001";
 
     let (pk, sk) = sign::gen_keypair();
-    let (t_hash, payment_tx) = create_valid_transaction(&intial_t_hash, &receiver_addr, &pk, &sk);
+    let (t_hash, payment_tx) = create_valid_transaction(intial_t_hash, receiver_addr, &pk, &sk);
 
     let transactions = {
         let mut m = BTreeMap::new();
         m.insert(t_hash.clone(), payment_tx.clone());
         m
     };
-    let seed_utxo = {
-        let mut m = BTreeMap::new();
-        m.insert(intial_t_hash, Transaction::new());
-        m
-    };
-    (seed_utxo, transactions, t_hash, payment_tx)
+
+    (transactions, t_hash, payment_tx)
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
@@ -406,6 +387,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
+        compute_seed_utxo: SEED_UTXO.iter().map(|v| v.to_string()).collect(),
     }
 }
 

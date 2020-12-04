@@ -38,6 +38,7 @@ pub struct Network {
 pub struct NetworkConfig {
     pub initial_port: u16,
     pub compute_raft: bool,
+    pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
@@ -195,6 +196,7 @@ impl Network {
                 compute_raft_tick_timeout: 10,
                 compute_block_timeout: 100,
                 compute_transaction_timeout: 50,
+                compute_seed_utxo: config.compute_seed_utxo.clone(),
             };
             map.insert(
                 name.clone(),

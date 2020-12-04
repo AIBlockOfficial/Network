@@ -30,7 +30,7 @@ use std::{
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_tx_hash, update_utxo_set};
+use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
 
 use tracing::{debug, error_span, info, trace, warn};
@@ -113,7 +113,6 @@ pub struct ComputeNode {
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
-    pub utxo_set: BTreeMap<String, Transaction>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub storage_addr: SocketAddr,
@@ -149,17 +148,11 @@ impl ComputeNode {
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
             last_coinbase_hash: None,
-            utxo_set: BTreeMap::new(),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
             storage_addr,
         })
-    }
-
-    /// Seed the inital value of the utxo_set
-    pub fn seed_utxo_set(&mut self, utxo_set: BTreeMap<String, Transaction>) {
-        self.utxo_set = utxo_set;
     }
 
     /// Returns the compute node's public endpoint.
@@ -269,7 +262,7 @@ impl ComputeNode {
         let mut txs_valid = true;
 
         for tx in droplet.tx.values() {
-            if !tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set) {
+            if !tx_ins_are_valid(tx.inputs.clone(), self.node_raft.get_committed_utxo_set()) {
                 txs_valid = false;
                 break;
             }
@@ -757,10 +750,6 @@ impl ComputeInterface for ComputeNode {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
 
-        // Update internal UTXO
-        self.utxo_set.append(&mut block_tx.clone());
-        update_utxo_set(&mut self.utxo_set);
-
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
 
@@ -819,10 +808,11 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        let utxo_set = self.node_raft.get_committed_utxo_set();
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set))
+            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), utxo_set))
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 
