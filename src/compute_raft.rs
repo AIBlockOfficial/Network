@@ -1,5 +1,5 @@
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::BLOCK_SIZE_IN_TX;
+use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout_at, Instant};
 use tracing::{debug, warn};
 
+/// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
     Block((String, u32)),
@@ -24,8 +25,8 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
 
-// All fields that are consensused between the RAFT group.
-// These fields need to be written and read from a committed log event.
+/// All fields that are consensused between the RAFT group.
+/// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default)]
 pub struct ComputeConsensused {
     /// Committed transaction pool.
@@ -73,6 +74,8 @@ pub struct ComputeRaft {
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
     propose_block_timeout_at: Instant,
+    /// Min duration between each transaction poposal.
+    propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
     propose_transactions_timeout_at: Instant,
 }
@@ -84,6 +87,7 @@ impl fmt::Debug for ComputeRaft {
 }
 
 impl ComputeRaft {
+    /// Create a ComputeRaft, need to spawn the raft loop to use raft.
     pub fn new(config: &ComputeNodeConfig) -> Self {
         let peers: Vec<u64> = (1..config.compute_nodes.len() + 1)
             .map(|idx| idx as u64 + 1)
@@ -104,7 +108,7 @@ impl ComputeRaft {
                 tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
-            Duration::from_millis(10),
+            Duration::from_millis(config.compute_raft_tick_timeout as u64),
         );
 
         let use_raft = config.compute_raft != 0;
@@ -120,10 +124,14 @@ impl ComputeRaft {
             Vec::new()
         };
 
-        let propose_block_timeout_duration = Duration::from_millis(100);
+        let propose_block_timeout_duration =
+            Duration::from_millis(config.compute_block_timeout as u64);
         let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
+
+        let propose_transactions_timeout_duration =
+            Duration::from_millis(config.compute_transaction_timeout as u64);
         let propose_transactions_timeout_at =
-            Instant::now() + (propose_block_timeout_duration / 10);
+            Instant::now() + propose_transactions_timeout_duration;
 
         ComputeRaft {
             use_raft,
@@ -140,10 +148,12 @@ impl ComputeRaft {
             local_last_block_hash_and_time: Some((String::new(), 1)),
             propose_block_timeout_duration,
             propose_block_timeout_at,
+            propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
         }
     }
 
+    /// All the peers to connect to when using raft.
     pub fn compute_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
         self.compute_peers_to_connect.iter()
     }
@@ -170,6 +180,8 @@ impl ComputeRaft {
         committed_rx.0.recv().await
     }
 
+    /// Process result from next_commit.
+    /// Return Some if block to mine is ready to generate.
     pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
         let mut committed_rx = self.committed_rx.lock().await;
         for data in raft_data.drain(..) {
@@ -213,24 +225,29 @@ impl ComputeRaft {
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
+    /// Message needs to be sent to given peer address.
     pub async fn next_msg(&self) -> Option<(SocketAddr, RaftMessageWrapper)> {
         let msg = self.msg_out_rx.lock().await.recv().await?;
         let addr = self.peer_addr.get(&msg.to).unwrap().clone();
         Some((addr, RaftMessageWrapper(msg)))
     }
 
+    /// Process a raft message: send to spawned raft loop.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.cmd_tx.send(RaftCmd::Raft(msg)).await.unwrap();
     }
 
+    /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) {
         Self::timeout_at(self.propose_block_timeout_at).await;
     }
 
+    /// Blocks & waits for a timeout to propose transactions.
     pub async fn timeout_propose_transactions(&self) {
         Self::timeout_at(self.propose_transactions_timeout_at).await;
     }
 
+    /// Blocks & waits for timeout.
     async fn timeout_at(timeout: Instant) {
         match timeout_at(timeout, future::pending::<()>()).await {
             Ok(()) => panic!("pending completed"),
@@ -238,11 +255,9 @@ impl ComputeRaft {
         }
     }
 
+    /// Process as a result of timeout_propose_block.
+    /// Reset timeout, and propose block if previous completed.
     pub async fn propose_block_at_timeout(&mut self) {
-        if self.propose_block_timeout_at > Instant::now() {
-            // Not ready yet
-            return;
-        }
         self.propose_block_timeout_at = Instant::now() + self.propose_block_timeout_duration;
 
         if let Some(block) = std::mem::take(&mut self.local_last_block_hash_and_time) {
@@ -252,13 +267,11 @@ impl ComputeRaft {
         }
     }
 
+    /// Process as a result of timeout_propose_transactions.
+    /// Reset timeout, and propose local transactions if available.
     pub async fn propose_local_transactions_at_timeout(&mut self) {
-        if self.propose_transactions_timeout_at > Instant::now() {
-            // Not ready yet
-            return;
-        }
         self.propose_transactions_timeout_at =
-            Instant::now() + (self.propose_block_timeout_duration / 10);
+            Instant::now() + self.propose_transactions_timeout_duration;
 
         let tx = std::mem::take(&mut self.local_tx_pool);
         if !tx.is_empty() {
@@ -266,6 +279,8 @@ impl ComputeRaft {
         }
     }
 
+    /// Process as a result of timeout_propose_transactions.
+    /// Propose druid transactions if available.
     pub async fn propose_local_druid_transactions(&mut self) {
         let tx = std::mem::take(&mut self.local_tx_druid_pool);
         if !tx.is_empty() {
@@ -274,6 +289,7 @@ impl ComputeRaft {
         }
     }
 
+    /// Propose an item to raft if use_raft, or commit it otherwise.
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         debug!("propose_item: {:?}", item);
         let data = serialize(item).unwrap();
@@ -284,30 +300,31 @@ impl ComputeRaft {
         }
     }
 
-    pub fn commited_tx_pool(&mut self) -> &mut BTreeMap<String, Transaction> {
-        &mut self.consensused.tx_pool
+    /// Whether adding these will grow our pool within the limit.
+    pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
+        let combined_len = self.consensused.tx_pool.len() + self.local_tx_pool.len();
+        combined_len + extra_len <= TX_POOL_LIMIT
     }
 
-    pub fn tx_pool_len(&self) -> usize {
-        self.consensused.tx_pool.len() + self.local_tx_pool.len()
-    }
-
+    /// Append new transaction to our local pool from which to propose
+    /// consensused transactions.
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
         self.local_tx_pool.append(&mut transactions);
     }
 
+    /// Set result of mined block necessary for new block to be generated.
     pub fn set_local_last_block_hash_and_time(&mut self, hash: String, time: u32) {
         self.local_last_block_hash_and_time = Some((hash, time));
     }
 
+    /// Append new transaction to our local pool from which to propose
+    /// consensused transactions.
     pub fn append_to_tx_druid_pool(&mut self, transactions: BTreeMap<String, Transaction>) {
         self.local_tx_druid_pool.push(transactions);
     }
 
-    pub fn commited_tx_druid_pool(&mut self) -> &mut Vec<BTreeMap<String, Transaction>> {
-        &mut self.consensused.tx_druid_pool
-    }
-
+    /// Set consensused committed block to mine.
+    /// Internal call, public for test only.
     pub fn set_committed_mining_block(
         &mut self,
         block: Block,
@@ -317,10 +334,12 @@ impl ComputeRaft {
         self.consensused.current_block_tx = block_tx;
     }
 
+    /// Current block to mine or being mined.
     pub fn get_mining_block(&self) -> &Option<Block> {
         &self.consensused.current_block
     }
 
+    /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
         let block = std::mem::take(&mut self.consensused.current_block).unwrap();
         let block_tx = std::mem::take(&mut self.consensused.current_block_tx);
@@ -374,6 +393,7 @@ impl ComputeRaft {
         block_tx.append(&mut txs);
     }
 
+    /// Apply the consensused information for the header.
     fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.consensused.tx_previous_hash).unwrap();
 

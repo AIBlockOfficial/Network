@@ -6,7 +6,8 @@ use bincode::deserialize;
 use futures::future::join_all;
 use tracing::debug;
 
-/// Check that 2 nodes can exchange arbitrary messages.
+/// Check that 2 nodes can exchange arbitrary messages in both direction,
+/// using their public address after one node connected to the other.
 #[tokio::test]
 async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
@@ -20,11 +21,16 @@ async fn direct_messages() {
         .unwrap();
 
     n2.connect_to(n1.address()).await.unwrap();
-    n2.send(n1.address(), "Hello").await.unwrap();
+    n2.send(n1.address(), "Hello1").await.unwrap();
+    n1.send(n2.address(), "Hello2").await.unwrap();
 
     if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
         let recv_frame: &str = deserialize(&frame).unwrap();
-        assert_eq!(recv_frame, "Hello");
+        assert_eq!(recv_frame, "Hello1");
+    }
+    if let Some(Event::NewFrame { peer: _, frame }) = n2.next_event().await {
+        let recv_frame: &str = deserialize(&frame).unwrap();
+        assert_eq!(recv_frame, "Hello2");
     }
 }
 

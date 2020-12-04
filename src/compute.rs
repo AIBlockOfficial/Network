@@ -1,9 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::ComputeRaft;
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{
-    BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, TX_POOL_LIMIT, UNICORN_LIMIT,
-};
+use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
     ProofOfWorkBlock, Response, StorageRequest,
@@ -19,7 +17,6 @@ use sha3::{Digest, Sha3_256};
 
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
 use tokio::task;
 
 use std::{
@@ -116,7 +113,7 @@ pub struct ComputeNode {
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
-    pub utxo_set: Arc<Mutex<BTreeMap<String, Transaction>>>,
+    pub utxo_set: BTreeMap<String, Transaction>,
     pub partition_list: Vec<ProofOfWork>,
     pub request_list: BTreeMap<String, bool>,
     pub storage_addr: SocketAddr,
@@ -152,7 +149,7 @@ impl ComputeNode {
             druid_pool: BTreeMap::new(),
             current_random_num: Vec::new(),
             last_coinbase_hash: None,
-            utxo_set: Arc::new(Mutex::new(BTreeMap::new())),
+            utxo_set: BTreeMap::new(),
             request_list: BTreeMap::new(),
             partition_list: Vec::new(),
             partition_key: gen_key(),
@@ -161,8 +158,8 @@ impl ComputeNode {
     }
 
     /// Seed the inital value of the utxo_set
-    pub fn seed_utxo_set(&self, utxo_set: BTreeMap<String, Transaction>) {
-        *self.utxo_set.lock().unwrap() = utxo_set;
+    pub fn seed_utxo_set(&mut self, utxo_set: BTreeMap<String, Transaction>) {
+        self.utxo_set = utxo_set;
     }
 
     /// Returns the compute node's public endpoint.
@@ -272,7 +269,7 @@ impl ComputeNode {
         let mut txs_valid = true;
 
         for tx in droplet.tx.values() {
-            if !tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set.lock().unwrap()) {
+            if !tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set) {
                 txs_valid = false;
                 break;
             }
@@ -522,6 +519,7 @@ impl ComputeNode {
                 _ = self.node_raft.timeout_propose_transactions() => {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
+                    self.node_raft.propose_local_druid_transactions().await;
                 }
             }
         }
@@ -760,7 +758,7 @@ impl ComputeInterface for ComputeNode {
         let (block, block_tx) = self.node_raft.take_mining_block();
 
         // Update internal UTXO
-        self.utxo_set.lock().unwrap().append(&mut block_tx.clone());
+        self.utxo_set.append(&mut block_tx.clone());
         update_utxo_set(&mut self.utxo_set);
 
         // Update latest coinbase to notify winner
@@ -814,7 +812,7 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        if self.node_raft.tx_pool_len() + transactions.len() > TX_POOL_LIMIT {
+        if !self.node_raft.tx_pool_can_accept(transactions.len()) {
             return Response {
                 success: false,
                 reason: "Transaction pool for this compute node is full",
@@ -824,7 +822,7 @@ impl ComputeInterface for ComputeNode {
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set.lock().unwrap()))
+            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), &self.utxo_set))
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 

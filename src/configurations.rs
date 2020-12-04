@@ -20,6 +20,12 @@ pub struct ComputeNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// Whether compute node will use raft or act independently (0)
     pub compute_raft: usize,
+    /// Timeout for generating a new block
+    pub compute_raft_tick_timeout: usize,
+    /// Timeout for generating a new block
+    pub compute_block_timeout: usize,
+    /// Index of the current node in compute_nodes
+    pub compute_transaction_timeout: usize,
 }
 
 /// Configuration option for a storage node
