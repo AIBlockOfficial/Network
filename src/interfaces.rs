@@ -32,6 +32,12 @@ pub struct ProofOfWorkBlock {
     pub block: Block,
 }
 
+impl Default for ProofOfWorkBlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProofOfWorkBlock {
     pub fn new() -> Self {
         ProofOfWorkBlock {

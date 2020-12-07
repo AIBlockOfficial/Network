@@ -118,7 +118,7 @@ impl RaftNode {
             RaftNodeChannels {
                 cmd_tx,
                 committed_rx,
-                msg_out_rx: msg_out_rx,
+                msg_out_rx,
             },
         )
     }
@@ -286,7 +286,7 @@ mod tests {
             send_proposal(&mut test_nodes[0], proposed_data.clone()).await;
 
             let commited_data = recv_commited(&mut test_nodes).await;
-            let expected = expected_commited(&test_nodes, &vec![proposed_data]);
+            let expected = expected_commited(&test_nodes, &[proposed_data]);
             assert_eq!(commited_data, expected);
         }
 
@@ -296,7 +296,7 @@ mod tests {
             send_proposal(&mut test_nodes[1], proposed_data.clone()).await;
 
             let commited_data = recv_commited(&mut test_nodes).await;
-            let expected = expected_commited(&test_nodes, &vec![proposed_data]);
+            let expected = expected_commited(&test_nodes, &[proposed_data]);
             assert_eq!(commited_data, expected);
         }
 
@@ -349,11 +349,8 @@ mod tests {
         received
     }
 
-    fn expected_commited(
-        test_nodes: &Vec<TestNode>,
-        expected: &Vec<RaftData>,
-    ) -> Vec<Vec<RaftData>> {
-        test_nodes.iter().map(|_| expected.clone()).collect()
+    fn expected_commited(test_nodes: &[TestNode], expected: &[RaftData]) -> Vec<Vec<RaftData>> {
+        test_nodes.iter().map(|_| expected.to_owned()).collect()
     }
 
     fn test_configs(num_peers: u64) -> (HashMap<u64, usize>, Vec<TestNode>) {
@@ -370,11 +367,11 @@ mod tests {
         (peer_to_indexes, test_nodes)
     }
 
-    fn test_config(peer_id: u64, peers: &Vec<u64>) -> TestNode {
+    fn test_config(peer_id: u64, peers: &[u64]) -> TestNode {
         let (raft_config, node_channels) = RaftNode::init_config(
             Config {
                 id: peer_id,
-                peers: peers.clone(),
+                peers: peers.to_owned(),
                 ..Default::default()
             },
             Duration::from_millis(1),

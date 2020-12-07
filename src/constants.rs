@@ -36,22 +36,22 @@ pub const MAX_OPCODE: u8 = OpCodes::OP_NOP10 as u8;
 /*------- STORAGE CONSTANTS -------*/
 
 /// Path to chain DB
-pub const DB_PATH: &'static str = "src/db/db";
+pub const DB_PATH: &str = "src/db/db";
 
 /// Path to test net DB
-pub const DB_PATH_TEST: &'static str = "test";
+pub const DB_PATH_TEST: &str = "test";
 
 /// Path to live net DB
-pub const DB_PATH_LIVE: &'static str = "live";
+pub const DB_PATH_LIVE: &str = "live";
 
 /// Path to wallet DB
-pub const WALLET_PATH: &'static str = "src/wallet/wallet";
+pub const WALLET_PATH: &str = "src/wallet/wallet";
 
 /// Key for local addresses in wallet
-pub const ADDRESS_KEY: &'static str = "a";
+pub const ADDRESS_KEY: &str = "a";
 
 /// Key for a running total of wallet funds
-pub const FUND_KEY: &'static str = "f";
+pub const FUND_KEY: &str = "f";
 
 /*------- LIMIT CONSTANTS -------*/
 

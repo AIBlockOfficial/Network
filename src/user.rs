@@ -105,8 +105,7 @@ impl UserNode {
             .user_nodes
             .get(config.user_node_idx)
             .ok_or(UserError::ConfigError("Invalid user index"))?
-            .address
-            .clone();
+            .address;
         Ok(UserNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
             assets: Vec::new(),
@@ -266,7 +265,7 @@ impl UserNode {
             Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
         };
 
-        if let None = fund_store_state {
+        if fund_store_state.is_none() {
             panic!("No funds available for payment!");
         }
 
@@ -283,23 +282,22 @@ impl UserNode {
         let tx_hashes: Vec<_> = fund_store.transactions.keys().cloned().collect();
 
         // Start adding amounts to payment and updating FundStore
-        for i in 0..tx_hashes.len() {
-            let current_amount = fund_store.transactions.get(&tx_hashes[i]).unwrap();
+        for tx_hash in tx_hashes {
+            let current_amount = fund_store.transactions.get(&tx_hash).unwrap();
 
             // If we've reached target
             if amount_made == amount_required {
                 break;
-            } else
+            }
             // If we've overshot
-            if current_amount + amount_made > amount_required {
+            else if current_amount + amount_made > amount_required {
                 let diff = amount_required - amount_made;
 
                 fund_store.running_total -= current_amount;
                 amount_made = amount_required;
 
                 // Add a new return payment transaction
-                let return_tx_in =
-                    self.construct_tx_in_from_prev_out(tx_hashes[i].clone(), &db, false);
+                let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &db, false);
                 self.return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
                     amount: current_amount - diff,
@@ -313,10 +311,10 @@ impl UserNode {
             }
 
             // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hashes[i].clone(), &db, true);
+            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &db, true);
             tx_ins.push(tx_in);
 
-            fund_store.transactions.remove(&tx_hashes[i]);
+            fund_store.transactions.remove(&tx_hash);
         }
 
         // Save the updated fund store to disk
@@ -357,10 +355,7 @@ impl UserNode {
             return_amt,
         );
 
-        let tx_store = TransactionStore {
-            address: address,
-            net: 0,
-        };
+        let tx_store = TransactionStore { address, net: 0 };
         let mut tx_for_wallet = BTreeMap::new();
         tx_for_wallet.insert(construct_tx_hash(&payment_tx), tx_store);
 
@@ -402,9 +397,9 @@ impl UserNode {
             Err(e) => panic!("Error accessing wallet: {:?}", e),
         };
 
-        let needed_store: &AddressStore = address_store.get(&tx_store.address.clone()).unwrap();
+        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
 
-        let pub_key = needed_store.public_key.clone();
+        let pub_key = needed_store.public_key;
         let s_key = needed_store.secret_key.clone();
         let signature = sign::sign_detached(tx_hash.as_bytes(), &s_key);
 
@@ -443,12 +438,7 @@ impl UserNode {
         let _peer_span = info_span!("sending payment transaction to receiver");
 
         self.node
-            .send(
-                peer,
-                UserRequest::SendPaymentTransaction {
-                    transaction: transaction,
-                },
-            )
+            .send(peer, UserRequest::SendPaymentTransaction { transaction })
             .await?;
 
         Ok(())
@@ -480,7 +470,7 @@ impl UserNode {
         println!("Address to send: {:?}", address);
 
         self.node
-            .send(peer, UserRequest::SendPaymentAddress { address: address })
+            .send(peer, UserRequest::SendPaymentAddress { address })
             .await?;
         Ok(())
     }

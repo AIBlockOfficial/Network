@@ -75,8 +75,7 @@ impl StorageNode {
             .storage_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?
-            .address
-            .clone();
+            .address;
 
         Ok(StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
@@ -198,12 +197,12 @@ impl StorageInterface for StorageNode {
             db.put(tx_hash, tx_input).unwrap();
         }
 
-        let _ = DB::destroy(&opts, save_path.clone());
+        let _ = DB::destroy(&opts, save_path);
 
-        return Response {
+        Response {
             success: true,
             reason: "Block received and added",
-        };
+        }
     }
 
     fn receive_contracts(&self, _contract: Contract) -> Response {

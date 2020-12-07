@@ -8,6 +8,12 @@ pub struct UnicornShard {
     pub commit: ProofOfWork,
 }
 
+impl Default for UnicornShard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnicornShard {
     /// Generate a new UnicornShard instance
     pub fn new() -> UnicornShard {
@@ -23,9 +29,9 @@ impl UnicornShard {
     }
 
     /// Checks for UnicornShard validity
-    pub fn is_valid(&mut self, commit: ProofOfWork) -> bool {
+    pub fn is_valid(&mut self, mut commit: ProofOfWork) -> bool {
         let mut commit_body = commit.address.as_bytes().to_vec();
-        commit_body.append(&mut commit.nonce.clone());
+        commit_body.append(&mut commit.nonce);
 
         let _result = Sha3_256::digest(&commit_body).to_vec();
 

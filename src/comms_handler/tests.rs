@@ -59,8 +59,8 @@ async fn multicast() {
     let first_node = nodes[0].address();
     let mut conn_handles = Vec::with_capacity(NUM_NODES);
 
-    for i in 1..NUM_NODES {
-        let mut node = nodes[i].clone();
+    for (i, node) in nodes.iter().enumerate().skip(1) {
+        let mut node = node.clone();
 
         conn_handles.push(tokio::spawn(async move {
             node.connect_to(first_node).await.unwrap();
@@ -74,8 +74,8 @@ async fn multicast() {
     nodes[0].multicast("Hello").await.unwrap();
 
     // Verify that all other nodes have received the message
-    for i in 1..NUM_NODES {
-        if let Some(Event::NewFrame { peer: _, frame }) = nodes[i].next_event().await {
+    for (i, node) in nodes.iter_mut().enumerate().skip(1) {
+        if let Some(Event::NewFrame { peer: _, frame }) = node.next_event().await {
             debug!(?i, "received");
 
             let recv_frame: &str = deserialize(&frame).unwrap();
