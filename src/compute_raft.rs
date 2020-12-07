@@ -26,6 +26,13 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
 
+/// Item serialized into RaftData and process by Raft.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ComputeRaftKey {
+    proposer_id: u64,
+    proposal_id: u64,
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default)]
@@ -48,10 +55,12 @@ pub struct ComputeConsensused {
 
 /// Consensused Compute fields and consensus managment.
 pub struct ComputeRaft {
-    // false if RAFT is bypassed.
+    /// false if RAFT is bypassed.
     use_raft: bool,
-    // false if RAFT is bypassed.
+    /// false if RAFT is bypassed.
     first_raft_peer: bool,
+    /// The raft peer id.
+    peer_id: u64,
     /// Raft node used for running loop: only use for run_raft_loop.
     raft_node: Arc<Mutex<RaftNode>>,
     /// Channel to send command to the running RaftNode.
@@ -81,6 +90,16 @@ pub struct ComputeRaft {
     propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
     propose_transactions_timeout_at: Instant,
+    /// Proposed items in flight.
+    proposed_in_flight: BTreeMap<ComputeRaftKey, RaftData>,
+    /// Proposed transaction in flight length.
+    proposed_tx_pool_len: usize,
+    /// Maximum transaction in flight length.
+    proposed_tx_pool_len_max: usize,
+    /// Maximum transaction consensused and in flight for proposing more.
+    proposed_and_consensused_tx_pool_len_max: usize,
+    /// The last id of a proposed item.
+    proposed_last_id: u64,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -92,7 +111,7 @@ impl fmt::Debug for ComputeRaft {
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
     pub fn new(config: &ComputeNodeConfig) -> Self {
-        let peers: Vec<u64> = (1..config.compute_nodes.len() + 1)
+        let peers: Vec<u64> = (0..config.compute_nodes.len())
             .map(|idx| idx as u64 + 1)
             .collect();
 
@@ -107,7 +126,7 @@ impl ComputeRaft {
         let (raft_config, raft_channels) = RaftNode::init_config(
             raft::Config {
                 id: peer_id,
-                peers,
+                peers: peers.clone(),
                 tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
@@ -149,6 +168,7 @@ impl ComputeRaft {
         ComputeRaft {
             use_raft,
             first_raft_peer: config.compute_node_idx == 0 || !use_raft,
+            peer_id,
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
             cmd_tx: raft_channels.cmd_tx,
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
@@ -163,6 +183,11 @@ impl ComputeRaft {
             propose_block_timeout_at,
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
+            proposed_in_flight: BTreeMap::new(),
+            proposed_tx_pool_len: 0,
+            proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers.len(),
+            proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
+            proposed_last_id: 0,
         }
     }
 
@@ -203,14 +228,29 @@ impl ComputeRaft {
                 continue;
             }
 
-            match deserialize::<ComputeRaftItem>(&data) {
-                Ok(ComputeRaftItem::Transactions(mut transactions)) => {
-                    self.consensused.tx_pool.append(&mut transactions);
+            let item = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&data) {
+                Ok((key, item)) => {
+                    if self.proposed_in_flight.remove(&key).is_some() {
+                        if let ComputeRaftItem::Transactions(ref txs) = &item {
+                            self.proposed_tx_pool_len -= txs.len();
+                        }
+                    }
+                    item
                 }
-                Ok(ComputeRaftItem::DruidTransactions(mut transactions)) => {
-                    self.consensused.tx_druid_pool.append(&mut transactions);
+                Err(error) => {
+                    warn!(?error, "ComputeRaftItem-deserialize");
+                    continue;
                 }
-                Ok(ComputeRaftItem::Block((previous_hash, previous_idx))) => {
+            };
+
+            match item {
+                ComputeRaftItem::Transactions(mut txs) => {
+                    self.consensused.tx_pool.append(&mut txs);
+                }
+                ComputeRaftItem::DruidTransactions(mut txs) => {
+                    self.consensused.tx_druid_pool.append(&mut txs);
+                }
+                ComputeRaftItem::Block((previous_hash, previous_idx)) => {
                     if self.consensused.tx_previous_block_idx >= previous_idx {
                         // Ignore already known blocks
                         continue;
@@ -230,7 +270,6 @@ impl ComputeRaft {
                     self.consensused.tx_previous_hash = Some(previous_hash);
                     self.consensused.tx_previous_block_idx = previous_idx;
                 }
-                Err(error) => warn!(?error, "ComputeRaftItem-deserialize"),
             }
         }
 
@@ -286,26 +325,40 @@ impl ComputeRaft {
         self.propose_transactions_timeout_at =
             Instant::now() + self.propose_transactions_timeout_duration;
 
-        let tx = std::mem::take(&mut self.local_tx_pool);
-        if !tx.is_empty() {
-            self.propose_item(&ComputeRaftItem::Transactions(tx)).await;
+        let max_add = self
+            .proposed_and_consensused_tx_pool_len_max
+            .saturating_sub(self.proposed_and_consensused_tx_pool_len());
+
+        let max_propose_len = std::cmp::min(max_add, self.proposed_tx_pool_len_max);
+        let txs = Self::take_first_n(max_propose_len, &mut self.local_tx_pool);
+        if !txs.is_empty() {
+            self.proposed_tx_pool_len += txs.len();
+            self.propose_item(&ComputeRaftItem::Transactions(txs)).await;
         }
     }
 
     /// Process as a result of timeout_propose_transactions.
     /// Propose druid transactions if available.
     pub async fn propose_local_druid_transactions(&mut self) {
-        let tx = std::mem::take(&mut self.local_tx_druid_pool);
-        if !tx.is_empty() {
-            self.propose_item(&ComputeRaftItem::DruidTransactions(tx))
+        let txs = std::mem::take(&mut self.local_tx_druid_pool);
+        if !txs.is_empty() {
+            self.propose_item(&ComputeRaftItem::DruidTransactions(txs))
                 .await;
         }
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
-        debug!("propose_item: {:?}", item);
-        let data = serialize(item).unwrap();
+        self.proposed_last_id += 1;
+        let key = ComputeRaftKey {
+            proposer_id: self.peer_id,
+            proposal_id: self.proposed_last_id,
+        };
+
+        debug!("propose_item: {:?} -> {:?}", key, item);
+        let data = serialize(&(&key, item)).unwrap();
+        self.proposed_in_flight.insert(key, data.clone());
+
         if self.use_raft {
             self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
         } else {
@@ -315,8 +368,17 @@ impl ComputeRaft {
 
     /// Whether adding these will grow our pool within the limit.
     pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
-        let combined_len = self.consensused.tx_pool.len() + self.local_tx_pool.len();
-        combined_len + extra_len <= TX_POOL_LIMIT
+        self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
+    }
+
+    /// Current tx_pool lenght handled by this node.
+    fn combined_tx_pool_len(&self) -> usize {
+        self.local_tx_pool.len() + self.proposed_and_consensused_tx_pool_len()
+    }
+
+    /// Current proposed tx_pool lenght handled by this node.
+    fn proposed_and_consensused_tx_pool_len(&self) -> usize {
+        self.proposed_tx_pool_len + self.consensused.tx_pool.len()
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -414,14 +476,7 @@ impl ComputeRaft {
         }
 
         // Select subset of transaction to fill the block.
-        let txs = {
-            let mut txs = std::mem::take(&mut self.consensused.tx_pool);
-            if let Some(max_key) = txs.keys().nth(BLOCK_SIZE_IN_TX).cloned() {
-                // Set back overflowing transactions.
-                self.consensused.tx_pool = txs.split_off(&max_key);
-            }
-            txs
-        };
+        let txs = Self::take_first_n(BLOCK_SIZE_IN_TX, &mut self.consensused.tx_pool);
 
         // Process valid set of transactions.
         self.update_current_block_tx_with_given_valid_txs(txs, block, block_tx);
@@ -473,6 +528,15 @@ impl ComputeRaft {
         }
 
         invalid
+    }
+
+    fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
+        let mut result = std::mem::take(from);
+        if let Some(max_key) = result.keys().nth(n).cloned() {
+            // Set back overflowing in from.
+            *from = result.split_off(&max_key);
+        }
+        result
     }
 }
 
@@ -593,6 +657,78 @@ mod test {
         assert_eq!(node.consensused.tx_pool.len(), 0);
         assert_eq!(node.consensused.tx_druid_pool.len(), 0);
         assert_eq!(node.consensused.tx_previous_hash, None);
+    }
+
+    #[tokio::test]
+    async fn in_flight_transactions_no_raft() {
+        //
+        // Arrange
+        //
+        let mut node = new_test_node(&[]);
+        node.proposed_and_consensused_tx_pool_len_max = 3;
+        node.proposed_tx_pool_len_max = 2;
+
+        //
+        // Act
+        //
+        let mut actual_combined_local_flight_consensused = Vec::new();
+        let mut collect_info = |node: &ComputeRaft| {
+            actual_combined_local_flight_consensused.push((
+                node.combined_tx_pool_len(),
+                node.local_tx_pool.len(),
+                node.proposed_tx_pool_len,
+                node.consensused.tx_pool.len(),
+            ))
+        };
+        collect_info(&node);
+
+        node.append_to_tx_pool(valid_transaction(
+            &["000000", "000001", "000003", "000004", "000005", "000006"],
+            &["000100", "000101", "000103", "000104", "000105", "000106"],
+            &mut BTreeMap::new(),
+        ));
+        node.append_to_tx_druid_pool(valid_transaction(
+            &["000010", "000011"],
+            &["000200", "000200"],
+            &mut BTreeMap::new(),
+        ));
+        collect_info(&node);
+
+        for _ in 0..3 {
+            node.propose_local_transactions_at_timeout().await;
+            node.propose_local_druid_transactions().await;
+            collect_info(&node);
+
+            tokio::select! {
+                commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
+                _ = ComputeRaft::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
+            }
+            collect_info(&node);
+        }
+
+        //
+        // Assert
+        //
+        assert_eq!(
+            actual_combined_local_flight_consensused,
+            vec![
+                // Start
+                (0, 0, 0, 0),
+                // Transaction appended
+                (6, 6, 0, 0),
+                // Process 1st time out and commit: 2 in flight then consensused
+                (6, 4, 2, 0),
+                (6, 4, 0, 2),
+                // Process 2nd time out and commit: 1 in flight then consensused
+                // (max reached)
+                (6, 3, 1, 2),
+                (6, 3, 0, 3),
+                // Process 3rd time out and commit: 0 in flight then consensused
+                // (max reached)
+                (6, 3, 0, 3),
+                (6, 3, 0, 3)
+            ]
+        );
     }
 
     fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {

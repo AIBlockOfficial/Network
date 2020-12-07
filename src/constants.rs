@@ -56,7 +56,7 @@ pub const FUND_KEY: &'static str = "f";
 /*------- LIMIT CONSTANTS -------*/
 
 /// Limit for the transaction pool per compute node
-pub const TX_POOL_LIMIT: usize = 10000000;
+pub const TX_POOL_LIMIT: usize = 10_000_000;
 
 /// Limit for the number of peers a compute node may have
 pub const PEER_LIMIT: usize = 50;
@@ -71,7 +71,7 @@ pub const PARTITION_LIMIT: usize = 1;
 pub const MINING_DIFFICULTY: usize = 1;
 
 /// The size of a block in bytes
-pub const BLOCK_SIZE: usize = 1000000;
+pub const BLOCK_SIZE: usize = 1_000_000;
 
 /// The size of the block in transactions (approx)
 pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
