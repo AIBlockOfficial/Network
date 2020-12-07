@@ -75,8 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .compute_nodes
                 .get(config.miner_compute_node_idx)
                 .unwrap()
-                .address
-                .clone(),
+                .address,
         )
     } else {
         None

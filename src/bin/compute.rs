@@ -1,7 +1,6 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use config;
 use sodiumoxide::crypto::sign;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;

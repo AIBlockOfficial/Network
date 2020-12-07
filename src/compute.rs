@@ -130,14 +130,12 @@ impl ComputeNode {
             .compute_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid compute index"))?
-            .address
-            .clone();
+            .address;
         let storage_addr = config
             .storage_nodes
             .get(0)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
-            .address
-            .clone();
+            .address;
 
         Ok(ComputeNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
@@ -186,7 +184,7 @@ impl ComputeNode {
         async move {
             for peer in peers {
                 info!(?peer, "Try to connect to");
-                let res = node.connect_to(peer.clone()).await;
+                let res = node.connect_to(peer).await;
                 info!(?peer, ?res, "Try to connect to result-");
                 res?;
             }
@@ -202,6 +200,7 @@ impl ComputeNode {
     pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
         if let Some(druid) = transaction.clone().druid {
             // If this transaction is meant to join others
+            #[allow(clippy::map_entry)]
             if self.druid_pool.contains_key(&druid) {
                 self.process_tx_druid(druid, transaction);
                 self.node_raft.propose_local_druid_transactions().await;
@@ -340,7 +339,7 @@ impl ComputeNode {
     ///
     /// * `address`    - Address to decrement
     fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
-        let mut storage_address = address.clone();
+        let mut storage_address = address;
         storage_address.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
         storage_address.set_port(address.port() - 1);
 
@@ -354,7 +353,7 @@ impl ComputeNode {
     /// * `address`    - Peer's address
     fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
         let comparison_port = address.port() + 1;
-        let mut comparison_addr = address.clone();
+        let mut comparison_addr = address;
 
         comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         comparison_addr.set_port(comparison_port);
@@ -369,7 +368,7 @@ impl ComputeNode {
     /// * `peer`    - Address to send to
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
-        println!("");
+        println!();
         let block_to_send =
             Bytes::from(serialize(self.node_raft.get_mining_block()).unwrap()).to_vec();
 
@@ -453,7 +452,7 @@ impl ComputeNode {
     ///
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
-    pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &Vec<u8>) {
+    pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &[u8]) {
         println!("Flooding PoW to peers not implemented");
     }
 
@@ -483,14 +482,13 @@ impl ComputeNode {
             tokio::select! {
                 event = self.node.next_event() => {
                     trace!("handle_next_event evt {:?}", event);
-                    match self.handle_event(event?).await.transpose() {
-                        res @ Some(_) => return res,
-                        None => (),
+                    if let res @ Some(_) = self.handle_event(event?).await.transpose() {
+                        return res;
                     }
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    if let Some(_) = self.node_raft.received_commit(commit_data).await {
+                    if self.node_raft.received_commit(commit_data).await.is_some() {
                         self.node_raft.generate_block();
                         return Some(Ok(Response{
                             success: true,
@@ -590,7 +588,7 @@ impl ComputeNode {
         let mut pow_mut = partition_entry.clone();
 
         if self.partition_list.len() < PARTITION_LIMIT && Self::validate_pow(&mut pow_mut) {
-            self.partition_list.push(partition_entry.clone());
+            self.partition_list.push(partition_entry);
 
             if self.partition_list.len() == PARTITION_LIMIT {
                 let key = get_partition_entry_key(self.partition_list.clone());

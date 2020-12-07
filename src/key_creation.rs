@@ -66,10 +66,10 @@ impl KeyAgreement {
         let (pk, sk) = sign::gen_keypair();
 
         KeyAgreement {
-            g: g,
-            id: id,
-            x_i: x_i,
-            u_i: u_i,
+            g,
+            id,
+            x_i,
+            u_i,
             s_key: sk,
             p_key: pk,
             k_i: Vec::new(),
@@ -97,7 +97,7 @@ impl KeyAgreement {
     /// Retrieves and bundles peer info for peer
     pub fn get_peer_info(&self) -> PeerInfo {
         PeerInfo {
-            u_i: self.u_i.clone(),
+            u_i: self.u_i,
             M_iI: self.M_iI.clone(),
             ek_i: self.ek_i.clone(),
             T_i: self.T_i.clone(),
@@ -162,7 +162,7 @@ impl KeyAgreement {
 
         // Set M_i^U = M_i^I || U_i
         mi_handler.append(&mut self.u_i.to_be_bytes().to_vec());
-        self.M_iIU = mi_handler.clone();
+        self.M_iIU = mi_handler;
 
         // Set sigma_i^I to the signed M_i^U
         self.sigma_iI = sign::sign(&self.M_iIU, &self.s_key);

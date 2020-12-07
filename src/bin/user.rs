@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config
     };
     println!("Starting node with config: {:?}", config);
-    println!("");
+    println!();
 
     let compute_node_connected = if matches.is_present("compute_connect") {
         Some(
@@ -92,15 +92,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .compute_nodes
                 .get(config.user_compute_node_idx)
                 .unwrap()
-                .address
-                .clone(),
+                .address,
         )
     } else {
         None
     };
 
     println!("CONFIG: {:?}", config);
-    println!("");
+    println!();
 
     let peer_user_node_connected = if matches.is_present("peer_user_connect") {
         Some(
@@ -108,8 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .user_nodes
                 .get(config.peer_user_node_idx)
                 .unwrap()
-                .address
-                .clone(),
+                .address,
         )
     } else {
         None
@@ -158,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "New address ready to be sent",
                     }) => {
                         println!("Sending new payment address");
-                        println!("");
+                        println!();
 
                         let _ = node
                             .send_address_to_peer(node.trading_peer.unwrap())

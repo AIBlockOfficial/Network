@@ -140,7 +140,7 @@ impl ComputeRaft {
             peer_addr_vec
                 .iter()
                 .filter(|(idx, _)| *idx > peer_id)
-                .map(|(_, addr)| addr.clone())
+                .map(|(_, addr)| *addr)
                 .collect()
         } else {
             Vec::new()
@@ -280,7 +280,7 @@ impl ComputeRaft {
     /// Message needs to be sent to given peer address.
     pub async fn next_msg(&self) -> Option<(SocketAddr, RaftMessageWrapper)> {
         let msg = self.msg_out_rx.lock().await.recv().await?;
-        let addr = self.peer_addr.get(&msg.to).unwrap().clone();
+        let addr = *self.peer_addr.get(&msg.to).unwrap();
         Some((addr, RaftMessageWrapper(msg)))
     }
 
@@ -301,9 +301,8 @@ impl ComputeRaft {
 
     /// Blocks & waits for timeout.
     async fn timeout_at(timeout: Instant) {
-        match timeout_at(timeout, future::pending::<()>()).await {
-            Ok(()) => panic!("pending completed"),
-            Err(_) => (),
+        if let Ok(()) = timeout_at(timeout, future::pending::<()>()).await {
+            panic!("pending completed");
         }
     }
 
@@ -749,7 +748,7 @@ mod test {
         ComputeRaft::new(&compute_config)
     }
 
-    fn valid_transaction<'a>(
+    fn valid_transaction(
         intial_t_hashes: &[&str],
         receiver_addrs: &[&str],
         new_hashes: &mut BTreeMap<String, String>,

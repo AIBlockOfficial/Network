@@ -829,7 +829,7 @@ fn get_messages_stream(
             Ok(message) => Some(message),
             Err(error) => {
                 warn!(?error, "Could not deserialize message; ignoring");
-                return None;
+                None
             }
         }
     })

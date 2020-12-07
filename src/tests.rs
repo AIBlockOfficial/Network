@@ -132,11 +132,11 @@ async fn proof_of_work() {
     //
     // Act
     //
-    tokio::join!(
-        task_spawn_connect_and_send_pow(&mut network, "miner1", "compute1", &block).await,
-        task_spawn_connect_and_send_pow(&mut network, "miner2", "compute1", &block).await,
-        task_spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await,
-    );
+    let mut jh = Vec::new();
+    jh.push(task_spawn_connect_and_send_pow(&mut network, "miner1", "compute1", &block).await);
+    jh.push(task_spawn_connect_and_send_pow(&mut network, "miner2", "compute1", &block).await);
+    jh.push(task_spawn_connect_and_send_pow(&mut network, "miner3", "compute1", &block).await);
+    join_all(jh).await;
 
     let block_before = compute_mined_block_time(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
@@ -220,7 +220,7 @@ async fn receive_payment_tx_user() {
                     Some(Ok(Response {
                         success: true,
                         reason: "New address ready to be sent",
-                    })) => return (),
+                    })) => (),
                     other => panic!("Unexpected result: {:?}", other),
                 }
             }
@@ -241,10 +241,7 @@ async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: 
 async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
     match c.handle_next_event().await {
         Some(Ok(Response { success, reason }))
-            if success == success_val && reason == reason_val =>
-        {
-            ()
-        }
+            if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?}", other),
     }
 }
@@ -290,10 +287,7 @@ async fn compute_set_current_block(network: &mut Network, compute: &str, block: 
 
 async fn compute_mined_block_time(network: &mut Network, compute: &str) -> Option<u32> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.current_mined_block
-        .as_ref()
-        .map(|b| b.block.header.time)
-        .clone()
+    c.current_mined_block.as_ref().map(|b| b.block.header.time)
 }
 
 async fn compute_raft_group_all_current_block_transactions(
@@ -328,7 +322,7 @@ async fn task_connect_and_send_payment_to_compute(
     to_compute: &str,
     tx: &Transaction,
 ) -> impl Future<Output = ()> {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap().clone();
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let user = network.user(from_user).unwrap();
     let tx = tx.clone();
     let u = user.clone();

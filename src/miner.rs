@@ -104,8 +104,7 @@ impl MinerNode {
             .miner_nodes
             .get(config.miner_node_idx)
             .ok_or(MinerError::ConfigError("Invalid miner index"))?
-            .address
-            .clone();
+            .address;
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             partition_list: Vec::new(),
@@ -201,7 +200,7 @@ impl MinerNode {
         let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
         self.partition_key = Key(key_slice);
 
-        self.partition_list = p_list.clone();
+        self.partition_list = p_list;
 
         Response {
             success: true,
@@ -212,7 +211,7 @@ impl MinerNode {
     /// Util function to get a socket address for PID table checks
     fn get_comparison_addr(&self) -> SocketAddr {
         let comparison_port = self.address().port() + 1;
-        let mut comparison_addr = self.address().clone();
+        let mut comparison_addr = self.address();
 
         comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         comparison_addr.set_port(comparison_port);
@@ -246,12 +245,7 @@ impl MinerNode {
         partition_entry: ProofOfWork,
     ) -> Result<()> {
         self.node
-            .send(
-                peer,
-                ComputeRequest::SendPartitionEntry {
-                    partition_entry: partition_entry,
-                },
-            )
+            .send(peer, ComputeRequest::SendPartitionEntry { partition_entry })
             .await?;
         Ok(())
     }
@@ -322,17 +316,14 @@ impl MinerNode {
             let current_coinbase = construct_coinbase_tx(12, block.header.time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
 
-            let mut block_for_pow = block.clone();
+            let mut block_for_pow = block;
             block_for_pow.transactions.push(coinbase_hash.clone());
 
             // Create address and save to wallet
             let address = construct_address(pk, 0);
 
             // Create wallet content
-            let transaction_store = TransactionStore {
-                address: address,
-                net: 0,
-            };
+            let transaction_store = TransactionStore { address, net: 0 };
             let mut tx_to_save = BTreeMap::new();
             tx_to_save.insert(coinbase_hash, transaction_store);
 
@@ -397,9 +388,7 @@ impl MinerNode {
     /// Generates a random sequence of values for a nonce
     fn generate_nonce() -> Vec<u8> {
         let mut rng = rand::thread_rng();
-        let nonce = (0..10).map(|_| rng.gen_range(1, 200)).collect();
-
-        nonce
+        (0..10).map(|_| rng.gen_range(1, 200)).collect()
     }
 }
 
