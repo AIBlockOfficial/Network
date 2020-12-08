@@ -3,6 +3,7 @@
 //! A library for modeling artistic concepts.
 #![allow(dead_code)]
 
+mod active_raft;
 mod comms_handler;
 mod compute;
 mod compute_raft;

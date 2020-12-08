@@ -1,20 +1,17 @@
+use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
-use crate::raft::{
-    CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
-};
+use crate::raft::{RaftData, RaftMessageWrapper};
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::future::{self, Future};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::{timeout_at, Instant};
 use tracing::{debug, warn};
 
@@ -56,24 +53,9 @@ pub struct ComputeConsensused {
 /// Consensused Compute fields and consensus managment.
 pub struct ComputeRaft {
     /// false if RAFT is bypassed.
-    use_raft: bool,
-    /// false if RAFT is bypassed.
     first_raft_peer: bool,
-    /// The raft peer id.
-    peer_id: u64,
-    /// Raft node used for running loop: only use for run_raft_loop.
-    raft_node: Arc<Mutex<RaftNode>>,
-    /// Channel to send command to the running RaftNode.
-    cmd_tx: RaftCmdSender,
-    /// Channel to receive messages from the running RaftNode to pass arround.
-    msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
-    /// Channel to receive commited entries from the running RaftNode to process.
-    /// and extra data not processed yet.
-    committed_rx: Arc<Mutex<(CommitReceiver, Vec<RaftData>)>>,
-    /// Map to the address of the peers.
-    peer_addr: HashMap<u64, SocketAddr>,
-    /// Collection of the peer this node is responsible to connect to.
-    compute_peers_to_connect: Vec<SocketAddr>,
+    /// The raft instance to interact with.
+    raft_active: ActiveRaft,
     /// Consensused fields.
     consensused: ComputeConsensused,
     /// Local transaction pool.
@@ -111,40 +93,12 @@ impl fmt::Debug for ComputeRaft {
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
     pub fn new(config: &ComputeNodeConfig) -> Self {
-        let peers: Vec<u64> = (0..config.compute_nodes.len())
-            .map(|idx| idx as u64 + 1)
-            .collect();
-
-        let peer_addr_vec: Vec<(u64, SocketAddr)> = peers
-            .iter()
-            .zip(config.compute_nodes.iter())
-            .map(|(idx, spec)| (*idx, spec.address))
-            .collect();
-        let peer_addr: HashMap<u64, SocketAddr> = peer_addr_vec.iter().cloned().collect();
-        let peer_id = peers[config.compute_node_idx];
-
-        let (raft_config, raft_channels) = RaftNode::init_config(
-            raft::Config {
-                id: peer_id,
-                peers: peers.clone(),
-                tag: format!("[id={}]", peer_id),
-                ..Default::default()
-            },
+        let raft_active = ActiveRaft::new(
+            config.compute_node_idx,
+            &config.compute_nodes,
+            config.compute_raft != 0,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
         );
-
-        let use_raft = config.compute_raft != 0;
-
-        // TODO: Connect to all other peers once connection can succeed from both sides.
-        let compute_peers_to_connect = if use_raft {
-            peer_addr_vec
-                .iter()
-                .filter(|(idx, _)| *idx > peer_id)
-                .map(|(_, addr)| *addr)
-                .collect()
-        } else {
-            Vec::new()
-        };
 
         let propose_block_timeout_duration =
             Duration::from_millis(config.compute_block_timeout as u64);
@@ -165,16 +119,12 @@ impl ComputeRaft {
             consensused
         };
 
-        ComputeRaft {
-            use_raft,
-            first_raft_peer: config.compute_node_idx == 0 || !use_raft,
-            peer_id,
-            raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
-            cmd_tx: raft_channels.cmd_tx,
-            msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
-            committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, Vec::new()))),
-            peer_addr,
-            compute_peers_to_connect,
+        let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
+        let peers_len = raft_active.peers_len();
+
+        Self {
+            first_raft_peer,
+            raft_active,
             consensused,
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
@@ -185,7 +135,7 @@ impl ComputeRaft {
             propose_transactions_timeout_at,
             proposed_in_flight: BTreeMap::new(),
             proposed_tx_pool_len: 0,
-            proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers.len(),
+            proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             proposed_last_id: 0,
         }
@@ -193,38 +143,26 @@ impl ComputeRaft {
 
     /// All the peers to connect to when using raft.
     pub fn compute_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
-        self.compute_peers_to_connect.iter()
+        self.raft_active.compute_peer_to_connect()
     }
 
     /// Blocks & waits for a next event from a peer.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
-        let raft_node = self.raft_node.clone();
-        let use_raft = self.use_raft;
-        async move {
-            if use_raft {
-                raft_node.lock().await.run_raft_loop().await;
-            }
-        }
+        self.raft_active.raft_loop()
     }
 
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
-        let mut committed_rx = self.committed_rx.lock().await;
-
-        if !committed_rx.1.is_empty() {
-            return Some(std::mem::take(&mut committed_rx.1));
-        }
-
-        committed_rx.0.recv().await
+        self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
     pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
-        let mut committed_rx = self.committed_rx.lock().await;
+        let mut committed_rx_overflow = Vec::new();
         for data in raft_data.drain(..) {
             if self.consensused.tx_previous_hash.is_some() {
-                committed_rx.1.push(data);
+                committed_rx_overflow.push(data);
                 continue;
             }
 
@@ -273,20 +211,21 @@ impl ComputeRaft {
             }
         }
 
+        self.raft_active
+            .append_commited_overflow(committed_rx_overflow)
+            .await;
         self.consensused.tx_previous_hash.as_ref().map(|_| ())
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
     /// Message needs to be sent to given peer address.
     pub async fn next_msg(&self) -> Option<(SocketAddr, RaftMessageWrapper)> {
-        let msg = self.msg_out_rx.lock().await.recv().await?;
-        let addr = *self.peer_addr.get(&msg.to).unwrap();
-        Some((addr, RaftMessageWrapper(msg)))
+        self.raft_active.next_msg().await
     }
 
     /// Process a raft message: send to spawned raft loop.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
-        self.cmd_tx.send(RaftCmd::Raft(msg)).await.unwrap();
+        self.raft_active.received_message(msg).await
     }
 
     /// Blocks & waits for a timeout to propose a block.
@@ -329,7 +268,7 @@ impl ComputeRaft {
             .saturating_sub(self.proposed_and_consensused_tx_pool_len());
 
         let max_propose_len = std::cmp::min(max_add, self.proposed_tx_pool_len_max);
-        let txs = Self::take_first_n(max_propose_len, &mut self.local_tx_pool);
+        let txs = take_first_n(max_propose_len, &mut self.local_tx_pool);
         if !txs.is_empty() {
             self.proposed_tx_pool_len += txs.len();
             self.propose_item(&ComputeRaftItem::Transactions(txs)).await;
@@ -350,7 +289,7 @@ impl ComputeRaft {
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         self.proposed_last_id += 1;
         let key = ComputeRaftKey {
-            proposer_id: self.peer_id,
+            proposer_id: self.raft_active.peer_id(),
             proposal_id: self.proposed_last_id,
         };
 
@@ -358,11 +297,7 @@ impl ComputeRaft {
         let data = serialize(&(&key, item)).unwrap();
         self.proposed_in_flight.insert(key, data.clone());
 
-        if self.use_raft {
-            self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
-        } else {
-            self.committed_rx.lock().await.1.push(data);
-        }
+        self.raft_active.propose_data(data).await
     }
 
     /// Whether adding these will grow our pool within the limit.
@@ -404,29 +339,68 @@ impl ComputeRaft {
         block: Block,
         block_tx: BTreeMap<String, Transaction>,
     ) {
-        // Transaction only depend on mined block: append at the end.
-        // The block is about to be mined, all transaction accepted can be used
-        // to accept next block transactions.
-        // TODO: Roll back append and removal if block rejected by miners.
-        self.consensused.utxo_set.append(&mut block_tx.clone());
-
-        self.consensused.current_block = Some(block);
-        self.consensused.current_block_tx = block_tx;
+        self.consensused.set_committed_mining_block(block, block_tx)
     }
 
     /// Current block to mine or being mined.
     pub fn get_mining_block(&self) -> &Option<Block> {
-        &self.consensused.current_block
+        self.consensused.get_mining_block()
     }
 
+    /// Current utxo_set including block being mined
     pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
-        &self.consensused.utxo_set
+        &self.consensused.get_committed_utxo_set()
     }
 
     /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
-        let block = std::mem::take(&mut self.consensused.current_block).unwrap();
-        let block_tx = std::mem::take(&mut self.consensused.current_block_tx);
+        self.consensused.take_mining_block()
+    }
+
+    /// Processes the next batch of transactions from the floating tx pool
+    /// to create the next block
+    pub fn generate_block(&mut self) {
+        self.consensused.generate_block()
+    }
+
+    /// Find transactions for the current block.
+    pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
+        self.consensused.find_invalid_new_txs(new_txs)
+    }
+}
+
+impl ComputeConsensused {
+    /// Set consensused committed block to mine.
+    /// Internal call, public for test only.
+    pub fn set_committed_mining_block(
+        &mut self,
+        block: Block,
+        block_tx: BTreeMap<String, Transaction>,
+    ) {
+        // Transaction only depend on mined block: append at the end.
+        // The block is about to be mined, all transaction accepted can be used
+        // to accept next block transactions.
+        // TODO: Roll back append and removal if block rejected by miners.
+        self.utxo_set.append(&mut block_tx.clone());
+
+        self.current_block = Some(block);
+        self.current_block_tx = block_tx;
+    }
+
+    /// Current block to mine or being mined.
+    pub fn get_mining_block(&self) -> &Option<Block> {
+        &self.current_block
+    }
+
+    /// Current utxo_set including block being mined
+    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+        &self.utxo_set
+    }
+
+    /// Take mining block when mining is completed, use to populate mined block.
+    pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
+        let block = std::mem::take(&mut self.current_block).unwrap();
+        let block_tx = std::mem::take(&mut self.current_block_tx);
         (block, block_tx)
     }
 
@@ -451,7 +425,7 @@ impl ComputeRaft {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        let mut tx_druid_pool = std::mem::take(&mut self.consensused.tx_druid_pool);
+        let mut tx_druid_pool = std::mem::take(&mut self.tx_druid_pool);
         for txs in tx_druid_pool.drain(..) {
             if !self.find_invalid_new_txs(&txs).is_empty() {
                 // Drop invalid DRUID droplet
@@ -470,12 +444,12 @@ impl ComputeRaft {
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
         // Clean tx_pool of invalid transactions for this block.
-        for invalid in self.find_invalid_new_txs(&self.consensused.tx_pool) {
-            self.consensused.tx_pool.remove(&invalid);
+        for invalid in self.find_invalid_new_txs(&self.tx_pool) {
+            self.tx_pool.remove(&invalid);
         }
 
         // Select subset of transaction to fill the block.
-        let txs = Self::take_first_n(BLOCK_SIZE_IN_TX, &mut self.consensused.tx_pool);
+        let txs = take_first_n(BLOCK_SIZE_IN_TX, &mut self.tx_pool);
 
         // Process valid set of transactions.
         self.update_current_block_tx_with_given_valid_txs(txs, block, block_tx);
@@ -483,9 +457,9 @@ impl ComputeRaft {
 
     /// Apply the consensused information for the header.
     fn update_block_header(&mut self, block: &mut Block) {
-        let previous_hash = std::mem::take(&mut self.consensused.tx_previous_hash).unwrap();
+        let previous_hash = std::mem::take(&mut self.tx_previous_hash).unwrap();
 
-        block.header.time = self.consensused.tx_previous_block_idx + 1;
+        block.header.time = self.tx_previous_block_idx + 1;
         block.header.previous_hash = Some(previous_hash);
     }
 
@@ -498,7 +472,7 @@ impl ComputeRaft {
     ) {
         for hash in get_inputs_previous_out_hash(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
-            self.consensused.utxo_set.remove(hash).unwrap();
+            self.utxo_set.remove(hash).unwrap();
         }
         block.transactions.extend(txs.keys().cloned());
         block_tx.append(&mut txs);
@@ -513,7 +487,7 @@ impl ComputeRaft {
             let mut removed_roll_back = Vec::new();
 
             for hash_in in get_inputs_previous_out_hash(Some(value).into_iter()) {
-                if self.consensused.utxo_set.contains_key(hash_in) && removed_all.insert(hash_in) {
+                if self.utxo_set.contains_key(hash_in) && removed_all.insert(hash_in) {
                     removed_roll_back.push(hash_in);
                 } else {
                     // Entry is invalid: roll back, mark entry and check next one.
@@ -528,15 +502,15 @@ impl ComputeRaft {
 
         invalid
     }
+}
 
-    fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
-        let mut result = std::mem::take(from);
-        if let Some(max_key) = result.keys().nth(n).cloned() {
-            // Set back overflowing in from.
-            *from = result.split_off(&max_key);
-        }
-        result
+fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
+    let mut result = std::mem::take(from);
+    if let Some(max_key) = result.keys().nth(n).cloned() {
+        // Set back overflowing in from.
+        *from = result.split_off(&max_key);
     }
+    result
 }
 
 #[cfg(test)]
