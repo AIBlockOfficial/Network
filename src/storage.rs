@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::StorageNodeConfig;
+use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
@@ -68,7 +68,7 @@ pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
     whitelisted: HashMap<SocketAddr, bool>,
-    net: usize,
+    db_mode: DbMode,
 }
 
 impl StorageNode {
@@ -83,7 +83,7 @@ impl StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
             node_raft: StorageRaft::new(&config),
             whitelisted: HashMap::new(),
-            net: config.use_live_db,
+            db_mode: config.storage_db_mode,
         })
     }
 
@@ -213,9 +213,10 @@ impl StorageNode {
         let hash_input = Bytes::from(serialize(&complete.common.block).unwrap());
         let hash_digest = Sha3_256::digest(&hash_input);
         let hash_key = hex::encode(hash_digest);
-        let save_path = match self.net {
-            0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
-            _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+        let save_path = match self.db_mode {
+            DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+            DbMode::Test(idx) => format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, idx),
+            _ => panic!("unimplemented db mode"),
         };
 
         let opts = get_db_options();

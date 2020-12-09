@@ -1,10 +1,18 @@
 use serde::Deserialize;
 use std::net::SocketAddr;
 
-/// Configuration option for a compute node
+/// Configuration info for a node
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodeSpec {
     pub address: SocketAddr,
+}
+
+/// Configuration info for a database
+#[derive(Debug, Clone, Deserialize)]
+pub enum DbMode {
+    Live,
+    Test(usize),
+    InMemory,
 }
 
 /// Configuration option for a compute node
@@ -36,7 +44,7 @@ pub struct StorageNodeConfig {
     /// Index of the current node in compute_nodes
     pub storage_node_idx: usize,
     /// Use test database if 0
-    pub use_live_db: usize,
+    pub storage_db_mode: DbMode,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first

@@ -4,7 +4,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{
-    ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
+    ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -186,9 +186,10 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
+            let port = info.storage_nodes[idx].address.port();
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
-                use_live_db: 0,
+                storage_db_mode: DbMode::Test(port as usize),
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
