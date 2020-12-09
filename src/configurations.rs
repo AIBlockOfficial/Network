@@ -1,10 +1,18 @@
 use serde::Deserialize;
 use std::net::SocketAddr;
 
-/// Configuration option for a compute node
+/// Configuration info for a node
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodeSpec {
     pub address: SocketAddr,
+}
+
+/// Configuration info for a database
+#[derive(Debug, Clone, Deserialize)]
+pub enum DbMode {
+    Live,
+    Test(usize),
+    InMemory,
 }
 
 /// Configuration option for a compute node
@@ -20,13 +28,13 @@ pub struct ComputeNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// Whether compute node will use raft or act independently (0)
     pub compute_raft: usize,
-    /// Timeout for generating a new block
+    /// Timeout for ticking raft
     pub compute_raft_tick_timeout: usize,
     /// Timeout for generating a new block
     pub compute_block_timeout: usize,
     /// Index of the current node in compute_nodes
     pub compute_transaction_timeout: usize,
-    /// Transaction hash to use to seed utxo.
+    /// Transaction hash to use to seed utxo
     pub compute_seed_utxo: Vec<String>,
 }
 
@@ -36,13 +44,19 @@ pub struct StorageNodeConfig {
     /// Index of the current node in compute_nodes
     pub storage_node_idx: usize,
     /// Use test database if 0
-    pub use_live_db: usize,
+    pub storage_db_mode: DbMode,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
+    /// Whether storage node will use raft or act independently (0)
+    pub storage_raft: usize,
+    /// Timeout for ticking raft
+    pub storage_raft_tick_timeout: usize,
+    /// Timeout for generating a new block
+    pub storage_block_timeout: usize,
 }
 
 /// Configuration option for a storage node

@@ -7,18 +7,18 @@ use crate::interfaces::{
     ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
-use crate::utils::get_partition_entry_key;
+use crate::utils::{get_partition_entry_key, loop_connnect_to_peers_async};
 use crate::Node;
-
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::construct_tx_hash;
+use naom::script::utils::tx_ins_are_valid;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
-
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::collections::BTreeMap;
-use tokio::task;
-
 use std::{
     collections::HashMap,
     convert::TryInto,
@@ -27,12 +27,7 @@ use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
-
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::construct_tx_hash;
-use naom::script::utils::tx_ins_are_valid;
-
+use tokio::task;
 use tracing::{debug, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -133,7 +128,7 @@ impl ComputeNode {
             .address;
         let storage_addr = config
             .storage_nodes
-            .get(0)
+            .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
 
@@ -177,19 +172,17 @@ impl ComputeNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
-    /// Connect to a compute peer on the network.
-    pub fn connect_to_computes(&self) -> impl Future<Output = Result<()>> {
-        let peers: Vec<SocketAddr> = self.node_raft.compute_peer_to_connect().cloned().collect();
-        let mut node = self.node.clone();
-        async move {
-            for peer in peers {
-                info!(?peer, "Try to connect to");
-                let res = node.connect_to(peer).await;
-                info!(?peer, ?res, "Try to connect to result-");
-                res?;
-            }
-            Ok(())
-        }
+    /// Connect to a raft peer on the network.
+    pub fn connect_to_raft_peers(&self) -> impl Future<Output = Result<()>> {
+        loop_connnect_to_peers_async(
+            self.node.clone(),
+            self.node_raft.raft_peer_to_connect().cloned().collect(),
+        )
+    }
+
+    /// Return the raft loop to spawn in it own task.
+    pub fn raft_loop(&self) -> impl Future<Output = ()> {
+        self.node_raft.raft_loop()
     }
 
     /// Processes a dual double entry transaction
@@ -467,11 +460,6 @@ impl ComputeNode {
         println!("Flooding commit to peers not implemented");
     }
 
-    /// Return the raft loop to spawn in it own task.
-    pub fn raft_loop(&self) -> impl Future<Output = ()> {
-        self.node_raft.raft_loop()
-    }
-
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
@@ -498,10 +486,12 @@ impl ComputeNode {
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
-                    let result = self.node.send(
+                    match self.node.send(
                         addr,
-                        ComputeRequest::RaftCmd(msg)).await;
-                    info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
+                        ComputeRequest::RaftCmd(msg)).await {
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                        };
                 }
                 _ = self.node_raft.timeout_propose_block() => {
                     trace!("handle_next_event timeout block");

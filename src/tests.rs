@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::{ComputeNode, MinedBlock};
-use crate::interfaces::Response;
+use crate::interfaces::{ComputeRequest, Response};
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
 use futures::future::join_all;
@@ -81,16 +81,21 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let network_config = complete_network_config_with_n_compute_raft(initial_port, compute_count);
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let (_transactions, t_hash, tx) = valid_transactions();
+    let (transactions, t_hash, _tx) = valid_transactions();
 
-    tokio::join!(
-        task_connect_and_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await,
-        compute_handle_event(
-            &mut network,
-            "compute1",
-            "All transactions successfully added to tx pool",
-        )
-    );
+    inject_next_event_to_compute(
+        &mut network,
+        "user1",
+        "compute1",
+        ComputeRequest::SendTransactions { transactions },
+    )
+    .await;
+    compute_handle_event(
+        &mut network,
+        "compute1",
+        "All transactions successfully added to tx pool",
+    )
+    .await;
 
     //
     // Act
@@ -152,7 +157,7 @@ async fn proof_of_work() {
 }
 
 #[tokio::test(threaded_scheduler)]
-async fn send_block_to_storage() {
+async fn send_block_to_storage_no_raft() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let network_config = complete_network_config(10020);
@@ -180,7 +185,14 @@ async fn send_block_to_storage() {
                 match storage.handle_next_event().await {
                     Some(Ok(Response {
                         success: true,
-                        reason: "Block received and added",
+                        reason: "Block received to be added",
+                    })) => (),
+                    other => panic!("Unexpected result: {:?}", other),
+                }
+                match storage.handle_next_event().await {
+                    Some(Ok(Response {
+                        success: true,
+                        reason: "Block complete stored",
                     })) => (),
                     other => panic!("Unexpected result: {:?}", other),
                 }
@@ -316,6 +328,18 @@ async fn compute_current_block_transactions(
         .map(|b| b.transactions.clone())
 }
 
+async fn inject_next_event_to_compute(
+    network: &mut Network,
+    from_user: &str,
+    to_compute: &str,
+    request: ComputeRequest,
+) {
+    let from_addr = network.get_address(from_user).await.unwrap();
+    let c = network.compute(to_compute).unwrap().lock().await;
+
+    c.inject_next_event(from_addr, request).unwrap();
+}
+
 async fn task_connect_and_send_payment_to_compute(
     network: &mut Network,
     from_user: &str,
@@ -377,6 +401,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
         compute_raft: false,
+        storage_raft: false,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
@@ -401,6 +426,9 @@ fn complete_network_config_with_n_compute_raft(
     cfg.compute_raft = true;
     cfg.compute_nodes = (0..compute_count)
         .map(|idx| format!("compute{}", idx + 1))
+        .collect();
+    cfg.storage_nodes = (0..compute_count)
+        .map(|idx| format!("storage{}", idx + 1))
         .collect();
     cfg
 }

@@ -135,6 +135,7 @@ pub enum StorageRequest {
     Store {
         incoming_contract: Contract,
     },
+    RaftCmd(RaftMessageWrapper),
 }
 
 impl fmt::Debug for StorageRequest {
@@ -152,6 +153,7 @@ impl fmt::Debug for StorageRequest {
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
+            RaftCmd(_) => write!(f, "RaftCmd"),
         }
     }
 }

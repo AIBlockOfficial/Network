@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // RAFT HANDLING
     let raft_loop_handle = {
-        let connect_all = node.connect_to_computes();
+        let connect_all = node.connect_to_raft_peers();
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
             // Need to connect first so Raft messages can be sent.

@@ -1,23 +1,25 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::StorageNodeConfig;
+use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
 };
-use crate::utils::get_db_options;
-use sha3::Digest;
-
+use crate::storage_raft::{CompleteBlock, StorageRaft};
+use crate::utils::{get_db_options, loop_connnect_to_peers_async};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::{block::Block, transaction::Transaction};
 use rocksdb::DB;
+use serde::Serialize;
+use sha3::Digest;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
-use tracing::{debug, info_span, warn};
-
-use naom::primitives::{block::Block, transaction::Transaction};
+use tracing::{error_span, info, trace, warn};
+use tracing_futures::Instrument;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -64,9 +66,9 @@ impl From<bincode::Error> for StorageError {
 #[derive(Debug)]
 pub struct StorageNode {
     node: Node,
+    node_raft: StorageRaft,
     whitelisted: HashMap<SocketAddr, bool>,
-    block: Block,
-    net: usize,
+    db_mode: DbMode,
 }
 
 impl StorageNode {
@@ -79,60 +81,158 @@ impl StorageNode {
 
         Ok(StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
+            node_raft: StorageRaft::new(&config),
             whitelisted: HashMap::new(),
-            block: Block::new(),
-            net: config.use_live_db,
+            db_mode: config.storage_db_mode,
         })
+    }
+
+    /// Returns the compute node's public endpoint.
+    pub fn address(&self) -> SocketAddr {
+        self.node.address()
+    }
+
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
+    }
+
+    /// Connect to a raft peer on the network.
+    pub fn connect_to_raft_peers(&self) -> impl Future<Output = Result<()>> {
+        loop_connnect_to_peers_async(
+            self.node.clone(),
+            self.node_raft.raft_peer_to_connect().cloned().collect(),
+        )
+    }
+
+    /// Return the raft loop to spawn in it own task.
+    pub fn raft_loop(&self) -> impl Future<Output = ()> {
+        self.node_raft.raft_loop()
     }
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
-        let event = self.node.next_event().await?;
-        self.handle_event(event).await.into()
+        loop {
+            // Process pending submission.
+            self.node_raft.propose_received_part_block().await;
+
+            // State machines are not keept between iterations or calls.
+            // All selection calls (between = and =>), need to be dropable
+            // i.e they should only await a channel.
+            tokio::select! {
+                event = self.node.next_event() => {
+                    trace!("handle_next_event evt {:?}", event);
+                    if let res @ Some(_) = self.handle_event(event?).await.transpose() {
+                        return res;
+                    }
+                }
+                Some(commit_data) = self.node_raft.next_commit() => {
+                    trace!("handle_next_event commit {:?}", commit_data);
+                    if self.node_raft.received_commit(commit_data).await.is_some() {
+                        let block = self.node_raft.generate_complete_block();
+                        self.store_complete_block(block);
+
+                        return Some(Ok(Response{
+                            success: true,
+                            reason: "Block complete stored",
+                        }));
+                    }
+                }
+                Some((addr, msg)) = self.node_raft.next_msg() => {
+                    trace!("handle_next_event msg {:?}: {:?}", addr, msg);
+                    match self.node.send(
+                        addr,
+                        StorageRequest::RaftCmd(msg)).await {
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                        };
+
+                }
+                Some(_) = self.node_raft.timeout_propose_block() => {
+                    trace!("handle_next_event timeout block");
+                    self.node_raft.propose_block_at_timeout().await;
+                }
+            }
+        }
     }
 
-    /// Returns this node's listener address.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
-    }
-
-    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+    async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+            Event::NewFrame { peer, frame } => {
+                let peer_span = error_span!("peer", ?peer);
+                self.handle_new_frame(peer, frame)
+                    .instrument(peer_span)
+                    .await
+            }
         }
     }
 
     /// Hanldes a new incoming message from a peer.
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
-        info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<StorageRequest>(&frame).map_err(|error| {
-                warn!(?error, "frame-deserialize");
-                error
-            })?;
+    async fn handle_new_frame(
+        &mut self,
+        peer: SocketAddr,
+        frame: Bytes,
+    ) -> Result<Option<Response>> {
+        let req = deserialize::<StorageRequest>(&frame).map_err(|error| {
+            warn!(?error, "frame-deserialize");
+            error
+        })?;
 
-            info_span!("request", ?req).in_scope(|| {
-                let response = self.handle_request(peer, req);
-                debug!(?response, ?peer, "response");
+        let req_span = error_span!("request", ?req);
+        let response = self.handle_request(peer, req).instrument(req_span).await;
+        trace!(?response, ?peer, "response");
 
-                Ok(response)
-            })
-        })
+        Ok(response)
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Response {
+    async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
         match req {
             GetHistory {
                 start_time,
                 end_time,
-            } => self.get_history(&start_time, &end_time),
-            GetUnicornTable { n_last_items } => self.get_unicorn_table(n_last_items),
-            SendPow { pow } => self.receive_pow(pow),
-            SendBlock { block, tx } => self.receive_block(peer, block, tx),
-            Store { incoming_contract } => self.receive_contracts(incoming_contract),
+            } => Some(self.get_history(&start_time, &end_time)),
+            GetUnicornTable { n_last_items } => Some(self.get_unicorn_table(n_last_items)),
+            SendPow { pow } => Some(self.receive_pow(pow)),
+            SendBlock { block, tx } => Some(self.receive_block(peer, block, tx)),
+            Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
+            RaftCmd(msg) => {
+                self.node_raft.received_message(msg).await;
+                None
+            }
         }
+    }
+
+    fn store_complete_block(&mut self, complete: CompleteBlock) {
+        // TODO: Makes the DB save process async
+        // TODO: only accept whitelisted blocks
+
+        // Save the block
+        let hash_input = Bytes::from(serialize(&complete.common.block).unwrap());
+        let hash_digest = Sha3_256::digest(&hash_input);
+        let hash_key = hex::encode(hash_digest);
+        let save_path = match self.db_mode {
+            DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+            DbMode::Test(idx) => format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, idx),
+            _ => panic!("unimplemented db mode"),
+        };
+
+        let opts = get_db_options();
+        let db = DB::open(&opts, save_path.clone()).unwrap();
+        db.put(hash_key, hash_input).unwrap();
+
+        // Save each transaction
+        for (tx_hash, tx_value) in &complete.common.block_txs {
+            let tx_input = Bytes::from(serialize(tx_value).unwrap());
+            db.put(tx_hash, tx_input).unwrap();
+        }
+
+        let _ = DB::destroy(&opts, save_path);
     }
 }
 
@@ -169,39 +269,15 @@ impl StorageInterface for StorageNode {
 
     fn receive_block(
         &mut self,
-        _peer: SocketAddr,
+        peer: SocketAddr,
         block: Block,
         tx: BTreeMap<String, Transaction>,
     ) -> Response {
-        self.block = block;
-
-        // TODO: Makes the DB save process async
-        // TODO: only accept whitelisted blocks
-
-        // Save the block
-        let hash_input = Bytes::from(serialize(&self.block).unwrap());
-        let hash_digest = Sha3_256::digest(&hash_input);
-        let hash_key = hex::encode(hash_digest);
-        let save_path = match self.net {
-            0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
-            _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
-        };
-
-        let opts = get_db_options();
-        let db = DB::open(&opts, save_path.clone()).unwrap();
-        db.put(hash_key, hash_input).unwrap();
-
-        // Save each transaction
-        for (tx_hash, tx_value) in &tx {
-            let tx_input = Bytes::from(serialize(tx_value).unwrap());
-            db.put(tx_hash, tx_input).unwrap();
-        }
-
-        let _ = DB::destroy(&opts, save_path);
+        self.node_raft.append_to_our_blocks(peer, block, tx);
 
         Response {
             success: true,
-            reason: "Block received and added",
+            reason: "Block received to be added",
         }
     }
 

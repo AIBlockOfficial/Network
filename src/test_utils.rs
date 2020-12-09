@@ -4,13 +4,14 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{
-    ComputeNodeConfig, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
+    ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Barrier;
@@ -26,6 +27,7 @@ pub type ArcUserNode = Arc<Mutex<UserNode>>;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
+    config: NetworkConfig,
     miner_nodes: BTreeMap<String, ArcMinerNode>,
     compute_nodes: BTreeMap<String, ArcComputeNode>,
     storage_nodes: BTreeMap<String, ArcStorageNode>,
@@ -34,10 +36,11 @@ pub struct Network {
 
 /// Represents a virtual network configuration.
 /// Can be created using the builder or deserialized from JSON.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub initial_port: u16,
     pub compute_raft: bool,
+    pub storage_raft: bool,
     pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
@@ -60,46 +63,66 @@ impl Network {
         let storage_nodes = Self::init_storage(&config, &info).await;
         let user_nodes = Self::init_users(&config, &info).await;
 
-        let result = Self {
+        Self {
+            config: config.clone(),
             miner_nodes,
             compute_nodes,
             storage_nodes,
             user_nodes,
-        };
-
-        if config.compute_raft {
-            result.spawn_raft_loops().await
-        } else {
-            result
         }
+        .spawn_raft_loops()
+        .await
     }
 
     async fn spawn_raft_loops(self) -> Self {
-        let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
-        for (name, c) in &self.compute_nodes {
-            let c = c.lock().await;
-            let barrier = barrier.clone();
-            let name = name.clone();
-            let address = c.address();
-            let connect_all = c.connect_to_computes();
-            let raft_loop = c.raft_loop();
-            let peer_span = info_span!("compute_node", ?name, ?address);
-            tokio::spawn(
-                async move {
-                    // Need to connect first so Raft messages can be sent.
-                    info!("Start connect to peers");
-                    let result = connect_all.await;
-                    info!(?result, "Peer connect complete");
-                    barrier.wait().await;
-                    info!("All Peer connected: start raft");
-                    raft_loop.await;
-                    info!("raft complete");
-                }
-                .instrument(peer_span),
-            );
+        if self.config.compute_raft {
+            let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
+            for (name, node) in &self.compute_nodes {
+                let node = node.lock().await;
+                Self::spawn_raft_loop(
+                    node.connect_to_raft_peers(),
+                    node.raft_loop(),
+                    info_span!("compute_node", ?name, addr = ?node.address()),
+                    barrier.clone(),
+                );
+            }
+        }
+
+        if self.config.storage_raft {
+            let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
+            for (name, node) in &self.storage_nodes {
+                let node = node.lock().await;
+                Self::spawn_raft_loop(
+                    node.connect_to_raft_peers(),
+                    node.raft_loop(),
+                    info_span!("storage_node", ?name, addr = ?node.address()),
+                    barrier.clone(),
+                );
+            }
         }
 
         self
+    }
+
+    fn spawn_raft_loop<E: std::error::Error + Send>(
+        connect_all: impl Future<Output = std::result::Result<(), E>> + Send + 'static,
+        raft_loop: impl Future<Output = ()> + Send + 'static,
+        peer_span: tracing::Span,
+        barrier: Arc<Barrier>,
+    ) {
+        tokio::spawn(
+            async move {
+                // Need to connect first so Raft messages can be sent.
+                info!("Start connect to peers");
+                let result = connect_all.await;
+                info!(?result, "Peer connect complete");
+                barrier.wait().await;
+                info!("All Peer connected: start raft");
+                raft_loop.await;
+                info!("raft complete");
+            }
+            .instrument(peer_span),
+        );
     }
 
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
@@ -163,12 +186,16 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
+            let port = info.storage_nodes[idx].address.port();
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
-                use_live_db: 0,
+                storage_db_mode: DbMode::Test(port as usize),
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
+                storage_raft: 0,
+                storage_raft_tick_timeout: 10,
+                storage_block_timeout: 100,
             };
             map.insert(
                 name.clone(),
