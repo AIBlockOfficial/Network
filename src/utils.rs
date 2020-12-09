@@ -1,3 +1,4 @@
+use crate::comms_handler::{CommsError, Node};
 use crate::interfaces::ProofOfWork;
 use crate::wallet::{
     construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
@@ -10,12 +11,35 @@ use naom::primitives::{
     asset::Asset,
     transaction::{Transaction, TxConstructor},
 };
+use rocksdb::{DBCompressionType, Options};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::time::{self, Instant};
+use tracing::trace;
 
-use rocksdb::{DBCompressionType, Options};
+/// Blocks & waits for timeout.
+pub async fn timeout_at(timeout: Instant) {
+    if let Ok(()) = time::timeout_at(timeout, future::pending::<()>()).await {
+        panic!("pending completed");
+    }
+}
+
+/// Return future that will connect to given peers on the network.
+pub async fn loop_connnect_to_peers_async<E: From<CommsError>>(
+    mut node: Node,
+    peers: Vec<SocketAddr>,
+) -> Result<(), E> {
+    for peer in peers {
+        trace!(?peer, "Try to connect to");
+        let res = node.connect_to(peer).await;
+        trace!(?peer, ?res, "Try to connect to result-");
+        res?;
+    }
+    Ok(())
+}
 
 /// Creates a set of DB opening options for rocksDB instances
 pub fn get_db_options() -> Options {

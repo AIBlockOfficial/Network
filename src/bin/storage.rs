@@ -33,6 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("src/bin/node_settings.toml");
 
         settings.set_default("storage_node_idx", 0).unwrap();
+        settings.set_default("storage_raft", 0).unwrap();
+        settings
+            .set_default("storage_raft_tick_timeout", 10)
+            .unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();

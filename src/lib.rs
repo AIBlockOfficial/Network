@@ -14,6 +14,7 @@ pub mod key_creation;
 mod miner;
 mod raft;
 mod storage;
+mod storage_raft;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]

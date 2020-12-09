@@ -377,6 +377,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
         compute_raft: false,
+        storage_raft: false,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],

@@ -2,6 +2,7 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::raft::{RaftData, RaftMessageWrapper};
+use crate::utils;
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
@@ -9,10 +10,10 @@ use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
-use std::future::{self, Future};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::{timeout_at, Instant};
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 /// Item serialized into RaftData and process by Raft.
@@ -23,7 +24,7 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
 
-/// Item serialized into RaftData and process by Raft.
+/// Key serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ComputeRaftKey {
     proposer_id: u64,
@@ -52,7 +53,7 @@ pub struct ComputeConsensused {
 
 /// Consensused Compute fields and consensus managment.
 pub struct ComputeRaft {
-    /// false if RAFT is bypassed.
+    /// True if first peer (leader).
     first_raft_peer: bool,
     /// The raft instance to interact with.
     raft_active: ActiveRaft,
@@ -142,8 +143,8 @@ impl ComputeRaft {
     }
 
     /// All the peers to connect to when using raft.
-    pub fn compute_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
-        self.raft_active.compute_peer_to_connect()
+    pub fn raft_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
+        self.raft_active.raft_peer_to_connect()
     }
 
     /// Blocks & waits for a next event from a peer.
@@ -230,19 +231,12 @@ impl ComputeRaft {
 
     /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) {
-        Self::timeout_at(self.propose_block_timeout_at).await;
+        utils::timeout_at(self.propose_block_timeout_at).await;
     }
 
     /// Blocks & waits for a timeout to propose transactions.
     pub async fn timeout_propose_transactions(&self) {
-        Self::timeout_at(self.propose_transactions_timeout_at).await;
-    }
-
-    /// Blocks & waits for timeout.
-    async fn timeout_at(timeout: Instant) {
-        if let Ok(()) = timeout_at(timeout, future::pending::<()>()).await {
-            panic!("pending completed");
-        }
+        utils::timeout_at(self.propose_transactions_timeout_at).await;
     }
 
     /// Process as a result of timeout_propose_block.
@@ -674,7 +668,7 @@ mod test {
 
             tokio::select! {
                 commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
-                _ = ComputeRaft::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
+                _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
             }
             collect_info(&node);
         }
