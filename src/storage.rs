@@ -4,7 +4,7 @@ use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
     Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
 };
-use crate::storage_raft::StorageRaft;
+use crate::storage_raft::{CompleteBlock, StorageRaft};
 use crate::utils::{get_db_options, loop_connnect_to_peers_async};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -68,7 +68,6 @@ pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
     whitelisted: HashMap<SocketAddr, bool>,
-    block: Block,
     net: usize,
 }
 
@@ -84,7 +83,6 @@ impl StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
             node_raft: StorageRaft::new(&config),
             whitelisted: HashMap::new(),
-            block: Block::new(),
             net: config.use_live_db,
         })
     }
@@ -135,10 +133,12 @@ impl StorageNode {
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
                     if self.node_raft.received_commit(commit_data).await.is_some() {
-                        let _block = self.node_raft.generate_complete_block();
+                        let block = self.node_raft.generate_complete_block();
+                        self.store_complete_block(block);
+
                         return Some(Ok(Response{
                             success: true,
-                            reason: "Block committed",
+                            reason: "Block complete stored",
                         }));
                     }
                 }
@@ -149,7 +149,7 @@ impl StorageNode {
                         StorageRequest::RaftCmd(msg)).await;
                     info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
                 }
-                _ = self.node_raft.timeout_propose_block() => {
+                Some(_) = self.node_raft.timeout_propose_block() => {
                     trace!("handle_next_event timeout block");
                     self.node_raft.propose_block_at_timeout().await;
                 }
@@ -204,6 +204,32 @@ impl StorageNode {
             }
         }
     }
+
+    fn store_complete_block(&mut self, complete: CompleteBlock) {
+        // TODO: Makes the DB save process async
+        // TODO: only accept whitelisted blocks
+
+        // Save the block
+        let hash_input = Bytes::from(serialize(&complete.common.block).unwrap());
+        let hash_digest = Sha3_256::digest(&hash_input);
+        let hash_key = hex::encode(hash_digest);
+        let save_path = match self.net {
+            0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
+            _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+        };
+
+        let opts = get_db_options();
+        let db = DB::open(&opts, save_path.clone()).unwrap();
+        db.put(hash_key, hash_input).unwrap();
+
+        // Save each transaction
+        for (tx_hash, tx_value) in &complete.common.block_txs {
+            let tx_input = Bytes::from(serialize(tx_value).unwrap());
+            db.put(tx_hash, tx_input).unwrap();
+        }
+
+        let _ = DB::destroy(&opts, save_path);
+    }
 }
 
 impl StorageInterface for StorageNode {
@@ -239,39 +265,15 @@ impl StorageInterface for StorageNode {
 
     fn receive_block(
         &mut self,
-        _peer: SocketAddr,
+        peer: SocketAddr,
         block: Block,
         tx: BTreeMap<String, Transaction>,
     ) -> Response {
-        self.block = block;
-
-        // TODO: Makes the DB save process async
-        // TODO: only accept whitelisted blocks
-
-        // Save the block
-        let hash_input = Bytes::from(serialize(&self.block).unwrap());
-        let hash_digest = Sha3_256::digest(&hash_input);
-        let hash_key = hex::encode(hash_digest);
-        let save_path = match self.net {
-            0 => format!("{}/{}", DB_PATH, DB_PATH_TEST),
-            _ => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
-        };
-
-        let opts = get_db_options();
-        let db = DB::open(&opts, save_path.clone()).unwrap();
-        db.put(hash_key, hash_input).unwrap();
-
-        // Save each transaction
-        for (tx_hash, tx_value) in &tx {
-            let tx_input = Bytes::from(serialize(tx_value).unwrap());
-            db.put(tx_hash, tx_input).unwrap();
-        }
-
-        let _ = DB::destroy(&opts, save_path);
+        self.node_raft.append_to_our_blocks(peer, block, tx);
 
         Response {
             success: true,
-            reason: "Block received and added",
+            reason: "Block received to be added",
         }
     }
 

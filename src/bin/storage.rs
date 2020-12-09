@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings
             .set_default("storage_raft_tick_timeout", 10)
             .unwrap();
+        settings.set_default("storage_block_timeout", 1000).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
@@ -63,8 +64,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match response {
                     Ok(Response {
                         success: true,
-                        reason: "Block received and added",
+                        reason: "Block received to be added",
                     }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason: "Block complete stored",
+                    }) => {
+                        println!("Block stored");
+                    }
                     Ok(Response {
                         success: true,
                         reason: &_,

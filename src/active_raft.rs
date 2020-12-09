@@ -39,14 +39,14 @@ impl ActiveRaft {
         tick_timeout_duration: Duration,
     ) -> Self {
         let peers: Vec<u64> = (0..node_specs.len()).map(|idx| idx as u64 + 1).collect();
+        let peer_id = peers[node_idx];
 
         let peer_addr_vec: Vec<(u64, SocketAddr)> = peers
             .iter()
             .zip(node_specs.iter())
             .map(|(idx, spec)| (*idx, spec.address))
+            .filter(|(idx, _)| use_raft || *idx == peer_id)
             .collect();
-        let peer_addr: HashMap<u64, SocketAddr> = peer_addr_vec.iter().cloned().collect();
-        let peer_id = peers[node_idx];
 
         let (raft_config, raft_channels) = RaftNode::init_config(
             raft::Config {
@@ -58,16 +58,14 @@ impl ActiveRaft {
             tick_timeout_duration,
         );
 
+        let peer_addr: HashMap<u64, SocketAddr> = peer_addr_vec.iter().cloned().collect();
+
         // TODO: Connect to all other peers once connection can succeed from both sides.
-        let raft_peers_to_connect = if use_raft {
-            peer_addr_vec
-                .iter()
-                .filter(|(idx, _)| *idx > peer_id)
-                .map(|(_, addr)| *addr)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let raft_peers_to_connect = peer_addr_vec
+            .iter()
+            .filter(|(idx, _)| *idx > peer_id)
+            .map(|(_, addr)| *addr)
+            .collect();
 
         Self {
             use_raft,

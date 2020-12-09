@@ -25,24 +25,24 @@ pub enum StorageRaftItem {
 /// Key serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StorageRaftKey {
-    proposer_id: u64,
-    proposal_id: u64,
+    pub proposer_id: u64,
+    pub proposal_id: u64,
 }
 
 /// Mined block received.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReceivedBlock {
-    peer: SocketAddr,
-    common: CommonBlockInfo,
-    per_node: MinedBlockExtraInfo,
+    pub peer: SocketAddr,
+    pub common: CommonBlockInfo,
+    pub per_node: MinedBlockExtraInfo,
 }
 
 /// Common info in all mined block that form a complete block.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommonBlockInfo {
-    block_idx: u64,
-    block: Block,
-    block_txs: BTreeMap<String, Transaction>,
+    pub block_idx: u64,
+    pub block: Block,
+    pub block_txs: BTreeMap<String, Transaction>,
 }
 
 /// Additional info specific to one of the mined block that form a complete block.
@@ -55,8 +55,8 @@ pub struct MinedBlockExtraInfo {
 /// Complete block info with all mining transactions and proof of work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompleteBlock {
-    common: CommonBlockInfo,
-    per_node: BTreeMap<u64, MinedBlockExtraInfo>,
+    pub common: CommonBlockInfo,
+    pub per_node: BTreeMap<u64, MinedBlockExtraInfo>,
 }
 
 /// All fields that are consensused between the RAFT group.
@@ -84,7 +84,7 @@ pub struct StorageRaft {
     /// Min duration between each block poposal.
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
-    propose_block_timeout_at: Instant,
+    propose_block_timeout_at: Option<Instant>,
     /// The last id of a proposed item.
     proposed_last_id: u64,
     /// Received blocks
@@ -109,7 +109,7 @@ impl StorageRaft {
 
         let propose_block_timeout_duration =
             Duration::from_millis(config.storage_block_timeout as u64);
-        let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
+        let propose_block_timeout_at = Some(Instant::now() + propose_block_timeout_duration);
 
         let consensused = StorageConsensused {
             sufficient_majority: raft_active.peers_len() / 2 + 1,
@@ -209,14 +209,20 @@ impl StorageRaft {
     }
 
     /// Blocks & waits for a timeout to propose a block.
-    pub async fn timeout_propose_block(&self) {
-        utils::timeout_at(self.propose_block_timeout_at).await;
+    pub async fn timeout_propose_block(&self) -> Option<()> {
+        if let Some(time) = self.propose_block_timeout_at {
+            utils::timeout_at(time).await;
+            Some(())
+        } else {
+            None
+        }
     }
 
     /// Process as a result of timeout_propose_block.
     /// Signal that the current block should complete.
-    /// Only reset timeout when complete block is generated.
+    /// Reset timeout, Only restart it when complete block is generated.
     pub async fn propose_block_at_timeout(&mut self) {
+        self.propose_block_timeout_at = None;
         self.propose_item(&StorageRaftItem::CompleteBlock(
             self.consensused.current_block_idx,
         ))
@@ -237,8 +243,31 @@ impl StorageRaft {
         self.raft_active.propose_data(data).await
     }
 
+    /// Append block to our local pool from which to propose
+    /// consensused blocks.
+    pub fn append_to_our_blocks(
+        &mut self,
+        peer: SocketAddr,
+        block: Block,
+        block_txs: BTreeMap<String, Transaction>,
+    ) {
+        self.local_blocks.push(ReceivedBlock {
+            peer,
+            common: CommonBlockInfo {
+                block_idx: self.consensused.current_block_idx,
+                block,
+                block_txs,
+            },
+            per_node: MinedBlockExtraInfo {
+                // TODO: Get and use real MinedBlockExtraInfo infos
+                nonce: Vec::new(),
+                mining_tx: Transaction::new(),
+            },
+        });
+    }
+
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
-        self.propose_block_timeout_at = Instant::now() + self.propose_block_timeout_duration;
+        self.propose_block_timeout_at = Some(Instant::now() + self.propose_block_timeout_duration);
         self.consensused.generate_complete_block()
     }
 }

@@ -180,7 +180,14 @@ async fn send_block_to_storage() {
                 match storage.handle_next_event().await {
                     Some(Ok(Response {
                         success: true,
-                        reason: "Block received and added",
+                        reason: "Block received to be added",
+                    })) => (),
+                    other => panic!("Unexpected result: {:?}", other),
+                }
+                match storage.handle_next_event().await {
+                    Some(Ok(Response {
+                        success: true,
+                        reason: "Block complete stored",
                     })) => (),
                     other => panic!("Unexpected result: {:?}", other),
                 }
