@@ -410,5 +410,8 @@ fn complete_network_config_with_n_compute_raft(
     cfg.compute_nodes = (0..compute_count)
         .map(|idx| format!("compute{}", idx + 1))
         .collect();
+    cfg.storage_nodes = (0..compute_count)
+        .map(|idx| format!("storage{}", idx + 1))
+        .collect();
     cfg
 }

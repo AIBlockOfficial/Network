@@ -128,7 +128,7 @@ impl ComputeNode {
             .address;
         let storage_addr = config
             .storage_nodes
-            .get(0)
+            .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
 
