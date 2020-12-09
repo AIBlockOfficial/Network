@@ -53,6 +53,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Started node at {}", node.address());
 
+    // RAFT HANDLING
+    let raft_loop_handle = {
+        let connect_all = node.connect_to_raft_peers();
+        let raft_loop = node.raft_loop();
+        tokio::spawn(async move {
+            // Need to connect first so Raft messages can be sent.
+            println!("Start connect to compute peers");
+            let result = connect_all.await;
+            println!("Peer connect complete, start Raft: {:?}", result);
+            raft_loop.await;
+            println!("Raft complete");
+        })
+    };
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -92,7 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let (result,) = tokio::join!(main_loop_handle);
-    result.unwrap();
+    let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
+    main.unwrap();
+    raft.unwrap();
     Ok(())
 }

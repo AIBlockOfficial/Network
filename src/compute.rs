@@ -486,10 +486,12 @@ impl ComputeNode {
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
-                    let result = self.node.send(
+                    match self.node.send(
                         addr,
-                        ComputeRequest::RaftCmd(msg)).await;
-                    info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
+                        ComputeRequest::RaftCmd(msg)).await {
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                        };
                 }
                 _ = self.node_raft.timeout_propose_block() => {
                     trace!("handle_next_event timeout block");

@@ -1,6 +1,7 @@
 storage_db_mode = {Test = 0}
 compute_seed_utxo = ["000000", "000001", "000002", "000003"]
 compute_raft = 1
+storage_raft = 1
 
 #first node is leader
 [[compute_nodes]]

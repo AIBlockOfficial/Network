@@ -175,11 +175,13 @@ impl StorageRaft {
             match item {
                 StorageRaftItem::PartBlock(block) => {
                     if self.consensused.is_current_block(block.common.block_idx) {
+                        debug!("PartBlock appened {:?}", key);
                         self.consensused.append_received_block(key, block);
                     }
                 }
                 StorageRaftItem::CompleteBlock(idx) => {
                     if self.consensused.is_current_block(idx) {
+                        debug!("CompleteBlock appened ({},{:?})", idx, key);
                         self.consensused.append_received_block_timeout(key);
                     }
                 }

@@ -18,7 +18,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-use tracing::{debug, error_span, info, trace, warn};
+use tracing::{error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
 /// Result wrapper for compute errors
@@ -144,10 +144,13 @@ impl StorageNode {
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
-                    let result = self.node.send(
+                    match self.node.send(
                         addr,
-                        StorageRequest::RaftCmd(msg)).await;
-                    info!("Msg sent to {}, from {}: {:?}", addr, self.address(), result);
+                        StorageRequest::RaftCmd(msg)).await {
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                        };
+
                 }
                 Some(_) = self.node_raft.timeout_propose_block() => {
                     trace!("handle_next_event timeout block");
@@ -181,7 +184,7 @@ impl StorageNode {
 
         let req_span = error_span!("request", ?req);
         let response = self.handle_request(peer, req).instrument(req_span).await;
-        debug!(?response, ?peer, "response");
+        trace!(?response, ?peer, "response");
 
         Ok(response)
     }
