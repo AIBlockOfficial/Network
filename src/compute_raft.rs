@@ -172,7 +172,7 @@ impl ComputeRaft {
         let mut committed_rx_overflow = Vec::new();
         let mut first_block_complete = false;
         for data in raft_data.drain(..) {
-            if self.consensused.tx_previous_hash.is_some() {
+            if first_block_complete || self.consensused.tx_previous_hash.is_some() {
                 committed_rx_overflow.push(data);
                 continue;
             }
@@ -567,6 +567,54 @@ mod test {
     use std::collections::BTreeSet;
 
     #[tokio::test]
+    async fn generate_first_block_no_raft() {
+        //
+        // Arrange
+        //
+        let seed_utxo = ["000000", "000001", "000002"];
+        let mut node = new_test_node(&seed_utxo).await;
+        let mut expected_block_addr_to_hashes = BTreeMap::new();
+
+        // 1. Add 2 valid and 2 double spend and one spent transactions
+        // Keep only 2 valids, and first double spent by hash.
+        node.append_to_tx_pool(valid_transaction(
+            &["000000", "000001", "000003"],
+            &["000100", "000101", "000103"],
+            &mut expected_block_addr_to_hashes,
+        ));
+
+        //
+        // Act
+        //
+        node.propose_local_transactions_at_timeout().await;
+        node.propose_local_druid_transactions().await;
+        node.propose_block_at_timeout().await;
+
+        let commit = node.next_commit().await.unwrap();
+        let first_block = node.received_commit(commit).await.unwrap();
+        let commit = node.next_commit().await.unwrap();
+        let new_block = node.received_commit(commit).await.unwrap();
+
+        //
+        // Assert
+        //
+        let expected_utxo_t_hashes: BTreeSet<String> =
+            seed_utxo.iter().map(|h| h.to_string()).collect();
+
+        let actual_utxo_t_hashes: BTreeSet<String> =
+            node.get_committed_utxo_set().keys().cloned().collect();
+
+        assert_eq!(first_block, CommittedItem::FirstBlock);
+        assert_eq!(new_block, CommittedItem::Block);
+        assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
+        assert_eq!(
+            node.consensused.tx_pool.len(),
+            expected_block_addr_to_hashes.len()
+        );
+        assert_eq!(node.consensused.tx_previous_hash, Some(String::new()));
+    }
+
+    #[tokio::test]
     async fn generate_current_block_no_raft() {
         //
         // Arrange
@@ -581,6 +629,9 @@ mod test {
         let mut node = new_test_node(&seed_utxo).await;
         let mut expected_block_addr_to_hashes = BTreeMap::new();
         let mut expected_unused_utxo_hashes = Vec::<&str>::new();
+
+        let commit = node.next_commit().await.unwrap();
+        let _first_block = node.received_commit(commit).await.unwrap();
 
         // 1. Add 2 valid and 2 double spend and one spent transactions
         // Keep only 2 valids, and first double spent by hash.
@@ -685,6 +736,8 @@ mod test {
         let mut node = new_test_node(&[]).await;
         node.proposed_and_consensused_tx_pool_len_max = 3;
         node.proposed_tx_pool_len_max = 2;
+        let commit = node.next_commit().await;
+        node.received_commit(commit.unwrap()).await.unwrap();
 
         //
         // Act
