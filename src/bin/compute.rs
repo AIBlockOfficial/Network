@@ -146,6 +146,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "First Block committed",
+                    }) => {
+                        println!("Block ready to be mined: {:?}", node.get_mining_block());
+                        let _write_to_store = node.send_first_block_to_storage().await.unwrap();
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to be mined: {:?}", node.get_mining_block());

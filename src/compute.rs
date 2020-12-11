@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::compute_raft::ComputeRaft;
+use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
@@ -132,9 +132,11 @@ impl ComputeNode {
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
 
+        let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
+        let node_raft = ComputeRaft::new(&config).await;
         Ok(ComputeNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
-            node_raft: ComputeRaft::new(&config),
+            node,
+            node_raft,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
@@ -412,6 +414,19 @@ impl ComputeNode {
     }
 
     /// Sends the latest block to storage
+    pub async fn send_first_block_to_storage(&mut self) -> Result<()> {
+        let tx = self.node_raft.get_committed_utxo_set().clone();
+        let mut block = Block::new();
+        block.transactions = tx.keys().cloned().collect();
+
+        self.node
+            .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
+            .await?;
+
+        Ok(())
+    }
+
+    /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         // Only the first call will send to storage.
         let mined_block = self.current_mined_block.take().unwrap();
@@ -476,12 +491,21 @@ impl ComputeNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    if self.node_raft.received_commit(commit_data).await.is_some() {
-                        self.node_raft.generate_block();
-                        return Some(Ok(Response{
-                            success: true,
-                            reason: "Block committed",
-                        }));
+                    match self.node_raft.received_commit(commit_data).await {
+                        Some(CommittedItem::FirstBlock) => {
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "First Block committed",
+                            }));
+                        }
+                        Some(CommittedItem::Block) => {
+                            self.node_raft.generate_block();
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Block committed",
+                            }));
+                        }
+                        None => {}
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
