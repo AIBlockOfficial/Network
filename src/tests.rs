@@ -18,13 +18,41 @@ const SEED_UTXO: [&str; 1] = ["000000"];
 const HASH_LEN: usize = 64;
 
 #[tokio::test(threaded_scheduler)]
-async fn create_block_no_raft() {
+async fn first_block_no_raft() {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
     let network_config = complete_network_config(10000);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    //
+    // Act
+    //
+    compute_connect_to_storage(&mut network, "compute1").await;
+    compute_handle_event(&mut network, "compute1", "First Block committed").await;
+    compute_send_first_block_to_storage(&mut network, "compute1").await;
+    storage_receive_and_store_block(&mut network, "storage1").await;
+
+    //
+    // Assert
+    //
+    let last_block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
+    assert_eq!(
+        last_block_stored,
+        Some((HASH_LEN, 0 /*time*/, 0 /*mining txs*/))
+    );
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn create_block_no_raft() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config(10010);
     let mut network = Network::create_from_config(&network_config).await;
     let (_transactions, t_hash, tx) = valid_transactions();
     compute_handle_event(&mut network, "compute1", "First Block committed").await;
@@ -131,7 +159,7 @@ async fn proof_of_work() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_miners(10010, 3);
+    let network_config = complete_network_config_with_n_miners(10020, 3);
     let mut network = Network::create_from_config(&network_config).await;
 
     let block = Block::new();
@@ -168,7 +196,7 @@ async fn send_block_to_storage_no_raft() {
     //
     // Arrange
     //
-    let network_config = complete_network_config(10020);
+    let network_config = complete_network_config(10030);
     let mut network = Network::create_from_config(&network_config).await;
     compute_connect_to_storage(&mut network, "compute1").await;
     let mined_block = MinedBlock {
@@ -201,7 +229,7 @@ async fn receive_payment_tx_user() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config(10030);
+    let mut network_config = complete_network_config(10040);
     network_config.user_nodes.push("user2".to_string());
     let mut network = Network::create_from_config(&network_config).await;
 
@@ -335,6 +363,11 @@ async fn compute_inject_next_event(
 async fn compute_connect_to_storage(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     c.connect_to_storage().await.unwrap();
+}
+
+async fn compute_send_first_block_to_storage(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.send_first_block_to_storage().await.unwrap();
 }
 
 async fn compute_send_block_to_storage(network: &mut Network, compute: &str, block: &MinedBlock) {
