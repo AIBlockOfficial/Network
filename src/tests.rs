@@ -15,6 +15,7 @@ use tracing::{error_span, info};
 use tracing_futures::Instrument;
 
 const SEED_UTXO: [&str; 1] = ["000000"];
+const HASH_LEN: usize = 64;
 
 #[tokio::test(threaded_scheduler)]
 async fn create_block_no_raft() {
@@ -182,6 +183,15 @@ async fn send_block_to_storage_no_raft() {
     //
     compute_send_block_to_storage(&mut network, "compute1", &mined_block).await;
     storage_receive_and_store_block(&mut network, "storage1").await;
+
+    //
+    // Assert
+    //
+    let last_block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
+    assert_eq!(
+        last_block_stored,
+        Some((HASH_LEN, 0 /*time*/, 0 /*mining txs*/))
+    );
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -336,6 +346,20 @@ async fn compute_send_block_to_storage(network: &mut Network, compute: &str, blo
 //
 // StorageNode helpers
 //
+
+async fn storage_get_last_block_stored(
+    network: &mut Network,
+    storage: &str,
+) -> Option<(usize, u32, usize)> {
+    let s = network.storage(storage).unwrap().lock().await;
+    s.get_last_block_stored().clone().map(|b| {
+        (
+            b.block_hash.len(),
+            b.block_time,
+            b.mining_transactions.len(),
+        )
+    })
+}
 
 async fn storage_receive_and_store_block(network: &mut Network, storage_str: &str) {
     let mut storage = network.storage(storage_str).unwrap().lock().await;

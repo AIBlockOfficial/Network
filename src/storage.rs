@@ -63,12 +63,20 @@ impl From<bincode::Error> for StorageError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockStoredInfo {
+    pub block_hash: String,
+    pub block_time: u32,
+    pub mining_transactions: BTreeMap<String, Transaction>,
+}
+
 #[derive(Debug)]
 pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
     whitelisted: HashMap<SocketAddr, bool>,
     db_mode: DbMode,
+    last_block_stored: Option<BlockStoredInfo>,
 }
 
 impl StorageNode {
@@ -84,6 +92,7 @@ impl StorageNode {
             node_raft: StorageRaft::new(&config),
             whitelisted: HashMap::new(),
             db_mode: config.storage_db_mode,
+            last_block_stored: None,
         })
     }
 
@@ -212,8 +221,8 @@ impl StorageNode {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
-        // Save the block
-        let hash_input = Bytes::from(serialize(&complete.common.block).unwrap());
+        // Save the complete block
+        let hash_input = Bytes::from(serialize(&complete).unwrap());
         let hash_digest = Sha3_256::digest(&hash_input);
         let hash_key = hex::encode(hash_digest);
         let save_path = match self.db_mode {
@@ -224,7 +233,7 @@ impl StorageNode {
 
         let opts = get_db_options();
         let db = DB::open(&opts, save_path.clone()).unwrap();
-        db.put(hash_key, hash_input).unwrap();
+        db.put(hash_key.clone(), hash_input).unwrap();
 
         // Save each transaction
         for (tx_hash, tx_value) in &complete.common.block_txs {
@@ -232,7 +241,17 @@ impl StorageNode {
             db.put(tx_hash, tx_input).unwrap();
         }
 
+        self.last_block_stored = Some(BlockStoredInfo {
+            block_hash: hash_key,
+            block_time: complete.common.block.header.time,
+            mining_transactions: BTreeMap::new(),
+        });
+
         let _ = DB::destroy(&opts, save_path);
+    }
+
+    pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
+        &self.last_block_stored
     }
 }
 
