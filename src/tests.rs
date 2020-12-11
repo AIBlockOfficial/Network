@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::{ComputeNode, MinedBlock};
-use crate::interfaces::{ComputeRequest, Response};
+use crate::interfaces::{BlockStoredInfo, ComputeRequest, Response};
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
 use futures::future::join_all;
@@ -55,19 +55,21 @@ async fn create_block_no_raft() {
     let network_config = complete_network_config(10010);
     let mut network = Network::create_from_config(&network_config).await;
     let (_transactions, t_hash, tx) = valid_transactions();
+    compute_connect_to_storage(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "First Block committed").await;
+    compute_send_first_block_to_storage(&mut network, "compute1").await;
+    storage_receive_and_store_block(&mut network, "storage1").await;
 
     //
     // Act
     //
     node_connect_to(&mut network, "user1", "compute1").await;
     user_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await;
-    compute_handle_event(
-        &mut network,
-        "compute1",
-        "All transactions successfully added to tx pool",
-    )
-    .await;
+    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+
+    storage_send_stored_block(&mut network, "storage1").await;
+    compute_handle_event(&mut network, "compute1", "Received block stored").await;
 
     let block_transaction_before =
         compute_current_block_transactions(&mut network, "compute1").await;
@@ -112,21 +114,23 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let (transactions, t_hash, _tx) = valid_transactions();
+
+    let send_tx_req = ComputeRequest::SendTransactions { transactions };
+    let send_block_stored_req = ComputeRequest::SendBlockStored(BlockStoredInfo {
+        block_hash: "0123".to_string(),
+        block_time: 0,
+        mining_transactions: BTreeMap::new(),
+    });
+
     compute_raft_group_all_handle_event(&mut network, compute_nodes, "First Block committed").await;
 
-    compute_inject_next_event(
-        &mut network,
-        "user1",
-        "compute1",
-        ComputeRequest::SendTransactions { transactions },
-    )
-    .await;
-    compute_handle_event(
-        &mut network,
-        "compute1",
-        "All transactions successfully added to tx pool",
-    )
-    .await;
+    compute_inject_next_event(&mut network, "user1", "compute1", send_tx_req).await;
+    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    compute_raft_group_all_handle_event(&mut network, compute_nodes, "Transactions committed")
+        .await;
+
+    compute_inject_next_event(&mut network, "storage1", "compute1", send_block_stored_req).await;
+    compute_handle_event(&mut network, "compute1", "Received block stored").await;
 
     //
     // Act
@@ -392,6 +396,11 @@ async fn storage_get_last_block_stored(
             b.mining_transactions.len(),
         )
     })
+}
+
+async fn storage_send_stored_block(network: &mut Network, storage: &str) {
+    let mut s = network.storage(storage).unwrap().lock().await;
+    s.send_stored_block().await.unwrap();
 }
 
 async fn storage_receive_and_store_block(network: &mut Network, storage_str: &str) {

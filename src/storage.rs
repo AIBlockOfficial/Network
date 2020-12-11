@@ -2,7 +2,8 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
-    Contract, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
+    BlockStoredInfo, ComputeRequest, Contract, NodeType, ProofOfWork, Response, StorageInterface,
+    StorageRequest,
 };
 use crate::storage_raft::{CompleteBlock, StorageRaft};
 use crate::utils::{get_db_options, loop_connnect_to_peers_async};
@@ -63,17 +64,11 @@ impl From<bincode::Error> for StorageError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockStoredInfo {
-    pub block_hash: String,
-    pub block_time: u32,
-    pub mining_transactions: BTreeMap<String, Transaction>,
-}
-
 #[derive(Debug)]
 pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
+    compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     db_mode: DbMode,
     last_block_stored: Option<BlockStoredInfo>,
@@ -86,10 +81,16 @@ impl StorageNode {
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?
             .address;
+        let compute_addr = config
+            .compute_nodes
+            .get(config.storage_node_idx)
+            .ok_or(StorageError::ConfigError("Invalid compute index"))?
+            .address;
 
         Ok(StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
             node_raft: StorageRaft::new(&config),
+            compute_addr,
             whitelisted: HashMap::new(),
             db_mode: config.storage_db_mode,
             last_block_stored: None,
@@ -155,7 +156,7 @@ impl StorageNode {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     match self.node.send(
                         addr,
-                        StorageRequest::RaftCmd(msg)).await {
+                        StorageRequest::SendRaftCmd(msg)).await {
                             Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
                             Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
                         };
@@ -210,7 +211,7 @@ impl StorageNode {
             SendPow { pow } => Some(self.receive_pow(pow)),
             SendBlock { block, tx } => Some(self.receive_block(peer, block, tx)),
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
-            RaftCmd(msg) => {
+            SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
@@ -252,6 +253,18 @@ impl StorageNode {
 
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         &self.last_block_stored
+    }
+
+    /// Sends the latest block to storage
+    pub async fn send_stored_block(&mut self) -> Result<()> {
+        // Only the first call will send to storage.
+        let block = self.last_block_stored.as_ref().unwrap().clone();
+
+        self.node
+            .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
+            .await?;
+
+        Ok(())
     }
 }
 

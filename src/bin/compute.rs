@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
-                        reason: "All transactions successfully added to tx pool",
+                        reason: "Transactions added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
                     }
