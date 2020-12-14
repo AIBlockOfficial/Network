@@ -15,6 +15,8 @@ use tracing::{error_span, info};
 use tracing_futures::Instrument;
 
 const SEED_UTXO: [&str; 1] = ["000000"];
+const SEED_UTXO_BLOCK_HASH: &str =
+    "e18f57f62c7bb00811c032b56c8113c83520c1bf9b8428cc96e4c8d5b704d11b";
 const HASH_LEN: usize = 64;
 
 #[tokio::test(threaded_scheduler)]
@@ -38,10 +40,13 @@ async fn first_block_no_raft() {
     //
     // Assert
     //
-    let last_block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
     assert_eq!(
-        last_block_stored,
-        Some((HASH_LEN, 0 /*time*/, 0 /*mining txs*/))
+        storage_get_last_block_stored(&mut network, "storage1").await,
+        Some((
+            SEED_UTXO_BLOCK_HASH.to_string(),
+            0, /*time*/
+            0  /*mining txs*/
+        ))
     );
 }
 
@@ -117,7 +122,7 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
 
     let send_tx_req = ComputeRequest::SendTransactions { transactions };
     let send_block_stored_req = ComputeRequest::SendBlockStored(BlockStoredInfo {
-        block_hash: "0123".to_string(),
+        block_hash: SEED_UTXO_BLOCK_HASH.to_string(),
         block_time: 0,
         mining_transactions: BTreeMap::new(),
     });
@@ -218,6 +223,8 @@ async fn send_block_to_storage_no_raft() {
         block_tx: BTreeMap::new(),
         mining_transaction: Transaction::new(),
     };
+    let expected_stored_block_hash =
+        "e0c042e2a9e88ea1be2a45df1c9b30bdfc485d3ab3e1683de5933d48bce01464".to_string();
 
     //
     // Act
@@ -228,10 +235,13 @@ async fn send_block_to_storage_no_raft() {
     //
     // Assert
     //
-    let last_block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
     assert_eq!(
-        last_block_stored,
-        Some((HASH_LEN, 0 /*time*/, 0 /*mining txs*/))
+        storage_get_last_block_stored(&mut network, "storage1").await,
+        Some((
+            expected_stored_block_hash,
+            0, /*time*/
+            0  /*mining txs*/
+        ))
     );
 }
 
@@ -397,11 +407,11 @@ async fn compute_send_block_to_storage(network: &mut Network, compute: &str, blo
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
-) -> Option<(usize, u32, usize)> {
+) -> Option<(String, u32, usize)> {
     let s = network.storage(storage).unwrap().lock().await;
     s.get_last_block_stored().clone().map(|b| {
         (
-            b.block_hash.len(),
+            b.block_hash.clone(),
             b.block_time,
             b.mining_transactions.len(),
         )
