@@ -162,6 +162,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Transactions committed",
+                    }) => {
+                        println!("Transactions ready to be used in next block");
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Received block stored",
+                    }) => {
+                        println!("Block info received from storage: ready to generate block");
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: &_,
                     }) => {
                         println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
