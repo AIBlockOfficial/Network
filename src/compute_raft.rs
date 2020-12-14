@@ -154,100 +154,78 @@ impl ComputeRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
+    pub async fn next_commit(&self) -> Option<RaftData> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<CommittedItem> {
-        let mut committed_rx_overflow = Vec::new();
-        let mut first_block_complete = false;
-        let mut transaction_added = false;
-        for data in raft_data.drain(..) {
-            if first_block_complete || self.consensused.tx_previous_hash.is_some() {
-                committed_rx_overflow.push(data);
-                continue;
+    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
+        let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
+            Ok((key, item)) => {
+                if self.proposed_in_flight.remove(&key).is_some() {
+                    if let ComputeRaftItem::Transactions(ref txs) = &item {
+                        self.proposed_tx_pool_len -= txs.len();
+                    }
+                }
+                (key, item)
             }
+            Err(error) => {
+                warn!(?error, "ComputeRaftItem-deserialize");
+                return None;
+            }
+        };
 
-            let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&data) {
-                Ok((key, item)) => {
-                    if self.proposed_in_flight.remove(&key).is_some() {
-                        if let ComputeRaftItem::Transactions(ref txs) = &item {
-                            self.proposed_tx_pool_len -= txs.len();
-                        }
-                    }
-                    (key, item)
+        match item {
+            ComputeRaftItem::FirstBlock(uxto_set) => {
+                if !self.consensused.utxo_set.is_empty() {
+                    error!("Proposed FirstBlock after startup {:?}", key);
+                    return None;
                 }
-                Err(error) => {
-                    warn!(?error, "ComputeRaftItem-deserialize");
-                    continue;
+
+                if self.consensused.utxo_set_first_block.is_none() {
+                    self.consensused.utxo_set_first_block =
+                        Some((uxto_set.clone(), BTreeSet::new()));
                 }
-            };
 
-            match item {
-                ComputeRaftItem::FirstBlock(uxto_set) => {
-                    if !self.consensused.utxo_set.is_empty() {
-                        error!("Proposed FirstBlock after startup {:?}", key);
-                        continue;
+                if let Some(first) = &mut self.consensused.utxo_set_first_block {
+                    if first.0 != uxto_set {
+                        error!("Proposed uxtosets are different {:?}", key);
+                        return None;
                     }
+                    first.1.insert(key.proposer_id);
 
-                    if self.consensused.utxo_set_first_block.is_none() {
-                        self.consensused.utxo_set_first_block =
-                            Some((uxto_set.clone(), BTreeSet::new()));
+                    if first.1.len() >= self.raft_active.peers_len() {
+                        // Complete first block
+                        let utxo_set = self.consensused.utxo_set_first_block.take().unwrap().0;
+                        self.consensused.utxo_set = utxo_set;
+                        return Some(CommittedItem::FirstBlock);
                     }
-
-                    if let Some(first) = &mut self.consensused.utxo_set_first_block {
-                        if first.0 != uxto_set {
-                            error!("Proposed uxtosets are different {:?}", key);
-                            continue;
-                        }
-                        first.1.insert(key.proposer_id);
-
-                        if first.1.len() >= self.raft_active.peers_len() {
-                            // Complete first block
-                            let utxo_set = self.consensused.utxo_set_first_block.take().unwrap().0;
-                            self.consensused.utxo_set = utxo_set.clone();
-                            first_block_complete = true;
-                        }
-                    }
-                }
-                ComputeRaftItem::Transactions(mut txs) => {
-                    self.consensused.tx_pool.append(&mut txs);
-                    transaction_added = true;
-                }
-                ComputeRaftItem::DruidTransactions(mut txs) => {
-                    self.consensused.tx_druid_pool.append(&mut txs);
-                    transaction_added = true;
-                }
-                ComputeRaftItem::Block(previous_info) => {
-                    if self.consensused.tx_previous_block_idx >= Some(previous_info.block_time) {
-                        // Ignore already known blocks
-                        continue;
-                    }
-
-                    // New block:
-                    // Must not populate further tx_pool & tx_druid_pool
-                    // before generating block.
-                    self.consensused.tx_previous_hash = Some(previous_info.block_hash);
-                    self.consensused.tx_previous_block_idx = Some(previous_info.block_time);
                 }
             }
-        }
+            ComputeRaftItem::Transactions(mut txs) => {
+                self.consensused.tx_pool.append(&mut txs);
+                return Some(CommittedItem::Transactions);
+            }
+            ComputeRaftItem::DruidTransactions(mut txs) => {
+                self.consensused.tx_druid_pool.append(&mut txs);
+                return Some(CommittedItem::Transactions);
+            }
+            ComputeRaftItem::Block(previous_info) => {
+                if self.consensused.tx_previous_block_idx >= Some(previous_info.block_time) {
+                    // Ignore already known blocks
+                    return None;
+                }
 
-        self.raft_active
-            .append_commited_overflow(committed_rx_overflow)
-            .await;
-
-        if first_block_complete {
-            Some(CommittedItem::FirstBlock)
-        } else if self.consensused.tx_previous_hash.is_some() {
-            Some(CommittedItem::Block)
-        } else if transaction_added {
-            Some(CommittedItem::Transactions)
-        } else {
-            None
+                // New block:
+                // Must not populate further tx_pool & tx_druid_pool
+                // before generating block.
+                self.consensused.tx_previous_hash = Some(previous_info.block_hash);
+                self.consensused.tx_previous_block_idx = Some(previous_info.block_time);
+                return Some(CommittedItem::Block);
+            }
         }
+        None
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -683,8 +661,11 @@ mod test {
 
         node.append_block_stored_info(previous_block);
         node.propose_block_with_last_info().await;
-        let commit = node.next_commit().await.unwrap();
-        let need_block = node.received_commit(commit).await.unwrap();
+        let mut commits = Vec::new();
+        for _ in 0..3 {
+            let commit = node.next_commit().await.unwrap();
+            commits.push(node.received_commit(commit).await.unwrap());
+        }
         node.generate_block();
 
         //
@@ -707,7 +688,14 @@ mod test {
         let actual_utxo_t_hashes: BTreeSet<String> =
             node.get_committed_utxo_set().keys().cloned().collect();
 
-        assert_eq!(need_block, CommittedItem::Block);
+        assert_eq!(
+            commits,
+            vec![
+                CommittedItem::Transactions,
+                CommittedItem::Transactions,
+                CommittedItem::Block
+            ]
+        );
         assert_eq!(Some(expected_block_t_hashes.clone()), actual_block_t_hashes);
         assert_eq!(expected_block_t_hashes, actual_block_tx_t_hashes);
         assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
@@ -758,9 +746,11 @@ mod test {
             node.propose_local_druid_transactions().await;
             collect_info(&node);
 
-            tokio::select! {
-                commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
-                _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
+            loop {
+                tokio::select! {
+                    commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
+                    _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {break;}
+                }
             }
             collect_info(&node);
         }

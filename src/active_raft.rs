@@ -2,7 +2,7 @@ use crate::configurations::NodeSpec;
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub struct ActiveRaft {
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
     /// Channel to receive commited entries from the running RaftNode to process.
     /// and extra data not processed yet.
-    committed_rx: Arc<Mutex<(CommitReceiver, Vec<RaftData>)>>,
+    committed_rx: Arc<Mutex<(CommitReceiver, VecDeque<RaftData>)>>,
     /// Map to the address of the peers.
     peer_addr: HashMap<u64, SocketAddr>,
     /// Collection of the peer this node is responsible to connect to.
@@ -73,7 +73,7 @@ impl ActiveRaft {
             raft_node: Arc::new(Mutex::new(RaftNode::new(raft_config))),
             cmd_tx: raft_channels.cmd_tx,
             msg_out_rx: Arc::new(Mutex::new(raft_channels.msg_out_rx)),
-            committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, Vec::new()))),
+            committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, VecDeque::new()))),
             peer_addr,
             raft_peers_to_connect,
         }
@@ -108,18 +108,16 @@ impl ActiveRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
+    pub async fn next_commit(&self) -> Option<RaftData> {
         let mut committed_rx = self.committed_rx.lock().await;
 
-        if !committed_rx.1.is_empty() {
-            return Some(std::mem::take(&mut committed_rx.1));
+        loop {
+            if let Some(commit) = committed_rx.1.pop_front() {
+                return Some(commit);
+            } else if let Some(commits) = committed_rx.0.recv().await {
+                committed_rx.1.extend(commits.into_iter());
+            }
         }
-
-        committed_rx.0.recv().await
-    }
-
-    pub async fn append_commited_overflow(&mut self, mut raft_data: Vec<RaftData>) {
-        self.committed_rx.lock().await.1.append(&mut raft_data);
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -140,7 +138,7 @@ impl ActiveRaft {
         if self.use_raft {
             self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
         } else {
-            self.committed_rx.lock().await.1.push(data);
+            self.committed_rx.lock().await.1.push_back(data);
         }
     }
 }
