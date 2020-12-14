@@ -84,7 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Block complete stored",
                     }) => {
-                        println!("Block stored");
+                        println!("Block stored: Send to compute");
+                        node.send_stored_block().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
@@ -103,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            node.close_raft_loop().await;
         }
     });
 

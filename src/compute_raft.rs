@@ -1,6 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
+use crate::interfaces::BlockStoredInfo;
 use crate::raft::{RaftData, RaftMessageWrapper};
 use crate::utils;
 use bincode::{deserialize, serialize};
@@ -8,18 +9,19 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
-    Block((String, u32)),
+    FirstBlock(BTreeMap<String, Transaction>),
+    Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
 }
@@ -29,6 +31,14 @@ pub enum ComputeRaftItem {
 pub struct ComputeRaftKey {
     proposer_id: u64,
     proposal_id: u64,
+}
+
+/// Commited item to process.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CommittedItem {
+    Transactions,
+    FirstBlock,
+    Block,
 }
 
 /// All fields that are consensused between the RAFT group.
@@ -42,13 +52,16 @@ pub struct ComputeConsensused {
     /// Header to use for next block if ready to generate.
     tx_previous_hash: Option<String>,
     /// Index of the last block,
-    tx_previous_block_idx: u32,
+    tx_previous_block_idx: Option<u32>,
     /// Current block ready to mine (consensused).
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
     /// UTXO set containain the valid transaction to use as previous input hashes.
     utxo_set: BTreeMap<String, Transaction>,
+    /// Accumulating first block: Require all compute node votes.
+    /// (proposed utxo_set, vote peer ids).
+    utxo_set_first_block: Option<(BTreeMap<String, Transaction>, BTreeSet<u64>)>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -64,11 +77,7 @@ pub struct ComputeRaft {
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Block to propose: should contain all needed information.
-    local_last_block_hash_and_time: Option<(String, u32)>,
-    /// Min duration between each block poposal.
-    propose_block_timeout_duration: Duration,
-    /// Timeout expiration time for block poposal.
-    propose_block_timeout_at: Instant,
+    last_block_stored_infos: Vec<BlockStoredInfo>,
     /// Min duration between each transaction poposal.
     propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
@@ -93,7 +102,7 @@ impl fmt::Debug for ComputeRaft {
 
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
-    pub fn new(config: &ComputeNodeConfig) -> Self {
+    pub async fn new(config: &ComputeNodeConfig) -> Self {
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
@@ -101,24 +110,16 @@ impl ComputeRaft {
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
         );
 
-        let propose_block_timeout_duration =
-            Duration::from_millis(config.compute_block_timeout as u64);
-        let propose_block_timeout_at = Instant::now() + propose_block_timeout_duration;
-
         let propose_transactions_timeout_duration =
             Duration::from_millis(config.compute_transaction_timeout as u64);
         let propose_transactions_timeout_at =
             Instant::now() + propose_transactions_timeout_duration;
 
-        let consensused = {
-            let mut consensused = ComputeConsensused::default();
-            consensused.utxo_set = config
-                .compute_seed_utxo
-                .iter()
-                .map(|hash| (hash.clone(), Transaction::new()))
-                .collect();
-            consensused
-        };
+        let utxo_set = config
+            .compute_seed_utxo
+            .iter()
+            .map(|hash| (hash.clone(), Transaction::new()))
+            .collect();
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
@@ -126,12 +127,10 @@ impl ComputeRaft {
         Self {
             first_raft_peer,
             raft_active,
-            consensused,
+            consensused: ComputeConsensused::default(),
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
-            local_last_block_hash_and_time: Some((String::new(), 1)),
-            propose_block_timeout_duration,
-            propose_block_timeout_at,
+            last_block_stored_infos: Vec::new(),
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
             proposed_in_flight: BTreeMap::new(),
@@ -140,6 +139,8 @@ impl ComputeRaft {
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             proposed_last_id: 0,
         }
+        .propose_initial_uxto_set(utxo_set)
+        .await
     }
 
     /// All the peers to connect to when using raft.
@@ -152,70 +153,84 @@ impl ComputeRaft {
         self.raft_active.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.raft_active.close_raft_loop().await
+    }
+
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
+    pub async fn next_commit(&self) -> Option<RaftData> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
-        let mut committed_rx_overflow = Vec::new();
-        for data in raft_data.drain(..) {
-            if self.consensused.tx_previous_hash.is_some() {
-                committed_rx_overflow.push(data);
-                continue;
+    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
+        let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
+            Ok((key, item)) => {
+                if self.proposed_in_flight.remove(&key).is_some() {
+                    if let ComputeRaftItem::Transactions(ref txs) = &item {
+                        self.proposed_tx_pool_len -= txs.len();
+                    }
+                }
+                (key, item)
             }
+            Err(error) => {
+                warn!(?error, "ComputeRaftItem-deserialize");
+                return None;
+            }
+        };
 
-            let item = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&data) {
-                Ok((key, item)) => {
-                    if self.proposed_in_flight.remove(&key).is_some() {
-                        if let ComputeRaftItem::Transactions(ref txs) = &item {
-                            self.proposed_tx_pool_len -= txs.len();
-                        }
+        match item {
+            ComputeRaftItem::FirstBlock(uxto_set) => {
+                if !self.consensused.utxo_set.is_empty() {
+                    error!("Proposed FirstBlock after startup {:?}", key);
+                    return None;
+                }
+
+                if self.consensused.utxo_set_first_block.is_none() {
+                    self.consensused.utxo_set_first_block =
+                        Some((uxto_set.clone(), BTreeSet::new()));
+                }
+
+                if let Some(first) = &mut self.consensused.utxo_set_first_block {
+                    if first.0 != uxto_set {
+                        error!("Proposed uxtosets are different {:?}", key);
+                        return None;
                     }
-                    item
-                }
-                Err(error) => {
-                    warn!(?error, "ComputeRaftItem-deserialize");
-                    continue;
-                }
-            };
+                    first.1.insert(key.proposer_id);
 
-            match item {
-                ComputeRaftItem::Transactions(mut txs) => {
-                    self.consensused.tx_pool.append(&mut txs);
-                }
-                ComputeRaftItem::DruidTransactions(mut txs) => {
-                    self.consensused.tx_druid_pool.append(&mut txs);
-                }
-                ComputeRaftItem::Block((previous_hash, previous_idx)) => {
-                    if self.consensused.tx_previous_block_idx >= previous_idx {
-                        // Ignore already known blocks
-                        continue;
+                    if first.1.len() >= self.raft_active.peers_len() {
+                        // Complete first block
+                        let utxo_set = self.consensused.utxo_set_first_block.take().unwrap().0;
+                        self.consensused.utxo_set = utxo_set;
+                        return Some(CommittedItem::FirstBlock);
                     }
-
-                    if self.consensused.tx_pool.is_empty()
-                        && self.consensused.tx_druid_pool.is_empty()
-                    {
-                        // Not ready for a new block, re-propose on timeout.
-                        self.local_last_block_hash_and_time = Some((previous_hash, previous_idx));
-                        continue;
-                    }
-
-                    // New block:
-                    // Must not populate further tx_pool & tx_druid_pool
-                    // before generating block.
-                    self.consensused.tx_previous_hash = Some(previous_hash);
-                    self.consensused.tx_previous_block_idx = previous_idx;
                 }
+            }
+            ComputeRaftItem::Transactions(mut txs) => {
+                self.consensused.tx_pool.append(&mut txs);
+                return Some(CommittedItem::Transactions);
+            }
+            ComputeRaftItem::DruidTransactions(mut txs) => {
+                self.consensused.tx_druid_pool.append(&mut txs);
+                return Some(CommittedItem::Transactions);
+            }
+            ComputeRaftItem::Block(previous_info) => {
+                if self.consensused.tx_previous_block_idx >= Some(previous_info.block_time) {
+                    // Ignore already known blocks
+                    return None;
+                }
+
+                // New block:
+                // Must not populate further tx_pool & tx_druid_pool
+                // before generating block.
+                self.consensused.tx_previous_hash = Some(previous_info.block_hash);
+                self.consensused.tx_previous_block_idx = Some(previous_info.block_time);
+                return Some(CommittedItem::Block);
             }
         }
-
-        self.raft_active
-            .append_commited_overflow(committed_rx_overflow)
-            .await;
-        self.consensused.tx_previous_hash.as_ref().map(|_| ())
+        None
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -229,25 +244,24 @@ impl ComputeRaft {
         self.raft_active.received_message(msg).await
     }
 
-    /// Blocks & waits for a timeout to propose a block.
-    pub async fn timeout_propose_block(&self) {
-        utils::timeout_at(self.propose_block_timeout_at).await;
-    }
-
     /// Blocks & waits for a timeout to propose transactions.
     pub async fn timeout_propose_transactions(&self) {
         utils::timeout_at(self.propose_transactions_timeout_at).await;
     }
 
-    /// Process as a result of timeout_propose_block.
-    /// Reset timeout, and propose block if previous completed.
-    pub async fn propose_block_at_timeout(&mut self) {
-        self.propose_block_timeout_at = Instant::now() + self.propose_block_timeout_duration;
+    /// Append new transaction to our local pool from which to propose
+    /// consensused transactions.
+    async fn propose_initial_uxto_set(mut self, uxto_set: BTreeMap<String, Transaction>) -> Self {
+        self.propose_item(&ComputeRaftItem::FirstBlock(uxto_set))
+            .await;
+        self
+    }
 
-        if let Some(block) = std::mem::take(&mut self.local_last_block_hash_and_time) {
-            if self.first_raft_peer {
-                self.propose_item(&ComputeRaftItem::Block(block)).await;
-            }
+    /// Process as received block info.
+    pub async fn propose_block_with_last_info(&mut self) {
+        let local_blocks = std::mem::take(&mut self.last_block_stored_infos);
+        for block in local_blocks.into_iter() {
+            self.propose_item(&ComputeRaftItem::Block(block)).await;
         }
     }
 
@@ -316,8 +330,8 @@ impl ComputeRaft {
     }
 
     /// Set result of mined block necessary for new block to be generated.
-    pub fn set_local_last_block_hash_and_time(&mut self, hash: String, time: u32) {
-        self.local_last_block_hash_and_time = Some((hash, time));
+    pub fn append_block_stored_info(&mut self, info: BlockStoredInfo) {
+        self.last_block_stored_infos.push(info);
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -453,7 +467,7 @@ impl ComputeConsensused {
     fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_previous_hash).unwrap();
 
-        block.header.time = self.tx_previous_block_idx + 1;
+        block.header.time = self.tx_previous_block_idx.unwrap() + 1;
         block.header.previous_hash = Some(previous_hash);
     }
 
@@ -516,6 +530,54 @@ mod test {
     use std::collections::BTreeSet;
 
     #[tokio::test]
+    async fn generate_first_block_no_raft() {
+        //
+        // Arrange
+        //
+        let seed_utxo = ["000000", "000001", "000002"];
+        let mut node = new_test_node(&seed_utxo).await;
+        let mut expected_block_addr_to_hashes = BTreeMap::new();
+
+        // 1. Add 2 valid and 2 double spend and one spent transactions
+        // Keep only 2 valids, and first double spent by hash.
+        node.append_to_tx_pool(valid_transaction(
+            &["000000", "000001", "000003"],
+            &["000100", "000101", "000103"],
+            &mut expected_block_addr_to_hashes,
+        ));
+
+        //
+        // Act
+        //
+        node.propose_local_transactions_at_timeout().await;
+        node.propose_local_druid_transactions().await;
+        node.propose_block_with_last_info().await;
+
+        let commit = node.next_commit().await.unwrap();
+        let first_block = node.received_commit(commit).await;
+        let commit = node.next_commit().await.unwrap();
+        let tx_no_block = node.received_commit(commit).await;
+
+        //
+        // Assert
+        //
+        let expected_utxo_t_hashes: BTreeSet<String> =
+            seed_utxo.iter().map(|h| h.to_string()).collect();
+
+        let actual_utxo_t_hashes: BTreeSet<String> =
+            node.get_committed_utxo_set().keys().cloned().collect();
+
+        assert_eq!(first_block, Some(CommittedItem::FirstBlock));
+        assert_eq!(tx_no_block, Some(CommittedItem::Transactions));
+        assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
+        assert_eq!(
+            node.consensused.tx_pool.len(),
+            expected_block_addr_to_hashes.len()
+        );
+        assert_eq!(node.consensused.tx_previous_hash, None);
+    }
+
+    #[tokio::test]
     async fn generate_current_block_no_raft() {
         //
         // Arrange
@@ -527,9 +589,17 @@ mod test {
             "000020", "000021", "000023", // 4:
             "000030", "000031",
         ];
-        let mut node = new_test_node(&seed_utxo);
+        let mut node = new_test_node(&seed_utxo).await;
         let mut expected_block_addr_to_hashes = BTreeMap::new();
         let mut expected_unused_utxo_hashes = Vec::<&str>::new();
+
+        let commit = node.next_commit().await.unwrap();
+        let _first_block = node.received_commit(commit).await.unwrap();
+        let previous_block = BlockStoredInfo {
+            block_hash: "0123".to_string(),
+            block_time: 1,
+            mining_transactions: BTreeMap::new(),
+        };
 
         // 1. Add 2 valid and 2 double spend and one spent transactions
         // Keep only 2 valids, and first double spent by hash.
@@ -593,9 +663,14 @@ mod test {
         //
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
-        node.propose_block_at_timeout().await;
-        let commit = node.next_commit().await.unwrap();
-        let _need_block = node.received_commit(commit).await.unwrap();
+
+        node.append_block_stored_info(previous_block);
+        node.propose_block_with_last_info().await;
+        let mut commits = Vec::new();
+        for _ in 0..3 {
+            let commit = node.next_commit().await.unwrap();
+            commits.push(node.received_commit(commit).await.unwrap());
+        }
         node.generate_block();
 
         //
@@ -618,6 +693,14 @@ mod test {
         let actual_utxo_t_hashes: BTreeSet<String> =
             node.get_committed_utxo_set().keys().cloned().collect();
 
+        assert_eq!(
+            commits,
+            vec![
+                CommittedItem::Transactions,
+                CommittedItem::Transactions,
+                CommittedItem::Block
+            ]
+        );
         assert_eq!(Some(expected_block_t_hashes.clone()), actual_block_t_hashes);
         assert_eq!(expected_block_t_hashes, actual_block_tx_t_hashes);
         assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
@@ -631,9 +714,11 @@ mod test {
         //
         // Arrange
         //
-        let mut node = new_test_node(&[]);
+        let mut node = new_test_node(&[]).await;
         node.proposed_and_consensused_tx_pool_len_max = 3;
         node.proposed_tx_pool_len_max = 2;
+        let commit = node.next_commit().await;
+        node.received_commit(commit.unwrap()).await.unwrap();
 
         //
         // Act
@@ -666,9 +751,11 @@ mod test {
             node.propose_local_druid_transactions().await;
             collect_info(&node);
 
-            tokio::select! {
-                commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
-                _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {}
+            loop {
+                tokio::select! {
+                    commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
+                    _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {break;}
+                }
             }
             collect_info(&node);
         }
@@ -698,7 +785,7 @@ mod test {
         );
     }
 
-    fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
+    async fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
         let compute_node = NodeSpec {
             address: "0.0.0.0:0".parse().unwrap(),
         };
@@ -713,7 +800,7 @@ mod test {
             compute_transaction_timeout: 50,
             compute_seed_utxo: seed_utxo.iter().map(|v| v.to_string()).collect(),
         };
-        ComputeRaft::new(&compute_config)
+        ComputeRaft::new(&compute_config).await
     }
 
     fn valid_transaction(

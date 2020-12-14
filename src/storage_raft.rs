@@ -141,6 +141,11 @@ impl StorageRaft {
         self.raft_active.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.raft_active.close_raft_loop().await
+    }
+
     /// Add any ready local blocks.
     pub async fn propose_received_part_block(&mut self) {
         let local_blocks = std::mem::take(&mut self.local_blocks);
@@ -150,47 +155,35 @@ impl StorageRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<Vec<RaftData>> {
+    pub async fn next_commit(&self) -> Option<RaftData> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, mut raft_data: Vec<RaftData>) -> Option<()> {
-        let mut committed_rx_overflow = Vec::new();
-        for data in raft_data.drain(..) {
-            if self.consensused.has_block_ready_to_store() {
-                committed_rx_overflow.push(data);
-                continue;
+    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<()> {
+        let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
+            Ok((key, item)) => (key, item),
+            Err(error) => {
+                warn!(?error, "StorageRaftItem-deserialize");
+                return None;
             }
+        };
 
-            let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&data) {
-                Ok((key, item)) => (key, item),
-                Err(error) => {
-                    warn!(?error, "StorageRaftItem-deserialize");
-                    continue;
+        match item {
+            StorageRaftItem::PartBlock(block) => {
+                if self.consensused.is_current_block(block.common.block_idx) {
+                    debug!("PartBlock appened {:?}", key);
+                    self.consensused.append_received_block(key, block);
                 }
-            };
-
-            match item {
-                StorageRaftItem::PartBlock(block) => {
-                    if self.consensused.is_current_block(block.common.block_idx) {
-                        debug!("PartBlock appened {:?}", key);
-                        self.consensused.append_received_block(key, block);
-                    }
-                }
-                StorageRaftItem::CompleteBlock(idx) => {
-                    if self.consensused.is_current_block(idx) {
-                        debug!("CompleteBlock appened ({},{:?})", idx, key);
-                        self.consensused.append_received_block_timeout(key);
-                    }
+            }
+            StorageRaftItem::CompleteBlock(idx) => {
+                if self.consensused.is_current_block(idx) {
+                    debug!("CompleteBlock appened ({},{:?})", idx, key);
+                    self.consensused.append_received_block_timeout(key);
                 }
             }
         }
-
-        self.raft_active
-            .append_commited_overflow(committed_rx_overflow)
-            .await;
 
         if self.consensused.has_block_ready_to_store() {
             Some(())

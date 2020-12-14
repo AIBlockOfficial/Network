@@ -18,6 +18,14 @@ pub struct Response {
     pub reason: &'static str,
 }
 
+/// Stored block info needed to generate next block
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct BlockStoredInfo {
+    pub block_hash: String,
+    pub block_time: u32,
+    pub mining_transactions: BTreeMap<String, Transaction>,
+}
+
 /// PoW structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
@@ -135,7 +143,7 @@ pub enum StorageRequest {
     Store {
         incoming_contract: Contract,
     },
-    RaftCmd(RaftMessageWrapper),
+    SendRaftCmd(RaftMessageWrapper),
 }
 
 impl fmt::Debug for StorageRequest {
@@ -153,7 +161,7 @@ impl fmt::Debug for StorageRequest {
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
-            RaftCmd(_) => write!(f, "RaftCmd"),
+            SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
 }
@@ -243,8 +251,10 @@ pub trait MinerInterface {
 ///============ COMPUTE NODE ============///
 
 /// Encapsulates compute requests & responses.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
+    SendBlockStored(BlockStoredInfo),
     SendPoW {
         pow: ProofOfWorkBlock,
         coinbase: Transaction,
@@ -256,7 +266,7 @@ pub enum ComputeRequest {
         transactions: BTreeMap<String, Transaction>,
     },
     SendPartitionRequest,
-    RaftCmd(RaftMessageWrapper),
+    SendRaftCmd(RaftMessageWrapper),
 }
 
 impl fmt::Debug for ComputeRequest {
@@ -264,6 +274,7 @@ impl fmt::Debug for ComputeRequest {
         use ComputeRequest::*;
 
         match *self {
+            SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
                 ref pow,
                 ref coinbase,
@@ -273,7 +284,7 @@ impl fmt::Debug for ComputeRequest {
             } => write!(f, "SendPartitionEntry"),
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
-            RaftCmd(_) => write!(f, "RaftCmd"),
+            SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
 }
@@ -311,6 +322,13 @@ pub trait ComputeInterface {
 
     /// Returns the internal service level data
     fn get_service_levels(&self) -> Response;
+
+    /// Receives block info from its storage node
+    fn receive_block_stored(
+        &mut self,
+        peer: SocketAddr,
+        previous_block_info: BlockStoredInfo,
+    ) -> Response;
 
     /// Receives transactions to be bundled into blocks
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;

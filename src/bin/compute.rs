@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut node = node;
 
         // Kick off with some transactions
-        {
+        let initial_send_transactions = {
             let (pk, sk) = sign::gen_keypair();
 
             let transactions = setup
@@ -94,12 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect();
 
-            let resp = node.inject_next_event(
-                "0.0.0.0:6666".parse().unwrap(),
-                ComputeRequest::SendTransactions { transactions },
-            );
-            println!("initial transactions inject Response: {:?}", resp);
-        }
+            ComputeRequest::SendTransactions { transactions }
+        };
 
         let storage_connected = {
             let result = node.connect_to_storage().await;
@@ -140,15 +136,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
-                        reason: "All transactions successfully added to tx pool",
+                        reason: "Transactions added to tx pool",
                     }) => {
                         println!("Transactions received and processed successfully");
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "First Block committed",
+                    }) => {
+                        println!("Block ready to be mined: {:?}", node.get_mining_block());
+                        let _write_to_store = node.send_first_block_to_storage().await.unwrap();
+
+                        // Only add transactions when they can be accepted
+                        let resp = node.inject_next_event(
+                            "0.0.0.0:6666".parse().unwrap(),
+                            initial_send_transactions.clone(),
+                        );
+                        println!("initial transactions inject Response: {:?}", resp);
                     }
                     Ok(Response {
                         success: true,
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to be mined: {:?}", node.get_mining_block());
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Transactions committed",
+                    }) => {
+                        println!("Transactions ready to be used in next block");
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason: "Received block stored",
+                    }) => {
+                        println!("Block info received from storage: ready to generate block");
                     }
                     Ok(Response {
                         success: true,
@@ -167,6 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            node.close_raft_loop().await;
         }
     });
 

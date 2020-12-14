@@ -1,10 +1,10 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::compute_raft::ComputeRaft;
+use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
-    ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType, ProofOfWork,
-    ProofOfWorkBlock, Response, StorageRequest,
+    BlockStoredInfo, ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType,
+    ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{get_partition_entry_key, loop_connnect_to_peers_async};
@@ -132,9 +132,11 @@ impl ComputeNode {
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
 
+        let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
+        let node_raft = ComputeRaft::new(&config).await;
         Ok(ComputeNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::Compute).await?,
-            node_raft: ComputeRaft::new(&config),
+            node,
+            node_raft,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
@@ -183,6 +185,11 @@ impl ComputeNode {
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.node_raft.raft_loop()
+    }
+
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.node_raft.close_raft_loop().await
     }
 
     /// Processes a dual double entry transaction
@@ -362,8 +369,8 @@ impl ComputeNode {
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         println!();
-        let block_to_send =
-            Bytes::from(serialize(self.node_raft.get_mining_block()).unwrap()).to_vec();
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+        let block_to_send = Bytes::from(serialize(block).unwrap()).to_vec();
 
         self.node
             .send(
@@ -408,6 +415,19 @@ impl ComputeNode {
                 },
             )
             .await?;
+        Ok(())
+    }
+
+    /// Sends the latest block to storage
+    pub async fn send_first_block_to_storage(&mut self) -> Result<()> {
+        let tx = self.node_raft.get_committed_utxo_set().clone();
+        let mut block = Block::new();
+        block.transactions = tx.keys().cloned().collect();
+
+        self.node
+            .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
+            .await?;
+
         Ok(())
     }
 
@@ -464,6 +484,9 @@ impl ComputeNode {
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         loop {
+            // Process pending submission.
+            self.node_raft.propose_block_with_last_info().await;
+
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
             // i.e they should only await a channel.
@@ -476,26 +499,37 @@ impl ComputeNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    if self.node_raft.received_commit(commit_data).await.is_some() {
-                        self.node_raft.generate_block();
-                        return Some(Ok(Response{
-                            success: true,
-                            reason: "Block committed",
-                        }));
+                    match self.node_raft.received_commit(commit_data).await {
+                        Some(CommittedItem::FirstBlock) => {
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "First Block committed",
+                            }));
+                        }
+                        Some(CommittedItem::Block) => {
+                            self.node_raft.generate_block();
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Block committed",
+                            }));
+                        }
+                        Some(CommittedItem::Transactions) => {
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Transactions committed",
+                            }));
+                        }
+                        None => {}
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     match self.node.send(
                         addr,
-                        ComputeRequest::RaftCmd(msg)).await {
+                        ComputeRequest::SendRaftCmd(msg)).await {
                             Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
                             Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
                         };
-                }
-                _ = self.node_raft.timeout_propose_block() => {
-                    trace!("handle_next_event timeout block");
-                    self.node_raft.propose_block_at_timeout().await;
                 }
                 _ = self.node_raft.timeout_propose_transactions() => {
                     trace!("handle_next_event timeout transactions");
@@ -541,13 +575,14 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
+            SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
             SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
-            RaftCmd(msg) => {
+            SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
@@ -741,15 +776,6 @@ impl ComputeInterface for ComputeNode {
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
 
-        // Update latest block hash
-        {
-            let latest_block_time = pow_block.block.header.time;
-            let block_s = Bytes::from(serialize(&pow_block).unwrap()).to_vec();
-            let latest_block_h = Sha3_256::digest(&block_s).to_vec();
-            self.node_raft
-                .set_local_last_block_hash_and_time(hex::encode(latest_block_h), latest_block_time);
-        }
-
         // Set mined block
         self.current_mined_block = Some(MinedBlock {
             nonce: pow.nonce,
@@ -785,6 +811,26 @@ impl ComputeInterface for ComputeNode {
         Response {
             success: false,
             reason: "Not implemented yet",
+        }
+    }
+
+    fn receive_block_stored(
+        &mut self,
+        peer: SocketAddr,
+        previous_block_info: BlockStoredInfo,
+    ) -> Response {
+        if peer != self.storage_addr {
+            return Response {
+                success: false,
+                reason: "Received block stored not from our storage peer",
+            };
+        }
+
+        self.node_raft.append_block_stored_info(previous_block_info);
+
+        Response {
+            success: true,
+            reason: "Received block stored",
         }
     }
 
@@ -824,7 +870,7 @@ impl ComputeInterface for ComputeNode {
 
         Response {
             success: true,
-            reason: "All transactions successfully added to tx pool",
+            reason: "Transactions added to tx pool",
         }
     }
 
