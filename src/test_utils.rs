@@ -11,10 +11,8 @@ use crate::storage::StorageNode;
 use crate::user::UserNode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tracing::info;
 use tracing::info_span;
@@ -76,53 +74,57 @@ impl Network {
 
     async fn spawn_raft_loops(self) -> Self {
         if self.config.compute_raft {
-            let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
+            // Need to connect first so Raft messages can be sent.
+            info!("Start connect to peers");
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
-                Self::spawn_raft_loop(
-                    node.connect_to_raft_peers(),
-                    node.raft_loop(),
-                    info_span!("compute_node", ?name, addr = ?node.address()),
-                    barrier.clone(),
+                let result = node.connect_to_raft_peers().await;
+                info!(?result, ?name, "Peer connect complete");
+            }
+            info!("Peers connect complete");
+
+
+            for (name, node) in &self.compute_nodes {
+                let node = node.lock().await;
+                let peer_span = info_span!("compute_node", ?name, addr = ?node.address());
+                let raft_loop = node.raft_loop();
+                tokio::spawn(
+                    async move {
+                        info!("Start raft");
+                        raft_loop.await;
+                        info!("raft complete");
+                    }
+                    .instrument(peer_span),
                 );
             }
         }
 
         if self.config.storage_raft {
-            let barrier = Arc::new(Barrier::new(self.compute_nodes.len()));
+            // Need to connect first so Raft messages can be sent.
+            info!("Start connect to peers");
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
-                Self::spawn_raft_loop(
-                    node.connect_to_raft_peers(),
-                    node.raft_loop(),
-                    info_span!("storage_node", ?name, addr = ?node.address()),
-                    barrier.clone(),
+                let result = node.connect_to_raft_peers().await;
+                info!(?result, ?name, "Peer connect complete");
+            }
+            info!("Peers connect complete");
+
+            for (name, node) in &self.storage_nodes {
+                let node = node.lock().await;
+                let peer_span = info_span!("storage_node", ?name, addr = ?node.address());
+                let raft_loop = node.raft_loop();
+                tokio::spawn(
+                    async move {
+                        info!("Start raft");
+                        raft_loop.await;
+                        info!("raft complete");
+                    }
+                    .instrument(peer_span),
                 );
             }
         }
 
         self
-    }
-
-    fn spawn_raft_loop<E: std::error::Error + Send>(
-        connect_all: impl Future<Output = std::result::Result<(), E>> + Send + 'static,
-        raft_loop: impl Future<Output = ()> + Send + 'static,
-        peer_span: tracing::Span,
-        barrier: Arc<Barrier>,
-    ) {
-        tokio::spawn(
-            async move {
-                // Need to connect first so Raft messages can be sent.
-                info!("Start connect to peers");
-                let result = connect_all.await;
-                info!(?result, "Peer connect complete");
-                barrier.wait().await;
-                info!("All Peer connected: start raft");
-                raft_loop.await;
-                info!("raft complete");
-            }
-            .instrument(peer_span),
-        );
     }
 
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
