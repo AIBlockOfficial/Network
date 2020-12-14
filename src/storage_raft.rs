@@ -141,6 +141,11 @@ impl StorageRaft {
         self.raft_active.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.raft_active.close_raft_loop().await
+    }
+
     /// Add any ready local blocks.
     pub async fn propose_received_part_block(&mut self) {
         let local_blocks = std::mem::take(&mut self.local_blocks);

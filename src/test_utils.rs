@@ -9,11 +9,13 @@ use crate::configurations::{
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::info_span;
 use tracing_futures::Instrument;
@@ -30,6 +32,7 @@ pub struct Network {
     compute_nodes: BTreeMap<String, ArcComputeNode>,
     storage_nodes: BTreeMap<String, ArcStorageNode>,
     user_nodes: BTreeMap<String, ArcUserNode>,
+    raft_loop_handles: Vec<JoinHandle<()>>,
 }
 
 /// Represents a virtual network configuration.
@@ -67,12 +70,13 @@ impl Network {
             compute_nodes,
             storage_nodes,
             user_nodes,
+            raft_loop_handles: Vec::new(),
         }
         .spawn_raft_loops()
         .await
     }
 
-    async fn spawn_raft_loops(self) -> Self {
+    async fn spawn_raft_loops(mut self) -> Self {
         if self.config.compute_raft {
             // Need to connect first so Raft messages can be sent.
             info!("Start connect to peers");
@@ -83,19 +87,18 @@ impl Network {
             }
             info!("Peers connect complete");
 
-
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
                 let peer_span = info_span!("compute_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
-                tokio::spawn(
+                self.raft_loop_handles.push(tokio::spawn(
                     async move {
                         info!("Start raft");
                         raft_loop.await;
                         info!("raft complete");
                     }
                     .instrument(peer_span),
-                );
+                ));
             }
         }
 
@@ -113,18 +116,36 @@ impl Network {
                 let node = node.lock().await;
                 let peer_span = info_span!("storage_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
-                tokio::spawn(
+                self.raft_loop_handles.push(tokio::spawn(
                     async move {
                         info!("Start raft");
                         raft_loop.await;
                         info!("raft complete");
                     }
                     .instrument(peer_span),
-                );
+                ));
             }
         }
 
         self
+    }
+
+    pub async fn close_raft_loops_and_drop(self) {
+        if self.config.compute_raft {
+            info!("Close compute raft");
+            for node in self.compute_nodes.values() {
+                node.lock().await.close_raft_loop().await;
+            }
+        }
+
+        if self.config.storage_raft {
+            info!("Close storage raft");
+            for node in self.storage_nodes.values() {
+                node.lock().await.close_raft_loop().await;
+            }
+        }
+
+        join_all(self.raft_loop_handles).await;
     }
 
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {

@@ -123,6 +123,11 @@ impl StorageNode {
         self.node_raft.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.node_raft.close_raft_loop().await
+    }
+
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {

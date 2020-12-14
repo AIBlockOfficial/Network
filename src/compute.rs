@@ -187,6 +187,11 @@ impl ComputeNode {
         self.node_raft.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.node_raft.close_raft_loop().await
+    }
+
     /// Processes a dual double entry transaction
     ///
     /// ### Arguments
@@ -364,8 +369,8 @@ impl ComputeNode {
     pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
         println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         println!();
-        let block_to_send =
-            Bytes::from(serialize(self.node_raft.get_mining_block()).unwrap()).to_vec();
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+        let block_to_send = Bytes::from(serialize(block).unwrap()).to_vec();
 
         self.node
             .send(

@@ -153,6 +153,11 @@ impl ComputeRaft {
         self.raft_active.raft_loop()
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.raft_active.close_raft_loop().await
+    }
+
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<RaftData> {
         self.raft_active.next_commit().await

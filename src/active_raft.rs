@@ -107,6 +107,11 @@ impl ActiveRaft {
         }
     }
 
+    /// Signal to the raft loop to complete
+    pub async fn close_raft_loop(&mut self) {
+        self.cmd_tx.send(RaftCmd::Close).await.unwrap();
+    }
+
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<RaftData> {
         let mut committed_rx = self.committed_rx.lock().await;

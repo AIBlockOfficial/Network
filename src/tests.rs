@@ -99,10 +99,10 @@ async fn create_block_raft_3_nodes() {
     create_block_raft(10240, 3).await;
 }
 
-// #[tokio::test(threaded_scheduler)]
-// async fn create_block_raft_20_nodes() {
-//     create_block_raft(10340, 20).await;
-// }
+#[tokio::test(threaded_scheduler)]
+async fn create_block_raft_20_nodes() {
+    create_block_raft(10340, 20).await;
+}
 
 async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let _ = tracing_subscriber::fmt::try_init();
@@ -122,13 +122,18 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
         mining_transactions: BTreeMap::new(),
     });
 
+    info!("Test Step 1");
     compute_raft_group_all_handle_event(&mut network, compute_nodes, "First Block committed").await;
 
+    info!("Test Step 2");
     compute_inject_next_event(&mut network, "user1", "compute1", send_tx_req).await;
     compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+
+    info!("Test Step 3");
     compute_raft_group_all_handle_event(&mut network, compute_nodes, "Transactions committed")
         .await;
 
+    info!("Test Step 4");
     compute_inject_next_event(&mut network, "storage1", "compute1", send_block_stored_req).await;
     compute_handle_event(&mut network, "compute1", "Received block stored").await;
 
@@ -138,6 +143,7 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let block_transaction_before =
         compute_raft_group_all_current_block_transactions(&mut network, compute_nodes).await;
 
+    info!("Test Step 5");
     compute_raft_group_all_handle_event(&mut network, compute_nodes, "Block committed").await;
 
     let block_transaction_after =
@@ -154,6 +160,9 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
         block_transaction_after,
         compute_raft_group_all(compute_nodes, Some(vec![t_hash]))
     );
+
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -291,16 +300,17 @@ async fn compute_raft_group_all_handle_event(
     let barrier = Arc::new(Barrier::new(compute_group.len()));
     for compute_name in compute_group {
         let barrier = barrier.clone();
+        let reason_str = reason_str.to_string();
         let compute_name = compute_name.clone();
         let compute = network.compute(&compute_name).unwrap().clone();
 
         let peer_span = error_span!("peer", ?compute_name);
-        join_handles.push(
+        join_handles.push(tokio::spawn(
             async move {
                 info!("Start wait for event");
 
                 let mut compute = compute.lock().await;
-                compute_handle_event_for_node(&mut compute, true, reason_str).await;
+                compute_handle_event_for_node(&mut compute, true, &reason_str).await;
 
                 info!("Start wait for completion of other in raft group");
                 let result = tokio::select!(
@@ -311,7 +321,7 @@ async fn compute_raft_group_all_handle_event(
                 info!("Stop wait for event: {:?}", result);
             }
             .instrument(peer_span),
-        );
+        ));
     }
     let _ = join_all(join_handles).await;
 }
