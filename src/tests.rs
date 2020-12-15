@@ -233,11 +233,15 @@ async fn send_block_to_storage_no_raft() {
     storage_receive_and_store_block(&mut network, "storage1").await;
 
     let (transactions, _t_hash, _tx) = valid_transactions(true);
+    let (_expected3, block_info3) = complete_block(3, Some("0"), BTreeMap::new(), 1);
     let (expected1, block_info1) = complete_block(1, Some("0"), transactions, 1);
 
     //
     // Act
     //
+    compute_send_block_to_storage(&mut network, "compute1", &block_info3).await;
+    storage_receive_block(&mut network, "storage1").await;
+
     compute_send_block_to_storage(&mut network, "compute1", &block_info1).await;
     storage_receive_and_store_block(&mut network, "storage1").await;
     let actual1 = storage_get_last_block_stored(&mut network, "storage1").await;
@@ -450,6 +454,11 @@ async fn storage_send_stored_block(network: &mut Network, storage: &str) {
 }
 
 async fn storage_receive_and_store_block(network: &mut Network, storage_str: &str) {
+    storage_receive_block(network, storage_str).await;
+    storage_store_block(network, storage_str).await;
+}
+
+async fn storage_receive_block(network: &mut Network, storage_str: &str) {
     let mut storage = network.storage(storage_str).unwrap().lock().await;
     match storage.handle_next_event().await {
         Some(Ok(Response {
@@ -458,6 +467,10 @@ async fn storage_receive_and_store_block(network: &mut Network, storage_str: &st
         })) => (),
         other => panic!("Unexpected result: {:?}", other),
     }
+}
+
+async fn storage_store_block(network: &mut Network, storage_str: &str) {
+    let mut storage = network.storage(storage_str).unwrap().lock().await;
     match storage.handle_next_event().await {
         Some(Ok(Response {
             success: true,
