@@ -18,6 +18,20 @@ pub struct Response {
     pub reason: &'static str,
 }
 
+/// Common info in all mined block that form a complete block.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommonBlockInfo {
+    pub block: Block,
+    pub block_txs: BTreeMap<String, Transaction>,
+}
+
+/// Additional info specific to one of the mined block that form a complete block.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MinedBlockExtraInfo {
+    pub nonce: Vec<u8>,
+    pub mining_tx: (String, Transaction),
+}
+
 /// Stored block info needed to generate next block
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockStoredInfo {
@@ -124,6 +138,7 @@ pub enum CommMessage {
 ///============ STORAGE NODE ============///
 
 /// Encapsulates storage requests
+#[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
     GetHistory {
@@ -137,8 +152,8 @@ pub enum StorageRequest {
         pow: ProofOfWork,
     },
     SendBlock {
-        block: Block,
-        tx: BTreeMap<String, Transaction>,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
     },
     Store {
         incoming_contract: Contract,
@@ -157,7 +172,10 @@ impl fmt::Debug for StorageRequest {
             } => write!(f, "GetHistory"),
             GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
             SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock { ref block, ref tx } => write!(f, "SendBlock"),
+            SendBlock {
+                ref common,
+                ref mined_info,
+            } => write!(f, "SendBlock"),
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
@@ -197,14 +215,14 @@ pub trait StorageInterface {
     ///
     /// ### Arguments
     ///
-    /// * `peer`    - Peer that the block is received from
-    /// * `block`   - The block to be stored and checked
-    /// * `tx`      - The transactions in the block
+    /// * `peer`       - Peer that the block is received from
+    /// * `common`     - The block to be stored and checked
+    /// * `mined_info` - The mining info for the block
     fn receive_block(
         &mut self,
         peer: SocketAddr,
-        block: Block,
-        tx: BTreeMap<String, Transaction>,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
     ) -> Response;
 
     /// Receives agreed contracts for storage

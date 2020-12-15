@@ -1,10 +1,9 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
+use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftData, RaftMessageWrapper};
 use crate::utils;
 use bincode::{deserialize, serialize};
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,20 +34,6 @@ pub struct ReceivedBlock {
     pub peer: SocketAddr,
     pub common: CommonBlockInfo,
     pub per_node: MinedBlockExtraInfo,
-}
-
-/// Common info in all mined block that form a complete block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CommonBlockInfo {
-    pub block: Block,
-    pub block_txs: BTreeMap<String, Transaction>,
-}
-
-/// Additional info specific to one of the mined block that form a complete block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MinedBlockExtraInfo {
-    pub nonce: Vec<u8>,
-    pub mining_tx: Transaction,
 }
 
 /// Complete block info with all mining transactions and proof of work.
@@ -245,17 +230,13 @@ impl StorageRaft {
     pub fn append_to_our_blocks(
         &mut self,
         peer: SocketAddr,
-        block: Block,
-        block_txs: BTreeMap<String, Transaction>,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
     ) {
         self.local_blocks.push(ReceivedBlock {
             peer,
-            common: CommonBlockInfo { block, block_txs },
-            per_node: MinedBlockExtraInfo {
-                // TODO: Get and use real MinedBlockExtraInfo infos
-                nonce: Vec::new(),
-                mining_tx: Transaction::new(),
-            },
+            common,
+            per_node: mined_info,
         });
     }
 

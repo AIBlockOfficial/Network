@@ -1,15 +1,17 @@
 //! Test suite for the network functions.
 
 use crate::compute::{ComputeNode, MinedBlock};
-use crate::interfaces::{BlockStoredInfo, ComputeRequest, Response};
-use crate::storage_raft::{CommonBlockInfo, CompleteBlock, MinedBlockExtraInfo};
+use crate::interfaces::{
+    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
+};
+use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::construct_coinbase_tx;
+use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
@@ -35,7 +37,7 @@ async fn first_block_no_raft() {
     let network_config = complete_network_config(10000);
     let mut network = Network::create_from_config(&network_config).await;
     let expected_utxo = network.collect_initial_uxto_set();
-    let (expected, _block_info) = complete_block(0, None, expected_utxo, 0);
+    let (expected0, _block_info) = complete_block(0, None, expected_utxo, 0);
 
     //
     // Act
@@ -51,7 +53,9 @@ async fn first_block_no_raft() {
     assert_eq!(
         storage_get_last_block_stored(&mut network, "storage1").await,
         Some((
-            expected.1, expected.0, 0, /*time*/
+            expected0.1,
+            expected0.0,
+            0, /*b_num*/
             0  /*mining txs*/
         ))
     );
@@ -224,22 +228,30 @@ async fn send_block_to_storage_no_raft() {
     let network_config = complete_network_config(10030);
     let mut network = Network::create_from_config(&network_config).await;
     compute_connect_to_storage(&mut network, "compute1").await;
-    let (expected, block_info) = complete_block(0, None, BTreeMap::new(), 0);
+    compute_handle_event(&mut network, "compute1", "First Block committed").await;
+    compute_send_first_block_to_storage(&mut network, "compute1").await;
+    storage_receive_and_store_block(&mut network, "storage1").await;
+
+    let (transactions, _t_hash, _tx) = valid_transactions(true);
+    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, 1);
 
     //
     // Act
     //
-    compute_send_block_to_storage(&mut network, "compute1", &block_info).await;
+    compute_send_block_to_storage(&mut network, "compute1", &block_info1).await;
     storage_receive_and_store_block(&mut network, "storage1").await;
+    let actual1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     //
     // Assert
     //
     assert_eq!(
-        storage_get_last_block_stored(&mut network, "storage1").await,
+        actual1,
         Some((
-            expected.1, expected.0, 0, /*time*/
-            0  /*mining txs*/
+            expected1.1,
+            expected1.0,
+            1, /*b_num*/
+            1  /*mining txs*/
         ))
     );
 }
@@ -398,13 +410,15 @@ async fn compute_send_block_to_storage(
     compute: &str,
     block_info: &CompleteBlock,
 ) {
+    let id = network.get_position(compute).unwrap() as u64 + 1;
     let mut c = network.compute(compute).unwrap().lock().await;
+    let mined = block_info.per_node.get(&id).unwrap();
 
     let mined_block = MinedBlock {
-        nonce: Vec::new(),
+        nonce: mined.nonce.clone(),
         block: block_info.common.block.clone(),
         block_tx: block_info.common.block_txs.clone(),
-        mining_transaction: Transaction::new(),
+        mining_transaction: mined.mining_tx.clone(),
     };
     c.current_mined_block = Some(mined_block);
 
@@ -547,9 +561,11 @@ fn complete_block(
     block.transactions = block_txs.keys().cloned().collect();
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
+        let tx = construct_coinbase_tx(12, block.header.time, addr.clone());
+        let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
             nonce: addr.as_bytes().to_vec(),
-            mining_tx: construct_coinbase_tx(12, block.header.time, addr),
+            mining_tx: (hash, tx),
         }
     };
 

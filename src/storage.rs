@@ -2,19 +2,18 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
 use crate::interfaces::{
-    BlockStoredInfo, ComputeRequest, Contract, NodeType, ProofOfWork, Response, StorageInterface,
-    StorageRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
+    ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CompleteBlock, StorageRaft};
 use crate::utils::{get_db_options, loop_connnect_to_peers_async};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::{block::Block, transaction::Transaction};
 use rocksdb::DB;
 use serde::Serialize;
 use sha3::Digest;
 use sha3::Sha3_256;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -214,7 +213,7 @@ impl StorageNode {
             } => Some(self.get_history(&start_time, &end_time)),
             GetUnicornTable { n_last_items } => Some(self.get_unicorn_table(n_last_items)),
             SendPow { pow } => Some(self.receive_pow(pow)),
-            SendBlock { block, tx } => Some(self.receive_block(peer, block, tx)),
+            SendBlock { common, mined_info } => Some(self.receive_block(peer, common, mined_info)),
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -256,7 +255,11 @@ impl StorageNode {
         let stored_info = BlockStoredInfo {
             block_hash: hash_key,
             block_num: complete.common.block.header.b_num,
-            mining_transactions: BTreeMap::new(),
+            mining_transactions: complete
+                .per_node
+                .values()
+                .map(|v| v.mining_tx.clone())
+                .collect(),
         };
 
         self.last_block_stored = Some((complete, stored_info));
@@ -315,10 +318,11 @@ impl StorageInterface for StorageNode {
     fn receive_block(
         &mut self,
         peer: SocketAddr,
-        block: Block,
-        tx: BTreeMap<String, Transaction>,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
     ) -> Response {
-        self.node_raft.append_to_our_blocks(peer, block, tx);
+        self.node_raft
+            .append_to_our_blocks(peer, common, mined_info);
 
         Response {
             success: true,
