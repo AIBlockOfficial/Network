@@ -2,12 +2,18 @@
 
 use crate::compute::{ComputeNode, MinedBlock};
 use crate::interfaces::{BlockStoredInfo, ComputeRequest, Response};
+use crate::storage_raft::{CommonBlockInfo, CompleteBlock, MinedBlockExtraInfo};
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
+use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::construct_coinbase_tx;
+use sha3::Digest;
+use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Barrier;
@@ -28,6 +34,8 @@ async fn first_block_no_raft() {
     //
     let network_config = complete_network_config(10000);
     let mut network = Network::create_from_config(&network_config).await;
+    let expected_utxo = network.collect_initial_uxto_set();
+    let (expected, _block_info) = complete_block(0, None, expected_utxo, 0);
 
     //
     // Act
@@ -43,8 +51,7 @@ async fn first_block_no_raft() {
     assert_eq!(
         storage_get_last_block_stored(&mut network, "storage1").await,
         Some((
-            SEED_UTXO_BLOCK_HASH.to_string(),
-            0, /*time*/
+            expected.1, expected.0, 0, /*time*/
             0  /*mining txs*/
         ))
     );
@@ -59,7 +66,7 @@ async fn create_block_no_raft() {
     //
     let network_config = complete_network_config(10010);
     let mut network = Network::create_from_config(&network_config).await;
-    let (_transactions, t_hash, tx) = valid_transactions();
+    let (_transactions, t_hash, tx) = valid_transactions(true);
     compute_connect_to_storage(&mut network, "compute1").await;
     compute_handle_event(&mut network, "compute1", "First Block committed").await;
     compute_send_first_block_to_storage(&mut network, "compute1").await;
@@ -118,7 +125,7 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let network_config = complete_network_config_with_n_compute_raft(initial_port, compute_count);
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let (transactions, t_hash, _tx) = valid_transactions();
+    let (transactions, t_hash, _tx) = valid_transactions(true);
 
     let send_tx_req = ComputeRequest::SendTransactions { transactions };
     let send_block_stored_req = ComputeRequest::SendBlockStored(BlockStoredInfo {
@@ -217,19 +224,12 @@ async fn send_block_to_storage_no_raft() {
     let network_config = complete_network_config(10030);
     let mut network = Network::create_from_config(&network_config).await;
     compute_connect_to_storage(&mut network, "compute1").await;
-    let mined_block = MinedBlock {
-        nonce: Vec::new(),
-        block: Block::new(),
-        block_tx: BTreeMap::new(),
-        mining_transaction: Transaction::new(),
-    };
-    let expected_stored_block_hash =
-        "e0c042e2a9e88ea1be2a45df1c9b30bdfc485d3ab3e1683de5933d48bce01464".to_string();
+    let (expected, block_info) = complete_block(0, None, BTreeMap::new(), 0);
 
     //
     // Act
     //
-    compute_send_block_to_storage(&mut network, "compute1", &mined_block).await;
+    compute_send_block_to_storage(&mut network, "compute1", &block_info).await;
     storage_receive_and_store_block(&mut network, "storage1").await;
 
     //
@@ -238,8 +238,7 @@ async fn send_block_to_storage_no_raft() {
     assert_eq!(
         storage_get_last_block_stored(&mut network, "storage1").await,
         Some((
-            expected_stored_block_hash,
-            0, /*time*/
+            expected.1, expected.0, 0, /*time*/
             0  /*mining txs*/
         ))
     );
@@ -394,9 +393,21 @@ async fn compute_send_first_block_to_storage(network: &mut Network, compute: &st
     c.send_first_block_to_storage().await.unwrap();
 }
 
-async fn compute_send_block_to_storage(network: &mut Network, compute: &str, block: &MinedBlock) {
+async fn compute_send_block_to_storage(
+    network: &mut Network,
+    compute: &str,
+    block_info: &CompleteBlock,
+) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.current_mined_block = Some(block.clone());
+
+    let mined_block = MinedBlock {
+        nonce: Vec::new(),
+        block: block_info.common.block.clone(),
+        block_tx: block_info.common.block_txs.clone(),
+        mining_transaction: Transaction::new(),
+    };
+    c.current_mined_block = Some(mined_block);
+
     c.send_block_to_storage().await.unwrap();
 }
 
@@ -407,13 +418,14 @@ async fn compute_send_block_to_storage(network: &mut Network, compute: &str, blo
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
-) -> Option<(String, u32, usize)> {
+) -> Option<(String, String, u32, usize)> {
     let s = network.storage(storage).unwrap().lock().await;
-    s.get_last_block_stored().clone().map(|b| {
+    s.get_last_block_stored().clone().map(|(complete, info)| {
         (
-            b.block_hash.clone(),
-            b.block_time,
-            b.mining_transactions.len(),
+            format!("{:?}", complete),
+            info.block_hash.clone(),
+            info.block_time,
+            info.mining_transactions.len(),
         )
     })
 }
@@ -493,11 +505,24 @@ async fn miner_send_pow(network: &mut Network, from_miner: &str, to_compute: &st
 // Test helpers
 //
 
-fn valid_transactions() -> (BTreeMap<String, Transaction>, String, Transaction) {
+fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Transaction) {
     let intial_t_hash = SEED_UTXO[0];
     let receiver_addr = "000001";
 
-    let (pk, sk) = sign::gen_keypair();
+    let (pk, sk) = if !fixed {
+        let (pk, sk) = sign::gen_keypair();
+        println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
+        (pk, sk)
+    } else {
+        let sk_slice = hex::decode("0186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca45371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c").unwrap();
+        let pk_slice =
+            hex::decode("5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c")
+                .unwrap();
+        let sk = SecretKey::from_slice(&sk_slice).unwrap();
+        let pk = PublicKey::from_slice(&pk_slice).unwrap();
+        (pk, sk)
+    };
+
     let (t_hash, payment_tx) = create_valid_transaction(intial_t_hash, receiver_addr, &pk, &sk);
 
     let transactions = {
@@ -507,6 +532,49 @@ fn valid_transactions() -> (BTreeMap<String, Transaction>, String, Transaction) 
     };
 
     (transactions, t_hash, payment_tx)
+}
+
+fn complete_block(
+    block_idx: u64,
+    previous_hash: Option<&str>,
+    block_txs: BTreeMap<String, Transaction>,
+    mining_txs: usize,
+) -> ((String, String), CompleteBlock) {
+    let mut block = Block::new();
+    block.header.time = block_idx as u32;
+    block.header.previous_hash = previous_hash.map(|v| v.to_string());
+    block.transactions = block_txs.keys().cloned().collect();
+
+    let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
+        MinedBlockExtraInfo {
+            nonce: addr.as_bytes().to_vec(),
+            mining_tx: construct_coinbase_tx(12, block.header.time, addr),
+        }
+    };
+
+    let per_node = (0..mining_txs)
+        .map(|i| i as u64 + 1)
+        .map(|idx| (idx, hex::encode(vec![idx as u8])))
+        .map(|(idx, addr)| (idx, construct_mining_extra_info(addr)))
+        .collect();
+
+    let complete = CompleteBlock {
+        common: CommonBlockInfo {
+            block_idx,
+            block,
+            block_txs,
+        },
+        per_node,
+    };
+
+    let hash_key = {
+        let hash_input = serialize(&complete).unwrap();
+        let hash_digest = Sha3_256::digest(&hash_input);
+        hex::encode(hash_digest)
+    };
+    let complete_str = format!("{:?}", complete);
+
+    ((hash_key, complete_str), complete)
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {

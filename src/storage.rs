@@ -71,7 +71,7 @@ pub struct StorageNode {
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     db_mode: DbMode,
-    last_block_stored: Option<BlockStoredInfo>,
+    last_block_stored: Option<(CompleteBlock, BlockStoredInfo)>,
 }
 
 impl StorageNode {
@@ -223,11 +223,17 @@ impl StorageNode {
         }
     }
 
-    fn store_complete_block(&mut self, complete: CompleteBlock) {
+    fn store_complete_block(&mut self, mut complete: CompleteBlock) {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
+        if complete.common.block_idx == 0 {
+            // No mining on first block
+            complete.per_node.clear();
+        }
+
         // Save the complete block
+        trace!("Store complete block: {:?}", complete);
         let hash_input = Bytes::from(serialize(&complete).unwrap());
         let hash_digest = Sha3_256::digest(&hash_input);
         let hash_key = hex::encode(hash_digest);
@@ -247,23 +253,25 @@ impl StorageNode {
             db.put(tx_hash, tx_input).unwrap();
         }
 
-        self.last_block_stored = Some(BlockStoredInfo {
+        let stored_info = BlockStoredInfo {
             block_hash: hash_key,
             block_time: complete.common.block.header.time,
             mining_transactions: BTreeMap::new(),
-        });
+        };
+
+        self.last_block_stored = Some((complete, stored_info));
 
         let _ = DB::destroy(&opts, save_path);
     }
 
-    pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
+    pub fn get_last_block_stored(&self) -> &Option<(CompleteBlock, BlockStoredInfo)> {
         &self.last_block_stored
     }
 
     /// Sends the latest block to storage
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = self.last_block_stored.as_ref().unwrap().clone();
+        let block = self.last_block_stored.as_ref().unwrap().1.clone();
 
         self.node
             .send(self.compute_addr, ComputeRequest::SendBlockStored(block))

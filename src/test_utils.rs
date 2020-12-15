@@ -10,6 +10,7 @@ use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
 use futures::future::join_all;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -27,7 +28,7 @@ pub type ArcUserNode = Arc<Mutex<UserNode>>;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
-    config: NetworkConfig,
+    pub config: NetworkConfig,
     miner_nodes: BTreeMap<String, ArcMinerNode>,
     compute_nodes: BTreeMap<String, ArcComputeNode>,
     storage_nodes: BTreeMap<String, ArcStorageNode>,
@@ -317,5 +318,13 @@ impl Network {
             return Some(user.lock().await.address());
         }
         None
+    }
+
+    pub fn collect_initial_uxto_set(&self) -> BTreeMap<String, Transaction> {
+        self.config
+            .compute_seed_utxo
+            .iter()
+            .map(|h| (h.clone(), Transaction::new()))
+            .collect()
     }
 }
