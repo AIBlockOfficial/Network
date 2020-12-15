@@ -78,14 +78,19 @@ async fn first_block(network_config: NetworkConfig) {
     //
     // Assert
     //
+    let actual0 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
-        storage_get_last_block_stored(&mut network, "storage1").await,
+        actual0[0],
         Some((
             expected0.1,
             expected0.0,
             0, /*b_num*/
-            0  /*mining txs*/
+            0, /*mining txs*/
         ))
+    );
+    assert_eq!(
+        actual0.iter().map(|v| *v == actual0[0]).collect::<Vec<_>>(),
+        node_all(storage_nodes, true)
     );
 }
 
@@ -155,10 +160,10 @@ async fn create_block(network_config: NetworkConfig) {
     //
     // Assert
     //
-    assert_eq!(block_transaction_before, compute_all(compute_nodes, None));
+    assert_eq!(block_transaction_before, node_all(compute_nodes, None));
     assert_eq!(
         block_transaction_after,
-        compute_all(compute_nodes, Some(vec![t_hash]))
+        node_all(compute_nodes, Some(vec![t_hash]))
     );
 
     network.close_raft_loops_and_drop().await;
@@ -269,6 +274,10 @@ async fn receive_payment_tx_user() {
 // Node helpers
 //
 
+fn node_all<T: Clone>(group: &[String], value: T) -> Vec<T> {
+    group.iter().map(|_| value.clone()).collect()
+}
+
 async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
     let to_addr = network.get_address(to).await.unwrap();
     if let Some(u) = network.user(from) {
@@ -362,15 +371,11 @@ async fn compute_all_current_block_transactions(
     compute_group: &[String],
 ) -> Vec<Option<Vec<String>>> {
     let mut result = Vec::new();
-    for compute_name in compute_group {
-        let r = compute_current_block_transactions(network, compute_name).await;
+    for name in compute_group {
+        let r = compute_current_block_transactions(network, name).await;
         result.push(r);
     }
     result
-}
-
-fn compute_all<T: Clone>(compute_group: &[String], value: T) -> Vec<T> {
-    compute_group.iter().map(|_| value.clone()).collect()
 }
 
 async fn compute_current_block_transactions(
@@ -454,6 +459,18 @@ async fn storage_get_last_block_stored(
             info.mining_transactions.len(),
         )
     })
+}
+
+async fn storage_all_get_last_block_stored(
+    network: &mut Network,
+    storage_group: &[String],
+) -> Vec<Option<(String, String, u64, usize)>> {
+    let mut result = Vec::new();
+    for name in storage_group {
+        let r = storage_get_last_block_stored(network, name).await;
+        result.push(r);
+    }
+    result
 }
 
 async fn storage_send_stored_block(network: &mut Network, storage: &str) {
