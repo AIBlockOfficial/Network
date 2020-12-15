@@ -52,7 +52,7 @@ pub struct ComputeConsensused {
     /// Header to use for next block if ready to generate.
     tx_previous_hash: Option<String>,
     /// Index of the last block,
-    tx_previous_block_idx: Option<u32>,
+    tx_previous_block_num: Option<u64>,
     /// Current block ready to mine (consensused).
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
@@ -217,7 +217,7 @@ impl ComputeRaft {
                 return Some(CommittedItem::Transactions);
             }
             ComputeRaftItem::Block(previous_info) => {
-                if self.consensused.tx_previous_block_idx >= Some(previous_info.block_time) {
+                if self.consensused.tx_previous_block_num >= Some(previous_info.block_num) {
                     // Ignore already known blocks
                     return None;
                 }
@@ -226,7 +226,7 @@ impl ComputeRaft {
                 // Must not populate further tx_pool & tx_druid_pool
                 // before generating block.
                 self.consensused.tx_previous_hash = Some(previous_info.block_hash);
-                self.consensused.tx_previous_block_idx = Some(previous_info.block_time);
+                self.consensused.tx_previous_block_num = Some(previous_info.block_num);
                 return Some(CommittedItem::Block);
             }
         }
@@ -466,9 +466,11 @@ impl ComputeConsensused {
     /// Apply the consensused information for the header.
     fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_previous_hash).unwrap();
+        let b_num = self.tx_previous_block_num.unwrap() + 1;
 
-        block.header.time = self.tx_previous_block_idx.unwrap() + 1;
+        block.header.time = b_num as u32;
         block.header.previous_hash = Some(previous_hash);
+        block.header.b_num = b_num;
     }
 
     /// Apply set of valid transactions to the block.
@@ -597,7 +599,7 @@ mod test {
         let _first_block = node.received_commit(commit).await.unwrap();
         let previous_block = BlockStoredInfo {
             block_hash: "0123".to_string(),
-            block_time: 1,
+            block_num: 1,
             mining_transactions: BTreeMap::new(),
         };
 

@@ -40,7 +40,6 @@ pub struct ReceivedBlock {
 /// Common info in all mined block that form a complete block.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommonBlockInfo {
-    pub block_idx: u64,
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
 }
@@ -66,7 +65,7 @@ pub struct StorageConsensused {
     /// Sufficient majority
     sufficient_majority: usize,
     /// Index of the last completed block.
-    current_block_idx: u64,
+    current_block_num: u64,
     /// Peer ids that have voted to complete the block.
     current_block_complete_timeout_peer_ids: BTreeSet<u64>,
     /// Part block completed by Peer ids.
@@ -113,7 +112,7 @@ impl StorageRaft {
 
         let consensused = StorageConsensused {
             sufficient_majority: raft_active.peers_len() / 2 + 1,
-            current_block_idx: 0,
+            current_block_num: 0,
             current_block_complete_timeout_peer_ids: BTreeSet::new(),
             current_block_completed_parts: BTreeMap::new(),
         };
@@ -172,7 +171,10 @@ impl StorageRaft {
 
         match item {
             StorageRaftItem::PartBlock(block) => {
-                if self.consensused.is_current_block(block.common.block_idx) {
+                if self
+                    .consensused
+                    .is_current_block(block.common.block.header.b_num)
+                {
                     debug!("PartBlock appened {:?}", key);
                     self.consensused.append_received_block(key, block);
                 }
@@ -219,7 +221,7 @@ impl StorageRaft {
     pub async fn propose_block_at_timeout(&mut self) {
         self.propose_block_timeout_at = None;
         self.propose_item(&StorageRaftItem::CompleteBlock(
-            self.consensused.current_block_idx,
+            self.consensused.current_block_num,
         ))
         .await;
     }
@@ -248,11 +250,7 @@ impl StorageRaft {
     ) {
         self.local_blocks.push(ReceivedBlock {
             peer,
-            common: CommonBlockInfo {
-                block_idx: self.consensused.current_block_idx,
-                block,
-                block_txs,
-            },
+            common: CommonBlockInfo { block, block_txs },
             per_node: MinedBlockExtraInfo {
                 // TODO: Get and use real MinedBlockExtraInfo infos
                 nonce: Vec::new(),
@@ -268,8 +266,8 @@ impl StorageRaft {
 }
 
 impl StorageConsensused {
-    pub fn is_current_block(&self, block_idx: u64) -> bool {
-        block_idx == self.current_block_idx
+    pub fn is_current_block(&self, block_num: u64) -> bool {
+        block_num == self.current_block_num
     }
 
     pub fn has_block_ready_to_store(&self) -> bool {
@@ -307,7 +305,7 @@ impl StorageConsensused {
     }
 
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
-        self.current_block_idx += 1;
+        self.current_block_num += 1;
         let _timeouts = std::mem::take(&mut self.current_block_complete_timeout_peer_ids);
         let completed_parts = std::mem::take(&mut self.current_block_completed_parts);
 

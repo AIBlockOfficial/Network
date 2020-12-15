@@ -227,7 +227,7 @@ impl StorageNode {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
-        if complete.common.block_idx == 0 {
+        if complete.common.block.header.b_num == 0 {
             // No mining on first block
             complete.per_node.clear();
         }
@@ -255,7 +255,7 @@ impl StorageNode {
 
         let stored_info = BlockStoredInfo {
             block_hash: hash_key,
-            block_time: complete.common.block.header.time,
+            block_num: complete.common.block.header.b_num,
             mining_transactions: BTreeMap::new(),
         };
 

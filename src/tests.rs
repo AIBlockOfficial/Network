@@ -130,7 +130,7 @@ async fn create_block_raft(initial_port: u16, compute_count: usize) {
     let send_tx_req = ComputeRequest::SendTransactions { transactions };
     let send_block_stored_req = ComputeRequest::SendBlockStored(BlockStoredInfo {
         block_hash: SEED_UTXO_BLOCK_HASH.to_string(),
-        block_time: 0,
+        block_num: 0,
         mining_transactions: BTreeMap::new(),
     });
 
@@ -418,13 +418,13 @@ async fn compute_send_block_to_storage(
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
-) -> Option<(String, String, u32, usize)> {
+) -> Option<(String, String, u64, usize)> {
     let s = network.storage(storage).unwrap().lock().await;
     s.get_last_block_stored().clone().map(|(complete, info)| {
         (
             format!("{:?}", complete),
             info.block_hash.clone(),
-            info.block_time,
+            info.block_num,
             info.mining_transactions.len(),
         )
     })
@@ -535,13 +535,14 @@ fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Tr
 }
 
 fn complete_block(
-    block_idx: u64,
+    block_num: u64,
     previous_hash: Option<&str>,
     block_txs: BTreeMap<String, Transaction>,
     mining_txs: usize,
 ) -> ((String, String), CompleteBlock) {
     let mut block = Block::new();
-    block.header.time = block_idx as u32;
+    block.header.b_num = block_num;
+    block.header.time = block_num as u32;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
 
@@ -559,11 +560,7 @@ fn complete_block(
         .collect();
 
     let complete = CompleteBlock {
-        common: CommonBlockInfo {
-            block_idx,
-            block,
-            block_txs,
-        },
+        common: CommonBlockInfo { block, block_txs },
         per_node,
     };
 

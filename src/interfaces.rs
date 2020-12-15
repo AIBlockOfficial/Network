@@ -22,7 +22,7 @@ pub struct Response {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockStoredInfo {
     pub block_hash: String,
-    pub block_time: u32,
+    pub block_num: u64,
     pub mining_transactions: BTreeMap<String, Transaction>,
 }
 
