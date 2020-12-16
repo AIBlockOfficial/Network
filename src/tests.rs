@@ -92,6 +92,9 @@ async fn first_block(network_config: NetworkConfig) {
         actual0.iter().map(|v| *v == actual0[0]).collect::<Vec<_>>(),
         node_all(storage_nodes, true)
     );
+
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -127,13 +130,14 @@ async fn create_block(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
+    let storage_nodes = &network_config.storage_nodes;
     let (_transactions, t_hash, tx) = valid_transactions(true);
 
     info!("Test Step First Block");
     compute_all_connect_to_storage(&mut network, compute_nodes).await;
     node_all_handle_event(&mut network, compute_nodes, &["First Block committed"]).await;
-    compute_send_first_block_to_storage(&mut network, "compute1").await;
-    storage_receive_and_store_block(&mut network, "storage1").await;
+    compute_all_send_first_block_to_storage(&mut network, compute_nodes).await;
+    node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
 
     info!("Test Step Add Transactions");
     node_connect_to(&mut network, "user1", "compute1").await;

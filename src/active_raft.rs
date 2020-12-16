@@ -109,7 +109,12 @@ impl ActiveRaft {
 
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
-        self.cmd_tx.send(RaftCmd::Close).await.unwrap();
+        // Ensure the loop is not stalled:
+        self.msg_out_rx.lock().await.close();
+        self.committed_rx.lock().await.0.close();
+
+        // Close the loop
+        self.cmd_tx.send(RaftCmd::Close).unwrap();
     }
 
     /// Blocks & waits for a next commit from a peer.
@@ -135,13 +140,13 @@ impl ActiveRaft {
 
     /// Process a raft message: send to spawned raft loop.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
-        self.cmd_tx.send(RaftCmd::Raft(msg)).await.unwrap();
+        self.cmd_tx.send(RaftCmd::Raft(msg)).unwrap();
     }
 
     /// Propose RaftData to raft if use_raft, or commit it otherwise.
     pub async fn propose_data(&mut self, data: RaftData) {
         if self.use_raft {
-            self.cmd_tx.send(RaftCmd::Propose { data }).await.unwrap();
+            self.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
         } else {
             self.committed_rx.lock().await.1.push_back(data);
         }

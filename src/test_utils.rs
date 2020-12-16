@@ -210,6 +210,7 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
+            let storage_raft = if config.storage_raft { 1 } else { 0 };
             let port = info.storage_nodes[idx].address.port();
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
@@ -217,7 +218,7 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
-                storage_raft: 0,
+                storage_raft,
                 storage_raft_tick_timeout: 10,
                 storage_block_timeout: 100,
             };
