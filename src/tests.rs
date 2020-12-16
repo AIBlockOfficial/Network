@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
-use tracing::{error_span, info};
+use tracing::{error_span, debug, info};
 use tracing_futures::Instrument;
 
 const SEED_UTXO: [&str; 1] = ["000000"];
@@ -345,19 +345,19 @@ async fn compute_one_handle_event(
     barrier: &Barrier,
     reason_str: &[String],
 ) {
-    info!("Start wait for event");
+    debug!("Start wait for event");
 
     let mut compute = compute.lock().await;
     for reason in reason_str {
         compute_handle_event_for_node(&mut compute, true, &reason).await;
     }
-    info!("Start wait for completion of other in raft group");
+    debug!("Start wait for completion of other in raft group");
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
     );
 
-    info!("Stop wait for event: {:?}", result);
+    debug!("Stop wait for event: {:?}", result);
 }
 
 async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
@@ -500,20 +500,20 @@ async fn storage_one_handle_event(
     barrier: &Barrier,
     reason_str: &[String],
 ) {
-    info!("Start wait for event");
+    debug!("Start wait for event");
 
     let mut storage = storage.lock().await;
     for reason in reason_str {
         storage_handle_event_for_node(&mut storage, true, &reason).await;
     }
 
-    info!("Start wait for completion of other in raft group");
+    debug!("Start wait for completion of other in raft group");
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
     );
 
-    info!("Stop wait for event: {:?}", result);
+    debug!("Stop wait for event: {:?}", result);
 }
 
 async fn storage_receive_block(network: &mut Network, storage_str: &str) {
