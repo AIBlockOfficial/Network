@@ -33,7 +33,7 @@ pub struct MinedBlockExtraInfo {
 }
 
 /// Stored block info needed to generate next block
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BlockStoredInfo {
     pub block_hash: String,
     pub block_num: u64,

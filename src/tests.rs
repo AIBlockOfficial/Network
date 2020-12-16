@@ -34,7 +34,7 @@ const BLOCK_RECEIVED_AND_STORED: [&str; 2] =
 enum Cfg {
     All,
     IgnoreStorage,
-    IngoreCompute,
+    IgnoreCompute,
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -76,7 +76,8 @@ async fn full_flow(network_config: NetworkConfig) {
     //
     first_block_act(&mut network, Cfg::All).await;
     add_transactions_act(&mut network, &tx).await;
-    create_block_act(&mut network).await;
+    create_block_act(&mut network, Cfg::All).await;
+    proof_of_work_act(&mut network).await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -264,7 +265,7 @@ async fn create_block(network_config: NetworkConfig) {
     let block_transaction_before =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
 
-    create_block_act(&mut network).await;
+    create_block_act(&mut network, Cfg::All).await;
 
     let block_transaction_after =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
@@ -282,12 +283,17 @@ async fn create_block(network_config: NetworkConfig) {
     info!("Test Step complete")
 }
 
-async fn create_block_act(network: &mut Network) {
+async fn create_block_act(network: &mut Network, cfg: Cfg) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
 
     info!("Test Step Storage signal new block");
-    storage_send_stored_block(network, "storage1").await;
+    if cfg != Cfg::IgnoreStorage {
+        storage_send_stored_block(network, "storage1").await;
+    } else {
+        let req = ComputeRequest::SendBlockStored(Default::default());
+        compute_inject_next_event(network, "storage1", "compute1", req).await;
+    }
     compute_handle_event(network, "compute1", "Received block stored").await;
 
     info!("Test Step Generate Block");
@@ -295,40 +301,63 @@ async fn create_block_act(network: &mut Network) {
 }
 
 #[tokio::test(threaded_scheduler)]
-async fn proof_of_work() {
+async fn proof_of_work_no_raft() {
+    proof_of_work(complete_network_config(10200)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn proof_of_work_raft_1_node() {
+    proof_of_work(complete_network_config_with_n_compute_raft(10210, 1)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn proof_of_work_raft_2_nodes() {
+    proof_of_work(complete_network_config_with_n_compute_raft(10220, 2)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn proof_of_work_raft_3_nodes() {
+    proof_of_work(complete_network_config_with_n_compute_raft(10230, 3)).await;
+}
+
+async fn proof_of_work(network_config: NetworkConfig) {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_miners(10200, 3);
     let mut network = Network::create_from_config(&network_config).await;
-
-    let block = Block::new();
-    compute_handle_event(&mut network, "compute1", "First Block committed").await;
-    compute_set_current_block(&mut network, "compute1", block.clone()).await;
-    node_connect_to(&mut network, "miner1", "compute1").await;
-    node_connect_to(&mut network, "miner2", "compute1").await;
-    node_connect_to(&mut network, "miner3", "compute1").await;
+    let compute_nodes = &network_config.compute_nodes;
+    first_block_act(&mut network, Cfg::IgnoreStorage).await;
+    create_block_act(&mut network, Cfg::IgnoreStorage).await;
 
     //
     // Act
     //
-    miner_send_pow(&mut network, "miner1", "compute1", &block).await;
-    miner_send_pow(&mut network, "miner2", "compute1", &block).await;
-    miner_send_pow(&mut network, "miner3", "compute1", &block).await;
+    let block_before = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
-    let block_before = compute_mined_block_time(&mut network, "compute1").await;
-    compute_handle_event(&mut network, "compute1", "Received PoW successfully").await;
-    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
-    compute_handle_error(&mut network, "compute1", "Not mining given block").await;
-    let block_after = compute_mined_block_time(&mut network, "compute1").await;
+    proof_of_work_act(&mut network).await;
+
+    let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
     //
     // Assert
     //
-    assert_eq!(block_before, None);
-    assert_eq!(block_after, Some(0));
+    assert_eq!(block_before, node_all(compute_nodes, None));
+    assert_eq!(block_after, node_all(compute_nodes, Some(1)));
+}
+
+async fn proof_of_work_act(network: &mut Network) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+
+    info!("Test Step Miner Compute and Send Proof of work");
+    let block = Block::new();
+    node_connect_to_all(network, "miner1", compute_nodes).await;
+    miner_all_send_pow(network, "miner1", compute_nodes, &block).await;
+    miner_all_send_pow(network, "miner1", compute_nodes, &block).await;
+    compute_all_handle_event(network, compute_nodes, "Received PoW successfully").await;
+    compute_all_handle_error(network, compute_nodes, "Not mining given block").await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -411,6 +440,12 @@ async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
     }
 }
 
+async fn node_connect_to_all(network: &mut Network, from: &str, tos: &[String]) {
+    for to in tos {
+        node_connect_to(network, from, to).await;
+    }
+}
+
 async fn node_all_handle_event(network: &mut Network, node_group: &[String], reason_str: &[&str]) {
     let mut join_handles = Vec::new();
     let barrier = Arc::new(Barrier::new(node_group.len()));
@@ -447,9 +482,29 @@ async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: 
     compute_handle_event_for_node(&mut c, true, reason_str).await;
 }
 
+async fn compute_all_handle_event(
+    network: &mut Network,
+    compute_group: &[String],
+    reason_str: &str,
+) {
+    for compute in compute_group {
+        compute_handle_event(network, compute, reason_str).await;
+    }
+}
+
 async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     compute_handle_event_for_node(&mut c, false, reason_str).await;
+}
+
+async fn compute_all_handle_error(
+    network: &mut Network,
+    compute_group: &[String],
+    reason_str: &str,
+) {
+    for compute in compute_group {
+        compute_handle_error(network, compute, reason_str).await;
+    }
 }
 
 async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
@@ -485,9 +540,21 @@ async fn compute_set_current_block(network: &mut Network, compute: &str, block: 
     c.set_committed_mining_block(block, BTreeMap::new());
 }
 
-async fn compute_mined_block_time(network: &mut Network, compute: &str) -> Option<u32> {
+async fn compute_mined_block_num(network: &mut Network, compute: &str) -> Option<u64> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.current_mined_block.as_ref().map(|b| b.block.header.time)
+    c.current_mined_block.as_ref().map(|b| b.block.header.b_num)
+}
+
+async fn compute_all_mined_block_num(
+    network: &mut Network,
+    compute_group: &[String],
+) -> Vec<Option<u64>> {
+    let mut result = Vec::new();
+    for name in compute_group {
+        let r = compute_mined_block_num(network, name).await;
+        result.push(r);
+    }
+    result
 }
 
 async fn compute_all_current_block_transactions(
@@ -534,11 +601,11 @@ async fn compute_committed_tx_pool(
 
 async fn compute_inject_next_event(
     network: &mut Network,
-    from_user: &str,
+    from: &str,
     to_compute: &str,
     request: ComputeRequest,
 ) {
-    let from_addr = network.get_address(from_user).await.unwrap();
+    let from_addr = network.get_address(from).await.unwrap();
     let c = network.compute(to_compute).unwrap().lock().await;
 
     c.inject_next_event(from_addr, request).unwrap();
@@ -712,6 +779,17 @@ async fn miner_send_pow(network: &mut Network, from_miner: &str, to_compute: &st
     m.send_pow(compute_node_addr, pow, transaction)
         .await
         .unwrap();
+}
+
+async fn miner_all_send_pow(
+    network: &mut Network,
+    from_miner: &str,
+    to_compute_group: &[String],
+    block: &Block,
+) {
+    for to_compute in to_compute_group {
+        miner_send_pow(network, from_miner, to_compute, block).await;
+    }
 }
 
 //
