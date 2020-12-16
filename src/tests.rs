@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
-use tracing::{error_span, debug, info};
+use tracing::{debug, error_span, info};
 use tracing_futures::Instrument;
 
 const SEED_UTXO: [&str; 1] = ["000000"];
@@ -29,6 +29,55 @@ const HASH_LEN: usize = 64;
 
 const BLOCK_RECEIVED_AND_STORED: [&str; 2] =
     ["Block received to be added", "Block complete stored"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Cfg {
+    All,
+    IgnoreStorage,
+    IngoreCompute,
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn full_flow_no_raft() {
+    full_flow(complete_network_config(10500)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn full_flow_raft_1_node() {
+    full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn full_flow_raft_2_nodes() {
+    full_flow(complete_network_config_with_n_compute_raft(10520, 2)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn full_flow_raft_3_nodes() {
+    full_flow(complete_network_config_with_n_compute_raft(10530, 3)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn full_flow_raft_20_nodes() {
+    full_flow(complete_network_config_with_n_compute_raft(10540, 20)).await;
+}
+
+async fn full_flow(network_config: NetworkConfig) {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_from_config(&network_config).await;
+    let (_transactions, _t_hash, tx) = valid_transactions(true);
+
+    //
+    // Act
+    //
+    first_block_act(&mut network, Cfg::All).await;
+    add_transactions_act(&mut network, &tx).await;
+    create_block_act(&mut network).await;
+}
 
 #[tokio::test(threaded_scheduler)]
 async fn first_block_no_raft() {
@@ -62,7 +111,6 @@ async fn first_block(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
     let expected_utxo = network.collect_initial_uxto_set();
     let (expected0, _block_info) = complete_block(0, None, expected_utxo, 0);
@@ -70,10 +118,7 @@ async fn first_block(network_config: NetworkConfig) {
     //
     // Act
     //
-    compute_all_connect_to_storage(&mut network, compute_nodes).await;
-    node_all_handle_event(&mut network, compute_nodes, &["First Block committed"]).await;
-    compute_all_send_first_block_to_storage(&mut network, compute_nodes).await;
-    node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+    first_block_act(&mut network, Cfg::All).await;
 
     //
     // Assert
@@ -95,6 +140,84 @@ async fn first_block(network_config: NetworkConfig) {
 
     network.close_raft_loops_and_drop().await;
     info!("Test Step complete")
+}
+
+async fn first_block_act(network: &mut Network, cfg: Cfg) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+    let storage_nodes = &config.storage_nodes;
+
+    info!("Test Step First Block");
+    node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
+    if cfg != Cfg::IgnoreStorage {
+        compute_all_connect_to_storage(network, compute_nodes).await;
+        compute_all_send_first_block_to_storage(network, compute_nodes).await;
+        node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+    }
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn add_transactions_no_raft() {
+    add_transactions(complete_network_config(10600)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn add_transactions_raft_1_node() {
+    add_transactions(complete_network_config_with_n_compute_raft(10610, 1)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn add_transactions_raft_2_nodes() {
+    add_transactions(complete_network_config_with_n_compute_raft(10620, 2)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn add_transactions_raft_3_nodes() {
+    add_transactions(complete_network_config_with_n_compute_raft(10630, 3)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn add_transactions_raft_20_nodes() {
+    add_transactions(complete_network_config_with_n_compute_raft(10640, 20)).await;
+}
+
+async fn add_transactions(network_config: NetworkConfig) {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.compute_nodes;
+    let (transactions, _t_hash, tx) = valid_transactions(true);
+    first_block_act(&mut network, Cfg::IgnoreStorage).await;
+
+    //
+    // Act
+    //
+    add_transactions_act(&mut network, &tx).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        compute_all_committed_tx_pool(&mut network, compute_nodes).await,
+        node_all(compute_nodes, transactions)
+    );
+
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
+}
+
+async fn add_transactions_act(network: &mut Network, tx: &Transaction) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+
+    info!("Test Step Add Transactions");
+    node_connect_to(network, "user1", "compute1").await;
+    user_send_payment_to_compute(network, "user1", "compute1", tx).await;
+    compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
+    node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -130,24 +253,10 @@ async fn create_block(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let storage_nodes = &network_config.storage_nodes;
     let (_transactions, t_hash, tx) = valid_transactions(true);
 
-    info!("Test Step First Block");
-    compute_all_connect_to_storage(&mut network, compute_nodes).await;
-    node_all_handle_event(&mut network, compute_nodes, &["First Block committed"]).await;
-    compute_all_send_first_block_to_storage(&mut network, compute_nodes).await;
-    node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
-
-    info!("Test Step Add Transactions");
-    node_connect_to(&mut network, "user1", "compute1").await;
-    user_send_payment_to_compute(&mut network, "user1", "compute1", &tx).await;
-    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
-    node_all_handle_event(&mut network, compute_nodes, &["Transactions committed"]).await;
-
-    info!("Test Step Storage signal new block");
-    storage_send_stored_block(&mut network, "storage1").await;
-    compute_handle_event(&mut network, "compute1", "Received block stored").await;
+    first_block_act(&mut network, Cfg::All).await;
+    add_transactions_act(&mut network, &tx).await;
 
     //
     // Act
@@ -155,8 +264,7 @@ async fn create_block(network_config: NetworkConfig) {
     let block_transaction_before =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
 
-    info!("Test Step Generate Block");
-    node_all_handle_event(&mut network, compute_nodes, &["Block committed"]).await;
+    create_block_act(&mut network).await;
 
     let block_transaction_after =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
@@ -172,6 +280,18 @@ async fn create_block(network_config: NetworkConfig) {
 
     network.close_raft_loops_and_drop().await;
     info!("Test Step complete")
+}
+
+async fn create_block_act(network: &mut Network) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+
+    info!("Test Step Storage signal new block");
+    storage_send_stored_block(network, "storage1").await;
+    compute_handle_event(network, "compute1", "Received block stored").await;
+
+    info!("Test Step Generate Block");
+    node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -390,6 +510,26 @@ async fn compute_current_block_transactions(
     c.get_mining_block()
         .as_ref()
         .map(|b| b.transactions.clone())
+}
+
+async fn compute_all_committed_tx_pool(
+    network: &mut Network,
+    compute_group: &[String],
+) -> Vec<BTreeMap<String, Transaction>> {
+    let mut result = Vec::new();
+    for name in compute_group {
+        let r = compute_committed_tx_pool(network, name).await;
+        result.push(r);
+    }
+    result
+}
+
+async fn compute_committed_tx_pool(
+    network: &mut Network,
+    compute: &str,
+) -> BTreeMap<String, Transaction> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_committed_tx_pool().clone()
 }
 
 async fn compute_inject_next_event(

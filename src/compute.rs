@@ -182,6 +182,11 @@ impl ComputeNode {
         )
     }
 
+    /// The current tx_pool that will be used to generate next block
+    pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
+        self.node_raft.get_committed_tx_pool()
+    }
+
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.node_raft.raft_loop()

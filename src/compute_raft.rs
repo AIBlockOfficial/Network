@@ -308,6 +308,11 @@ impl ComputeRaft {
         self.raft_active.propose_data(data).await
     }
 
+    /// The current tx_pool that will be used to generate next block
+    pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
+        &self.consensused.tx_pool
+    }
+
     /// Whether adding these will grow our pool within the limit.
     pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
         self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
