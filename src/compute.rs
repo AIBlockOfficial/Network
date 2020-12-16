@@ -445,17 +445,14 @@ impl ComputeNode {
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         // Only the first call will send to storage.
         let mined_block = self.current_mined_block.take().unwrap();
-
-        // TODO: include the mining transaction.
         let block = mined_block.block;
         let block_txs = mined_block.block_tx;
+        let nonce = mined_block.nonce;
+        let mining_tx = mined_block.mining_transaction;
 
         let request = StorageRequest::SendBlock {
             common: CommonBlockInfo { block, block_txs },
-            mined_info: MinedBlockExtraInfo {
-                nonce: mined_block.nonce,
-                mining_tx: mined_block.mining_transaction,
-            },
+            mined_info: MinedBlockExtraInfo { nonce, mining_tx },
         };
         self.node.send(self.storage_addr, request).await?;
 

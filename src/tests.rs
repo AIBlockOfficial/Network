@@ -1,7 +1,9 @@
 //! Test suite for the network functions.
 
 use crate::compute::{ComputeNode, MinedBlock};
-use crate::interfaces::{CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response};
+use crate::interfaces::{
+    CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
+};
 use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
@@ -72,12 +74,13 @@ async fn full_flow(network_config: NetworkConfig) {
     let (_transactions, _t_hash, tx) = valid_transactions(true);
 
     //
-    // Act
+    // Act/Assert
     //
     first_block_act(&mut network, Cfg::All).await;
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All).await;
     proof_of_work_act(&mut network).await;
+    //send_block_to_storage_act(&mut network).await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -338,6 +341,9 @@ async fn proof_of_work(network_config: NetworkConfig) {
 
     proof_of_work_act(&mut network).await;
 
+    miner_all_send_pow(&mut network, "miner1", compute_nodes, &Block::new()).await;
+    compute_all_handle_error(&mut network, compute_nodes, "Not mining given block").await;
+
     let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
     //
@@ -355,51 +361,94 @@ async fn proof_of_work_act(network: &mut Network) {
     let block = Block::new();
     node_connect_to_all(network, "miner1", compute_nodes).await;
     miner_all_send_pow(network, "miner1", compute_nodes, &block).await;
-    miner_all_send_pow(network, "miner1", compute_nodes, &block).await;
     compute_all_handle_event(network, compute_nodes, "Received PoW successfully").await;
-    compute_all_handle_error(network, compute_nodes, "Not mining given block").await;
 }
 
 #[tokio::test(threaded_scheduler)]
 async fn send_block_to_storage_no_raft() {
+    send_block_to_storage(complete_network_config(10300)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn send_block_to_storage_raft_1_node() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10310, 1)).await;
+}
+
+#[tokio::test(threaded_scheduler)]
+async fn send_block_to_storage_raft_2_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10320, 2)).await;
+}
+
+// TODO: Fix test: Timeout trigger before all blocks are combined resulting in 2 mining tx.
+//
+// #[tokio::test(threaded_scheduler)]
+// async fn send_block_to_storage_raft_3_nodes() {
+//     send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
+// }
+
+// TODO: Fix test: Timeout trigger before all blocks are combined resulting in 11 mining tx.
+//
+// #[tokio::test(threaded_scheduler)]
+// async fn send_block_to_storage_raft_20_nodes() {
+//     send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
+// }
+
+async fn send_block_to_storage(network_config: NetworkConfig) {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let network_config = complete_network_config(10300);
     let mut network = Network::create_from_config(&network_config).await;
-    compute_connect_to_storage(&mut network, "compute1").await;
-    compute_handle_event(&mut network, "compute1", "First Block committed").await;
-    compute_send_first_block_to_storage(&mut network, "compute1").await;
-    storage_receive_and_store_block(&mut network, "storage1").await;
+    let compute_nodes = &network_config.compute_nodes;
+    let storage_nodes = &network_config.storage_nodes;
+    let compute_len = compute_nodes.len();
 
     let (transactions, _t_hash, _tx) = valid_transactions(true);
-    let (_expected3, block_info3) = complete_block(3, Some("0"), BTreeMap::new(), 1);
-    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, 1);
+    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, compute_len);
+    let (_expected3, wrong_block3) = complete_block(3, Some("0"), BTreeMap::new(), 1);
+
+    first_block_act(&mut network, Cfg::All).await;
+    compute_all_set_mined_block(&mut network, compute_nodes, &block_info1).await;
 
     //
     // Act
     //
-    compute_send_block_to_storage(&mut network, "compute1", &block_info3).await;
+    storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
     storage_receive_block(&mut network, "storage1").await;
 
-    compute_send_block_to_storage(&mut network, "compute1", &block_info1).await;
-    storage_receive_and_store_block(&mut network, "storage1").await;
-    let actual1 = storage_get_last_block_stored(&mut network, "storage1").await;
+    send_block_to_storage_act(&mut network).await;
 
     //
     // Assert
     //
+    let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
-        actual1,
+        actual1[0],
         Some((
             expected1.1,
             expected1.0,
-            1, /*b_num*/
-            1  /*mining txs*/
+            1,           /*b_num*/
+            compute_len, /*mining txs*/
         ))
     );
+    assert_eq!(
+        actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
+        node_all(storage_nodes, true)
+    );
+
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
+}
+
+async fn send_block_to_storage_act(network: &mut Network) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+    let storage_nodes = &config.storage_nodes;
+
+    info!("Test Step Compute Send block to Storage");
+    compute_all_send_block_to_storage(network, compute_nodes).await;
+    node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
 }
 
 #[tokio::test(threaded_scheduler)]
@@ -633,29 +682,77 @@ async fn compute_all_send_first_block_to_storage(network: &mut Network, compute_
     }
 }
 
-async fn compute_send_block_to_storage(
-    network: &mut Network,
-    compute: &str,
-    block_info: &CompleteBlock,
-) {
+async fn compute_send_block_to_storage(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.send_block_to_storage().await.unwrap();
+}
+
+async fn compute_all_send_block_to_storage(network: &mut Network, compute_group: &[String]) {
+    for compute in compute_group {
+        compute_send_block_to_storage(network, compute).await;
+    }
+}
+
+async fn compute_set_mined_block(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
     let id = network.get_position(compute).unwrap() as u64 + 1;
     let mut c = network.compute(compute).unwrap().lock().await;
     let mined = block_info.per_node.get(&id).unwrap();
 
-    let mined_block = MinedBlock {
+    c.current_mined_block = Some(MinedBlock {
         nonce: mined.nonce.clone(),
         block: block_info.common.block.clone(),
         block_tx: block_info.common.block_txs.clone(),
         mining_transaction: mined.mining_tx.clone(),
-    };
-    c.current_mined_block = Some(mined_block);
+    });
+}
 
-    c.send_block_to_storage().await.unwrap();
+async fn compute_all_set_mined_block(
+    network: &mut Network,
+    compute_group: &[String],
+    block_info: &CompleteBlock,
+) {
+    for compute in compute_group {
+        compute_set_mined_block(network, compute, block_info).await;
+    }
 }
 
 //
 // StorageNode helpers
 //
+
+async fn storage_inject_next_event(
+    network: &mut Network,
+    from: &str,
+    to_storage: &str,
+    request: StorageRequest,
+) {
+    let from_addr = network.get_address(from).await.unwrap();
+    let s = network.storage(to_storage).unwrap().lock().await;
+
+    s.inject_next_event(from_addr, request).unwrap();
+}
+
+async fn storage_inject_send_block_to_storage(
+    network: &mut Network,
+    compute: &str,
+    storage: &str,
+    block_info: &CompleteBlock,
+) {
+    let id = network.get_position(compute).unwrap() as u64 + 1;
+
+    let mined = block_info.per_node.get(&id).unwrap();
+    let block = block_info.common.block.clone();
+    let block_txs = block_info.common.block_txs.clone();
+    let nonce = mined.nonce.clone();
+    let mining_tx = mined.mining_tx.clone();
+
+    let request = StorageRequest::SendBlock {
+        common: CommonBlockInfo { block, block_txs },
+        mined_info: MinedBlockExtraInfo { nonce, mining_tx },
+    };
+
+    storage_inject_next_event(network, compute, storage, request).await;
+}
 
 async fn storage_get_last_block_stored(
     network: &mut Network,
