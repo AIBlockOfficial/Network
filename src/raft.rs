@@ -96,8 +96,14 @@ impl RaftNode {
         let storage = MemStorage::new();
         let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
 
+        let mut node = RawNode::new(&raft_config.cfg, storage, peers).unwrap();
+        if raft_config.cfg.id == 1 {
+            // Make first peer start election immediatly on start up to avoid unecessary wait.
+            node.raft.election_elapsed = node.raft.get_randomized_election_timeout();
+        }
+
         Self {
-            node: RawNode::new(&raft_config.cfg, storage, peers).unwrap(),
+            node,
             propose_data_backlog: Vec::new(),
             cmd_rx: raft_config.cmd_rx,
             committed_tx: raft_config.committed_tx,
