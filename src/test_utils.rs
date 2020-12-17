@@ -17,8 +17,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::error_span;
 use tracing::info;
-use tracing::info_span;
 use tracing_futures::Instrument;
 
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
@@ -90,7 +90,7 @@ impl Network {
 
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
-                let peer_span = info_span!("compute_node", ?name, addr = ?node.address());
+                let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
                 self.raft_loop_handles.push(tokio::spawn(
                     async move {
@@ -115,7 +115,7 @@ impl Network {
 
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
-                let peer_span = info_span!("storage_node", ?name, addr = ?node.address());
+                let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
                 self.raft_loop_handles.push(tokio::spawn(
                     async move {
