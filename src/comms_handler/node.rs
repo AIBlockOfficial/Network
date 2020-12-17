@@ -82,6 +82,7 @@
 
 use super::{CommsError, Event, Result};
 use crate::interfaces::{CommMessage, NodeType, Token};
+use crate::utils::MpscTracingSender;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use futures::future::join_all;
@@ -101,6 +102,8 @@ use tokio::{
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
+
+pub type ResultBytesSender = MpscTracingSender<io::Result<Bytes>>;
 
 /// Number of peers we select for gossip message retransmittion.
 const FANOUT: usize = 8;
@@ -138,7 +141,7 @@ pub struct Node {
 
 pub(crate) struct Peer {
     /// Channel for sending frames to the peer.
-    send_tx: mpsc::Sender<io::Result<Bytes>>,
+    send_tx: ResultBytesSender,
     /// Peer remote address.
     addr: SocketAddr,
     /// Peer type.
@@ -404,11 +407,11 @@ impl Node {
     async fn send_bytes(
         &self,
         peer: SocketAddr,
-        tx: &mut mpsc::Sender<io::Result<Bytes>>,
+        tx: &mut ResultBytesSender,
         bytes: Bytes,
     ) -> Result<()> {
         trace!(?bytes, ?peer, "send_bytes");
-        if let Err(error) = tx.send(Ok(bytes)).await {
+        if let Err(error) = tx.send(Ok(bytes), "tx_bytes").await {
             error!(?error, "Error sending a frame through the message channel");
         }
         Ok(())
@@ -479,7 +482,7 @@ impl Node {
     async fn handle_peer_recv_handshake(
         &self,
         peer_addr: SocketAddr,
-        send_tx: mpsc::Sender<std::result::Result<Bytes, io::Error>>,
+        send_tx: ResultBytesSender,
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) -> Result<SocketAddr> {
         while let Some(message) = messages.next().await {
@@ -634,7 +637,7 @@ impl Node {
         &self,
         peer_out_addr: SocketAddr,
         peer_in_addr: SocketAddr,
-        mut send_tx: mpsc::Sender<std::result::Result<Bytes, io::Error>>,
+        mut send_tx: ResultBytesSender,
         peer_type: NodeType,
     ) -> Result<()> {
         let mut all_peers = self.peers.write().await;
@@ -748,7 +751,7 @@ impl Node {
         let messages = get_messages_stream(sock_in);
         tokio::spawn({
             let node = self.clone();
-            let send_tx = send_tx.clone();
+            let send_tx = send_tx.clone().into();
             let peers = self.peers.clone();
             async move {
                 let mut messages = messages;
@@ -798,7 +801,7 @@ impl Node {
 
         Peer {
             addr: peer_addr,
-            send_tx,
+            send_tx: send_tx.into(),
             peer_type: None,
             public_address: if !is_initiator { Some(peer_addr) } else { None },
             notify_handshake_response: if is_initiator {
