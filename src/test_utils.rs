@@ -10,6 +10,7 @@ use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
 use futures::future::join_all;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -27,7 +28,7 @@ pub type ArcUserNode = Arc<Mutex<UserNode>>;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
-    config: NetworkConfig,
+    pub config: NetworkConfig,
     miner_nodes: BTreeMap<String, ArcMinerNode>,
     compute_nodes: BTreeMap<String, ArcComputeNode>,
     storage_nodes: BTreeMap<String, ArcStorageNode>,
@@ -209,6 +210,7 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
+            let storage_raft = if config.storage_raft { 1 } else { 0 };
             let port = info.storage_nodes[idx].address.port();
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
@@ -216,7 +218,7 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
-                storage_raft: 0,
+                storage_raft,
                 storage_raft_tick_timeout: 10,
                 storage_block_timeout: 100,
             };
@@ -317,5 +319,30 @@ impl Network {
             return Some(user.lock().await.address());
         }
         None
+    }
+
+    pub fn get_position(&mut self, name: &str) -> Option<usize> {
+        let is_name = |n: &String| n.as_str() == name;
+        if let Some(miner) = self.miner_nodes.keys().position(is_name) {
+            return Some(miner);
+        }
+        if let Some(compute) = self.compute_nodes.keys().position(is_name) {
+            return Some(compute);
+        }
+        if let Some(storage) = self.storage_nodes.keys().position(is_name) {
+            return Some(storage);
+        }
+        if let Some(user) = self.user_nodes.keys().position(is_name) {
+            return Some(user);
+        }
+        None
+    }
+
+    pub fn collect_initial_uxto_set(&self) -> BTreeMap<String, Transaction> {
+        self.config
+            .compute_seed_utxo
+            .iter()
+            .map(|h| (h.clone(), Transaction::new()))
+            .collect()
     }
 }

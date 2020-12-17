@@ -9,8 +9,8 @@ use tracing::trace;
 pub type RaftData = Vec<u8>;
 pub type CommitSender = mpsc::Sender<Vec<RaftData>>;
 pub type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
-pub type RaftCmdSender = mpsc::Sender<RaftCmd>;
-pub type RaftCmdReceiver = mpsc::Receiver<RaftCmd>;
+pub type RaftCmdSender = mpsc::UnboundedSender<RaftCmd>;
+pub type RaftCmdReceiver = mpsc::UnboundedReceiver<RaftCmd>;
 pub type RaftMsgSender = mpsc::Sender<Message>;
 pub type RaftMsgReceiver = mpsc::Receiver<Message>;
 
@@ -103,7 +103,7 @@ impl RaftNode {
         node_cfg: Config,
         tick_timeout_duration: Duration,
     ) -> (RaftConfig, RaftNodeChannels) {
-        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (committed_tx, committed_rx) = mpsc::channel(100);
         let (msg_out_tx, msg_out_rx) = mpsc::channel(100);
 
@@ -191,7 +191,7 @@ impl RaftNode {
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
         for msg in ready.messages.drain(..) {
             trace!("send_messages_to_peers({}, {:?})", self.node.raft.id, msg);
-            self.msg_out_tx.send(msg).await.unwrap();
+            let _ok_or_closed = self.msg_out_tx.send(msg).await;
         }
     }
 
@@ -224,7 +224,7 @@ impl RaftNode {
                 .collect();
 
             if !committed.is_empty() {
-                self.committed_tx.send(committed).await.unwrap();
+                let _ok_or_closed = self.committed_tx.send(committed).await;
             }
         }
     }
@@ -302,7 +302,7 @@ mod tests {
 
         // Close raft loop so spawned task can complete and wait for completion.
         for test_node in &mut test_nodes {
-            test_node.cmd_tx.send(RaftCmd::Close).await.unwrap();
+            test_node.cmd_tx.send(RaftCmd::Close).unwrap();
         }
         join_all(join_handles).await;
     }
@@ -315,15 +315,13 @@ mod tests {
     async fn dispatch_messages_loop(
         mut msg_out_rx: RaftMsgReceiver,
         peer_indexes: HashMap<u64, usize>,
-        mut msg_txs: Vec<RaftCmdSender>,
+        msg_txs: Vec<RaftCmdSender>,
     ) {
         loop {
             match msg_out_rx.recv().await {
                 Some(msg) => {
                     let to_index = peer_indexes[&msg.to];
-                    let _ = msg_txs[to_index]
-                        .send(RaftCmd::Raft(RaftMessageWrapper(msg)))
-                        .await;
+                    let _ = msg_txs[to_index].send(RaftCmd::Raft(RaftMessageWrapper(msg)));
                 }
                 None => {
                     // Disconnected
@@ -334,11 +332,7 @@ mod tests {
     }
 
     async fn send_proposal(test_node: &mut TestNode, data: RaftData) {
-        test_node
-            .cmd_tx
-            .send(RaftCmd::Propose { data })
-            .await
-            .unwrap();
+        test_node.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
     }
 
     async fn recv_commited(test_nodes: &mut Vec<TestNode>) -> Vec<Vec<RaftData>> {

@@ -3,8 +3,8 @@ use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
-    BlockStoredInfo, ComputeInterface, ComputeRequest, Contract, MineRequest, NodeType,
-    ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{get_partition_entry_key, loop_connnect_to_peers_async};
@@ -88,7 +88,7 @@ pub struct MinedBlock {
     pub nonce: Vec<u8>,
     pub block: Block,
     pub block_tx: BTreeMap<String, Transaction>,
-    pub mining_transaction: Transaction,
+    pub mining_transaction: (String, Transaction),
 }
 
 /// Druid pool structure for checking and holding participants
@@ -180,6 +180,11 @@ impl ComputeNode {
             self.node.clone(),
             self.node_raft.raft_peer_to_connect().cloned().collect(),
         )
+    }
+
+    /// The current tx_pool that will be used to generate next block
+    pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
+        self.node_raft.get_committed_tx_pool()
     }
 
     /// Return the raft loop to spawn in it own task.
@@ -420,13 +425,18 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_first_block_to_storage(&mut self) -> Result<()> {
-        let tx = self.node_raft.get_committed_utxo_set().clone();
+        let block_txs = self.node_raft.get_committed_utxo_set().clone();
         let mut block = Block::new();
-        block.transactions = tx.keys().cloned().collect();
+        block.transactions = block_txs.keys().cloned().collect();
 
-        self.node
-            .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
-            .await?;
+        let request = StorageRequest::SendBlock {
+            common: CommonBlockInfo { block, block_txs },
+            mined_info: MinedBlockExtraInfo {
+                nonce: Vec::new(),
+                mining_tx: (String::new(), Transaction::new()),
+            },
+        };
+        self.node.send(self.storage_addr, request).await?;
 
         Ok(())
     }
@@ -435,14 +445,16 @@ impl ComputeNode {
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         // Only the first call will send to storage.
         let mined_block = self.current_mined_block.take().unwrap();
-
-        // TODO: include the mining transaction.
         let block = mined_block.block;
-        let tx = mined_block.block_tx;
+        let block_txs = mined_block.block_tx;
+        let nonce = mined_block.nonce;
+        let mining_tx = mined_block.mining_transaction;
 
-        self.node
-            .send(self.storage_addr, StorageRequest::SendBlock { block, tx })
-            .await?;
+        let request = StorageRequest::SendBlock {
+            common: CommonBlockInfo { block, block_txs },
+            mined_info: MinedBlockExtraInfo { nonce, mining_tx },
+        };
+        self.node.send(self.storage_addr, request).await?;
 
         Ok(())
     }
@@ -747,6 +759,7 @@ impl ComputeInterface for ComputeNode {
     ) -> Response {
         info!(?address, "Received PoW");
         let mut pow_block = pow.clone();
+        let coinbase_hash = construct_tx_hash(&coinbase);
 
         if self.node_raft.get_mining_block().is_none() {
             // TODO: Verify the pow block is expected block.
@@ -781,7 +794,7 @@ impl ComputeInterface for ComputeNode {
             nonce: pow.nonce,
             block,
             block_tx,
-            mining_transaction: coinbase,
+            mining_transaction: (coinbase_hash, coinbase),
         });
 
         Response {
