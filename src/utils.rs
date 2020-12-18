@@ -11,7 +11,6 @@ use naom::primitives::{
     asset::Asset,
     transaction::{Transaction, TxConstructor},
 };
-use rocksdb::{DBCompressionType, Options};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
@@ -83,15 +82,6 @@ pub async fn loop_connnect_to_peers_async<E: From<CommsError>>(
         res?;
     }
     Ok(())
-}
-
-/// Creates a set of DB opening options for rocksDB instances
-pub fn get_db_options() -> Options {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.set_compression_type(DBCompressionType::Snappy);
-
-    opts
 }
 
 /// Creates a "fake" transaction to save to the local wallet

@@ -45,6 +45,13 @@ async fn full_flow_no_raft() {
 }
 
 #[tokio::test(threaded_scheduler)]
+async fn full_flow_no_raft_real_db() {
+    let mut cfg = complete_network_config(10505);
+    cfg.in_memory_db = false;
+    full_flow(cfg).await;
+}
+
+#[tokio::test(threaded_scheduler)]
 async fn full_flow_raft_1_node() {
     full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
 }
@@ -351,6 +358,9 @@ async fn proof_of_work(network_config: NetworkConfig) {
     //
     assert_eq!(block_before, node_all(compute_nodes, None));
     assert_eq!(block_after, node_all(compute_nodes, Some(1)));
+
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
 }
 
 async fn proof_of_work_act(network: &mut Network) {
@@ -969,6 +979,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         initial_port,
         compute_raft: false,
         storage_raft: false,
+        in_memory_db: true,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],

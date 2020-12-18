@@ -43,6 +43,7 @@ pub struct NetworkConfig {
     pub initial_port: u16,
     pub compute_raft: bool,
     pub storage_raft: bool,
+    pub in_memory_db: bool,
     pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
@@ -212,14 +213,19 @@ impl Network {
         for (idx, name) in config.storage_nodes.iter().enumerate() {
             let storage_raft = if config.storage_raft { 1 } else { 0 };
             let port = info.storage_nodes[idx].address.port();
+            let storage_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(port as usize)
+            };
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
-                storage_db_mode: DbMode::Test(port as usize),
+                storage_db_mode,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 storage_raft,
-                storage_raft_tick_timeout: 10,
+                storage_raft_tick_timeout: 100,
                 storage_block_timeout: 100,
             };
             map.insert(
@@ -245,7 +251,7 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
-                compute_raft_tick_timeout: 10,
+                compute_raft_tick_timeout: 100,
                 compute_block_timeout: 100,
                 compute_transaction_timeout: 50,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
