@@ -87,7 +87,7 @@ async fn full_flow(network_config: NetworkConfig) {
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All).await;
     proof_of_work_act(&mut network).await;
-    //send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network).await;
 
     //
     // Assert
