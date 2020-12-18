@@ -329,16 +329,16 @@ impl Network {
 
     pub fn get_position(&mut self, name: &str) -> Option<usize> {
         let is_name = |n: &String| n.as_str() == name;
-        if let Some(miner) = self.miner_nodes.keys().position(is_name) {
+        if let Some(miner) = self.config.miner_nodes.iter().position(is_name) {
             return Some(miner);
         }
-        if let Some(compute) = self.compute_nodes.keys().position(is_name) {
+        if let Some(compute) = self.config.compute_nodes.iter().position(is_name) {
             return Some(compute);
         }
-        if let Some(storage) = self.storage_nodes.keys().position(is_name) {
+        if let Some(storage) = self.config.storage_nodes.iter().position(is_name) {
             return Some(storage);
         }
-        if let Some(user) = self.user_nodes.keys().position(is_name) {
+        if let Some(user) = self.config.user_nodes.iter().position(is_name) {
             return Some(user);
         }
         None
