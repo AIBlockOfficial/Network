@@ -21,6 +21,12 @@ use tracing::error_span;
 use tracing::info;
 use tracing_futures::Instrument;
 
+#[cfg(not(debug_assertions))] // Release
+const TEST_DURATION_DIVIDER: usize = 10;
+
+#[cfg(debug_assertions)] // Debug
+const TEST_DURATION_DIVIDER: usize = 1;
+
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
 pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
 pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
@@ -225,8 +231,8 @@ impl Network {
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 storage_raft,
-                storage_raft_tick_timeout: 100,
-                storage_block_timeout: 100,
+                storage_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
+                storage_block_timeout: 1000 / TEST_DURATION_DIVIDER,
             };
             map.insert(
                 name.clone(),
@@ -251,8 +257,8 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
-                compute_raft_tick_timeout: 100,
-                compute_transaction_timeout: 50,
+                compute_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
+                compute_transaction_timeout: 100 / TEST_DURATION_DIVIDER,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
             };
             map.insert(

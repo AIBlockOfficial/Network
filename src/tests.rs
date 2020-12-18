@@ -394,17 +394,17 @@ async fn send_block_to_storage_raft_2_nodes() {
 
 // TODO: Fix test: Timeout trigger before all blocks are combined resulting in 2 mining tx.
 //
-// #[tokio::test(basic_scheduler)]
-// async fn send_block_to_storage_raft_3_nodes() {
-//     send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
-// }
+#[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_3_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
+}
 
 // TODO: Fix test: Timeout trigger before all blocks are combined resulting in 11 mining tx.
 //
-// #[tokio::test(basic_scheduler)]
-// async fn send_block_to_storage_raft_20_nodes() {
-//     send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
-// }
+#[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_20_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
+}
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
     test_step_start();
