@@ -79,6 +79,7 @@ async fn full_flow(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
+    let storage_nodes = &network_config.storage_nodes;
     let (_transactions, _t_hash, tx) = valid_transactions(true);
 
     //
@@ -93,8 +94,14 @@ async fn full_flow(network_config: NetworkConfig) {
     //
     // Assert
     //
+    let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
+    let actual1_b_num = actual1[0].as_ref().map(|(_, _, b_num, _)| *b_num);
+    assert_eq!(actual1_b_num, Some(1));
+    assert_eq!(
+        actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
+        node_all(storage_nodes, true)
+    );
 
-    // TODO: Add asserts
     test_step_complete(network).await;
 }
 
