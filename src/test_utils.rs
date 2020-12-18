@@ -252,7 +252,6 @@ impl Network {
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 compute_raft_tick_timeout: 100,
-                compute_block_timeout: 100,
                 compute_transaction_timeout: 50,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
             };

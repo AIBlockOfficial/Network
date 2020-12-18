@@ -30,8 +30,6 @@ pub struct ComputeNodeConfig {
     pub compute_raft: usize,
     /// Timeout for ticking raft
     pub compute_raft_tick_timeout: usize,
-    /// Timeout for generating a new block
-    pub compute_block_timeout: usize,
     /// Index of the current node in compute_nodes
     pub compute_transaction_timeout: usize,
     /// Transaction hash to use to seed utxo
