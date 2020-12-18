@@ -18,6 +18,7 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
@@ -480,8 +481,14 @@ async fn receive_payment_tx_user() {
     node_connect_to(&mut network, "user1", "user2").await;
     node_connect_to(&mut network, "user1", "compute1").await;
     user_send_address_request(&mut network, "user1", "user2").await;
-
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
+
+    //
+    // Assert
+    //
+    let actual = user_trading_peer(&mut network, "user2").await;
+    let expected = network.get_address("user1").await;
+    assert_eq!(actual, expected);
 
     test_step_complete(network).await;
 }
@@ -876,6 +883,11 @@ async fn user_send_address_request(network: &mut Network, from_user: &str, to_us
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
     u.send_address_request(user_node_addr).await.unwrap();
+}
+
+async fn user_trading_peer(network: &mut Network, user: &str) -> Option<SocketAddr> {
+    let u = network.user(user).unwrap().lock().await;
+    u.trading_peer
 }
 
 //
