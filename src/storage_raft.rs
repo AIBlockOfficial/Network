@@ -2,7 +2,6 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftData, RaftMessageWrapper};
-use crate::utils;
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -11,7 +10,7 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::Instant;
+use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
 /// Item serialized into RaftData and process by Raft.
@@ -192,7 +191,7 @@ impl StorageRaft {
     /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) -> Option<()> {
         if let Some(time) = self.propose_block_timeout_at {
-            utils::timeout_at(time).await;
+            time::delay_until(time).await;
             Some(())
         } else {
             None
