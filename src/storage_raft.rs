@@ -45,7 +45,7 @@ pub struct CompleteBlock {
 
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StorageConsensused {
     /// Sufficient majority
     sufficient_majority: usize,
@@ -95,14 +95,13 @@ impl StorageRaft {
             Duration::from_millis(config.storage_block_timeout as u64);
         let propose_block_timeout_at = Some(Instant::now() + propose_block_timeout_duration);
 
-        let consensused = StorageConsensused {
-            sufficient_majority: raft_active.peers_len() / 2 + 1,
-            current_block_num: 0,
-            current_block_complete_timeout_peer_ids: BTreeSet::new(),
-            current_block_completed_parts: BTreeMap::new(),
-        };
-
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
+        let peers_len = raft_active.peers_len();
+
+        let consensused = StorageConsensused {
+            sufficient_majority: peers_len / 2 + 1,
+            ..StorageConsensused::default()
+        };
 
         Self {
             first_raft_peer,

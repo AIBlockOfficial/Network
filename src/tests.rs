@@ -20,18 +20,23 @@ use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
+use tokio::time;
 use tracing::{debug, error_span, info};
 use tracing_futures::Instrument;
+
+const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 const SEED_UTXO: [&str; 1] = ["000000"];
 const SEED_UTXO_BLOCK_HASH: &str =
     "e18f57f62c7bb00811c032b56c8113c83520c1bf9b8428cc96e4c8d5b704d11b";
 const HASH_LEN: usize = 64;
 
-const BLOCK_RECEIVED_AND_STORED: [&str; 2] =
-    ["Block received to be added", "Block complete stored"];
+const BLOCK_RECEIVED: &str = "Block received to be added";
+const BLOCK_STORED: &str = "Block complete stored";
+const BLOCK_RECEIVED_AND_STORED: [&str; 2] = [BLOCK_RECEIVED, BLOCK_STORED];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Cfg {
@@ -306,18 +311,23 @@ async fn create_block(network_config: NetworkConfig) {
 async fn create_block_act(network: &mut Network, cfg: Cfg) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
+    let storage_nodes = &config.storage_nodes;
 
     info!("Test Step Storage signal new block");
     if cfg != Cfg::IgnoreStorage {
-        storage_send_stored_block(network, "storage1").await;
+        storage_all_send_stored_block(network, storage_nodes).await;
     } else {
         let req = ComputeRequest::SendBlockStored(Default::default());
-        compute_inject_next_event(network, "storage1", "compute1", req).await;
+        compute_all_inject_next_event(network, storage_nodes, compute_nodes, req).await;
     }
-    compute_handle_event(network, "compute1", "Received block stored").await;
 
     info!("Test Step Generate Block");
-    node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
+    node_all_handle_event(
+        network,
+        compute_nodes,
+        &["Received block stored", "Block committed"],
+    )
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -434,7 +444,7 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     // Act
     //
     storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
-    storage_receive_block(&mut network, "storage1").await;
+    storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
 
     send_block_to_storage_act(&mut network).await;
 
@@ -585,8 +595,8 @@ async fn compute_all_handle_error(
 }
 
 async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
-    match c.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, c.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -603,10 +613,12 @@ async fn compute_one_handle_event(
     for reason in reason_str {
         compute_handle_event_for_node(&mut compute, true, &reason).await;
     }
+
     debug!("Start wait for completion of other in raft group");
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
+       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);
@@ -674,6 +686,17 @@ async fn compute_committed_tx_pool(
 ) -> BTreeMap<String, Transaction> {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_tx_pool().clone()
+}
+
+async fn compute_all_inject_next_event(
+    network: &mut Network,
+    from_group: &[String],
+    to_compute_group: &[String],
+    request: ComputeRequest,
+) {
+    for (from, to) in from_group.iter().zip(to_compute_group.iter()) {
+        compute_inject_next_event(network, from, to, request.clone()).await;
+    }
 }
 
 async fn compute_inject_next_event(
@@ -828,14 +851,20 @@ async fn storage_send_stored_block(network: &mut Network, storage: &str) {
     s.send_stored_block().await.unwrap();
 }
 
-async fn storage_receive_and_store_block(network: &mut Network, storage_str: &str) {
-    storage_receive_block(network, storage_str).await;
-    storage_store_block(network, storage_str).await;
+async fn storage_all_send_stored_block(network: &mut Network, storage_group: &[String]) {
+    for storage in storage_group {
+        storage_send_stored_block(network, storage).await;
+    }
+}
+
+async fn storage_handle_event(network: &mut Network, storage: &str, reason_str: &str) {
+    let mut s = network.storage(storage).unwrap().lock().await;
+    storage_handle_event_for_node(&mut s, true, reason_str).await;
 }
 
 async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
-    match s.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, s.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -857,19 +886,10 @@ async fn storage_one_handle_event(
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
+       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);
-}
-
-async fn storage_receive_block(network: &mut Network, storage_str: &str) {
-    let mut storage = network.storage(storage_str).unwrap().lock().await;
-    storage_handle_event_for_node(&mut storage, true, "Block received to be added").await;
-}
-
-async fn storage_store_block(network: &mut Network, storage_str: &str) {
-    let mut storage = network.storage(storage_str).unwrap().lock().await;
-    storage_handle_event_for_node(&mut storage, true, "Block complete stored").await;
 }
 
 //
@@ -880,8 +900,8 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     let mut u = network.user(user).unwrap().lock().await;
     let success_val = true;
 
-    match u.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?}", other),
     }
