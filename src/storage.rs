@@ -70,7 +70,7 @@ pub struct StorageNode {
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     db: SimpleDb,
-    last_block_stored: Option<(CompleteBlock, BlockStoredInfo)>,
+    last_block_stored: Option<BlockStoredInfo>,
 }
 
 impl StorageNode {
@@ -266,17 +266,24 @@ impl StorageNode {
                 .collect(),
         };
 
-        self.last_block_stored = Some((complete, stored_info));
+        self.last_block_stored = Some(stored_info);
     }
 
-    pub fn get_last_block_stored(&self) -> &Option<(CompleteBlock, BlockStoredInfo)> {
+    pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         &self.last_block_stored
+    }
+
+    pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+        self.db.get(key).unwrap_or_else(|e| {
+            warn!("get_stored_value error: {}", e);
+            None
+        })
     }
 
     /// Sends the latest block to storage
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = self.last_block_stored.as_ref().unwrap().1.clone();
+        let block = self.last_block_stored.as_ref().unwrap().clone();
 
         self.node
             .send(self.compute_addr, ComputeRequest::SendBlockStored(block))

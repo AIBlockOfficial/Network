@@ -8,7 +8,7 @@ use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
-use bincode::serialize;
+use bincode::{deserialize, serialize};
 use futures::future::join_all;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
@@ -95,7 +95,7 @@ async fn full_flow(network_config: NetworkConfig) {
     // Assert
     //
     let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
-    let actual1_b_num = actual1[0].as_ref().map(|(_, _, b_num, _)| *b_num);
+    let actual1_b_num = actual1[0].1.as_ref().map(|(_, b_num, _)| *b_num);
     assert_eq!(actual1_b_num, Some(1));
     assert_eq!(
         actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
@@ -152,12 +152,10 @@ async fn first_block(network_config: NetworkConfig) {
     let actual0 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
         actual0[0],
-        Some((
-            expected0.1,
-            expected0.0,
-            0, /*b_num*/
-            0, /*mining txs*/
-        ))
+        (
+            Some(expected0.1),
+            Some((expected0.0, 0 /*b_num*/, 0 /*mining txs*/,))
+        )
     );
     assert_eq!(
         actual0.iter().map(|v| *v == actual0[0]).collect::<Vec<_>>(),
@@ -446,12 +444,14 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
         actual1[0],
-        Some((
-            expected1.1,
-            expected1.0,
-            1,           /*b_num*/
-            compute_len, /*mining txs*/
-        ))
+        (
+            Some(expected1.1),
+            Some((
+                expected1.0,
+                1,           /*b_num*/
+                compute_len, /*mining txs*/
+            ))
+        )
     );
     assert_eq!(
         actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
@@ -785,22 +785,36 @@ async fn storage_inject_send_block_to_storage(
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
-) -> Option<(String, String, u64, usize)> {
+) -> (Option<String>, Option<(String, u64, usize)>) {
     let s = network.storage(storage).unwrap().lock().await;
-    s.get_last_block_stored().clone().map(|(complete, info)| {
+    if let Some(info) = s.get_last_block_stored() {
+        let complete = s
+            .get_stored_value(&info.block_hash)
+            .map(|v| deserialize::<CompleteBlock>(&v))
+            .map(|v| {
+                v.map_or_else(
+                    |e| format!("error: {:?}", e),
+                    |complete| format!("{:?}", complete),
+                )
+            });
+
         (
-            format!("{:?}", complete),
-            info.block_hash.clone(),
-            info.block_num,
-            info.mining_transactions.len(),
+            complete,
+            Some((
+                info.block_hash.clone(),
+                info.block_num,
+                info.mining_transactions.len(),
+            )),
         )
-    })
+    } else {
+        (None, None)
+    }
 }
 
 async fn storage_all_get_last_block_stored(
     network: &mut Network,
     storage_group: &[String],
-) -> Vec<Option<(String, String, u64, usize)>> {
+) -> Vec<(Option<String>, Option<(String, u64, usize)>)> {
     let mut result = Vec::new();
     for name in storage_group {
         let r = storage_get_last_block_stored(network, name).await;
