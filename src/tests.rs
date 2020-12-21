@@ -79,11 +79,24 @@ async fn full_flow_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn full_flow_raft_majority_3_nodes() {
+    full_flow_common(
+        complete_network_config_with_n_compute_raft(10540, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_20_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10540, 20)).await;
+    full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
 }
 
 async fn full_flow(network_config: NetworkConfig) {
+    full_flow_common(network_config, CfgNum::All).await;
+}
+
+async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
@@ -96,11 +109,11 @@ async fn full_flow(network_config: NetworkConfig) {
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, cfg_num).await;
     add_transactions_act(&mut network, &tx).await;
-    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
     proof_of_work_act(&mut network).await;
-    send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
 
     //
     // Assert
@@ -137,11 +150,24 @@ async fn first_block_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn first_block_raft_majority_3_nodes() {
+    first_block_common(
+        complete_network_config_with_n_compute_raft(10040, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_20_nodes() {
-    first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
+    first_block(complete_network_config_with_n_compute_raft(10050, 20)).await;
 }
 
 async fn first_block(network_config: NetworkConfig) {
+    first_block_common(network_config, CfgNum::All).await;
+}
+
+async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
@@ -155,7 +181,7 @@ async fn first_block(network_config: NetworkConfig) {
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, cfg_num).await;
 
     //
     // Assert
@@ -176,17 +202,20 @@ async fn first_block(network_config: NetworkConfig) {
     test_step_complete(network).await;
 }
 
-async fn first_block_act(network: &mut Network, cfg: Cfg) {
+async fn first_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step First Block");
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
     if cfg != Cfg::IgnoreStorage {
         compute_all_connect_to_storage(network, compute_nodes).await;
-        compute_all_send_first_block_to_storage(network, compute_nodes).await;
-        node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+        compute_all_send_first_block_to_storage(network, msg_c_nodes).await;
+        storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+        node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
     }
 }
 
@@ -224,7 +253,7 @@ async fn add_transactions(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let (transactions, _t_hash, tx) = valid_transactions(true);
-    first_block_act(&mut network, Cfg::IgnoreStorage).await;
+    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
     // Act
@@ -301,7 +330,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let compute_nodes = &network_config.compute_nodes;
     let (_transactions, t_hash, tx) = valid_transactions(true);
 
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
     add_transactions_act(&mut network, &tx).await;
 
     //
@@ -331,17 +360,17 @@ async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
-    let msg_s_nodes = node_select(storage_nodes, cfg_num);
-    let msg_c_nodes = node_select(compute_nodes, cfg_num);
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step Storage signal new block");
     if cfg == Cfg::IgnoreStorage {
         let req = ComputeRequest::SendBlockStored(Default::default());
-        compute_all_inject_next_event(network, &msg_s_nodes, &msg_c_nodes, req).await;
+        compute_all_inject_next_event(network, msg_s_nodes, msg_c_nodes, req).await;
     } else {
-        storage_all_send_stored_block(network, &msg_s_nodes).await;
+        storage_all_send_stored_block(network, msg_s_nodes).await;
     }
-    compute_all_handle_event(network, &msg_c_nodes, "Received block stored").await;
+    compute_all_handle_event(network, msg_c_nodes, "Received block stored").await;
 
     info!("Test Step Generate Block");
     node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
@@ -375,7 +404,7 @@ async fn proof_of_work(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    first_block_act(&mut network, Cfg::IgnoreStorage).await;
+    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -431,11 +460,24 @@ async fn send_block_to_storage_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_majority_3_nodes() {
+    send_block_to_storage_common(
+        complete_network_config_with_n_compute_raft(10340, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_raft_20_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 20)).await;
 }
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
+    send_block_to_storage_common(network_config, CfgNum::All).await;
+}
+
+async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
@@ -444,14 +486,14 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
-    let compute_len = compute_nodes.len();
+    let c_mined = &node_select(compute_nodes, cfg_num);
 
     let (transactions, _t_hash, _tx) = valid_transactions(true);
-    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, compute_len);
+    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, c_mined.len());
     let (_expected3, wrong_block3) = complete_block(3, Some("0"), BTreeMap::new(), 1);
 
-    first_block_act(&mut network, Cfg::All).await;
-    compute_all_set_mined_block(&mut network, compute_nodes, &block_info1).await;
+    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    compute_all_set_mined_block(&mut network, c_mined, &block_info1).await;
 
     //
     // Act
@@ -459,7 +501,7 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
     storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
 
-    send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
 
     //
     // Assert
@@ -471,8 +513,8 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
             Some(expected1.1),
             Some((
                 expected1.0,
-                1,           /*b_num*/
-                compute_len, /*mining txs*/
+                1,             /*b_num*/
+                c_mined.len(), /*mining txs*/
             ))
         )
     );
@@ -484,14 +526,17 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     test_step_complete(network).await;
 }
 
-async fn send_block_to_storage_act(network: &mut Network) {
+async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step Compute Send block to Storage");
-    compute_all_send_block_to_storage(network, compute_nodes).await;
-    node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+    compute_all_send_block_to_storage(network, msg_c_nodes).await;
+    storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+    node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -883,6 +928,16 @@ async fn storage_all_send_stored_block(network: &mut Network, storage_group: &[S
 async fn storage_handle_event(network: &mut Network, storage: &str, reason_str: &str) {
     let mut s = network.storage(storage).unwrap().lock().await;
     storage_handle_event_for_node(&mut s, true, reason_str).await;
+}
+
+async fn storage_all_handle_event(
+    network: &mut Network,
+    storage_group: &[String],
+    reason_str: &str,
+) {
+    for storage in storage_group {
+        storage_handle_event(network, storage, reason_str).await;
+    }
 }
 
 async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
