@@ -1,9 +1,11 @@
 use crate::comms_handler::{CommsError, Node};
-use crate::interfaces::ProofOfWork;
+use crate::constants::MINING_DIFFICULTY;
+use crate::interfaces::{ProofOfWork, ProofOfWorkBlock};
 use crate::wallet::{
     construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
     AddressStore, TransactionStore,
 };
+use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
 };
@@ -11,6 +13,8 @@ use naom::primitives::{
     asset::Asset,
     transaction::{Transaction, TxConstructor},
 };
+use sha3::{Digest, Sha3_256};
+use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
@@ -142,15 +146,41 @@ pub fn command_input_to_socket(command_input: String) -> SocketAddr {
 }
 
 /// Computes a key that will be shared from a vector of PoWs
-pub fn get_partition_entry_key(p_list: Vec<ProofOfWork>) -> Vec<u8> {
-    let mut key = Vec::new();
-    for entry in p_list {
-        let mut next_entry = entry.address.as_bytes().to_vec();
-        next_entry.append(&mut entry.nonce.clone());
-        key.append(&mut next_entry);
-    }
+pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
+    let key_sha_seed: Vec<u8> = p_list
+        .iter()
+        .flat_map(|e| e.address.as_bytes().iter().chain(&e.nonce))
+        .copied()
+        .collect();
 
-    key
+    use std::convert::TryInto;
+    let hashed_key = Sha3_256::digest(&key_sha_seed).to_vec();
+    let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
+    Key(key_slice)
+}
+
+pub fn format_parition_pow_address(addr: SocketAddr, rand_num: &[u8]) -> String {
+    format!("{}-{}", addr, hex::encode(rand_num))
+}
+
+pub fn validate_pow_for_address(pow: &ProofOfWork) -> bool {
+    let mut pow_body = pow.address.as_bytes().to_vec();
+    pow_body.extend(&pow.nonce);
+
+    validate_pow(&pow_body)
+}
+
+/// I'm lazy, so just making another verifier for now
+pub fn validate_pow_block(pow: &ProofOfWorkBlock) -> bool {
+    let mut pow_body = serialize(&pow.block).unwrap();
+    pow_body.extend(&pow.nonce);
+
+    validate_pow(&pow_body)
+}
+
+fn validate_pow(pow: &[u8]) -> bool {
+    let pow_hash = Sha3_256::digest(pow).to_vec();
+    pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
 }
 
 pub fn create_valid_transaction(

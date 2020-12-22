@@ -1,13 +1,16 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{BLOCK_SIZE, MINING_DIFFICULTY, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
+use crate::constants::{BLOCK_SIZE, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
-use crate::utils::{get_partition_entry_key, loop_connnect_to_peers_async};
+use crate::utils::{
+    format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
+    validate_pow_block, validate_pow_for_address,
+};
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -16,12 +19,10 @@ use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
 use serde::Serialize;
-use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::{gen_key, Key};
 use std::collections::BTreeMap;
 use std::{
     collections::HashMap,
-    convert::TryInto,
     error::Error,
     fmt,
     future::Future,
@@ -298,26 +299,6 @@ impl ComputeNode {
         block_tx: BTreeMap<String, Transaction>,
     ) {
         self.node_raft.set_committed_mining_block(block, block_tx)
-    }
-
-    /// Validates PoW for a full block
-    ///
-    /// ### Arguments
-    ///
-    /// * `pow` - Proof of work, including the block
-    pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
-        let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
-        pow_body.append(&mut pow.nonce.clone());
-
-        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
-
-        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
-            if entry != 0 {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Generates a garbage file for use in network testing. Will save the file
@@ -624,42 +605,39 @@ impl ComputeNode {
     /// Receives the light POW for partition inclusion
     fn receive_partition_entry(
         &mut self,
-        _peer: SocketAddr,
+        peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
-        let mut pow_mut = partition_entry.clone();
+        if self.partition_list.len() >= PARTITION_LIMIT {
+            return Response {
+                success: false,
+                reason: "Partition list is already full",
+            };
+        }
 
-        if self.partition_list.len() < PARTITION_LIMIT && Self::validate_pow(&mut pow_mut) {
-            self.partition_list.push(partition_entry);
+        let expected_address = format_parition_pow_address(peer, &self.current_random_num);
+        if expected_address != partition_entry.address
+            || !validate_pow_for_address(&partition_entry)
+        {
+            return Response {
+                success: false,
+                reason: "PoW received is invalid",
+            };
+        }
 
-            if self.partition_list.len() == PARTITION_LIMIT {
-                let key = get_partition_entry_key(self.partition_list.clone());
-                let hashed_key = Sha3_256::digest(&key).to_vec();
-                let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
-                self.partition_key = Key(key_slice);
-
-                return Response {
-                    success: true,
-                    reason: "Partition list is full",
-                };
-            }
-
+        self.partition_list.push(partition_entry);
+        if self.partition_list.len() < PARTITION_LIMIT {
             return Response {
                 success: true,
                 reason: "Partition PoW received successfully",
             };
         }
 
-        if self.partition_list.len() >= PARTITION_LIMIT {
-            return Response {
-                success: false,
-                reason: "Partition list is full",
-            };
-        }
+        self.partition_key = get_partition_entry_key(&self.partition_list);
 
         Response {
-            success: false,
-            reason: "PoW received is invalid",
+            success: true,
+            reason: "Partition list is full",
         }
     }
 
@@ -739,21 +717,6 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
-    fn validate_pow(pow: &mut ProofOfWork) -> bool {
-        let mut pow_body = pow.address.as_bytes().to_vec();
-        pow_body.append(&mut pow.nonce.clone());
-
-        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
-
-        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
-            if entry != 0 {
-                return false;
-            }
-        }
-
-        true
-    }
-
     fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
         if let Some(entry) = self.unicorn_list.get_mut(&address) {
             if entry.is_valid(commit.clone()) {
@@ -783,7 +746,6 @@ impl ComputeInterface for ComputeNode {
         coinbase: Transaction,
     ) -> Response {
         info!(?address, "Received PoW");
-        let mut pow_block = pow.clone();
         let coinbase_hash = construct_tx_hash(&coinbase);
 
         if self.node_raft.get_mining_block().is_none() {
@@ -801,7 +763,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !Self::validate_pow_block(&mut pow_block) {
+        if !validate_pow_block(&pow) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
