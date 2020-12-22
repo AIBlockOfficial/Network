@@ -803,7 +803,6 @@ mod test {
             storage_nodes: vec![],
             user_nodes: vec![],
             compute_raft_tick_timeout: 10,
-            compute_block_timeout: 100,
             compute_transaction_timeout: 50,
             compute_seed_utxo: seed_utxo.iter().map(|v| v.to_string()).collect(),
         };

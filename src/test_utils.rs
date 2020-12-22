@@ -17,9 +17,15 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::error_span;
 use tracing::info;
-use tracing::info_span;
 use tracing_futures::Instrument;
+
+#[cfg(not(debug_assertions))] // Release
+const TEST_DURATION_DIVIDER: usize = 10;
+
+#[cfg(debug_assertions)] // Debug
+const TEST_DURATION_DIVIDER: usize = 1;
 
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
 pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
@@ -43,6 +49,7 @@ pub struct NetworkConfig {
     pub initial_port: u16,
     pub compute_raft: bool,
     pub storage_raft: bool,
+    pub in_memory_db: bool,
     pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
@@ -90,7 +97,7 @@ impl Network {
 
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
-                let peer_span = info_span!("compute_node", ?name, addr = ?node.address());
+                let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
                 self.raft_loop_handles.push(tokio::spawn(
                     async move {
@@ -115,7 +122,7 @@ impl Network {
 
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
-                let peer_span = info_span!("storage_node", ?name, addr = ?node.address());
+                let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
                 let raft_loop = node.raft_loop();
                 self.raft_loop_handles.push(tokio::spawn(
                     async move {
@@ -212,15 +219,20 @@ impl Network {
         for (idx, name) in config.storage_nodes.iter().enumerate() {
             let storage_raft = if config.storage_raft { 1 } else { 0 };
             let port = info.storage_nodes[idx].address.port();
+            let storage_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(port as usize)
+            };
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
-                storage_db_mode: DbMode::Test(port as usize),
+                storage_db_mode,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 storage_raft,
-                storage_raft_tick_timeout: 10,
-                storage_block_timeout: 100,
+                storage_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
+                storage_block_timeout: 1000 / TEST_DURATION_DIVIDER,
             };
             map.insert(
                 name.clone(),
@@ -245,9 +257,8 @@ impl Network {
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
-                compute_raft_tick_timeout: 10,
-                compute_block_timeout: 100,
-                compute_transaction_timeout: 50,
+                compute_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
+                compute_transaction_timeout: 100 / TEST_DURATION_DIVIDER,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
             };
             map.insert(
@@ -323,16 +334,16 @@ impl Network {
 
     pub fn get_position(&mut self, name: &str) -> Option<usize> {
         let is_name = |n: &String| n.as_str() == name;
-        if let Some(miner) = self.miner_nodes.keys().position(is_name) {
+        if let Some(miner) = self.config.miner_nodes.iter().position(is_name) {
             return Some(miner);
         }
-        if let Some(compute) = self.compute_nodes.keys().position(is_name) {
+        if let Some(compute) = self.config.compute_nodes.iter().position(is_name) {
             return Some(compute);
         }
-        if let Some(storage) = self.storage_nodes.keys().position(is_name) {
+        if let Some(storage) = self.config.storage_nodes.iter().position(is_name) {
             return Some(storage);
         }
-        if let Some(user) = self.user_nodes.keys().position(is_name) {
+        if let Some(user) = self.config.user_nodes.iter().position(is_name) {
             return Some(user);
         }
         None

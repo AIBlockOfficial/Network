@@ -1,15 +1,15 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
+use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CompleteBlock, StorageRaft};
-use crate::utils::{get_db_options, loop_connnect_to_peers_async};
+use crate::utils::loop_connnect_to_peers_async;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use rocksdb::DB;
 use serde::Serialize;
 use sha3::Digest;
 use sha3::Sha3_256;
@@ -69,7 +69,7 @@ pub struct StorageNode {
     node_raft: StorageRaft,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
-    db_mode: DbMode,
+    db: SimpleDb,
     last_block_stored: Option<(CompleteBlock, BlockStoredInfo)>,
 }
 
@@ -91,9 +91,21 @@ impl StorageNode {
             node_raft: StorageRaft::new(&config),
             compute_addr,
             whitelisted: HashMap::new(),
-            db_mode: config.storage_db_mode,
+            db: Self::new_db(config.storage_db_mode),
             last_block_stored: None,
         })
+    }
+
+    fn new_db(db_mode: DbMode) -> SimpleDb {
+        let save_path = match db_mode {
+            DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
+            DbMode::Test(idx) => format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, idx),
+            DbMode::InMemory => {
+                return SimpleDb::new_in_memory();
+            }
+        };
+
+        SimpleDb::new_file(save_path).unwrap()
     }
 
     /// Returns the compute node's public endpoint.
@@ -236,20 +248,12 @@ impl StorageNode {
         let hash_input = Bytes::from(serialize(&complete).unwrap());
         let hash_digest = Sha3_256::digest(&hash_input);
         let hash_key = hex::encode(hash_digest);
-        let save_path = match self.db_mode {
-            DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
-            DbMode::Test(idx) => format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, idx),
-            _ => panic!("unimplemented db mode"),
-        };
-
-        let opts = get_db_options();
-        let db = DB::open(&opts, save_path.clone()).unwrap();
-        db.put(hash_key.clone(), hash_input).unwrap();
+        self.db.put(hash_key.clone(), hash_input).unwrap();
 
         // Save each transaction
         for (tx_hash, tx_value) in &complete.common.block_txs {
             let tx_input = Bytes::from(serialize(tx_value).unwrap());
-            db.put(tx_hash, tx_input).unwrap();
+            self.db.put(tx_hash, tx_input).unwrap();
         }
 
         let stored_info = BlockStoredInfo {
@@ -263,8 +267,6 @@ impl StorageNode {
         };
 
         self.last_block_stored = Some((complete, stored_info));
-
-        let _ = DB::destroy(&opts, save_path);
     }
 
     pub fn get_last_block_stored(&self) -> &Option<(CompleteBlock, BlockStoredInfo)> {

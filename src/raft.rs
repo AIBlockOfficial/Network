@@ -1,17 +1,18 @@
+use crate::utils::MpscTracingSender;
 use raft::prelude::*;
 use raft::storage::MemStorage;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{timeout_at, Instant};
-use tracing::trace;
+use tracing::{info, trace};
 
 pub type RaftData = Vec<u8>;
-pub type CommitSender = mpsc::Sender<Vec<RaftData>>;
+pub type CommitSender = MpscTracingSender<Vec<RaftData>>;
 pub type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
 pub type RaftCmdSender = mpsc::UnboundedSender<RaftCmd>;
 pub type RaftCmdReceiver = mpsc::UnboundedReceiver<RaftCmd>;
-pub type RaftMsgSender = mpsc::Sender<Message>;
+pub type RaftMsgSender = MpscTracingSender<Message>;
 pub type RaftMsgReceiver = mpsc::Receiver<Message>;
 
 /// Channels needed to interact with the running raft instance.
@@ -79,6 +80,14 @@ pub struct RaftNode {
     tick_timeout_duration: Duration,
     /// Tick timeout expiration time.
     tick_timeout_at: Instant,
+    /// Committed entries/group count.
+    committed_entries_and_groups_count: (usize, usize),
+    /// Outgoing messages/group count.
+    outgoing_msgs_and_groups_count: (usize, usize),
+    /// Incomming messages count.
+    incoming_msgs_count: usize,
+    /// Total tick count.
+    total_tick_count: usize,
 }
 
 impl RaftNode {
@@ -87,14 +96,24 @@ impl RaftNode {
         let storage = MemStorage::new();
         let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
 
+        let mut node = RawNode::new(&raft_config.cfg, storage, peers).unwrap();
+        if raft_config.cfg.id == 1 {
+            // Make first peer start election immediatly on start up to avoid unecessary wait.
+            node.raft.election_elapsed = node.raft.get_randomized_election_timeout();
+        }
+
         Self {
-            node: RawNode::new(&raft_config.cfg, storage, peers).unwrap(),
+            node,
             propose_data_backlog: Vec::new(),
             cmd_rx: raft_config.cmd_rx,
             committed_tx: raft_config.committed_tx,
             msg_out_tx: raft_config.msg_out_tx,
             tick_timeout_duration: raft_config.tick_timeout_duration,
             tick_timeout_at,
+            committed_entries_and_groups_count: (0, 0),
+            outgoing_msgs_and_groups_count: (0, 0),
+            incoming_msgs_count: 0,
+            total_tick_count: 0,
         }
     }
 
@@ -111,8 +130,8 @@ impl RaftNode {
             RaftConfig {
                 cfg: node_cfg,
                 cmd_rx,
-                committed_tx,
-                msg_out_tx,
+                committed_tx: committed_tx.into(),
+                msg_out_tx: msg_out_tx.into(),
                 tick_timeout_duration,
             },
             RaftNodeChannels {
@@ -144,15 +163,27 @@ impl RaftNode {
             }
             Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => {
                 trace!("next_event receive message({}, {:?})", self.node.raft.id, m);
+                self.incoming_msgs_count += 1;
                 self.node.step(m).unwrap()
             }
             Err(_) => {
                 // Timeout
                 self.tick_timeout_at = Instant::now() + self.tick_timeout_duration;
+                self.total_tick_count += 1;
                 self.node.tick();
             }
             Ok(Some(RaftCmd::Close)) | Ok(None) => {
                 // Disconnected
+                info!(
+                    peer_id = self.node.raft.id,
+                    leader_id = self.node.raft.leader_id,
+                    term = self.node.raft.term,
+                    ?self.total_tick_count,
+                    ?self.incoming_msgs_count,
+                    ?self.committed_entries_and_groups_count,
+                    ?self.outgoing_msgs_and_groups_count,
+                    "Closing Raft: Summary"
+                );
                 return None;
             }
         }
@@ -189,9 +220,11 @@ impl RaftNode {
     }
 
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
+        self.outgoing_msgs_and_groups_count.1 += if ready.messages.is_empty() { 0 } else { 1 };
         for msg in ready.messages.drain(..) {
             trace!("send_messages_to_peers({}, {:?})", self.node.raft.id, msg);
-            let _ok_or_closed = self.msg_out_tx.send(msg).await;
+            self.outgoing_msgs_and_groups_count.0 += 1;
+            let _ok_or_closed = self.msg_out_tx.send(msg, "msg_out").await;
         }
     }
 
@@ -224,7 +257,9 @@ impl RaftNode {
                 .collect();
 
             if !committed.is_empty() {
-                let _ok_or_closed = self.committed_tx.send(committed).await;
+                self.committed_entries_and_groups_count.1 += 1;
+                self.committed_entries_and_groups_count.0 += committed.len();
+                let _ok_or_closed = self.committed_tx.send(committed, "committed").await;
             }
         }
     }

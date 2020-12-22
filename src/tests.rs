@@ -39,33 +39,40 @@ enum Cfg {
     IgnoreCompute,
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn full_flow_no_raft() {
     full_flow(complete_network_config(10500)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
+async fn full_flow_no_raft_real_db() {
+    let mut cfg = complete_network_config(10505);
+    cfg.in_memory_db = false;
+    full_flow(cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_1_node() {
     full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_2_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10520, 2)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_3_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10530, 3)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_20_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10540, 20)).await;
 }
 
 async fn full_flow(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -74,42 +81,49 @@ async fn full_flow(network_config: NetworkConfig) {
     let (_transactions, _t_hash, tx) = valid_transactions(true);
 
     //
-    // Act/Assert
+    // Act
     //
     first_block_act(&mut network, Cfg::All).await;
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All).await;
     proof_of_work_act(&mut network).await;
-    //send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network).await;
+
+    //
+    // Assert
+    //
+
+    // TODO: Add asserts
+    test_step_complete(network).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn first_block_no_raft() {
     first_block(complete_network_config(10000)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_1_node() {
     first_block(complete_network_config_with_n_compute_raft(10010, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_2_nodes() {
     first_block(complete_network_config_with_n_compute_raft(10020, 2)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_3_nodes() {
     first_block(complete_network_config_with_n_compute_raft(10030, 3)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_20_nodes() {
     first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
 }
 
 async fn first_block(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -142,8 +156,7 @@ async fn first_block(network_config: NetworkConfig) {
         node_all(storage_nodes, true)
     );
 
-    network.close_raft_loops_and_drop().await;
-    info!("Test Step complete")
+    test_step_complete(network).await;
 }
 
 async fn first_block_act(network: &mut Network, cfg: Cfg) {
@@ -160,33 +173,33 @@ async fn first_block_act(network: &mut Network, cfg: Cfg) {
     }
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_no_raft() {
     add_transactions(complete_network_config(10600)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_raft_1_node() {
     add_transactions(complete_network_config_with_n_compute_raft(10610, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_raft_2_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10620, 2)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_raft_3_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10630, 3)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_raft_20_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10640, 20)).await;
 }
 
 async fn add_transactions(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -209,8 +222,7 @@ async fn add_transactions(network_config: NetworkConfig) {
         node_all(compute_nodes, transactions)
     );
 
-    network.close_raft_loops_and_drop().await;
-    info!("Test Step complete")
+    test_step_complete(network).await;
 }
 
 async fn add_transactions_act(network: &mut Network, tx: &Transaction) {
@@ -224,33 +236,33 @@ async fn add_transactions_act(network: &mut Network, tx: &Transaction) {
     node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn create_block_no_raft() {
     create_block(complete_network_config(10100)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn create_block_raft_1_node() {
     create_block(complete_network_config_with_n_compute_raft(10110, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn create_block_raft_2_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10120, 2)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn create_block_raft_3_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10130, 3)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn create_block_raft_20_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10140, 20)).await;
 }
 
 async fn create_block(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -282,8 +294,7 @@ async fn create_block(network_config: NetworkConfig) {
         node_all(compute_nodes, Some(vec![t_hash]))
     );
 
-    network.close_raft_loops_and_drop().await;
-    info!("Test Step complete")
+    test_step_complete(network).await;
 }
 
 async fn create_block_act(network: &mut Network, cfg: Cfg) {
@@ -303,28 +314,28 @@ async fn create_block_act(network: &mut Network, cfg: Cfg) {
     node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn proof_of_work_no_raft() {
     proof_of_work(complete_network_config(10200)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn proof_of_work_raft_1_node() {
     proof_of_work(complete_network_config_with_n_compute_raft(10210, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn proof_of_work_raft_2_nodes() {
     proof_of_work(complete_network_config_with_n_compute_raft(10220, 2)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn proof_of_work_raft_3_nodes() {
     proof_of_work(complete_network_config_with_n_compute_raft(10230, 3)).await;
 }
 
 async fn proof_of_work(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -351,6 +362,8 @@ async fn proof_of_work(network_config: NetworkConfig) {
     //
     assert_eq!(block_before, node_all(compute_nodes, None));
     assert_eq!(block_after, node_all(compute_nodes, Some(1)));
+
+    test_step_complete(network).await;
 }
 
 async fn proof_of_work_act(network: &mut Network) {
@@ -364,37 +377,37 @@ async fn proof_of_work_act(network: &mut Network) {
     compute_all_handle_event(network, compute_nodes, "Received PoW successfully").await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_no_raft() {
     send_block_to_storage(complete_network_config(10300)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_raft_1_node() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10310, 1)).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_raft_2_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10320, 2)).await;
 }
 
 // TODO: Fix test: Timeout trigger before all blocks are combined resulting in 2 mining tx.
 //
-// #[tokio::test(threaded_scheduler)]
-// async fn send_block_to_storage_raft_3_nodes() {
-//     send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
-// }
+#[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_3_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
+}
 
 // TODO: Fix test: Timeout trigger before all blocks are combined resulting in 11 mining tx.
 //
-// #[tokio::test(threaded_scheduler)]
-// async fn send_block_to_storage_raft_20_nodes() {
-//     send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
-// }
+#[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_20_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
+}
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -437,8 +450,7 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
         node_all(storage_nodes, true)
     );
 
-    network.close_raft_loops_and_drop().await;
-    info!("Test Step complete")
+    test_step_complete(network).await;
 }
 
 async fn send_block_to_storage_act(network: &mut Network) {
@@ -451,9 +463,9 @@ async fn send_block_to_storage_act(network: &mut Network) {
     node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn receive_payment_tx_user() {
-    let _ = tracing_subscriber::fmt::try_init();
+    test_step_start();
 
     //
     // Arrange
@@ -470,6 +482,8 @@ async fn receive_payment_tx_user() {
     user_send_address_request(&mut network, "user1", "user2").await;
 
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
+
+    test_step_complete(network).await;
 }
 
 //
@@ -893,6 +907,16 @@ async fn miner_all_send_pow(
 // Test helpers
 //
 
+fn test_step_start() {
+    let _ = tracing_subscriber::fmt::try_init();
+    info!("Test Step start");
+}
+
+async fn test_step_complete(network: Network) {
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
+}
+
 fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Transaction) {
     let intial_t_hash = SEED_UTXO[0];
     let receiver_addr = "000001";
@@ -969,6 +993,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         initial_port,
         compute_raft: false,
         storage_raft: false,
+        in_memory_db: true,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],

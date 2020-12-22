@@ -1,8 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
+use crate::db_utils::get_db_options;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::utils::get_db_options;
 use crate::wallet::{
     construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
     save_transactions_to_wallet, AddressStore, FundStore, TransactionStore,

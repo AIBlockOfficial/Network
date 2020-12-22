@@ -39,7 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings
             .set_default("compute_raft_tick_timeout", 10)
             .unwrap();
-        settings.set_default("compute_block_timeout", 1000).unwrap();
         settings
             .set_default("compute_transaction_timeout", 100)
             .unwrap();

@@ -1,5 +1,5 @@
 use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
-use crate::utils::get_db_options;
+use crate::db_utils::get_db_options;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use rocksdb::DB;

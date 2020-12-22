@@ -11,19 +11,62 @@ use naom::primitives::{
     asset::Asset,
     transaction::{Transaction, TxConstructor},
 };
-use rocksdb::{DBCompressionType, Options};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
-use tracing::trace;
+use tracing::{trace, warn};
 
 /// Blocks & waits for timeout.
 pub async fn timeout_at(timeout: Instant) {
     if let Ok(()) = time::timeout_at(timeout, future::pending::<()>()).await {
         panic!("pending completed");
+    }
+}
+
+pub struct MpscTracingSender<T> {
+    sender: mpsc::Sender<T>,
+}
+
+impl<T> Clone for MpscTracingSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+        }
+    }
+}
+
+impl<T> From<mpsc::Sender<T>> for MpscTracingSender<T> {
+    fn from(sender: mpsc::Sender<T>) -> Self {
+        Self { sender }
+    }
+}
+
+impl<T> MpscTracingSender<T> {
+    pub async fn send(&mut self, value: T, tag: &str) -> Result<(), mpsc::error::SendError<T>> {
+        use mpsc::error::SendError;
+        use mpsc::error::TrySendError;
+
+        match self.sender.try_send(value) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(value)) => {
+                trace!("send_tracing({}) full: waiting", tag);
+                let start = Instant::now();
+                let result = self.sender.send(value).await;
+                let elapsed = Instant::now() - start;
+                if elapsed < Duration::from_millis(2) {
+                    trace!("send_tracing({}) done: waited({:?})", tag, elapsed);
+                } else {
+                    warn!("send_tracing({}) done: waited({:?})", tag, elapsed);
+                }
+                result
+            }
+            Err(TrySendError::Closed(value)) => Err(SendError(value)),
+        }
     }
 }
 
@@ -39,15 +82,6 @@ pub async fn loop_connnect_to_peers_async<E: From<CommsError>>(
         res?;
     }
     Ok(())
-}
-
-/// Creates a set of DB opening options for rocksDB instances
-pub fn get_db_options() -> Options {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.set_compression_type(DBCompressionType::Snappy);
-
-    opts
 }
 
 /// Creates a "fake" transaction to save to the local wallet

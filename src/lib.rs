@@ -9,6 +9,7 @@ mod compute;
 mod compute_raft;
 pub mod configurations;
 mod constants;
+mod db_utils;
 mod interfaces;
 pub mod key_creation;
 mod miner;
@@ -26,13 +27,13 @@ mod wallet;
 
 pub use compute::ComputeNode;
 pub use constants::{PARTITION_LIMIT, WALLET_PATH};
+pub use db_utils::get_db_options;
 pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface, UseInterface};
 pub use miner::MinerNode;
 pub use storage::StorageNode;
 pub use user::UserNode;
 pub use utils::{
     command_input_to_socket, create_and_save_fake_to_wallet, create_valid_transaction,
-    get_db_options,
 };
 
 #[cfg(not(features = "mock"))]
