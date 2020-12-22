@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match response {
                     Ok(Response {
                         success: true,
-                        reason: "Partition request received successfully",
+                        reason: "Received partition request successfully",
                     }) => {
                         let _flood = node.flood_rand_num_to_requesters().await.unwrap();
                     }

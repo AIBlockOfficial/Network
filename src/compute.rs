@@ -617,7 +617,7 @@ impl ComputeNode {
 
         Response {
             success: true,
-            reason: "Partition request received successfully",
+            reason: "Received partition request successfully",
         }
     }
 

@@ -420,7 +420,7 @@ async fn proof_of_work(network_config: NetworkConfig) {
 
     proof_of_work_act(&mut network).await;
 
-    miner_all_send_pow(&mut network, "miner1", compute_nodes, &Block::new()).await;
+    miner_all_send_pow_for_current(&mut network, "miner1", compute_nodes).await;
     compute_all_handle_error(&mut network, compute_nodes, "Not mining given block").await;
 
     let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
@@ -438,11 +438,26 @@ async fn proof_of_work_act(network: &mut Network) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
 
-    info!("Test Step Miner Compute and Send Proof of work");
-    let block = Block::new();
+    info!("Test Step Miner one connect to all compute nodes");
     node_connect_to_all(network, "miner1", compute_nodes).await;
-    miner_all_send_pow(network, "miner1", compute_nodes, &block).await;
-    compute_all_handle_event(network, compute_nodes, "Received PoW successfully").await;
+
+    info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
+    for compute in compute_nodes {
+        miner_send_partition_request(network, "miner1", compute).await;
+        compute_handle_event(network, compute, "Received partition request successfully").await;
+
+        compute_flood_rand_num_to_requesters(network, compute).await;
+        miner_handle_event(network, "miner1", "Received random number successfully").await;
+
+        miner_send_partition_pow(network, "miner1", compute).await;
+        compute_handle_event(network, compute, "Partition list is full").await;
+
+        compute_flood_block_to_partition(network, compute).await;
+        miner_handle_event(network, "miner1", "Pre-block received successfully").await;
+
+        miner_send_pow_for_current(network, "miner1", compute).await;
+        compute_handle_event(network, compute, "Received PoW successfully").await;
+    }
 }
 
 #[tokio::test(basic_scheduler)]
@@ -941,6 +956,16 @@ async fn compute_all_connect_to_storage(network: &mut Network, compute_group: &[
     }
 }
 
+async fn compute_flood_rand_num_to_requesters(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.flood_rand_num_to_requesters().await.unwrap();
+}
+
+async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.flood_block_to_partition().await.unwrap();
+}
+
 async fn compute_send_first_block_to_storage(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     c.send_first_block_to_storage().await.unwrap();
@@ -1162,25 +1187,53 @@ async fn user_trading_peer(network: &mut Network, user: &str) -> Option<SocketAd
 //
 // MinerNode helpers
 //
+async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    let success_val = true;
 
-async fn miner_send_pow(network: &mut Network, from_miner: &str, to_compute: &str, block: &Block) {
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
+            if success == success_val && reason == reason_val => {}
+        other => panic!("Unexpected result: {:?}", other),
+    }
+}
+
+async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let mut m = network.miner(from_miner).unwrap().lock().await;
+    m.send_partition_request(compute_node_addr).await.unwrap();
+}
+
+async fn miner_send_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let miner_adder_str = network.get_address(from_miner).await.unwrap().to_string();
+    let mut m = network.miner(from_miner).unwrap().lock().await;
+
+    let participation_pow = m.generate_pow(miner_adder_str).await.unwrap();
+    m.send_partition_pow(compute_node_addr, participation_pow)
+        .await
+        .unwrap();
+}
+
+async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let (pow, transaction) = m.generate_pow_for_block(block.clone()).await.unwrap();
+    let block = m.current_block.clone();
+    let (pow, transaction) = m.generate_pow_for_block(block).await.unwrap();
+
     m.send_pow(compute_node_addr, pow, transaction)
         .await
         .unwrap();
 }
 
-async fn miner_all_send_pow(
+async fn miner_all_send_pow_for_current(
     network: &mut Network,
     from_miner: &str,
     to_compute_group: &[String],
-    block: &Block,
 ) {
     for to_compute in to_compute_group {
-        miner_send_pow(network, from_miner, to_compute, block).await;
+        miner_send_pow_for_current(network, from_miner, to_compute).await;
     }
 }
 
