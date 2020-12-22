@@ -341,12 +341,12 @@ impl MinerNode {
         .await?)
     }
 
-    /// Generates a valid PoW
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Payment address for a valid PoW
-    pub async fn generate_pow(&mut self, address: String) -> Result<ProofOfWork> {
+    /// Generates a valid Partition PoW
+    pub async fn generate_partition_pow(&mut self) -> Result<ProofOfWork> {
+        Self::generate_pow_for_address(self.address().to_string()).await
+    }
+
+    async fn generate_pow_for_address(address: String) -> Result<ProofOfWork> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
             let mut pow = ProofOfWork { address, nonce };
@@ -367,7 +367,7 @@ impl MinerNode {
     ///
     /// * `address` - Payment address for a valid PoW
     pub async fn generate_pow_promise(&mut self, address: String) -> Result<Vec<u8>> {
-        let pow = self.generate_pow(address).await?;
+        let pow = Self::generate_pow_for_address(address).await?;
 
         *(self.last_pow.write().await) = pow.clone();
         let mut pow_body = pow.address.as_bytes().to_vec();

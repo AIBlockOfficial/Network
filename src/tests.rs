@@ -1206,13 +1206,10 @@ async fn miner_send_partition_request(network: &mut Network, from_miner: &str, t
 
 async fn miner_send_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
-    let miner_adder_str = network.get_address(from_miner).await.unwrap().to_string();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let participation_pow = m.generate_pow(miner_adder_str).await.unwrap();
-    m.send_partition_pow(compute_node_addr, participation_pow)
-        .await
-        .unwrap();
+    let pow = m.generate_partition_pow().await.unwrap();
+    m.send_partition_pow(compute_node_addr, pow).await.unwrap();
 }
 
 async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_compute: &str) {

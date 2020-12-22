@@ -61,14 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("Start node with config {:?}", config);
 
-    let endpoint = format!(
-        "{}",
-        config
-            .miner_nodes
-            .get(config.miner_node_idx)
-            .unwrap()
-            .address
-    );
     let compute_node_connected = if matches.is_present("compute_connect") {
         Some(
             config
@@ -112,10 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Received random number successfully",
                     }) => {
                         println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
-                        let participation_pow = node.generate_pow(endpoint.clone()).await.unwrap();
-
-                        let _send_pow = node
-                            .send_partition_pow(compute_node_connected.unwrap(), participation_pow)
+                        let pow = node.generate_partition_pow().await.unwrap();
+                        node.send_partition_pow(compute_node_connected.unwrap(), pow)
                             .await
                             .unwrap();
                     }
@@ -130,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Pre-block received successfully",
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
-                        let (block_pow, current_coinbase) =
+                        let (pow, current_coinbase) =
                             node.generate_pow_for_current_block().await.unwrap();
 
                         match now.elapsed() {
@@ -143,8 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        let _send_pow = node
-                            .send_pow(compute_node_connected.unwrap(), block_pow, current_coinbase)
+                        node.send_pow(compute_node_connected.unwrap(), pow, current_coinbase)
                             .await
                             .unwrap();
                     }
