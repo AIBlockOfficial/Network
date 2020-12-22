@@ -182,6 +182,11 @@ impl ComputeNode {
         )
     }
 
+    /// The current utxo_set including block being mined and previous block mining txs.
+    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+        &self.node_raft.get_committed_utxo_set()
+    }
+
     /// The current tx_pool that will be used to generate next block
     pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
         self.node_raft.get_committed_tx_pool()
@@ -711,6 +716,26 @@ impl ComputeNode {
 
         Ok(())
     }
+
+    pub fn mining_block_mined(
+        &mut self,
+        nonce: Vec<u8>,
+        mining_transaction: (String, Transaction),
+    ) {
+        // Take mining block info: no more mining for it.
+        let (block, block_tx) = self.node_raft.take_mining_block();
+
+        // Update latest coinbase to notify winner
+        self.last_coinbase_hash = mining_transaction.1.outputs[0].script_public_key.clone();
+
+        // Set mined block
+        self.current_mined_block = Some(MinedBlock {
+            nonce,
+            block,
+            block_tx,
+            mining_transaction,
+        });
+    }
 }
 
 impl ComputeInterface for ComputeNode {
@@ -783,19 +808,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        // Take mining block info: no more mining for it.
-        let (block, block_tx) = self.node_raft.take_mining_block();
-
-        // Update latest coinbase to notify winner
-        self.last_coinbase_hash = coinbase.outputs[0].script_public_key.clone();
-
-        // Set mined block
-        self.current_mined_block = Some(MinedBlock {
-            nonce: pow.nonce,
-            block,
-            block_tx,
-            mining_transaction: (coinbase_hash, coinbase),
-        });
+        self.mining_block_mined(pow.nonce, (coinbase_hash, coinbase));
 
         Response {
             success: true,

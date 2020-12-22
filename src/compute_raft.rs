@@ -615,9 +615,10 @@ impl ComputeConsensused {
                 self.tx_current_block_num = Some(0);
                 self.utxo_set = utxo_set;
             }
-            AccumulatingBlockStoredInfo::Block(info) => {
+            AccumulatingBlockStoredInfo::Block(mut info) => {
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
+                self.utxo_set.append(&mut info.mining_transactions);
             }
         }
     }
