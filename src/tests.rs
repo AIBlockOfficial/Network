@@ -1,6 +1,6 @@
 //! Test suite for the network functions.
 
-use crate::compute::{ComputeNode, MinedBlock};
+use crate::compute::ComputeNode;
 use crate::interfaces::{
     CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
 };
@@ -8,7 +8,7 @@ use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
-use bincode::serialize;
+use bincode::{deserialize, serialize};
 use futures::future::join_all;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
@@ -18,25 +18,37 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
+use tokio::time;
 use tracing::{debug, error_span, info};
 use tracing_futures::Instrument;
+
+const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 const SEED_UTXO: [&str; 1] = ["000000"];
 const SEED_UTXO_BLOCK_HASH: &str =
     "e18f57f62c7bb00811c032b56c8113c83520c1bf9b8428cc96e4c8d5b704d11b";
 const HASH_LEN: usize = 64;
 
-const BLOCK_RECEIVED_AND_STORED: [&str; 2] =
-    ["Block received to be added", "Block complete stored"];
+const BLOCK_RECEIVED: &str = "Block received to be added";
+const BLOCK_STORED: &str = "Block complete stored";
+const BLOCK_RECEIVED_AND_STORED: [&str; 2] = [BLOCK_RECEIVED, BLOCK_STORED];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Cfg {
     All,
     IgnoreStorage,
     IgnoreCompute,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CfgNum {
+    All,
+    Majority,
 }
 
 #[tokio::test(basic_scheduler)]
@@ -67,33 +79,53 @@ async fn full_flow_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn full_flow_raft_majority_3_nodes() {
+    full_flow_common(
+        complete_network_config_with_n_compute_raft(10540, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_20_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10540, 20)).await;
+    full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
 }
 
 async fn full_flow(network_config: NetworkConfig) {
+    full_flow_common(network_config, CfgNum::All).await;
+}
+
+async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
+    let storage_nodes = &network_config.storage_nodes;
     let (_transactions, _t_hash, tx) = valid_transactions(true);
 
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, cfg_num).await;
     add_transactions_act(&mut network, &tx).await;
-    create_block_act(&mut network, Cfg::All).await;
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
     proof_of_work_act(&mut network).await;
-    send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
 
     //
     // Assert
     //
+    let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
+    let actual1_b_num = actual1[0].1.as_ref().map(|(_, b_num, _)| *b_num);
+    assert_eq!(actual1_b_num, Some(1));
+    assert_eq!(
+        actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
+        node_all(storage_nodes, true)
+    );
 
-    // TODO: Add asserts
     test_step_complete(network).await;
 }
 
@@ -118,38 +150,53 @@ async fn first_block_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn first_block_raft_majority_3_nodes() {
+    first_block_common(
+        complete_network_config_with_n_compute_raft(10040, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn first_block_raft_20_nodes() {
-    first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
+    first_block(complete_network_config_with_n_compute_raft(10050, 20)).await;
 }
 
 async fn first_block(network_config: NetworkConfig) {
+    first_block_common(network_config, CfgNum::All).await;
+}
+
+async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
     let expected_utxo = network.collect_initial_uxto_set();
-    let (expected0, _block_info) = complete_block(0, None, expected_utxo, 0);
+    let (expected0, _block_info) = complete_block(0, None, &expected_utxo, 0);
 
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, cfg_num).await;
 
     //
     // Assert
     //
+    let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+    assert_eq!(utxo_set_after, node_all(compute_nodes, expected_utxo));
+
     let actual0 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
         actual0[0],
-        Some((
-            expected0.1,
-            expected0.0,
-            0, /*b_num*/
-            0, /*mining txs*/
-        ))
+        (
+            Some(expected0.1),
+            Some((expected0.0, 0 /*b_num*/, 0 /*mining txs*/,))
+        )
     );
     assert_eq!(
         actual0.iter().map(|v| *v == actual0[0]).collect::<Vec<_>>(),
@@ -159,17 +206,20 @@ async fn first_block(network_config: NetworkConfig) {
     test_step_complete(network).await;
 }
 
-async fn first_block_act(network: &mut Network, cfg: Cfg) {
+async fn first_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step First Block");
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
     if cfg != Cfg::IgnoreStorage {
         compute_all_connect_to_storage(network, compute_nodes).await;
-        compute_all_send_first_block_to_storage(network, compute_nodes).await;
-        node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+        compute_all_send_first_block_to_storage(network, msg_c_nodes).await;
+        storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+        node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
     }
 }
 
@@ -207,7 +257,7 @@ async fn add_transactions(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let (transactions, _t_hash, tx) = valid_transactions(true);
-    first_block_act(&mut network, Cfg::IgnoreStorage).await;
+    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
     // Act
@@ -257,11 +307,24 @@ async fn create_block_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn create_block_raft_majority_3_nodes() {
+    create_block_common(
+        complete_network_config_with_n_compute_raft(10140, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn create_block_raft_20_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10140, 20)).await;
+    create_block(complete_network_config_with_n_compute_raft(10150, 20)).await;
 }
 
 async fn create_block(network_config: NetworkConfig) {
+    create_block_common(network_config, CfgNum::All).await;
+}
+
+async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
@@ -269,9 +332,9 @@ async fn create_block(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let (_transactions, t_hash, tx) = valid_transactions(true);
+    let (transactions, t_hash, tx) = valid_transactions(true);
 
-    first_block_act(&mut network, Cfg::All).await;
+    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
     add_transactions_act(&mut network, &tx).await;
 
     //
@@ -280,10 +343,11 @@ async fn create_block(network_config: NetworkConfig) {
     let block_transaction_before =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
 
-    create_block_act(&mut network, Cfg::All).await;
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
 
     let block_transaction_after =
         compute_all_current_block_transactions(&mut network, compute_nodes).await;
+    let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
 
     //
     // Assert
@@ -293,22 +357,26 @@ async fn create_block(network_config: NetworkConfig) {
         block_transaction_after,
         node_all(compute_nodes, Some(vec![t_hash]))
     );
+    assert_eq!(utxo_set_after, node_all(compute_nodes, transactions));
 
     test_step_complete(network).await;
 }
 
-async fn create_block_act(network: &mut Network, cfg: Cfg) {
+async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
+    let storage_nodes = &config.storage_nodes;
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step Storage signal new block");
-    if cfg != Cfg::IgnoreStorage {
-        storage_send_stored_block(network, "storage1").await;
-    } else {
+    if cfg == Cfg::IgnoreStorage {
         let req = ComputeRequest::SendBlockStored(Default::default());
-        compute_inject_next_event(network, "storage1", "compute1", req).await;
+        compute_all_inject_next_event(network, msg_s_nodes, msg_c_nodes, req).await;
+    } else {
+        storage_all_send_stored_block(network, msg_s_nodes).await;
     }
-    compute_handle_event(network, "compute1", "Received block stored").await;
+    compute_all_handle_event(network, msg_c_nodes, "Received block stored").await;
 
     info!("Test Step Generate Block");
     node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
@@ -342,8 +410,8 @@ async fn proof_of_work(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    first_block_act(&mut network, Cfg::IgnoreStorage).await;
-    create_block_act(&mut network, Cfg::IgnoreStorage).await;
+    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
     // Act
@@ -392,21 +460,30 @@ async fn send_block_to_storage_raft_2_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10320, 2)).await;
 }
 
-// TODO: Fix test: Timeout trigger before all blocks are combined resulting in 2 mining tx.
-//
 #[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_raft_3_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
 }
 
-// TODO: Fix test: Timeout trigger before all blocks are combined resulting in 11 mining tx.
-//
+#[tokio::test(basic_scheduler)]
+async fn send_block_to_storage_raft_majority_3_nodes() {
+    send_block_to_storage_common(
+        complete_network_config_with_n_compute_raft(10340, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
 #[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_raft_20_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10340, 20)).await;
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 20)).await;
 }
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
+    send_block_to_storage_common(network_config, CfgNum::All).await;
+}
+
+async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
@@ -415,22 +492,23 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
-    let compute_len = compute_nodes.len();
+    let c_mined = &node_select(compute_nodes, cfg_num);
 
     let (transactions, _t_hash, _tx) = valid_transactions(true);
-    let (expected1, block_info1) = complete_block(1, Some("0"), transactions, compute_len);
-    let (_expected3, wrong_block3) = complete_block(3, Some("0"), BTreeMap::new(), 1);
+    let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
+    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
 
-    first_block_act(&mut network, Cfg::All).await;
-    compute_all_set_mined_block(&mut network, compute_nodes, &block_info1).await;
+    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
+    compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
 
     //
     // Act
     //
     storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
-    storage_receive_block(&mut network, "storage1").await;
+    storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
 
-    send_block_to_storage_act(&mut network).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
 
     //
     // Assert
@@ -438,12 +516,14 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
         actual1[0],
-        Some((
-            expected1.1,
-            expected1.0,
-            1,           /*b_num*/
-            compute_len, /*mining txs*/
-        ))
+        (
+            Some(expected1.1),
+            Some((
+                expected1.0,
+                1,             /*b_num*/
+                c_mined.len(), /*mining txs*/
+            ))
+        )
     );
     assert_eq!(
         actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
@@ -453,14 +533,107 @@ async fn send_block_to_storage(network_config: NetworkConfig) {
     test_step_complete(network).await;
 }
 
-async fn send_block_to_storage_act(network: &mut Network) {
+async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
+    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
+    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
     info!("Test Step Compute Send block to Storage");
-    compute_all_send_block_to_storage(network, compute_nodes).await;
-    node_all_handle_event(network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+    compute_all_send_block_to_storage(network, msg_c_nodes).await;
+    storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+    node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_no_raft() {
+    create_third_block(complete_network_config(10700)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_raft_1_node() {
+    create_third_block(complete_network_config_with_n_compute_raft(10710, 1)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_raft_2_nodes() {
+    create_third_block(complete_network_config_with_n_compute_raft(10720, 2)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_raft_3_nodes() {
+    create_third_block(complete_network_config_with_n_compute_raft(10730, 3)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_raft_majority_3_nodes() {
+    create_third_block_common(
+        complete_network_config_with_n_compute_raft(10740, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn create_third_block_raft_20_nodes() {
+    create_third_block(complete_network_config_with_n_compute_raft(10750, 20)).await;
+}
+
+async fn create_third_block(network_config: NetworkConfig) {
+    create_third_block_common(network_config, CfgNum::All).await;
+}
+
+async fn create_third_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.compute_nodes;
+    let c_mined = &node_select(compute_nodes, cfg_num);
+
+    let (transactions, t_hash, tx) = valid_transactions(true);
+    let (_expected1, block_info1) = complete_block(1, Some("0"), &BTreeMap::new(), c_mined.len());
+
+    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
+    compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
+    add_transactions_act(&mut network, &tx).await;
+
+    //
+    // Act
+    //
+    let block_transaction_before =
+        compute_all_current_block_transactions(&mut network, compute_nodes).await;
+
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
+
+    let block_transaction_after =
+        compute_all_current_block_transactions(&mut network, compute_nodes).await;
+    let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        block_transaction_before,
+        node_all_or(compute_nodes, cfg_num, None, Some(vec![]))
+    );
+    assert_eq!(
+        block_transaction_after,
+        node_all(compute_nodes, Some(vec![t_hash]))
+    );
+
+    let expected_utxo_set = {
+        let mining_txs = complete_block_mining_txs(&block_info1);
+        mining_txs.into_iter().chain(transactions).collect()
+    };
+    assert_eq!(utxo_set_after, node_all(compute_nodes, expected_utxo_set));
+
+    test_step_complete(network).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -480,8 +653,14 @@ async fn receive_payment_tx_user() {
     node_connect_to(&mut network, "user1", "user2").await;
     node_connect_to(&mut network, "user1", "compute1").await;
     user_send_address_request(&mut network, "user1", "user2").await;
-
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
+
+    //
+    // Assert
+    //
+    let actual = user_trading_peer(&mut network, "user2").await;
+    let expected = network.get_address("user1").await;
+    assert_eq!(actual, expected);
 
     test_step_complete(network).await;
 }
@@ -490,8 +669,37 @@ async fn receive_payment_tx_user() {
 // Node helpers
 //
 
-fn node_all<T: Clone>(group: &[String], value: T) -> Vec<T> {
-    group.iter().map(|_| value.clone()).collect()
+fn node_all<T: Clone>(nodes: &[String], value: T) -> Vec<T> {
+    let len = nodes.len();
+    (0..len).map(|_| value.clone()).collect()
+}
+
+fn node_all_or<T: Clone>(
+    nodes: &[String],
+    cfg_num: CfgNum,
+    value: T,
+    unselected_value: T,
+) -> Vec<T> {
+    let select_len = node_select_len(nodes, cfg_num);
+    let len = nodes.len();
+
+    let selected = (0..select_len).map(|_| value.clone());
+    let unselected = (select_len..len).map(|_| unselected_value.clone());
+    selected.chain(unselected).collect()
+}
+
+fn node_select(nodes: &[String], cfg_num: CfgNum) -> Vec<String> {
+    let len = node_select_len(nodes, cfg_num);
+    nodes.iter().cloned().take(len).collect()
+}
+
+fn node_select_len(nodes: &[String], cfg_num: CfgNum) -> usize {
+    let len = nodes.len();
+    if cfg_num == CfgNum::Majority {
+        len / 2 + 1
+    } else {
+        len
+    }
 }
 
 async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
@@ -571,8 +779,8 @@ async fn compute_all_handle_error(
 }
 
 async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
-    match c.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, c.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -589,18 +797,35 @@ async fn compute_one_handle_event(
     for reason in reason_str {
         compute_handle_event_for_node(&mut compute, true, &reason).await;
     }
+
     debug!("Start wait for completion of other in raft group");
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
+       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);
 }
 
-async fn compute_set_current_block(network: &mut Network, compute: &str, block: Block) {
+async fn compute_set_mining_block(
+    network: &mut Network,
+    compute: &str,
+    block_info: &CompleteBlock,
+) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.set_committed_mining_block(block, BTreeMap::new());
+    let common = block_info.common.clone();
+    c.set_committed_mining_block(common.block, common.block_txs);
+}
+
+async fn compute_all_set_mining_block(
+    network: &mut Network,
+    compute_group: &[String],
+    block_info: &CompleteBlock,
+) {
+    for compute in compute_group {
+        compute_set_mining_block(network, compute, block_info).await;
+    }
 }
 
 async fn compute_mined_block_num(network: &mut Network, compute: &str) -> Option<u64> {
@@ -642,6 +867,26 @@ async fn compute_current_block_transactions(
         .map(|b| b.transactions.clone())
 }
 
+async fn compute_all_committed_utxo_set(
+    network: &mut Network,
+    compute_group: &[String],
+) -> Vec<BTreeMap<String, Transaction>> {
+    let mut result = Vec::new();
+    for name in compute_group {
+        let r = compute_committed_utxo_set(network, name).await;
+        result.push(r);
+    }
+    result
+}
+
+async fn compute_committed_utxo_set(
+    network: &mut Network,
+    compute: &str,
+) -> BTreeMap<String, Transaction> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_committed_utxo_set().clone()
+}
+
 async fn compute_all_committed_tx_pool(
     network: &mut Network,
     compute_group: &[String],
@@ -660,6 +905,17 @@ async fn compute_committed_tx_pool(
 ) -> BTreeMap<String, Transaction> {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_tx_pool().clone()
+}
+
+async fn compute_all_inject_next_event(
+    network: &mut Network,
+    from_group: &[String],
+    to_compute_group: &[String],
+    request: ComputeRequest,
+) {
+    for (from, to) in from_group.iter().zip(to_compute_group.iter()) {
+        compute_inject_next_event(network, from, to, request.clone()).await;
+    }
 }
 
 async fn compute_inject_next_event(
@@ -707,26 +963,25 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
     }
 }
 
-async fn compute_set_mined_block(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
+async fn compute_mining_block_mined(
+    network: &mut Network,
+    compute: &str,
+    block_info: &CompleteBlock,
+) {
     let id = network.get_position(compute).unwrap() as u64 + 1;
     let mut c = network.compute(compute).unwrap().lock().await;
     let mined = block_info.per_node.get(&id).unwrap();
 
-    c.current_mined_block = Some(MinedBlock {
-        nonce: mined.nonce.clone(),
-        block: block_info.common.block.clone(),
-        block_tx: block_info.common.block_txs.clone(),
-        mining_transaction: mined.mining_tx.clone(),
-    });
+    c.mining_block_mined(mined.nonce.clone(), mined.mining_tx.clone());
 }
 
-async fn compute_all_set_mined_block(
+async fn compute_all_mining_block_mined(
     network: &mut Network,
     compute_group: &[String],
     block_info: &CompleteBlock,
 ) {
     for compute in compute_group {
-        compute_set_mined_block(network, compute, block_info).await;
+        compute_mining_block_mined(network, compute, block_info).await;
     }
 }
 
@@ -771,22 +1026,36 @@ async fn storage_inject_send_block_to_storage(
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
-) -> Option<(String, String, u64, usize)> {
+) -> (Option<String>, Option<(String, u64, usize)>) {
     let s = network.storage(storage).unwrap().lock().await;
-    s.get_last_block_stored().clone().map(|(complete, info)| {
+    if let Some(info) = s.get_last_block_stored() {
+        let complete = s
+            .get_stored_value(&info.block_hash)
+            .map(|v| deserialize::<CompleteBlock>(&v))
+            .map(|v| {
+                v.map_or_else(
+                    |e| format!("error: {:?}", e),
+                    |complete| format!("{:?}", complete),
+                )
+            });
+
         (
-            format!("{:?}", complete),
-            info.block_hash.clone(),
-            info.block_num,
-            info.mining_transactions.len(),
+            complete,
+            Some((
+                info.block_hash.clone(),
+                info.block_num,
+                info.mining_transactions.len(),
+            )),
         )
-    })
+    } else {
+        (None, None)
+    }
 }
 
 async fn storage_all_get_last_block_stored(
     network: &mut Network,
     storage_group: &[String],
-) -> Vec<Option<(String, String, u64, usize)>> {
+) -> Vec<(Option<String>, Option<(String, u64, usize)>)> {
     let mut result = Vec::new();
     for name in storage_group {
         let r = storage_get_last_block_stored(network, name).await;
@@ -800,14 +1069,30 @@ async fn storage_send_stored_block(network: &mut Network, storage: &str) {
     s.send_stored_block().await.unwrap();
 }
 
-async fn storage_receive_and_store_block(network: &mut Network, storage_str: &str) {
-    storage_receive_block(network, storage_str).await;
-    storage_store_block(network, storage_str).await;
+async fn storage_all_send_stored_block(network: &mut Network, storage_group: &[String]) {
+    for storage in storage_group {
+        storage_send_stored_block(network, storage).await;
+    }
+}
+
+async fn storage_handle_event(network: &mut Network, storage: &str, reason_str: &str) {
+    let mut s = network.storage(storage).unwrap().lock().await;
+    storage_handle_event_for_node(&mut s, true, reason_str).await;
+}
+
+async fn storage_all_handle_event(
+    network: &mut Network,
+    storage_group: &[String],
+    reason_str: &str,
+) {
+    for storage in storage_group {
+        storage_handle_event(network, storage, reason_str).await;
+    }
 }
 
 async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
-    match s.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, s.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -829,19 +1114,10 @@ async fn storage_one_handle_event(
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
+       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);
-}
-
-async fn storage_receive_block(network: &mut Network, storage_str: &str) {
-    let mut storage = network.storage(storage_str).unwrap().lock().await;
-    storage_handle_event_for_node(&mut storage, true, "Block received to be added").await;
-}
-
-async fn storage_store_block(network: &mut Network, storage_str: &str) {
-    let mut storage = network.storage(storage_str).unwrap().lock().await;
-    storage_handle_event_for_node(&mut storage, true, "Block complete stored").await;
 }
 
 //
@@ -852,8 +1128,8 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     let mut u = network.user(user).unwrap().lock().await;
     let success_val = true;
 
-    match u.handle_next_event().await {
-        Some(Ok(Response { success, reason }))
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?}", other),
     }
@@ -876,6 +1152,11 @@ async fn user_send_address_request(network: &mut Network, from_user: &str, to_us
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
     u.send_address_request(user_node_addr).await.unwrap();
+}
+
+async fn user_trading_peer(network: &mut Network, user: &str) -> Option<SocketAddr> {
+    let u = network.user(user).unwrap().lock().await;
+    u.trading_peer
 }
 
 //
@@ -946,10 +1227,18 @@ fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Tr
     (transactions, t_hash, payment_tx)
 }
 
+fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transaction> {
+    block
+        .per_node
+        .values()
+        .map(|m_info| m_info.mining_tx.clone())
+        .collect()
+}
+
 fn complete_block(
     block_num: u64,
     previous_hash: Option<&str>,
-    block_txs: BTreeMap<String, Transaction>,
+    block_txs: &BTreeMap<String, Transaction>,
     mining_txs: usize,
 ) -> ((String, String), CompleteBlock) {
     let mut block = Block::new();
@@ -974,7 +1263,10 @@ fn complete_block(
         .collect();
 
     let complete = CompleteBlock {
-        common: CommonBlockInfo { block, block_txs },
+        common: CommonBlockInfo {
+            block,
+            block_txs: block_txs.clone(),
+        },
         per_node,
     };
 

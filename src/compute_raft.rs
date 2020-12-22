@@ -3,19 +3,19 @@ use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::interfaces::BlockStoredInfo;
 use crate::raft::{RaftData, RaftMessageWrapper};
-use crate::utils;
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::Instant;
-use tracing::{debug, error, warn};
+use tokio::time::{self, Instant};
+use tracing::{debug, error, trace, warn};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub enum ComputeRaftItem {
 }
 
 /// Key serialized into RaftData and process by Raft.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ComputeRaftKey {
     proposer_id: u64,
     proposal_id: u64,
@@ -41,27 +41,41 @@ pub enum CommittedItem {
     Block,
 }
 
+/// Accumulated previous block info
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum AccumulatingBlockStoredInfo {
+    /// Accumulating first block utxo_set
+    FirstBlock(BTreeMap<String, Transaction>),
+    /// Accumulating other blocks BlockStoredInfo
+    Block(BlockStoredInfo),
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default)]
 pub struct ComputeConsensused {
+    /// Sufficient majority
+    unanimous_majority: usize,
+    /// Sufficient majority
+    sufficient_majority: usize,
     /// Committed transaction pool.
     tx_pool: BTreeMap<String, Transaction>,
     /// Committed DRUID transactions.
     tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Header to use for next block if ready to generate.
-    tx_previous_hash: Option<String>,
+    tx_current_block_previous_hash: Option<String>,
     /// Index of the last block,
-    tx_previous_block_num: Option<u64>,
+    tx_current_block_num: Option<u64>,
     /// Current block ready to mine (consensused).
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
     /// UTXO set containain the valid transaction to use as previous input hashes.
     utxo_set: BTreeMap<String, Transaction>,
-    /// Accumulating first block: Require all compute node votes.
-    /// (proposed utxo_set, vote peer ids).
-    utxo_set_first_block: Option<(BTreeMap<String, Transaction>, BTreeSet<u64>)>,
+    /// Accumulating block:
+    /// Require majority of compute node votes for normal blocks.
+    /// Require unanimit for first block.
+    current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -124,10 +138,16 @@ impl ComputeRaft {
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
+        let consensused = ComputeConsensused {
+            unanimous_majority: peers_len,
+            sufficient_majority: peers_len / 2 + 1,
+            ..ComputeConsensused::default()
+        };
+
         Self {
             first_raft_peer,
             raft_active,
-            consensused: ComputeConsensused::default(),
+            consensused,
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
             last_block_stored_infos: Vec::new(),
@@ -183,29 +203,20 @@ impl ComputeRaft {
 
         match item {
             ComputeRaftItem::FirstBlock(uxto_set) => {
-                if !self.consensused.utxo_set.is_empty() {
+                if !self.consensused.is_first_block() {
                     error!("Proposed FirstBlock after startup {:?}", key);
                     return None;
                 }
 
-                if self.consensused.utxo_set_first_block.is_none() {
-                    self.consensused.utxo_set_first_block =
-                        Some((uxto_set.clone(), BTreeSet::new()));
+                self.consensused.append_first_block_info(key, uxto_set);
+                if self.consensused.has_different_block_stored_info() {
+                    error!("Proposed uxtosets are different {:?}", key);
                 }
 
-                if let Some(first) = &mut self.consensused.utxo_set_first_block {
-                    if first.0 != uxto_set {
-                        error!("Proposed uxtosets are different {:?}", key);
-                        return None;
-                    }
-                    first.1.insert(key.proposer_id);
-
-                    if first.1.len() >= self.raft_active.peers_len() {
-                        // Complete first block
-                        let utxo_set = self.consensused.utxo_set_first_block.take().unwrap().0;
-                        self.consensused.utxo_set = utxo_set;
-                        return Some(CommittedItem::FirstBlock);
-                    }
+                if self.consensused.has_block_stored_info_ready() {
+                    // First block complete:
+                    self.consensused.apply_ready_block_stored_info();
+                    return Some(CommittedItem::FirstBlock);
                 }
             }
             ComputeRaftItem::Transactions(mut txs) => {
@@ -216,18 +227,25 @@ impl ComputeRaft {
                 self.consensused.tx_druid_pool.append(&mut txs);
                 return Some(CommittedItem::Transactions);
             }
-            ComputeRaftItem::Block(previous_info) => {
-                if self.consensused.tx_previous_block_num >= Some(previous_info.block_num) {
-                    // Ignore already known blocks
+            ComputeRaftItem::Block(info) => {
+                if !self.consensused.is_current_block(info.block_num) {
+                    // Ignore already known or invalid blocks
+                    trace!("Ignore invalid or outdated block stored info {:?}", key);
                     return None;
                 }
 
-                // New block:
-                // Must not populate further tx_pool & tx_druid_pool
-                // before generating block.
-                self.consensused.tx_previous_hash = Some(previous_info.block_hash);
-                self.consensused.tx_previous_block_num = Some(previous_info.block_num);
-                return Some(CommittedItem::Block);
+                self.consensused.append_block_stored_info(key, info);
+                if self.consensused.has_different_block_stored_info() {
+                    warn!("Proposed previous blocks are different {:?}", key);
+                }
+
+                if self.consensused.has_block_stored_info_ready() {
+                    // New block:
+                    // Must not populate further tx_pool & tx_druid_pool
+                    // before generating block.
+                    self.consensused.apply_ready_block_stored_info();
+                    return Some(CommittedItem::Block);
+                }
             }
         }
         None
@@ -246,7 +264,7 @@ impl ComputeRaft {
 
     /// Blocks & waits for a timeout to propose transactions.
     pub async fn timeout_propose_transactions(&self) {
-        utils::timeout_at(self.propose_transactions_timeout_at).await;
+        time::delay_until(self.propose_transactions_timeout_at).await;
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -470,8 +488,8 @@ impl ComputeConsensused {
 
     /// Apply the consensused information for the header.
     fn update_block_header(&mut self, block: &mut Block) {
-        let previous_hash = std::mem::take(&mut self.tx_previous_hash).unwrap();
-        let b_num = self.tx_previous_block_num.unwrap() + 1;
+        let previous_hash = std::mem::take(&mut self.tx_current_block_previous_hash).unwrap();
+        let b_num = self.tx_current_block_num.unwrap();
 
         block.header.time = b_num as u32;
         block.header.previous_hash = Some(previous_hash);
@@ -517,8 +535,107 @@ impl ComputeConsensused {
 
         invalid
     }
+
+    /// Check if computing the first block.
+    pub fn is_first_block(&self) -> bool {
+        self.tx_current_block_num.is_none()
+    }
+
+    /// Check if computing the given block.
+    pub fn is_current_block(&self, block_num: u64) -> bool {
+        if let Some(tx_current_block_num) = self.tx_current_block_num {
+            block_num == tx_current_block_num
+        } else {
+            false
+        }
+    }
+
+    /// Check if we have inconsistent votes for the current block stored info.
+    pub fn has_different_block_stored_info(&self) -> bool {
+        self.current_block_stored_info.len() > 1
+    }
+
+    /// Check if we have enough votes to apply the block stored info.
+    pub fn has_block_stored_info_ready(&self) -> bool {
+        let threshold = if self.is_first_block() {
+            self.unanimous_majority
+        } else {
+            self.sufficient_majority
+        };
+
+        self.max_agreeing_block_stored_info() >= threshold
+    }
+
+    /// Current maximum vote count for a block stored info.
+    fn max_agreeing_block_stored_info(&self) -> usize {
+        self.current_block_stored_info
+            .values()
+            .map(|v| v.1.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Append a vote for first block info
+    pub fn append_first_block_info(
+        &mut self,
+        key: ComputeRaftKey,
+        utxo_set: BTreeMap<String, Transaction>,
+    ) {
+        self.append_current_block_stored_info(
+            key,
+            AccumulatingBlockStoredInfo::FirstBlock(utxo_set),
+        )
+    }
+
+    /// Append a vote for a non first block info
+    pub fn append_block_stored_info(&mut self, key: ComputeRaftKey, block: BlockStoredInfo) {
+        self.append_current_block_stored_info(key, AccumulatingBlockStoredInfo::Block(block))
+    }
+
+    /// Append the given vote.
+    pub fn append_current_block_stored_info(
+        &mut self,
+        key: ComputeRaftKey,
+        block: AccumulatingBlockStoredInfo,
+    ) {
+        let block_ser = serialize(&block).unwrap();
+        let block_hash = Sha3_256::digest(&block_ser).to_vec();
+
+        self.current_block_stored_info
+            .entry(block_hash)
+            .or_insert((block, BTreeSet::new()))
+            .1
+            .insert(key.proposer_id);
+    }
+
+    /// Apply accumulated block info.
+    pub fn apply_ready_block_stored_info(&mut self) {
+        match self.take_ready_block_stored_info() {
+            AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
+                self.tx_current_block_num = Some(0);
+                self.utxo_set = utxo_set;
+            }
+            AccumulatingBlockStoredInfo::Block(mut info) => {
+                self.tx_current_block_previous_hash = Some(info.block_hash);
+                self.tx_current_block_num = Some(info.block_num + 1);
+                self.utxo_set.append(&mut info.mining_transactions);
+            }
+        }
+    }
+
+    /// Take the block info with most vote and reset accumulator.
+    fn take_ready_block_stored_info(&mut self) -> AccumulatingBlockStoredInfo {
+        let infos = std::mem::take(&mut self.current_block_stored_info);
+        infos
+            .into_iter()
+            .map(|(_digest, value)| value)
+            .max_by_key(|(_, vote_ids)| vote_ids.len())
+            .map(|(block_info, _)| block_info)
+            .unwrap()
+    }
 }
 
+/// Take the first `n` items of the given map.
 fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
     let mut result = std::mem::take(from);
     if let Some(max_key) = result.keys().nth(n).cloned() {
@@ -581,7 +698,7 @@ mod test {
             node.consensused.tx_pool.len(),
             expected_block_addr_to_hashes.len()
         );
-        assert_eq!(node.consensused.tx_previous_hash, None);
+        assert_eq!(node.consensused.tx_current_block_previous_hash, None);
     }
 
     #[tokio::test]
@@ -604,7 +721,7 @@ mod test {
         let _first_block = node.received_commit(commit).await.unwrap();
         let previous_block = BlockStoredInfo {
             block_hash: "0123".to_string(),
-            block_num: 1,
+            block_num: 0,
             mining_transactions: BTreeMap::new(),
         };
 
@@ -713,7 +830,7 @@ mod test {
         assert_eq!(actual_utxo_t_hashes, expected_utxo_t_hashes);
         assert_eq!(node.consensused.tx_pool.len(), 0);
         assert_eq!(node.consensused.tx_druid_pool.len(), 0);
-        assert_eq!(node.consensused.tx_previous_hash, None);
+        assert_eq!(node.consensused.tx_current_block_previous_hash, None);
     }
 
     #[tokio::test]
@@ -761,7 +878,7 @@ mod test {
             loop {
                 tokio::select! {
                     commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
-                    _ = utils::timeout_at(Instant::now() + Duration::from_millis(5)) => {break;}
+                    _ = time::delay_for(Duration::from_millis(5)) => {break;}
                 }
             }
             collect_info(&node);

@@ -2,7 +2,6 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftData, RaftMessageWrapper};
-use crate::utils;
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -11,7 +10,7 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::Instant;
+use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
 /// Item serialized into RaftData and process by Raft.
@@ -45,7 +44,7 @@ pub struct CompleteBlock {
 
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StorageConsensused {
     /// Sufficient majority
     sufficient_majority: usize,
@@ -95,14 +94,13 @@ impl StorageRaft {
             Duration::from_millis(config.storage_block_timeout as u64);
         let propose_block_timeout_at = Some(Instant::now() + propose_block_timeout_duration);
 
-        let consensused = StorageConsensused {
-            sufficient_majority: raft_active.peers_len() / 2 + 1,
-            current_block_num: 0,
-            current_block_complete_timeout_peer_ids: BTreeSet::new(),
-            current_block_completed_parts: BTreeMap::new(),
-        };
-
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
+        let peers_len = raft_active.peers_len();
+
+        let consensused = StorageConsensused {
+            sufficient_majority: peers_len / 2 + 1,
+            ..StorageConsensused::default()
+        };
 
         Self {
             first_raft_peer,
@@ -193,7 +191,7 @@ impl StorageRaft {
     /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) -> Option<()> {
         if let Some(time) = self.propose_block_timeout_at {
-            utils::timeout_at(time).await;
+            time::delay_until(time).await;
             Some(())
         } else {
             None

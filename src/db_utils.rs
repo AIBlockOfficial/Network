@@ -72,6 +72,14 @@ impl SimpleDb {
         }
         Ok(())
     }
+
+    /// Get entry from database
+    pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>, DBError> {
+        match self {
+            Self::File { db, .. } => db.get(key),
+            Self::InMemory { key_values } => Ok(key_values.get(key.as_ref()).cloned()),
+        }
+    }
 }
 
 /// Creates a set of DB opening options for rocksDB instances
