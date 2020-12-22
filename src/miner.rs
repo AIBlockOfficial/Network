@@ -300,14 +300,15 @@ impl MinerNode {
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
-    ///
-    /// ### Arguments
-    ///
-    /// * `block` - The block to get the PoW for
-    pub async fn generate_pow_for_block(
+    pub async fn generate_pow_for_current_block(
         &mut self,
-        block: Block,
     ) -> Result<(ProofOfWorkBlock, Transaction)> {
+        let (pow, tx) = Self::generate_pow_for_block(self.current_block.clone()).await?;
+        self.current_coinbase = tx.clone();
+        Ok((pow, tx))
+    }
+
+    async fn generate_pow_for_block(mut block: Block) -> Result<(ProofOfWorkBlock, Transaction)> {
         Ok(task::spawn_blocking(move || {
             let mut nonce = Self::generate_nonce();
             let (pk, _sk) = sign::gen_keypair();
@@ -315,9 +316,7 @@ impl MinerNode {
 
             let current_coinbase = construct_coinbase_tx(12, block.header.time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
-
-            let mut block_for_pow = block;
-            block_for_pow.transactions.push(coinbase_hash.clone());
+            block.transactions.push(coinbase_hash.clone());
 
             // Create address and save to wallet
             let address = construct_address(pk, 0);
@@ -330,10 +329,7 @@ impl MinerNode {
             let _save_result = save_transactions_to_wallet(tx_to_save);
 
             // Construct PoW block for mining
-            let mut pow = ProofOfWorkBlock {
-                nonce,
-                block: block_for_pow,
-            };
+            let mut pow = ProofOfWorkBlock { nonce, block };
 
             while !Self::validate_pow_block(&mut pow) {
                 nonce = Self::generate_nonce();
