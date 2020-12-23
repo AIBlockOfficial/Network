@@ -1,8 +1,9 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
+use crate::constants::{DB_PATH, DB_PATH_TEST};
 use crate::interfaces::{
-    CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
 };
 use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
@@ -60,7 +61,12 @@ async fn full_flow_no_raft() {
 #[tokio::test(basic_scheduler)]
 async fn full_flow_no_raft_real_db() {
     let mut cfg = complete_network_config(10505);
+    let storage_node_db_path = format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, 10507);
+    if let Err(e) = std::fs::remove_dir_all(storage_node_db_path) {
+        info!("Not removed storage db: {:?}", e);
+    }
     cfg.in_memory_db = false;
+
     full_flow(cfg).await;
 }
 
@@ -105,7 +111,8 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let storage_nodes = &network_config.storage_nodes;
-    let (_transactions, _t_hash, tx) = valid_transactions(true);
+    let initial_utxo = network.collect_initial_uxto_set();
+    let (transactions, _t_hash, tx) = valid_transactions(true);
 
     //
     // Act
@@ -113,20 +120,32 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
+    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
+
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
+    let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     //
     // Assert
     //
-    let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
-    let actual1_b_num = actual1[0].1.as_ref().map(|(_, b_num, _)| *b_num);
-    assert_eq!(actual1_b_num, Some(1));
+    let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
+    assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
+
+    let actual0_db_count =
+        storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    let expected_block0_db_count =
+        1 + initial_utxo.len() + stored0.unwrap().mining_transactions.len();
+    let expected_block1_db_count =
+        1 + transactions.len() + stored1.unwrap().mining_transactions.len();
     assert_eq!(
-        actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
-        node_all(storage_nodes, true)
+        actual0_db_count,
+        node_all(
+            storage_nodes,
+            expected_block0_db_count + expected_block1_db_count
+        )
     );
 
     test_step_complete(network).await;
@@ -255,7 +274,7 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     //
     // Assert
     //
-    let actual0 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
+    let actual0 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
     assert_eq!(
         actual0[0],
         (
@@ -267,10 +286,7 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
             ))
         )
     );
-    assert_eq!(
-        actual0.iter().map(|v| *v == actual0[0]).collect::<Vec<_>>(),
-        node_all(storage_nodes, true)
-    );
+    assert_eq!(equal_first(&actual0), node_all(storage_nodes, true));
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -326,10 +342,9 @@ async fn add_transactions(network_config: NetworkConfig) {
     //
     // Assert
     //
-    assert_eq!(
-        compute_all_committed_tx_pool(&mut network, compute_nodes).await,
-        node_all(compute_nodes, transactions)
-    );
+    let actual = compute_all_committed_tx_pool(&mut network, compute_nodes).await;
+    assert_eq!(actual[0], transactions);
+    assert_eq!(equal_first(&actual), node_all(compute_nodes, true));
 
     test_step_complete(network).await;
 }
@@ -602,6 +617,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let (transactions, _t_hash, _tx) = valid_transactions(true);
     let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
     let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
+    let block1_mining_tx = complete_block_mining_txs(&block_info1);
 
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
@@ -609,6 +625,9 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
 
     compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
     compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
+
+    let initial_db_count =
+        storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
 
     //
     // Act
@@ -621,7 +640,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     //
     // Assert
     //
-    let actual1 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
+    let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
     assert_eq!(
         actual1[0],
         (
@@ -633,9 +652,16 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
             ))
         )
     );
+    assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
+
+    let actual0_db_count =
+        storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     assert_eq!(
-        actual1.iter().map(|v| *v == actual1[0]).collect::<Vec<_>>(),
-        node_all(storage_nodes, true)
+        substract_vec(&actual0_db_count, &initial_db_count),
+        node_all(
+            storage_nodes,
+            1 + transactions.len() + block1_mining_tx.len()
+        )
     );
 
     test_step_complete(network).await;
@@ -1065,6 +1091,14 @@ async fn storage_all_get_stored_key_values_count(
 async fn storage_get_last_block_stored(
     network: &mut Network,
     storage: &str,
+) -> Option<BlockStoredInfo> {
+    let s = network.storage(storage).unwrap().lock().await;
+    s.get_last_block_stored().clone()
+}
+
+async fn storage_get_last_stored_info(
+    network: &mut Network,
+    storage: &str,
 ) -> (Option<String>, Option<(String, u64, usize)>) {
     let s = network.storage(storage).unwrap().lock().await;
     if let Some(info) = s.get_last_block_stored() {
@@ -1091,13 +1125,13 @@ async fn storage_get_last_block_stored(
     }
 }
 
-async fn storage_all_get_last_block_stored(
+async fn storage_all_get_last_stored_info(
     network: &mut Network,
     storage_group: &[String],
 ) -> Vec<(Option<String>, Option<(String, u64, usize)>)> {
     let mut result = Vec::new();
     for name in storage_group {
-        let r = storage_get_last_block_stored(network, name).await;
+        let r = storage_get_last_stored_info(network, name).await;
         result.push(r);
     }
     result
@@ -1295,6 +1329,14 @@ fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
 
 fn len_and_map<K, V>(values: &BTreeMap<K, V>) -> (usize, &BTreeMap<K, V>) {
     (values.len(), &values)
+}
+
+fn substract_vec(value1: &[usize], value2: &[usize]) -> Vec<usize> {
+    value1
+        .iter()
+        .zip(value2.iter())
+        .map(|(v1, v2)| v1 - v2)
+        .collect()
 }
 
 fn merge_txs(
