@@ -42,6 +42,14 @@ pub struct CompleteBlock {
     pub per_node: BTreeMap<u64, MinedBlockExtraInfo>,
 }
 
+/// Different state for timeout
+#[derive(Clone, Debug)]
+pub enum ProposeBlockTimeout {
+    First,
+    None,
+    Some(Instant),
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default)]
@@ -67,7 +75,7 @@ pub struct StorageRaft {
     /// Min duration between each block poposal.
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
-    propose_block_timeout_at: Option<Instant>,
+    propose_block_timeout_at: ProposeBlockTimeout,
     /// The last id of a proposed item.
     proposed_last_id: u64,
     /// Received blocks
@@ -92,7 +100,7 @@ impl StorageRaft {
 
         let propose_block_timeout_duration =
             Duration::from_millis(config.storage_block_timeout as u64);
-        let propose_block_timeout_at = Some(Instant::now() + propose_block_timeout_duration);
+        let propose_block_timeout_at = ProposeBlockTimeout::First;
 
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
@@ -126,14 +134,6 @@ impl StorageRaft {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.raft_active.close_raft_loop().await
-    }
-
-    /// Add any ready local blocks.
-    pub async fn propose_received_part_block(&mut self) {
-        let local_blocks = std::mem::take(&mut self.local_blocks);
-        for block in local_blocks.into_iter() {
-            self.propose_item(&StorageRaftItem::PartBlock(block)).await;
-        }
     }
 
     /// Blocks & waits for a next commit from a peer.
@@ -190,7 +190,7 @@ impl StorageRaft {
 
     /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) -> Option<()> {
-        if let Some(time) = self.propose_block_timeout_at {
+        if let ProposeBlockTimeout::Some(time) = self.propose_block_timeout_at {
             time::delay_until(time).await;
             Some(())
         } else {
@@ -202,11 +202,19 @@ impl StorageRaft {
     /// Signal that the current block should complete.
     /// Reset timeout, Only restart it when complete block is generated.
     pub async fn propose_block_at_timeout(&mut self) {
-        self.propose_block_timeout_at = None;
+        self.propose_block_timeout_at = ProposeBlockTimeout::None;
         self.propose_item(&StorageRaftItem::CompleteBlock(
             self.consensused.current_block_num,
         ))
         .await;
+    }
+
+    /// Add any ready local blocks.
+    pub async fn propose_received_part_block(&mut self) {
+        let local_blocks = std::mem::take(&mut self.local_blocks);
+        for block in local_blocks.into_iter() {
+            self.propose_item(&StorageRaftItem::PartBlock(block)).await;
+        }
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
@@ -231,6 +239,12 @@ impl StorageRaft {
         common: CommonBlockInfo,
         mined_info: MinedBlockExtraInfo,
     ) {
+        if let ProposeBlockTimeout::First = &self.propose_block_timeout_at {
+            // Wait for compute and other nodes to be ready so we do not unecessarily
+            // timeout early on first block.
+            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+        }
+
         self.local_blocks.push(ReceivedBlock {
             peer,
             common,
@@ -239,8 +253,12 @@ impl StorageRaft {
     }
 
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
-        self.propose_block_timeout_at = Some(Instant::now() + self.propose_block_timeout_duration);
+        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
         self.consensused.generate_complete_block()
+    }
+
+    fn next_propose_block_timeout_at(&mut self) -> ProposeBlockTimeout {
+        ProposeBlockTimeout::Some(Instant::now() + self.propose_block_timeout_duration)
     }
 }
 

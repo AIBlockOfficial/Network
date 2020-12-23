@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{DbMode, StorageNodeConfig};
 use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{DbIteratorItem, SimpleDb};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
@@ -234,50 +234,62 @@ impl StorageNode {
         }
     }
 
-    fn store_complete_block(&mut self, mut complete: CompleteBlock) {
+    fn store_complete_block(&mut self, complete: CompleteBlock) {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
-
-        if complete.common.block.header.b_num == 0 {
-            // No mining on first block
-            complete.per_node.clear();
-        }
 
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
         let hash_input = Bytes::from(serialize(&complete).unwrap());
-        let hash_digest = Sha3_256::digest(&hash_input);
-        let hash_key = hex::encode(hash_digest);
-        self.db.put(hash_key.clone(), hash_input).unwrap();
+        let hash_key = {
+            let hash_digest = Sha3_256::digest(&hash_input);
+            hex::encode(hash_digest)
+        };
+        let mining_transactions = complete
+            .per_node
+            .values()
+            .map(|v| v.mining_tx.clone())
+            .collect();
 
-        // Save each transaction
-        for (tx_hash, tx_value) in &complete.common.block_txs {
-            let tx_input = Bytes::from(serialize(tx_value).unwrap());
-            self.db.put(tx_hash, tx_input).unwrap();
+        // Save Block
+        self.db.put(&hash_key, &hash_input).unwrap();
+
+        // Save each transaction and mining transactions
+        let all_txs = complete.common.block_txs.iter().chain(&mining_transactions);
+        for (tx_hash, tx_value) in all_txs {
+            let tx_input = serialize(tx_value).unwrap();
+            self.db.put(tx_hash, &tx_input).unwrap();
         }
 
         let stored_info = BlockStoredInfo {
             block_hash: hash_key,
             block_num: complete.common.block.header.b_num,
-            mining_transactions: complete
-                .per_node
-                .values()
-                .map(|v| v.mining_tx.clone())
-                .collect(),
+            mining_transactions,
         };
-
         self.last_block_stored = Some(stored_info);
     }
 
+    /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         &self.last_block_stored
     }
 
+    /// Get the stored value at the given key
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
         self.db.get(key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
             None
         })
+    }
+
+    /// Get count of all the stored values
+    pub fn get_stored_values_count(&self) -> usize {
+        self.db.count()
+    }
+
+    /// Get all the stored (key, values)
+    pub fn get_stored_cloned_key_values(&self) -> impl Iterator<Item = DbIteratorItem> + '_ {
+        self.db.iter_clone()
     }
 
     /// Sends the latest block to storage

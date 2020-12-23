@@ -1,7 +1,9 @@
-use rocksdb::{DBCompressionType, Error as DBError, Options, DB};
+use rocksdb::{DBCompressionType, Error as DBError, IteratorMode, Options, DB};
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+
+pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 
 /// Database that can store in memory or using rocksDB.
 pub enum SimpleDb {
@@ -78,6 +80,30 @@ impl SimpleDb {
         match self {
             Self::File { db, .. } => db.get(key),
             Self::InMemory { key_values } => Ok(key_values.get(key.as_ref()).cloned()),
+        }
+    }
+
+    /// Count entries from database
+    pub fn count(&self) -> usize {
+        match self {
+            Self::File { db, .. } => db.iterator(IteratorMode::Start).count(),
+            Self::InMemory { key_values } => key_values.len(),
+        }
+    }
+
+    /// Get entries from database
+    pub fn iter_clone(&self) -> Box<dyn Iterator<Item = DbIteratorItem> + '_> {
+        match self {
+            Self::File { db, .. } => {
+                let iter = db
+                    .iterator(IteratorMode::Start)
+                    .map(|(k, v)| (k.to_vec(), v.to_vec()));
+                Box::new(iter)
+            }
+            Self::InMemory { key_values } => {
+                let iter = key_values.iter().map(|(k, v)| (k.clone(), v.clone()));
+                Box::new(iter)
+            }
         }
     }
 }

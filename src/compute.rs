@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{BLOCK_SIZE, PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
+use crate::constants::{PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
@@ -301,19 +301,6 @@ impl ComputeNode {
         self.node_raft.set_committed_mining_block(block, block_tx)
     }
 
-    /// Generates a garbage file for use in network testing. Will save the file
-    /// as the current block internally
-    ///
-    /// TODO: Fill with random tx hashes
-    ///
-    /// ### Arguments
-    ///
-    /// * `size`    - Size of the file in bytes
-    pub fn generate_garbage_block(&mut self, size: usize) {
-        let _garbage_block = vec![0; size];
-        // self.current_block = garbage_block;
-    }
-
     /// Generates a garbage random num for use in network testing
     ///
     /// ### Arguments
@@ -499,6 +486,7 @@ impl ComputeNode {
                     trace!("handle_next_event commit {:?}", commit_data);
                     match self.node_raft.received_commit(commit_data).await {
                         Some(CommittedItem::FirstBlock) => {
+                            self.node_raft.generate_first_block();
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "First Block committed",
@@ -664,8 +652,6 @@ impl ComputeNode {
 
     /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        self.generate_garbage_block(BLOCK_SIZE);
-
         for (peer, _) in self.request_list.clone() {
             let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
             let _result = self.send_block(peer_addr).await.unwrap();

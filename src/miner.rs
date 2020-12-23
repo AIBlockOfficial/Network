@@ -29,7 +29,7 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 
-use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 
 /// Result wrapper for miner errors
@@ -87,7 +87,7 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug)]
 pub struct MinerNode {
     node: Node,
-    pub partition_key: Key,
+    pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
     pub current_block: Block,
     pub current_coinbase: Transaction,
@@ -111,7 +111,7 @@ impl MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             partition_list: Vec::new(),
             rand_num: Vec::new(),
-            partition_key: gen_key(),
+            partition_key: None,
             current_block: Block::new(),
             current_coinbase: Transaction::new(),
             last_pow: Arc::new(RwLock::new(ProofOfWork {
@@ -197,7 +197,7 @@ impl MinerNode {
 
     /// Handles the receipt of the filled partition list
     fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
-        self.partition_key = get_partition_entry_key(&p_list);
+        self.partition_key = Some(get_partition_entry_key(&p_list));
         self.partition_list = p_list;
 
         Response {
