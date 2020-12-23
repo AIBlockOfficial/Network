@@ -159,12 +159,13 @@ pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
     Key(key_slice)
 }
 
-pub fn format_parition_pow_address(addr: SocketAddr, rand_num: &[u8]) -> String {
-    format!("{}-{}", addr, hex::encode(rand_num))
+pub fn format_parition_pow_address(addr: SocketAddr) -> String {
+    format!("{}", addr)
 }
 
-pub fn validate_pow_for_address(pow: &ProofOfWork) -> bool {
+pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) -> bool {
     let mut pow_body = pow.address.as_bytes().to_vec();
+    pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
     validate_pow(&pow_body)

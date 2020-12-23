@@ -615,9 +615,8 @@ impl ComputeNode {
             };
         }
 
-        let expected_address = format_parition_pow_address(peer, &self.current_random_num);
-        if expected_address != partition_entry.address
-            || !validate_pow_for_address(&partition_entry)
+        if format_parition_pow_address(peer) != partition_entry.address
+            || !validate_pow_for_address(&partition_entry, &Some(&self.current_random_num))
         {
             return Response {
                 success: false,

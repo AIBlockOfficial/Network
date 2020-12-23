@@ -306,18 +306,21 @@ impl MinerNode {
 
     /// Generates a valid Partition PoW
     pub async fn generate_partition_pow(&mut self) -> Result<ProofOfWork> {
-        let address_proof = format_parition_pow_address(self.address(), &self.rand_num);
-        Self::generate_pow_for_address(address_proof).await
+        let address_proof = format_parition_pow_address(self.address());
+        Self::generate_pow_for_address(address_proof, Some(self.rand_num.clone())).await
     }
 
-    async fn generate_pow_for_address(address: String) -> Result<ProofOfWork> {
+    async fn generate_pow_for_address(
+        address: String,
+        rand_num: Option<Vec<u8>>,
+    ) -> Result<ProofOfWork> {
         Ok(task::spawn_blocking(move || {
             let mut pow = ProofOfWork {
                 address,
                 nonce: Self::generate_nonce(),
             };
 
-            while !validate_pow_for_address(&pow) {
+            while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
                 pow.nonce = Self::generate_nonce();
             }
 
@@ -332,7 +335,7 @@ impl MinerNode {
     ///
     /// * `address` - Payment address for a valid PoW
     pub async fn generate_pow_promise(&mut self, address: String) -> Result<Vec<u8>> {
-        let pow = Self::generate_pow_for_address(address).await?;
+        let pow = Self::generate_pow_for_address(address, None).await?;
 
         *(self.last_pow.write().await) = pow.clone();
         let mut pow_body = pow.address.as_bytes().to_vec();
