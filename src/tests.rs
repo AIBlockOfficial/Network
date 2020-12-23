@@ -109,7 +109,8 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All, cfg_num).await;
+    create_first_block_act(&mut network).await;
+    send_first_block_to_storage_act(&mut network, cfg_num).await;
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     proof_of_work_act(&mut network).await;
@@ -130,44 +131,31 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn first_block_no_raft() {
-    first_block(complete_network_config(10000)).await;
+async fn create_first_block_no_raft() {
+    create_first_block(complete_network_config(10000)).await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn first_block_raft_1_node() {
-    first_block(complete_network_config_with_n_compute_raft(10010, 1)).await;
+async fn create_first_block_raft_1_node() {
+    create_first_block(complete_network_config_with_n_compute_raft(10010, 1)).await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn first_block_raft_2_nodes() {
-    first_block(complete_network_config_with_n_compute_raft(10020, 2)).await;
+async fn create_first_block_raft_2_nodes() {
+    create_first_block(complete_network_config_with_n_compute_raft(10020, 2)).await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn first_block_raft_3_nodes() {
-    first_block(complete_network_config_with_n_compute_raft(10030, 3)).await;
+async fn create_first_block_raft_3_nodes() {
+    create_first_block(complete_network_config_with_n_compute_raft(10030, 3)).await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn first_block_raft_majority_3_nodes() {
-    first_block_common(
-        complete_network_config_with_n_compute_raft(10040, 3),
-        CfgNum::Majority,
-    )
-    .await;
+async fn create_first_block_raft_20_nodes() {
+    create_first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
 }
 
-#[tokio::test(basic_scheduler)]
-async fn first_block_raft_20_nodes() {
-    first_block(complete_network_config_with_n_compute_raft(10050, 20)).await;
-}
-
-async fn first_block(network_config: NetworkConfig) {
-    first_block_common(network_config, CfgNum::All).await;
-}
-
-async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
+async fn create_first_block(network_config: NetworkConfig) {
     test_step_start();
 
     //
@@ -175,14 +163,12 @@ async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let storage_nodes = &network_config.storage_nodes;
     let expected_utxo = network.collect_initial_uxto_set();
-    let (expected0, _block_info) = complete_block(0, None, &expected_utxo, 0);
 
     //
     // Act
     //
-    first_block_act(&mut network, Cfg::All, cfg_num).await;
+    create_first_block_act(&mut network).await;
 
     //
     // Assert
@@ -190,6 +176,76 @@ async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     assert_eq!(utxo_set_after, node_all(compute_nodes, expected_utxo));
 
+    test_step_complete(network).await;
+}
+
+async fn create_first_block_act(network: &mut Network) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+
+    info!("Test Step Create first Block");
+    node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_no_raft() {
+    send_first_block_to_storage(complete_network_config(10800)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_raft_1_node() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10810, 1)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_raft_2_nodes() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10820, 2)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_raft_3_nodes() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10830, 3)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_raft_majority_3_nodes() {
+    send_first_block_to_storage_common(
+        complete_network_config_with_n_compute_raft(10840, 3),
+        CfgNum::Majority,
+    )
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn send_first_block_to_storage_raft_20_nodes() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 20)).await;
+}
+
+async fn send_first_block_to_storage(network_config: NetworkConfig) {
+    send_first_block_to_storage_common(network_config, CfgNum::All).await;
+}
+
+async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_num: CfgNum) {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_from_config(&network_config).await;
+    let storage_nodes = &network_config.storage_nodes;
+    let initial_utxo = network.collect_initial_uxto_set();
+    let (expected0, _block_info) = complete_block(0, None, &initial_utxo, 0);
+
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act
+    //
+    send_first_block_to_storage_act(&mut network, cfg_num).await;
+
+    //
+    // Assert
+    //
     let actual0 = storage_all_get_last_block_stored(&mut network, storage_nodes).await;
     assert_eq!(
         actual0[0],
@@ -206,21 +262,18 @@ async fn first_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_complete(network).await;
 }
 
-async fn first_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
+async fn send_first_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
     let storage_nodes = &config.storage_nodes;
     let msg_c_nodes = &node_select(compute_nodes, cfg_num);
     let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
-    info!("Test Step First Block");
-    node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
-    if cfg != Cfg::IgnoreStorage {
-        compute_all_connect_to_storage(network, compute_nodes).await;
-        compute_all_send_first_block_to_storage(network, msg_c_nodes).await;
-        storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
-        node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
-    }
+    info!("Test Step Send first Block to storage");
+    compute_all_connect_to_storage(network, compute_nodes).await;
+    compute_all_send_first_block_to_storage(network, msg_c_nodes).await;
+    storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+    node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -257,7 +310,7 @@ async fn add_transactions(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let (transactions, _t_hash, tx) = valid_transactions(true);
-    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    create_first_block_act(&mut network).await;
 
     //
     // Act
@@ -334,7 +387,8 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let compute_nodes = &network_config.compute_nodes;
     let (transactions, t_hash, tx) = valid_transactions(true);
 
-    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    create_first_block_act(&mut network).await;
+    send_first_block_to_storage_act(&mut network, CfgNum::All).await;
     add_transactions_act(&mut network, &tx).await;
 
     //
@@ -410,7 +464,7 @@ async fn proof_of_work(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    first_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -513,7 +567,8 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
     let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
 
-    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    create_first_block_act(&mut network).await;
+    send_first_block_to_storage_act(&mut network, CfgNum::All).await;
     compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
     compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
 
@@ -612,7 +667,8 @@ async fn create_third_block_common(network_config: NetworkConfig, cfg_num: CfgNu
     let (transactions, t_hash, tx) = valid_transactions(true);
     let (_expected1, block_info1) = complete_block(1, Some("0"), &BTreeMap::new(), c_mined.len());
 
-    first_block_act(&mut network, Cfg::All, CfgNum::All).await;
+    create_first_block_act(&mut network).await;
+    send_first_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
