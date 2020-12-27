@@ -356,13 +356,6 @@ pub trait ComputeInterface {
 
     /// Returns the next block reward value
     fn get_next_block_reward(&self) -> f64;
-
-    /// Validates a PoW
-    ///
-    /// ### Arguments
-    ///
-    /// * `pow` - PoW to validate
-    fn validate_pow(pow: &mut ProofOfWork) -> bool;
 }
 
 ///============ USER NODE ============///

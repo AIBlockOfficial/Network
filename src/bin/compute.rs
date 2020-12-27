@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match response {
                     Ok(Response {
                         success: true,
-                        reason: "Partition request received successfully",
+                        reason: "Received partition request successfully",
                     }) => {
                         let _flood = node.flood_rand_num_to_requesters().await.unwrap();
                     }
@@ -117,10 +117,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Partition list is full",
                     }) => {
-                        let _list_flood = node.flood_list_to_partition().await.unwrap();
+                        node.flood_list_to_partition().await.unwrap();
                         node.partition_list = Vec::new();
 
-                        let _block_flood = node.flood_block_to_partition().await.unwrap();
+                        if node.get_mining_block().is_some() {
+                            node.flood_block_to_partition().await.unwrap();
+                        }
                     }
                     Ok(Response {
                         success: true,
@@ -143,8 +145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "First Block committed",
                     }) => {
-                        println!("Block ready to be mined: {:?}", node.get_mining_block());
-                        let _write_to_store = node.send_first_block_to_storage().await.unwrap();
+                        println!("First Block ready to mine: {:?}", node.get_mining_block());
+                        node.flood_block_to_partition().await.unwrap();
 
                         // Only add transactions when they can be accepted
                         let resp = node.inject_next_event(
@@ -157,7 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Block committed",
                     }) => {
-                        println!("Block ready to be mined: {:?}", node.get_mining_block());
+                        println!("Block ready to mine: {:?}", node.get_mining_block());
+                        node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {
                         success: true,

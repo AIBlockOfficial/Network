@@ -388,6 +388,11 @@ impl ComputeRaft {
         self.consensused.take_mining_block()
     }
 
+    /// Processes the very first block with utxo_set
+    pub fn generate_first_block(&mut self) {
+        self.consensused.generate_first_block()
+    }
+
     /// Processes the next batch of transactions from the floating tx pool
     /// to create the next block
     pub fn generate_block(&mut self) {
@@ -433,6 +438,15 @@ impl ComputeConsensused {
         let block = std::mem::take(&mut self.current_block).unwrap();
         let block_tx = std::mem::take(&mut self.current_block_tx);
         (block, block_tx)
+    }
+
+    /// Processes the very first block with utxo_set
+    pub fn generate_first_block(&mut self) {
+        let next_block_tx = self.utxo_set.clone();
+        let mut next_block = Block::new();
+        next_block.transactions = next_block_tx.keys().cloned().collect();
+
+        self.set_committed_mining_block(next_block, next_block_tx)
     }
 
     /// Processes the next batch of transactions from the floating tx pool

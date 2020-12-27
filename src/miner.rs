@@ -1,19 +1,21 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
-use crate::constants::{MINING_DIFFICULTY, PEER_LIMIT};
+use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
 };
-use crate::utils::get_partition_entry_key;
+use crate::utils::{
+    format_parition_pow_address, get_partition_entry_key, validate_pow_block,
+    validate_pow_for_address,
+};
 use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore};
 use crate::Node;
-use bincode::{deserialize, serialize};
+use bincode::deserialize;
 use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use std::{
     collections::BTreeMap,
-    convert::TryInto,
     error::Error,
     fmt,
     net::SocketAddr,
@@ -27,7 +29,7 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 
-use sodiumoxide::crypto::secretbox::{gen_key, Key};
+use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 
 /// Result wrapper for miner errors
@@ -85,7 +87,7 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug)]
 pub struct MinerNode {
     node: Node,
-    pub partition_key: Key,
+    pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
     pub current_block: Block,
     pub current_coinbase: Transaction,
@@ -109,7 +111,7 @@ impl MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             partition_list: Vec::new(),
             rand_num: Vec::new(),
-            partition_key: gen_key(),
+            partition_key: None,
             current_block: Block::new(),
             current_coinbase: Transaction::new(),
             last_pow: Arc::new(RwLock::new(ProofOfWork {
@@ -195,11 +197,7 @@ impl MinerNode {
 
     /// Handles the receipt of the filled partition list
     fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
-        let key = get_partition_entry_key(p_list.clone());
-        let hashed_key = Sha3_256::digest(&key).to_vec();
-        let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
-        self.partition_key = Key(key_slice);
-
+        self.partition_key = Some(get_partition_entry_key(&p_list));
         self.partition_list = p_list;
 
         Response {
@@ -261,63 +259,25 @@ impl MinerNode {
         Ok(())
     }
 
-    /// Validates a PoW
-    ///
-    /// ### Arguments
-    ///
-    /// * `pow` - PoW to validate
-    pub fn validate_pow(pow: &mut ProofOfWork) -> bool {
-        let mut pow_body = pow.address.as_bytes().to_vec();
-        pow_body.append(&mut pow.nonce.clone());
-
-        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
-
-        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
-            if entry != 0 {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    /// I'm lazy, so just making another verifier for now
-    pub fn validate_pow_block(pow: &mut ProofOfWorkBlock) -> bool {
-        let mut pow_body = Bytes::from(serialize(&pow.block).unwrap()).to_vec();
-        pow_body.append(&mut pow.nonce.clone());
-
-        let pow_hash = Sha3_256::digest(&pow_body).to_vec();
-
-        for entry in pow_hash[0..MINING_DIFFICULTY].to_vec() {
-            if entry != 0 {
-                return false;
-            }
-        }
-
-        true
-    }
-
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
-    ///
-    /// ### Arguments
-    ///
-    /// * `block` - The block to get the PoW for
-    pub async fn generate_pow_for_block(
+    pub async fn generate_pow_for_current_block(
         &mut self,
-        block: Block,
     ) -> Result<(ProofOfWorkBlock, Transaction)> {
+        let (pow, tx) = Self::generate_pow_for_block(self.current_block.clone()).await?;
+        self.current_coinbase = tx.clone();
+        Ok((pow, tx))
+    }
+
+    async fn generate_pow_for_block(mut block: Block) -> Result<(ProofOfWorkBlock, Transaction)> {
         Ok(task::spawn_blocking(move || {
-            let mut nonce = Self::generate_nonce();
             let (pk, _sk) = sign::gen_keypair();
             let address = construct_address(pk, 0);
 
             let current_coinbase = construct_coinbase_tx(12, block.header.time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
-
-            let mut block_for_pow = block;
-            block_for_pow.transactions.push(coinbase_hash.clone());
+            block.transactions.push(coinbase_hash.clone());
 
             // Create address and save to wallet
             let address = construct_address(pk, 0);
@@ -331,13 +291,12 @@ impl MinerNode {
 
             // Construct PoW block for mining
             let mut pow = ProofOfWorkBlock {
-                nonce,
-                block: block_for_pow,
+                nonce: Self::generate_nonce(),
+                block,
             };
 
-            while !Self::validate_pow_block(&mut pow) {
-                nonce = Self::generate_nonce();
-                pow.nonce = nonce;
+            while !validate_pow_block(&pow) {
+                pow.nonce = Self::generate_nonce();
             }
 
             (pow, current_coinbase)
@@ -345,19 +304,24 @@ impl MinerNode {
         .await?)
     }
 
-    /// Generates a valid PoW
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - Payment address for a valid PoW
-    pub async fn generate_pow(&mut self, address: String) -> Result<ProofOfWork> {
-        Ok(task::spawn_blocking(move || {
-            let mut nonce = Self::generate_nonce();
-            let mut pow = ProofOfWork { address, nonce };
+    /// Generates a valid Partition PoW
+    pub async fn generate_partition_pow(&mut self) -> Result<ProofOfWork> {
+        let address_proof = format_parition_pow_address(self.address());
+        Self::generate_pow_for_address(address_proof, Some(self.rand_num.clone())).await
+    }
 
-            while !Self::validate_pow(&mut pow) {
-                nonce = Self::generate_nonce();
-                pow.nonce = nonce;
+    async fn generate_pow_for_address(
+        address: String,
+        rand_num: Option<Vec<u8>>,
+    ) -> Result<ProofOfWork> {
+        Ok(task::spawn_blocking(move || {
+            let mut pow = ProofOfWork {
+                address,
+                nonce: Self::generate_nonce(),
+            };
+
+            while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
+                pow.nonce = Self::generate_nonce();
             }
 
             pow
@@ -371,7 +335,7 @@ impl MinerNode {
     ///
     /// * `address` - Payment address for a valid PoW
     pub async fn generate_pow_promise(&mut self, address: String) -> Result<Vec<u8>> {
-        let pow = self.generate_pow(address).await?;
+        let pow = Self::generate_pow_for_address(address, None).await?;
 
         *(self.last_pow.write().await) = pow.clone();
         let mut pow_body = pow.address.as_bytes().to_vec();
