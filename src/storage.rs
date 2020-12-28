@@ -130,7 +130,7 @@ impl StorageNode {
     }
 
     /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> impl Future<Output = Result<()>> {
+    pub fn connect_to_raft_peers(&self) -> impl Future<Output = ()> {
         loop_connnect_to_peers_async(
             self.node.clone(),
             self.node_raft.raft_peer_to_connect().cloned().collect(),

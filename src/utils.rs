@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Node};
+use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::{
@@ -76,17 +76,15 @@ impl<T> MpscTracingSender<T> {
 }
 
 /// Return future that will connect to given peers on the network.
-pub async fn loop_connnect_to_peers_async<E: From<CommsError>>(
-    mut node: Node,
-    peers: Vec<SocketAddr>,
-) -> Result<(), E> {
+pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>) {
     for peer in peers {
         trace!(?peer, "Try to connect to");
-        let res = node.connect_to(peer).await;
-        trace!(?peer, ?res, "Try to connect to result-");
-        res?;
+        while let Err(e) = node.connect_to(peer).await {
+            trace!(?peer, ?e, "Try to connect to failed");
+            tokio::time::delay_for(Duration::from_millis(500)).await;
+        }
+        trace!(?peer, "Try to connect to succeeded");
     }
-    Ok(())
 }
 
 /// Creates a "fake" transaction to save to the local wallet
