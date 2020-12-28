@@ -10,10 +10,11 @@ use crate::storage_raft::{CompleteBlock, StorageRaft};
 use crate::utils::loop_connnect_to_peers_async;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use serde::Serialize;
+use naom::primitives::{block::Block, transaction::Transaction};
+use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sha3::Sha3_256;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -61,6 +62,13 @@ impl From<bincode::Error> for StorageError {
     fn from(other: bincode::Error) -> Self {
         Self::Serialization(other)
     }
+}
+
+/// Mined block as stored in DB.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredSerializingBlock {
+    pub block: Block,
+    pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -240,30 +248,43 @@ impl StorageNode {
 
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
-        let hash_input = Bytes::from(serialize(&complete).unwrap());
-        let hash_key = {
-            let hash_digest = Sha3_256::digest(&hash_input);
+
+        let (stored_block, block_txs, mining_transactions, block_num) = {
+            let CompleteBlock { common, per_node } = complete;
+            let block_num = common.block.header.b_num;
+            let stored_block = StoredSerializingBlock {
+                block: common.block,
+                mining_tx_hash_and_nonces: per_node
+                    .iter()
+                    .map(|(idx, v)| (*idx, (v.mining_tx.0.clone(), v.nonce.clone())))
+                    .collect(),
+            };
+            let block_txs = common.block_txs;
+            let mining_transactions: BTreeMap<_, _> =
+                per_node.into_iter().map(|(_, v)| v.mining_tx).collect();
+
+            (stored_block, block_txs, mining_transactions, block_num)
+        };
+
+        let block_input = serialize(&stored_block).unwrap();
+        let block_hash = {
+            let hash_digest = Sha3_256::digest(&block_input);
             hex::encode(hash_digest)
         };
-        let mining_transactions = complete
-            .per_node
-            .values()
-            .map(|v| v.mining_tx.clone())
-            .collect();
 
         // Save Block
-        self.db.put(&hash_key, &hash_input).unwrap();
+        self.db.put(&block_hash, &block_input).unwrap();
 
         // Save each transaction and mining transactions
-        let all_txs = complete.common.block_txs.iter().chain(&mining_transactions);
+        let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
             self.db.put(tx_hash, &tx_input).unwrap();
         }
 
         let stored_info = BlockStoredInfo {
-            block_hash: hash_key,
-            block_num: complete.common.block.header.b_num,
+            block_hash,
+            block_num,
             mining_transactions,
         };
         self.last_block_stored = Some(stored_info);
@@ -280,6 +301,25 @@ impl StorageNode {
             warn!("get_stored_value error: {}", e);
             None
         })
+    }
+
+    /// Get the stored block at the given key
+    pub fn get_stored_block<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+    ) -> Result<Option<StoredSerializingBlock>> {
+        Ok(self
+            .get_stored_value(key)
+            .map(|v| deserialize::<StoredSerializingBlock>(&v))
+            .transpose()?)
+    }
+
+    /// Get the stored Transaction at the given key
+    pub fn get_stored_tx<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Transaction>> {
+        Ok(self
+            .get_stored_value(key)
+            .map(|v| deserialize::<Transaction>(&v))
+            .transpose()?)
     }
 
     /// Get count of all the stored values

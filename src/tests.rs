@@ -5,11 +5,11 @@ use crate::constants::{DB_PATH, DB_PATH_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
 };
-use crate::storage::StorageNode;
+use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
-use bincode::{deserialize, serialize};
+use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
@@ -1102,15 +1102,7 @@ async fn storage_get_last_stored_info(
 ) -> (Option<String>, Option<(String, u64, usize)>) {
     let s = network.storage(storage).unwrap().lock().await;
     if let Some(info) = s.get_last_block_stored() {
-        let complete = s
-            .get_stored_value(&info.block_hash)
-            .map(|v| deserialize::<CompleteBlock>(&v))
-            .map(|v| {
-                v.map_or_else(
-                    |e| format!("error: {:?}", e),
-                    |complete| format!("{:?}", complete),
-                )
-            });
+        let complete = storage_get_stored_complete_block_for_node(&s, &info.block_hash);
 
         (
             complete,
@@ -1123,6 +1115,45 @@ async fn storage_get_last_stored_info(
     } else {
         (None, None)
     }
+}
+
+fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str) -> Option<String> {
+    let stored_block = match s.get_stored_block(block_hash) {
+        Err(e) => return Some(format!("error: {:?}", e)),
+        Ok(None) => return None,
+        Ok(Some(v)) => v,
+    };
+
+    let mut block_txs = BTreeMap::new();
+    for tx_hash in &stored_block.block.transactions {
+        let stored_tx = match s.get_stored_tx(tx_hash) {
+            Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
+            Ok(None) => return Some(format!("error tx not found: {:?}", tx_hash)),
+            Ok(Some(v)) => v,
+        };
+        block_txs.insert(tx_hash.clone(), stored_tx);
+    }
+
+    let mut per_node = BTreeMap::new();
+    for (idx, (tx_hash, nonce)) in &stored_block.mining_tx_hash_and_nonces {
+        let stored_tx = match s.get_stored_tx(tx_hash) {
+            Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
+            Ok(None) => return Some(format!("error mining tx not found: {:?}", tx_hash)),
+            Ok(Some(v)) => v,
+        };
+        per_node.insert(
+            *idx,
+            MinedBlockExtraInfo {
+                nonce: nonce.clone(),
+                mining_tx: (tx_hash.clone(), stored_tx),
+            },
+        );
+    }
+
+    let block = stored_block.block;
+    let common = CommonBlockInfo { block, block_txs };
+    let complete = CompleteBlock { common, per_node };
+    Some(format!("{:?}", complete))
 }
 
 async fn storage_all_get_last_stored_info(
@@ -1400,9 +1431,17 @@ fn complete_block(
         },
         per_node,
     };
+    let stored = StoredSerializingBlock {
+        block: complete.common.block.clone(),
+        mining_tx_hash_and_nonces: complete
+            .per_node
+            .iter()
+            .map(|(idx, v)| (*idx, (v.mining_tx.0.clone(), v.nonce.clone())))
+            .collect(),
+    };
 
     let hash_key = {
-        let hash_input = serialize(&complete).unwrap();
+        let hash_input = serialize(&stored).unwrap();
         let hash_digest = Sha3_256::digest(&hash_input);
         hex::encode(hash_digest)
     };
