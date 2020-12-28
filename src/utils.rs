@@ -1,6 +1,6 @@
 use crate::comms_handler::{CommsError, Node};
 use crate::constants::MINING_DIFFICULTY;
-use crate::interfaces::{ProofOfWork, ProofOfWorkBlock};
+use crate::interfaces::ProofOfWork;
 use crate::wallet::{
     construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
     AddressStore, TransactionStore,
@@ -11,6 +11,7 @@ use naom::primitives::transaction_utils::{
 };
 use naom::primitives::{
     asset::Asset,
+    block::Block,
     transaction::{Transaction, TxConstructor},
 };
 use sha3::{Digest, Sha3_256};
@@ -159,10 +160,17 @@ pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
     Key(key_slice)
 }
 
+/// Address to be used in Proof of Work
 pub fn format_parition_pow_address(addr: SocketAddr) -> String {
     format!("{}", addr)
 }
 
+/// Block to be used in Proof of Work
+pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
+    serialize(block).unwrap()
+}
+
+/// Validate Proof of Work an address with a random number
 pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) -> bool {
     let mut pow_body = pow.address.as_bytes().to_vec();
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
@@ -171,14 +179,19 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     validate_pow(&pow_body)
 }
 
-/// I'm lazy, so just making another verifier for now
-pub fn validate_pow_block(pow: &ProofOfWorkBlock) -> bool {
-    let mut pow_body = serialize(&pow.block).unwrap();
-    pow_body.extend(&pow.nonce);
+/// Validate Proof of Work for a block with a mining transaction
+/// Note: serialized_block is also manipulated as a buffer and restored before return.
+pub fn validate_pow_block(serialized_block: &mut Vec<u8>, mining_tx: &str, nonce: &[u8]) -> bool {
+    let serialized_block_len = serialized_block.len();
+    serialized_block.extend(mining_tx.as_bytes());
+    serialized_block.extend(nonce);
 
-    validate_pow(&pow_body)
+    let result = validate_pow(&serialized_block);
+    serialized_block.truncate(serialized_block_len);
+    result
 }
 
+/// Check the hash of given data reach MINING_DIFFICULTY
 fn validate_pow(pow: &[u8]) -> bool {
     let pow_hash = Sha3_256::digest(pow).to_vec();
     pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)

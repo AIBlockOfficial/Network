@@ -9,7 +9,7 @@ use crate::interfaces::{
 use crate::unicorn::UnicornShard;
 use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
-    validate_pow_block, validate_pow_for_address,
+    serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -733,13 +733,15 @@ impl ComputeInterface for ComputeNode {
         info!(?address, "Received PoW");
         let coinbase_hash = construct_tx_hash(&coinbase);
 
-        if self.node_raft.get_mining_block().is_none() {
+        let mut mining_block = if let Some(mining_block) = self.node_raft.get_mining_block() {
+            serialize_block_for_pow(mining_block)
+        } else {
             // TODO: Verify the pow block is expected block.
             return Response {
                 success: false,
                 reason: "Not mining given block",
             };
-        }
+        };
 
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
@@ -748,7 +750,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !validate_pow_block(&pow) {
+        if !validate_pow_block(&mut mining_block, &coinbase_hash, &pow.nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
