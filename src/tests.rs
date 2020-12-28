@@ -1264,8 +1264,8 @@ async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let (pow, transaction) = m.generate_pow_for_current_block().await.unwrap();
-    m.send_pow(compute_node_addr, pow, transaction)
+    let (nonce, transaction) = m.generate_pow_for_current_block().await.unwrap();
+    m.send_pow(compute_node_addr, nonce, transaction)
         .await
         .unwrap();
 }

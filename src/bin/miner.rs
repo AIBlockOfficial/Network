@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Pre-block received successfully",
                     }) => {
                         println!("PRE-BLOCK RECEIVED");
-                        let (pow, current_coinbase) =
+                        let (nonce, current_coinbase) =
                             node.generate_pow_for_current_block().await.unwrap();
 
                         match now.elapsed() {
@@ -133,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        node.send_pow(compute_node_connected.unwrap(), pow, current_coinbase)
+                        node.send_pow(compute_node_connected.unwrap(), nonce, current_coinbase)
                             .await
                             .unwrap();
                     }

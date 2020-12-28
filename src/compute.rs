@@ -4,7 +4,7 @@ use crate::configurations::ComputeNodeConfig;
 use crate::constants::{PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
@@ -562,7 +562,7 @@ impl ComputeNode {
 
         match req {
             SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
-            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
+            SendPoW { nonce, coinbase } => Some(self.receive_pow(peer, nonce, coinbase)),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
@@ -727,7 +727,7 @@ impl ComputeInterface for ComputeNode {
     fn receive_pow(
         &mut self,
         address: SocketAddr,
-        pow: ProofOfWorkBlock,
+        nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Response {
         info!(?address, "Received PoW");
@@ -750,14 +750,14 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !validate_pow_block(&mut mining_block, &coinbase_hash, &pow.nonce) {
+        if !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
             };
         }
 
-        self.mining_block_mined(pow.nonce, (coinbase_hash, coinbase));
+        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
 
         Response {
             success: true,
