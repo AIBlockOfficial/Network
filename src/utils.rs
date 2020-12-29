@@ -10,7 +10,7 @@ use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
 };
 use naom::primitives::{
-    asset::Asset,
+    asset::{Asset, TokenAmount},
     block::Block,
     transaction::{Transaction, TxConstructor},
 };
@@ -108,7 +108,8 @@ pub async fn create_and_save_fake_to_wallet() -> Result<(), Box<dyn std::error::
     let _save_a_result = save_address_to_wallet(final_address.clone(), address_keys).await;
 
     // Save fund store
-    let _save_f_result = save_payment_to_wallet(t_hash.clone(), 4).await;
+    let payment_to_save = TokenAmount(4000);
+    let _save_f_result = save_payment_to_wallet(t_hash.clone(), payment_to_save).await;
 
     // Save transaction store
     let mut t_store = BTreeMap::new();
@@ -210,14 +211,15 @@ pub fn create_valid_transaction(
         pub_keys: vec![*pub_key],
     };
 
+    let amount = TokenAmount(4000);
     let tx_ins = construct_payment_tx_ins(vec![tx_const]);
     let payment_tx = construct_payment_tx(
         tx_ins,
         receiver_addr_hex.to_string(),
         None,
         None,
-        Asset::Token(4),
-        4,
+        Asset::Token(amount.clone()),
+        amount,
     );
     let t_hash = construct_tx_hash(&payment_tx);
     (t_hash, payment_tx)

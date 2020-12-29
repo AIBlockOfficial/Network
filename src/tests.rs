@@ -11,6 +11,7 @@ use crate::test_utils::{Network, NetworkConfig};
 use crate::utils::create_valid_transaction;
 use bincode::serialize;
 use futures::future::join_all;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
@@ -1410,7 +1411,8 @@ fn complete_block(
     block.transactions = block_txs.keys().cloned().collect();
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
-        let tx = construct_coinbase_tx(12, block.header.time, addr.clone());
+        let amount = TokenAmount(12000);
+        let tx = construct_coinbase_tx(amount, block.header.time, addr.clone());
         let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
             nonce: addr.as_bytes().to_vec(),

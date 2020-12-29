@@ -14,6 +14,7 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::construct_tx_hash;
@@ -743,7 +744,8 @@ impl ComputeInterface for ComputeNode {
             };
         };
 
-        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
+        let coinbase_amount = TokenAmount(12000);
+        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != coinbase_amount {
             return Response {
                 success: false,
                 reason: "Coinbase transaction invalid",

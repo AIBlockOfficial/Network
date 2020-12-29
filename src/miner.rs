@@ -24,6 +24,7 @@ use std::{
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
 
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
@@ -268,7 +269,8 @@ impl MinerNode {
             let (pk, _sk) = sign::gen_keypair();
             let address = construct_address(pk, 0);
 
-            let current_coinbase = construct_coinbase_tx(12, block_time, address);
+            let coinbase_amount = TokenAmount(12000);
+            let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
 
             // Create address and save to wallet

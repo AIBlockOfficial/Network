@@ -9,7 +9,7 @@ use crate::wallet::{
 };
 use bincode::deserialize;
 use bytes::Bytes;
-use naom::primitives::asset::Asset;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -78,13 +78,13 @@ impl From<bincode::Error> for UserError {
 #[derive(Debug, Clone)]
 pub struct AssetInTransit {
     pub asset: Asset,
-    pub amount: u64,
+    pub amount: TokenAmount,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReturnPayment {
     pub tx_in: TxIn,
-    pub amount: u64,
+    pub amount: TokenAmount,
     pub transaction: Transaction,
 }
 
@@ -93,7 +93,7 @@ pub struct ReturnPayment {
 pub struct UserNode {
     node: Node,
     pub assets: Vec<Asset>,
-    pub amount: u64,
+    pub amount: TokenAmount,
     pub trading_peer: Option<SocketAddr>,
     pub next_payment: Option<Transaction>,
     pub return_payment: Option<ReturnPayment>,
@@ -109,7 +109,7 @@ impl UserNode {
         Ok(UserNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
             assets: Vec::new(),
-            amount: 0,
+            amount: TokenAmount(0),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
@@ -209,10 +209,11 @@ impl UserNode {
         let hash = construct_tx_hash(&transaction);
 
         for out in transaction.outputs {
-            total_add += out.amount;
+            total_add += out.amount.0;
         }
 
-        let _ = save_payment_to_wallet(hash, total_add);
+        let total_to_save = TokenAmount(total_add);
+        let _ = save_payment_to_wallet(hash, total_to_save);
 
         Response {
             success: true,
@@ -226,15 +227,15 @@ impl UserNode {
     ///
     /// * `address` - Address to assign the payment transaction to
     pub fn make_payment_transactions(&mut self, address: String) -> Response {
-        let tx_ins = self.fetch_inputs_for_payment(self.amount);
+        let tx_ins = self.fetch_inputs_for_payment(self.amount.clone());
 
         let payment_tx = construct_payment_tx(
             tx_ins,
             address,
             None,
             None,
-            Asset::Token(self.amount),
-            self.amount,
+            Asset::Token(self.amount.clone()),
+            self.amount.clone(),
         );
         self.next_payment = Some(payment_tx);
 
@@ -253,7 +254,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `amount_required` - Amount needed
-    pub fn fetch_inputs_for_payment(&mut self, amount_required: u64) -> Vec<TxIn> {
+    pub fn fetch_inputs_for_payment(&mut self, amount_required: TokenAmount) -> Vec<TxIn> {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
@@ -273,7 +274,7 @@ impl UserNode {
         let mut fund_store: FundStore = fund_store_state.unwrap();
 
         // Ensure we have enough funds to proceed with payment
-        if fund_store.running_total < amount_required {
+        if fund_store.running_total.0 < amount_required.0 {
             panic!("Not enough funds available for payment!");
         }
 
@@ -286,28 +287,28 @@ impl UserNode {
             let current_amount = fund_store.transactions.get(&tx_hash).unwrap();
 
             // If we've reached target
-            if amount_made == amount_required {
+            if amount_made == amount_required.0 {
                 break;
             }
             // If we've overshot
-            else if current_amount + amount_made > amount_required {
-                let diff = amount_required - amount_made;
+            else if current_amount.0 + amount_made > amount_required.0 {
+                let diff = amount_required.0 - amount_made;
 
-                fund_store.running_total -= current_amount;
-                amount_made = amount_required;
+                fund_store.running_total.0 -= current_amount.0;
+                amount_made = amount_required.0;
 
                 // Add a new return payment transaction
                 let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &db, false);
                 self.return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
-                    amount: current_amount - diff,
+                    amount: TokenAmount(current_amount.0 - diff),
                     transaction: Transaction::new(),
                 });
             }
             // Else add to used stack
             else {
-                amount_made += current_amount;
-                fund_store.running_total -= current_amount;
+                amount_made += current_amount.0;
+                fund_store.running_total.0 -= current_amount.0;
             }
 
             // Add the new TxIn
@@ -334,7 +335,7 @@ impl UserNode {
     pub async fn construct_return_payment_tx(
         &mut self,
         tx_in: TxIn,
-        return_amt: u64,
+        return_amt: TokenAmount,
     ) -> Result<()> {
         let tx_ins = vec![tx_in];
         let (pk, sk) = sign::gen_keypair();
@@ -351,8 +352,8 @@ impl UserNode {
             address.clone(),
             None,
             None,
-            Asset::Token(return_amt),
-            return_amt,
+            Asset::Token(return_amt.clone()),
+            return_amt.clone(),
         );
 
         let tx_store = TransactionStore { address, net: 0 };
