@@ -9,7 +9,7 @@ image: "rust:latest"
   before_script:
     - mkdir -p cargo_cache
     - echo $CARGO_HOME
-    - sudo apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential m4 llvm libclang-dev
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential m4 llvm libclang-dev
     - git clone --depth=1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/zenotta/naom.git ../naom
   cache:
     when: 'on_success'
