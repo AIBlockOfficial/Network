@@ -4,12 +4,12 @@ use crate::configurations::ComputeNodeConfig;
 use crate::constants::{PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, ProofOfWorkBlock, Response, StorageRequest,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
-    validate_pow_block, validate_pow_for_address,
+    serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -176,7 +176,7 @@ impl ComputeNode {
     }
 
     /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> impl Future<Output = Result<()>> {
+    pub fn connect_to_raft_peers(&self) -> impl Future<Output = ()> {
         loop_connnect_to_peers_async(
             self.node.clone(),
             self.node_raft.raft_peer_to_connect().cloned().collect(),
@@ -562,7 +562,7 @@ impl ComputeNode {
 
         match req {
             SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
-            SendPoW { pow, coinbase } => Some(self.receive_pow(peer, pow, coinbase)),
+            SendPoW { nonce, coinbase } => Some(self.receive_pow(peer, nonce, coinbase)),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
@@ -727,19 +727,21 @@ impl ComputeInterface for ComputeNode {
     fn receive_pow(
         &mut self,
         address: SocketAddr,
-        pow: ProofOfWorkBlock,
+        nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Response {
         info!(?address, "Received PoW");
         let coinbase_hash = construct_tx_hash(&coinbase);
 
-        if self.node_raft.get_mining_block().is_none() {
+        let mut mining_block = if let Some(mining_block) = self.node_raft.get_mining_block() {
+            serialize_block_for_pow(mining_block)
+        } else {
             // TODO: Verify the pow block is expected block.
             return Response {
                 success: false,
                 reason: "Not mining given block",
             };
-        }
+        };
 
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != 12 {
             return Response {
@@ -748,14 +750,14 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !validate_pow_block(&pow) {
+        if !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
             };
         }
 
-        self.mining_block_mined(pow.nonce, (coinbase_hash, coinbase));
+        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
 
         Response {
             success: true,

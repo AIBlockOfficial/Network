@@ -2,11 +2,11 @@ use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, ProofOfWorkBlock, Response,
+    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, validate_pow_block,
-    validate_pow_for_address,
+    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
+    validate_pow_block, validate_pow_for_address,
 };
 use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore};
 use crate::Node;
@@ -15,7 +15,6 @@ use bytes::Bytes;
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use std::{
-    collections::BTreeMap,
     error::Error,
     fmt,
     net::SocketAddr,
@@ -221,17 +220,11 @@ impl MinerNode {
     pub async fn send_pow(
         &mut self,
         peer: SocketAddr,
-        pow_promise: ProofOfWorkBlock,
+        nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Result<()> {
         self.node
-            .send(
-                peer,
-                ComputeRequest::SendPoW {
-                    pow: pow_promise,
-                    coinbase,
-                },
-            )
+            .send(peer, ComputeRequest::SendPoW { nonce, coinbase })
             .await?;
         Ok(())
     }
@@ -262,44 +255,40 @@ impl MinerNode {
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
-    pub async fn generate_pow_for_current_block(
-        &mut self,
-    ) -> Result<(ProofOfWorkBlock, Transaction)> {
-        let (pow, tx) = Self::generate_pow_for_block(self.current_block.clone()).await?;
+    pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
+        let (pow, tx) = Self::generate_pow_for_block(&self.current_block).await?;
         self.current_coinbase = tx.clone();
         Ok((pow, tx))
     }
 
-    async fn generate_pow_for_block(mut block: Block) -> Result<(ProofOfWorkBlock, Transaction)> {
+    async fn generate_pow_for_block(block: &Block) -> Result<(Vec<u8>, Transaction)> {
+        let mut mining_block = serialize_block_for_pow(block);
+        let block_time = block.header.time;
         Ok(task::spawn_blocking(move || {
             let (pk, _sk) = sign::gen_keypair();
             let address = construct_address(pk, 0);
 
-            let current_coinbase = construct_coinbase_tx(12, block.header.time, address);
+            let current_coinbase = construct_coinbase_tx(12, block_time, address);
             let coinbase_hash = construct_tx_hash(&current_coinbase);
-            block.transactions.push(coinbase_hash.clone());
 
             // Create address and save to wallet
             let address = construct_address(pk, 0);
 
             // Create wallet content
             let transaction_store = TransactionStore { address, net: 0 };
-            let mut tx_to_save = BTreeMap::new();
-            tx_to_save.insert(coinbase_hash, transaction_store);
+            let tx_to_save = Some((coinbase_hash.clone(), transaction_store))
+                .into_iter()
+                .collect();
 
             let _save_result = save_transactions_to_wallet(tx_to_save);
 
-            // Construct PoW block for mining
-            let mut pow = ProofOfWorkBlock {
-                nonce: Self::generate_nonce(),
-                block,
-            };
-
-            while !validate_pow_block(&pow) {
-                pow.nonce = Self::generate_nonce();
+            // Mine Block with mining transaction
+            let mut nonce = Self::generate_nonce();
+            while !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
+                nonce = Self::generate_nonce();
             }
 
-            (pow, current_coinbase)
+            (nonce, current_coinbase)
         })
         .await?)
     }

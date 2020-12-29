@@ -274,7 +274,7 @@ pub trait MinerInterface {
 pub enum ComputeRequest {
     SendBlockStored(BlockStoredInfo),
     SendPoW {
-        pow: ProofOfWorkBlock,
+        nonce: Vec<u8>,
         coinbase: Transaction,
     },
     SendPartitionEntry {
@@ -294,7 +294,7 @@ impl fmt::Debug for ComputeRequest {
         match *self {
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
-                ref pow,
+                ref nonce,
                 ref coinbase,
             } => write!(f, "SendPoW"),
             SendPartitionEntry {
@@ -314,14 +314,9 @@ pub trait ComputeInterface {
     /// ### Arguments
     ///
     /// * `address`         - address for the peer providing the PoW
-    /// * `pow`             - PoW for potential inclusion
+    /// * `nonce`           - PoW for potential inclusion
     /// * `coinbase`        - Coinbase tx to validate
-    fn receive_pow(
-        &mut self,
-        peer: SocketAddr,
-        pow: ProofOfWorkBlock,
-        coinbase: Transaction,
-    ) -> Response;
+    fn receive_pow(&mut self, peer: SocketAddr, nonce: Vec<u8>, coinbase: Transaction) -> Response;
 
     /// Receives a PoW commit for UnicornShard creation
     ///

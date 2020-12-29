@@ -65,8 +65,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             // Need to connect first so Raft messages can be sent.
             println!("Start connect to compute peers");
-            let result = connect_all.await;
-            println!("Peer connect complete, start Raft: {:?}", result);
+            connect_all.await;
+            println!("Peer connect complete, start Raft");
             raft_loop.await;
             println!("Raft complete");
         })

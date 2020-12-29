@@ -90,8 +90,8 @@ impl Network {
             info!("Start connect to peers");
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
-                let result = node.connect_to_raft_peers().await;
-                info!(?result, ?name, "Peer connect complete");
+                node.connect_to_raft_peers().await;
+                info!(?name, "Peer connect complete");
             }
             info!("Peers connect complete");
 
@@ -115,8 +115,8 @@ impl Network {
             info!("Start connect to peers");
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
-                let result = node.connect_to_raft_peers().await;
-                info!(?result, ?name, "Peer connect complete");
+                node.connect_to_raft_peers().await;
+                info!(?name, "Peer connect complete");
             }
             info!("Peers connect complete");
 

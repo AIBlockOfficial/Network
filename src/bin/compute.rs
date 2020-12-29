@@ -2,6 +2,7 @@
 
 use clap::{App, Arg};
 use sodiumoxide::crypto::sign;
+use std::time::Duration;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::create_valid_transaction;
 use system::{ComputeNode, ComputeRequest, Response};
@@ -65,8 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             // Need to connect first so Raft messages can be sent.
             println!("Start connect to compute peers");
-            let result = connect_all.await;
-            println!("Peer connect complete, start Raft: {:?}", result);
+            connect_all.await;
+            println!("Peer connect complete, start Raft");
             raft_loop.await;
             println!("Raft complete");
         })
@@ -96,11 +97,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ComputeRequest::SendTransactions { transactions }
         };
 
-        let storage_connected = {
-            let result = node.connect_to_storage().await;
-            println!("Storage connection: {:?}", result);
-            result.is_ok()
-        };
+        while let Err(e) = node.connect_to_storage().await {
+            println!("Storage connection error: {:?}", e);
+            tokio::time::delay_for(Duration::from_millis(500)).await;
+        }
+        println!("Storage connection complete");
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -128,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        if storage_connected && node.has_current_mined_block() {
+                        if node.has_current_mined_block() {
                             println!("Send Block to storage");
                             println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
                             let _write_to_store = node.send_block_to_storage().await.unwrap();
