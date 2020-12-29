@@ -17,12 +17,8 @@ image: "rust:latest"
       files:
         - Cargo.lock
     paths:
-      # Rust cache
-      # https://doc.rust-lang.org/cargo/guide/cargo-home.html#caching-the-cargo-home-in-ci
-      - cargo_cache/bin
-      - cargo_cache/registry/index
-      - cargo_cache/registry/cache
-      - cargo_cache/git/db
+      # Rust cache: All cargo to handle librocksdb-sys
+      - cargo_cache
       - target/
 
 # Test and lint the project: do not build binaries
