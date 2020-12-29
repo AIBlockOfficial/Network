@@ -34,7 +34,7 @@ test:cargo:
       prefix: test
   script:
     - rustc --version && cargo --version  # Print version info for debugging
-    - cargo test --workspace --verbose
+    - cargo test --lib --workspace --verbose
 
 lint:rustfmt:
   script:
