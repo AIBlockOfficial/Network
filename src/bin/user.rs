@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Started node at {}", node.address());
 
     // Update payment amount as needed
-    node.amount = amount_to_send;
+    node.amount.0 = amount_to_send;
 
     if let Some(compute_node) = compute_node_connected {
         // Connect to a compute node.

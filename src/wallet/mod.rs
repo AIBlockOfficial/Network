@@ -2,6 +2,7 @@ use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
 use crate::db_utils::get_db_options;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -28,8 +29,8 @@ pub struct AddressStore {
 /// of the transaction and a `u64` of its holding amount
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FundStore {
-    pub running_total: u64, // TODO: Needs to be big int at some point
-    pub transactions: BTreeMap<String, u64>,
+    pub running_total: TokenAmount,
+    pub transactions: BTreeMap<String, TokenAmount>,
 }
 
 /// Generates a new payment address, saving the related keys to the wallet
@@ -136,10 +137,10 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
 ///
 /// * `hash`    - Hash of the transaction
 /// * `amount`  - Amount of tokens in the payment
-pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Error> {
+pub async fn save_payment_to_wallet(hash: String, amount: TokenAmount) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
         let mut fund_store = FundStore {
-            running_total: 0,
+            running_total: TokenAmount(0),
             transactions: BTreeMap::new(),
         };
 
@@ -155,7 +156,7 @@ pub async fn save_payment_to_wallet(hash: String, amount: u64) -> Result<(), Err
             fund_store = store;
         }
         // Update the running total and add the transaction to the tab list
-        fund_store.running_total += amount;
+        fund_store.running_total.0 += amount.0;
         fund_store.transactions.insert(hash, amount);
         // Save to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
