@@ -4,8 +4,8 @@ use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
 use crate::db_utils::get_db_options;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::wallet::{
-    construct_address, generate_payment_address, save_address_to_wallet, save_payment_to_wallet,
-    save_transactions_to_wallet, AddressStore, FundStore, TransactionStore,
+    generate_payment_address, save_payment_to_wallet, save_transactions_to_wallet, AddressStore,
+    FundStore, TransactionStore,
 };
 use bincode::deserialize;
 use bytes::Bytes;
@@ -338,14 +338,7 @@ impl UserNode {
         return_amt: TokenAmount,
     ) -> Result<()> {
         let tx_ins = vec![tx_in];
-        let (pk, sk) = sign::gen_keypair();
-        let address = construct_address(pk, 0);
-
-        let key_store = AddressStore {
-            public_key: pk,
-            secret_key: sk,
-        };
-        let _ = save_address_to_wallet(address.clone(), key_store).await;
+        let (address, _) = generate_payment_address(0).await;
 
         let payment_tx = construct_payment_tx(
             tx_ins,
@@ -467,7 +460,7 @@ impl UserNode {
     ///
     /// * `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let address = generate_payment_address(0).await;
+        let (address, _) = generate_payment_address(0).await;
         println!("Address to send: {:?}", address);
 
         self.node

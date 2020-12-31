@@ -2,8 +2,8 @@ use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::{
-    construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
-    AddressStore, TransactionStore,
+    construct_address, generate_payment_address, save_payment_to_wallet,
+    save_transactions_to_wallet, TransactionStore,
 };
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
@@ -92,20 +92,16 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
 ///
 /// NOTE: This is a test util function
 pub async fn create_and_save_fake_to_wallet() -> Result<(), Box<dyn std::error::Error>> {
-    let (pk, sk) = sign::gen_keypair();
-    let final_address = construct_address(pk, 0);
-    let address_keys = AddressStore {
-        public_key: pk,
-        secret_key: sk.clone(),
-    };
+    let (final_address, address_keys) = generate_payment_address(0).await;
 
     let (pkb, _sk) = sign::gen_keypair();
     let receiver_addr = construct_address(pkb, 0);
-    let (t_hash, _payment_tx) =
-        create_valid_transaction(&"00000".to_owned(), &receiver_addr, &pk, &sk);
-
-    // Save address store
-    let _save_a_result = save_address_to_wallet(final_address.clone(), address_keys).await;
+    let (t_hash, _payment_tx) = create_valid_transaction(
+        &"00000".to_owned(),
+        &receiver_addr,
+        &address_keys.public_key,
+        &address_keys.secret_key,
+    );
 
     // Save fund store
     let payment_to_save = TokenAmount(4000);

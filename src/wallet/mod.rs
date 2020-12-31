@@ -39,7 +39,7 @@ pub struct FundStore {
 /// ### Arguments
 ///
 /// * `net`     - Network version
-pub async fn generate_payment_address(net: u8) -> String {
+pub async fn generate_payment_address(net: u8) -> (String, AddressStore) {
     let (pk, sk) = sign::gen_keypair();
     let final_address = construct_address(pk, net);
     let address_keys = AddressStore {
@@ -47,12 +47,12 @@ pub async fn generate_payment_address(net: u8) -> String {
         secret_key: sk,
     };
 
-    let save_result = save_address_to_wallet(final_address.clone(), address_keys).await;
+    let save_result = save_address_to_wallet(final_address.clone(), address_keys.clone()).await;
     if save_result.is_err() {
         panic!("Error writing address to wallet");
     }
 
-    final_address
+    (final_address, address_keys)
 }
 
 /// Saves an address and its ancestor keys to the wallet
@@ -61,7 +61,7 @@ pub async fn generate_payment_address(net: u8) -> String {
 ///
 /// * `address` - Address to save to wallet
 /// * `keys`    - Address-related keys to save
-pub async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(), Error> {
+async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
         let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
 
