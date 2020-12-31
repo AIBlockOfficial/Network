@@ -1,6 +1,6 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
-use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT, WALLET_PATH};
+use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, FUND_KEY, PEER_LIMIT, WALLET_PATH};
 use crate::db_utils::get_db_options;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::wallet::{
@@ -259,7 +259,8 @@ impl UserNode {
 
         // Wallet DB handling
         let opts = get_db_options();
-        let db = DB::open(&opts, WALLET_PATH).unwrap();
+        let db_path = format!("{}/{}", WALLET_PATH, DB_PATH_LIVE);
+        let db = DB::open(&opts, &db_path).unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -321,7 +322,7 @@ impl UserNode {
         // Save the updated fund store to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&opts, WALLET_PATH);
+        let _ = DB::destroy(&opts, &db_path);
 
         tx_ins
     }

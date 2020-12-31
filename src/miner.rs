@@ -1,6 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::configurations::MinerNodeConfig;
-use crate::constants::PEER_LIMIT;
+use crate::configurations::{DbMode, MinerNodeConfig};
+use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT, WALLET_PATH};
+use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
@@ -12,8 +13,14 @@ use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionS
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
+use sodiumoxide::crypto::secretbox::Key;
+use sodiumoxide::crypto::sign;
 use std::{
     error::Error,
     fmt,
@@ -23,14 +30,6 @@ use std::{
 };
 use tokio::{sync::RwLock, task};
 use tracing::{debug, info_span, warn};
-
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
-
-use sodiumoxide::crypto::secretbox::Key;
-use sodiumoxide::crypto::sign;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -93,6 +92,7 @@ pub struct MinerNode {
     pub current_coinbase: Transaction,
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<ProofOfWork>,
+    db: SimpleDb,
 }
 
 impl MinerNode {
@@ -118,7 +118,20 @@ impl MinerNode {
                 address: "".to_string(),
                 nonce: Vec::new(),
             })),
+            db: Self::new_db(config.miner_db_mode),
         })
+    }
+
+    fn new_db(db_mode: DbMode) -> SimpleDb {
+        let save_path = match db_mode {
+            DbMode::Live => format!("{}/{}", WALLET_PATH, DB_PATH_LIVE),
+            DbMode::Test(idx) => format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, idx),
+            DbMode::InMemory => {
+                return SimpleDb::new_in_memory();
+            }
+        };
+
+        SimpleDb::new_file(save_path).unwrap()
     }
 
     /// Returns the miner node's public endpoint.

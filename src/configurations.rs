@@ -41,7 +41,7 @@ pub struct ComputeNodeConfig {
 pub struct StorageNodeConfig {
     /// Index of the current node in compute_nodes
     pub storage_node_idx: usize,
-    /// Use test database if 0
+    /// Use specific database
     pub storage_db_mode: DbMode,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
@@ -60,9 +60,11 @@ pub struct StorageNodeConfig {
 /// Configuration option for a storage node
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinerNodeConfig {
-    /// Index of the current node in compute_addrs
+    /// Index of the current node in miner_nodes
     pub miner_node_idx: usize,
-    /// Use test database if 0
+    /// Use specific database
+    pub miner_db_mode: DbMode,
+    /// Index of the compute node to use in compute_nodes
     pub miner_compute_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
