@@ -34,7 +34,7 @@ pub struct FundStore {
     pub transactions: BTreeMap<String, TokenAmount>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WalletDb {
     pub db: Arc<Mutex<SimpleDb>>,
 }
@@ -65,7 +65,7 @@ impl WalletDb {
 /// ### Arguments
 ///
 /// * `net`     - Network version
-pub async fn generate_payment_address(net: u8) -> (String, AddressStore) {
+pub async fn generate_payment_address(wallet_db: &WalletDb, net: u8) -> (String, AddressStore) {
     let (pk, sk) = sign::gen_keypair();
     let final_address = construct_address(pk, net);
     let address_keys = AddressStore {
@@ -73,7 +73,8 @@ pub async fn generate_payment_address(net: u8) -> (String, AddressStore) {
         secret_key: sk,
     };
 
-    let save_result = save_address_to_wallet(final_address.clone(), address_keys.clone()).await;
+    let save_result =
+        save_address_to_wallet(wallet_db, final_address.clone(), address_keys.clone()).await;
     if save_result.is_err() {
         panic!("Error writing address to wallet");
     }
@@ -87,13 +88,17 @@ pub async fn generate_payment_address(net: u8) -> (String, AddressStore) {
 ///
 /// * `address` - Address to save to wallet
 /// * `keys`    - Address-related keys to save
-async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(), Error> {
+async fn save_address_to_wallet(
+    wallet_db: &WalletDb,
+    address: String,
+    keys: AddressStore,
+) -> Result<(), Error> {
+    let db = wallet_db.db.clone();
     Ok(task::spawn_blocking(move || {
         let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
 
         // Wallet DB handling
-        let wallet_db = WalletDb::new(DbMode::Live);
-        let mut db = wallet_db.db.lock().unwrap();
+        let mut db = db.lock().unwrap();
         let address_list_state = match db.get(ADDRESS_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -120,11 +125,12 @@ async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(
 ///
 /// * `tx_to_save`  - All transactions that are required to be saved to wallet
 pub async fn save_transactions_to_wallet(
+    wallet_db: &WalletDb,
     tx_to_save: BTreeMap<String, TransactionStore>,
 ) -> Result<(), Error> {
+    let db = wallet_db.db.clone();
     Ok(task::spawn_blocking(move || {
-        let wallet_db = WalletDb::new(DbMode::Live);
-        let mut db = wallet_db.db.lock().unwrap();
+        let mut db = db.lock().unwrap();
         let keys: Vec<_> = tx_to_save.keys().cloned().collect();
 
         for key in keys {
@@ -160,7 +166,12 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
 ///
 /// * `hash`    - Hash of the transaction
 /// * `amount`  - Amount of tokens in the payment
-pub async fn save_payment_to_wallet(hash: String, amount: TokenAmount) -> Result<(), Error> {
+pub async fn save_payment_to_wallet(
+    wallet_db: &WalletDb,
+    hash: String,
+    amount: TokenAmount,
+) -> Result<(), Error> {
+    let db = wallet_db.db.clone();
     Ok(task::spawn_blocking(move || {
         let mut fund_store = FundStore {
             running_total: TokenAmount(0),
@@ -168,8 +179,7 @@ pub async fn save_payment_to_wallet(hash: String, amount: TokenAmount) -> Result
         };
 
         // Wallet DB handling
-        let wallet_db = WalletDb::new(DbMode::Live);
-        let mut db = wallet_db.db.lock().unwrap();
+        let mut db = db.lock().unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,

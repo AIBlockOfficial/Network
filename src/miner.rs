@@ -257,13 +257,17 @@ impl MinerNode {
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
     pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
-        let (pow, tx) = Self::generate_pow_for_block(&self.current_block).await?;
+        let (pow, tx) = Self::generate_pow_for_block(&self.wallet_db, &self.current_block).await?;
         self.current_coinbase = tx.clone();
         Ok((pow, tx))
     }
 
-    async fn generate_pow_for_block(block: &Block) -> Result<(Vec<u8>, Transaction)> {
+    async fn generate_pow_for_block(
+        wallet_db: &WalletDb,
+        block: &Block,
+    ) -> Result<(Vec<u8>, Transaction)> {
         let mut mining_block = serialize_block_for_pow(block);
+        let wallet_db = wallet_db.clone();
         let block_time = block.header.time;
         Ok(task::spawn_blocking(move || {
             let (pk, _sk) = sign::gen_keypair();
@@ -282,7 +286,7 @@ impl MinerNode {
                 .into_iter()
                 .collect();
 
-            let _save_result = save_transactions_to_wallet(tx_to_save);
+            let _save_result = save_transactions_to_wallet(&wallet_db, tx_to_save);
 
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();

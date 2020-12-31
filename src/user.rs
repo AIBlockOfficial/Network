@@ -213,7 +213,7 @@ impl UserNode {
         }
 
         let total_to_save = TokenAmount(total_add);
-        let _ = save_payment_to_wallet(hash, total_to_save);
+        let _ = save_payment_to_wallet(&self.wallet_db, hash, total_to_save);
 
         Response {
             success: true,
@@ -339,7 +339,7 @@ impl UserNode {
         return_amt: TokenAmount,
     ) -> Result<()> {
         let tx_ins = vec![tx_in];
-        let (address, _) = generate_payment_address(0).await;
+        let (address, _) = generate_payment_address(&self.wallet_db, 0).await;
 
         let payment_tx = construct_payment_tx(
             tx_ins,
@@ -355,8 +355,9 @@ impl UserNode {
         tx_for_wallet.insert(construct_tx_hash(&payment_tx), tx_store);
 
         // Update saves to the wallet
-        let _ = save_transactions_to_wallet(tx_for_wallet).await;
-        let _ = save_payment_to_wallet(construct_tx_hash(&payment_tx), return_amt).await;
+        let _ = save_transactions_to_wallet(&self.wallet_db, tx_for_wallet).await;
+        let _ = save_payment_to_wallet(&self.wallet_db, construct_tx_hash(&payment_tx), return_amt)
+            .await;
 
         // Completely reallocate the payment tx; required because an unwrap will just
         // consume self
@@ -461,7 +462,7 @@ impl UserNode {
     ///
     /// * `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let (address, _) = generate_payment_address(0).await;
+        let (address, _) = generate_payment_address(&self.wallet_db, 0).await;
         println!("Address to send: {:?}", address);
 
         self.node
