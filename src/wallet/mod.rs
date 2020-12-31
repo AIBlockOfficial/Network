@@ -1,15 +1,16 @@
-use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, FUND_KEY, WALLET_PATH};
-use crate::db_utils::get_db_options;
+use crate::configurations::DbMode;
+use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, WALLET_PATH};
+use crate::db_utils::SimpleDb;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
-use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::io::Error;
+use std::sync::{Arc, Mutex};
 use tokio::task;
 
 /// Data structure for wallet storage
@@ -31,6 +32,31 @@ pub struct AddressStore {
 pub struct FundStore {
     pub running_total: TokenAmount,
     pub transactions: BTreeMap<String, TokenAmount>,
+}
+
+#[derive(Debug)]
+pub struct WalletDb {
+    pub db: Arc<Mutex<SimpleDb>>,
+}
+
+impl WalletDb {
+    pub fn new(db_mode: DbMode) -> Self {
+        Self {
+            db: Arc::new(Mutex::new(Self::new_db(db_mode))),
+        }
+    }
+
+    fn new_db(db_mode: DbMode) -> SimpleDb {
+        let save_path = match db_mode {
+            DbMode::Live => format!("{}/{}", WALLET_PATH, DB_PATH_LIVE),
+            DbMode::Test(idx) => format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, idx),
+            DbMode::InMemory => {
+                return SimpleDb::new_in_memory();
+            }
+        };
+
+        SimpleDb::new_file(save_path).unwrap()
+    }
 }
 
 /// Generates a new payment address, saving the related keys to the wallet
@@ -66,9 +92,8 @@ async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(
         let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
 
         // Wallet DB handling
-        let opts = get_db_options();
-        let db_path = format!("{}/{}", WALLET_PATH, DB_PATH_LIVE);
-        let db = DB::open(&opts, &db_path).unwrap();
+        let wallet_db = WalletDb::new(DbMode::Live);
+        let mut db = wallet_db.db.lock().unwrap();
         let address_list_state = match db.get(ADDRESS_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -85,7 +110,6 @@ async fn save_address_to_wallet(address: String, keys: AddressStore) -> Result<(
         // Save to disk
         db.put(ADDRESS_KEY, Bytes::from(serialize(&address_list).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&opts, &db_path);
     })
     .await?)
 }
@@ -99,17 +123,14 @@ pub async fn save_transactions_to_wallet(
     tx_to_save: BTreeMap<String, TransactionStore>,
 ) -> Result<(), Error> {
     Ok(task::spawn_blocking(move || {
-        let opts = get_db_options();
-        let db_path = format!("{}/{}", WALLET_PATH, DB_PATH_LIVE);
-        let db = DB::open(&opts, &db_path).unwrap();
+        let wallet_db = WalletDb::new(DbMode::Live);
+        let mut db = wallet_db.db.lock().unwrap();
         let keys: Vec<_> = tx_to_save.keys().cloned().collect();
 
         for key in keys {
             let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
             db.put(key.clone(), input).unwrap();
         }
-
-        let _ = DB::destroy(&opts, &db_path);
     })
     .await?)
 }
@@ -147,9 +168,8 @@ pub async fn save_payment_to_wallet(hash: String, amount: TokenAmount) -> Result
         };
 
         // Wallet DB handling
-        let opts = get_db_options();
-        let db_path = format!("{}/{}", WALLET_PATH, DB_PATH_LIVE);
-        let db = DB::open(&opts, &db_path).unwrap();
+        let wallet_db = WalletDb::new(DbMode::Live);
+        let mut db = wallet_db.db.lock().unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -164,7 +184,6 @@ pub async fn save_payment_to_wallet(hash: String, amount: TokenAmount) -> Result
         // Save to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&opts, &db_path);
     })
     .await?)
 }

@@ -59,17 +59,26 @@ impl SimpleDb {
     }
 
     /// Add entry to database
-    pub fn put<K, V>(&mut self, key: K, value: V) -> Result<(), DBError>
-    where
-        K: AsRef<[u8]>,
-        V: AsRef<[u8]>,
-    {
+    pub fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<(), DBError> {
         match self {
             Self::File { db, .. } => {
                 db.put(key, value)?;
             }
             Self::InMemory { key_values } => {
                 key_values.insert(key.as_ref().to_vec(), value.as_ref().to_vec());
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove entry from database
+    pub fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), DBError> {
+        match self {
+            Self::File { db, .. } => {
+                db.delete(key)?;
+            }
+            Self::InMemory { key_values } => {
+                key_values.remove(key.as_ref());
             }
         }
         Ok(())

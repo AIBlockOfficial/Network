@@ -1,11 +1,11 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::UserNodeConfig;
-use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, FUND_KEY, PEER_LIMIT, WALLET_PATH};
-use crate::db_utils::get_db_options;
+use crate::configurations::{DbMode, UserNodeConfig};
+use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT};
+use crate::db_utils::SimpleDb;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::wallet::{
     generate_payment_address, save_payment_to_wallet, save_transactions_to_wallet, AddressStore,
-    FundStore, TransactionStore,
+    FundStore, TransactionStore, WalletDb,
 };
 use bincode::deserialize;
 use bytes::Bytes;
@@ -16,7 +16,6 @@ use naom::primitives::transaction_utils::{
 };
 
 use bincode::serialize;
-use rocksdb::DB;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
@@ -258,9 +257,8 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let opts = get_db_options();
-        let db_path = format!("{}/{}", WALLET_PATH, DB_PATH_LIVE);
-        let db = DB::open(&opts, &db_path).unwrap();
+        let wallet_db = WalletDb::new(DbMode::Live);
+        let mut db = wallet_db.db.lock().unwrap();
         let fund_store_state = match db.get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
             Ok(None) => None,
@@ -299,7 +297,8 @@ impl UserNode {
                 amount_made = amount_required.0;
 
                 // Add a new return payment transaction
-                let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &db, false);
+                let return_tx_in =
+                    self.construct_tx_in_from_prev_out(tx_hash.clone(), &mut db, false);
                 self.return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
                     amount: TokenAmount(current_amount.0 - diff),
@@ -313,7 +312,7 @@ impl UserNode {
             }
 
             // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &db, true);
+            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), &mut db, true);
             tx_ins.push(tx_in);
 
             fund_store.transactions.remove(&tx_hash);
@@ -322,7 +321,6 @@ impl UserNode {
         // Save the updated fund store to disk
         db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
             .unwrap();
-        let _ = DB::destroy(&opts, &db_path);
 
         tx_ins
     }
@@ -377,7 +375,7 @@ impl UserNode {
     pub fn construct_tx_in_from_prev_out(
         &mut self,
         tx_hash: String,
-        db: &DB,
+        db: &mut SimpleDb,
         remove_from_wallet: bool,
     ) -> TxIn {
         let mut address_store: BTreeMap<String, AddressStore> = match db.get(ADDRESS_KEY) {

@@ -1,7 +1,6 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::configurations::{DbMode, MinerNodeConfig};
-use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT, WALLET_PATH};
-use crate::db_utils::SimpleDb;
+use crate::configurations::MinerNodeConfig;
+use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
@@ -9,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore};
+use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -92,7 +91,7 @@ pub struct MinerNode {
     pub current_coinbase: Transaction,
     last_pow: Arc<RwLock<ProofOfWork>>,
     pub partition_list: Vec<ProofOfWork>,
-    db: SimpleDb,
+    wallet_db: WalletDb,
 }
 
 impl MinerNode {
@@ -118,20 +117,8 @@ impl MinerNode {
                 address: "".to_string(),
                 nonce: Vec::new(),
             })),
-            db: Self::new_db(config.miner_db_mode),
+            wallet_db: WalletDb::new(config.miner_db_mode),
         })
-    }
-
-    fn new_db(db_mode: DbMode) -> SimpleDb {
-        let save_path = match db_mode {
-            DbMode::Live => format!("{}/{}", WALLET_PATH, DB_PATH_LIVE),
-            DbMode::Test(idx) => format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, idx),
-            DbMode::InMemory => {
-                return SimpleDb::new_in_memory();
-            }
-        };
-
-        SimpleDb::new_file(save_path).unwrap()
     }
 
     /// Returns the miner node's public endpoint.

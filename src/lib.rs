@@ -26,7 +26,7 @@ mod utils;
 mod wallet;
 
 pub use compute::ComputeNode;
-pub use constants::{PARTITION_LIMIT, WALLET_PATH};
+pub use constants::PARTITION_LIMIT;
 pub use db_utils::get_db_options;
 pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface, UseInterface};
 pub use miner::MinerNode;
