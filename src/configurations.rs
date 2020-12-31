@@ -81,7 +81,9 @@ pub struct MinerNodeConfig {
 pub struct UserNodeConfig {
     /// Index of the current node in user_addrs
     pub user_node_idx: usize,
-    /// Use test database if 0
+    /// Use specific database
+    pub user_db_mode: DbMode,
+    /// Index of the compute node to use in compute_nodes
     pub user_compute_node_idx: usize,
     /// Peer node index in user_nodes
     pub peer_user_node_idx: usize,

@@ -282,8 +282,14 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.user_nodes.iter().enumerate() {
+            let user_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(info.user_nodes[idx].address.port() as usize)
+            };
             let user_config = UserNodeConfig {
                 user_node_idx: idx,
+                user_db_mode,
                 user_compute_node_idx: 0,
                 peer_user_node_idx: 0,
                 compute_nodes: info.compute_nodes.clone(),
