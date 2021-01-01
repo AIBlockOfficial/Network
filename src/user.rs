@@ -319,7 +319,7 @@ impl UserNode {
             .db
             .lock()
             .unwrap()
-            .put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
+            .put(FUND_KEY, &serialize(&fund_store).unwrap())
             .unwrap();
 
         tx_ins
@@ -337,7 +337,7 @@ impl UserNode {
         return_amt: TokenAmount,
     ) -> Result<()> {
         let tx_ins = vec![tx_in];
-        let (address, _) = self.wallet_db.generate_payment_address(0).await;
+        let (address, _) = self.wallet_db.generate_payment_address().await;
 
         let payment_tx = construct_payment_tx(
             tx_ins,
@@ -411,7 +411,7 @@ impl UserNode {
             db.delete(&tx_hash).unwrap();
 
             address_store.remove(&tx_store.address);
-            db.put(ADDRESS_KEY, Bytes::from(serialize(&address_store).unwrap()))
+            db.put(ADDRESS_KEY, &serialize(&address_store).unwrap())
                 .unwrap();
         }
 
@@ -462,7 +462,7 @@ impl UserNode {
     ///
     /// * `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let (address, _) = self.wallet_db.generate_payment_address(0).await;
+        let (address, _) = self.wallet_db.generate_payment_address().await;
         let address = address.address;
         println!("Address to send: {:?}", address);
 

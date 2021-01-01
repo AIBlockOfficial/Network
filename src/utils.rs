@@ -1,7 +1,7 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
-use crate::wallet::{construct_address, WalletDb};
+use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -90,10 +90,9 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
 pub async fn create_and_save_fake_to_wallet(
     wallet_db: &WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (final_address, address_keys) = wallet_db.generate_payment_address(0).await;
+    let (final_address, address_keys) = wallet_db.generate_payment_address().await;
+    let (receiver_addr, _) = wallet_db.generate_payment_address().await;
 
-    let (pkb, _sk) = sign::gen_keypair();
-    let receiver_addr = construct_address(pkb, 0);
     let (t_hash, _payment_tx) = create_valid_transaction(
         &"00000".to_owned(),
         &receiver_addr.address,

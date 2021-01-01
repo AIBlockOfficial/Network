@@ -267,7 +267,7 @@ impl MinerNode {
     ) -> Result<(Vec<u8>, Transaction)> {
         let mut mining_block = serialize_block_for_pow(block);
         let block_time = block.header.time;
-        let (address, _) = wallet_db.generate_payment_address(0).await;
+        let (address, _) = wallet_db.generate_payment_address().await;
 
         let coinbase_amount = TokenAmount(12000);
         let current_coinbase =

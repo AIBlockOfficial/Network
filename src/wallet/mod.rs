@@ -1,8 +1,9 @@
 use crate::configurations::DbMode;
-use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, WALLET_PATH};
+use crate::constants::{
+    ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, NETWORK_VERSION, WALLET_PATH,
+};
 use crate::db_utils::SimpleDb;
 use bincode::{deserialize, serialize};
-use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -70,12 +71,12 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `net`     - Network version
-    pub async fn generate_payment_address(&self, net: u8) -> (PaymentAddress, AddressStore) {
-        let (pk, sk) = sign::gen_keypair();
-        let final_address = construct_address(pk, net);
+    pub async fn generate_payment_address(&self) -> (PaymentAddress, AddressStore) {
+        let (public_key, secret_key) = sign::gen_keypair();
+        let final_address = construct_address(public_key, NETWORK_VERSION);
         let address_keys = AddressStore {
-            public_key: pk,
-            secret_key: sk,
+            public_key,
+            secret_key,
         };
 
         let save_result = self
@@ -119,7 +120,7 @@ impl WalletDb {
             address_list.insert(address.clone(), keys);
 
             // Save to disk
-            db.put(ADDRESS_KEY, Bytes::from(serialize(&address_list).unwrap()))
+            db.put(ADDRESS_KEY, &serialize(&address_list).unwrap())
                 .unwrap();
         })
         .await?)
@@ -196,8 +197,7 @@ impl WalletDb {
             fund_store.running_total.0 += amount.0;
             fund_store.transactions.insert(hash, amount);
             // Save to disk
-            db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
-                .unwrap();
+            db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
         })
         .await?)
     }
@@ -210,12 +210,12 @@ impl WalletDb {
 /// * `pub_key` - A public key to build an address from
 /// * `net`     - Network version
 pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
-    let first_pubkey_bytes = Bytes::from(serialize(&pub_key).unwrap());
+    let first_pubkey_bytes = serialize(&pub_key).unwrap();
     let mut first_hash = Sha3_256::digest(&first_pubkey_bytes).to_vec();
 
     // TODO: Add RIPEMD
 
-    first_hash.insert(0, net as u8);
+    first_hash.insert(0, net);
     let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
     second_hash.truncate(16);
 
