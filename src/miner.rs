@@ -270,12 +270,13 @@ impl MinerNode {
         let (address, _) = wallet_db.generate_payment_address(0).await;
 
         let coinbase_amount = TokenAmount(12000);
-        let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address.clone());
+        let current_coinbase =
+            construct_coinbase_tx(coinbase_amount, block_time, address.address.clone());
         let coinbase_hash = construct_tx_hash(&current_coinbase);
 
         // Create wallet content
         wallet_db
-            .save_transaction_to_wallet(coinbase_hash.clone(), address, 0)
+            .save_transaction_to_wallet(coinbase_hash.clone(), address)
             .await
             .unwrap();
 

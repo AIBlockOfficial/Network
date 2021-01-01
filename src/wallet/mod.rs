@@ -13,11 +13,17 @@ use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaymentAddress {
+    pub address: String,
+    pub net: u8,
+}
+
 /// Data structure for wallet storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionStore {
     pub address: String,
-    pub net: usize,
+    pub net: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +70,7 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `net`     - Network version
-    pub async fn generate_payment_address(&self, net: u8) -> (String, AddressStore) {
+    pub async fn generate_payment_address(&self, net: u8) -> (PaymentAddress, AddressStore) {
         let (pk, sk) = sign::gen_keypair();
         let final_address = construct_address(pk, net);
         let address_keys = AddressStore {
@@ -73,7 +79,7 @@ impl WalletDb {
         };
 
         let save_result = self
-            .save_address_to_wallet(final_address.clone(), address_keys.clone())
+            .save_address_to_wallet(final_address.address.clone(), address_keys.clone())
             .await;
         if save_result.is_err() {
             panic!("Error writing address to wallet");
@@ -125,17 +131,13 @@ impl WalletDb {
     ///
     /// * `tx_hash`  - Transaction hash
     /// * `address`  - Transaction Address
-    /// * `net`      - Network version
     pub async fn save_transaction_to_wallet(
         &self,
         tx_hash: String,
-        address: String,
-        net: u8,
+        address: PaymentAddress,
     ) -> Result<(), Error> {
-        let tx_store = TransactionStore {
-            address,
-            net: net as usize,
-        };
+        let PaymentAddress { address, net } = address;
+        let tx_store = TransactionStore { address, net };
         let tx_to_save = Some((tx_hash, tx_store)).into_iter().collect();
 
         self.save_transactions_to_wallet(tx_to_save).await
@@ -207,7 +209,7 @@ impl WalletDb {
 ///
 /// * `pub_key` - A public key to build an address from
 /// * `net`     - Network version
-pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
+pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
     let first_pubkey_bytes = Bytes::from(serialize(&pub_key).unwrap());
     let mut first_hash = Sha3_256::digest(&first_pubkey_bytes).to_vec();
 
@@ -217,7 +219,10 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
     let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
     second_hash.truncate(16);
 
-    hex::encode(second_hash)
+    PaymentAddress {
+        address: hex::encode(second_hash),
+        net,
+    }
 }
 
 #[cfg(test)]
@@ -233,7 +238,13 @@ mod tests {
         ]);
         let addr = construct_address(pk, 0);
 
-        assert_eq!(addr, "fd86f2230f4fd5bfd9cd882732792279".to_string());
+        assert_eq!(
+            addr,
+            PaymentAddress {
+                address: "fd86f2230f4fd5bfd9cd882732792279".to_string(),
+                net: 0
+            }
+        );
     }
 
     #[test]
@@ -245,6 +256,6 @@ mod tests {
         ]);
         let addr = construct_address(pk, 0);
 
-        assert_eq!(addr.len(), 32);
+        assert_eq!(addr.address.len(), 32);
     }
 }

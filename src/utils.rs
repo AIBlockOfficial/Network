@@ -96,7 +96,7 @@ pub async fn create_and_save_fake_to_wallet(
     let receiver_addr = construct_address(pkb, 0);
     let (t_hash, _payment_tx) = create_valid_transaction(
         &"00000".to_owned(),
-        &receiver_addr,
+        &receiver_addr.address,
         &address_keys.public_key,
         &address_keys.secret_key,
     );
@@ -111,7 +111,7 @@ pub async fn create_and_save_fake_to_wallet(
     // Save transaction store
     println!("TX STORE: {:?}", (&t_hash, &final_address));
     wallet_db
-        .save_transaction_to_wallet(t_hash, final_address, 0)
+        .save_transaction_to_wallet(t_hash, final_address)
         .await
         .unwrap();
 

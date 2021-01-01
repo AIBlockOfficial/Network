@@ -341,7 +341,7 @@ impl UserNode {
 
         let payment_tx = construct_payment_tx(
             tx_ins,
-            address.clone(),
+            address.address.clone(),
             None,
             None,
             Asset::Token(return_amt.clone()),
@@ -351,7 +351,7 @@ impl UserNode {
 
         // Update saves to the wallet
         self.wallet_db
-            .save_transaction_to_wallet(payment_tx_hash.clone(), address, 0)
+            .save_transaction_to_wallet(payment_tx_hash.clone(), address)
             .await
             .unwrap();
         self.wallet_db
@@ -463,6 +463,7 @@ impl UserNode {
     /// * `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         let (address, _) = self.wallet_db.generate_payment_address(0).await;
+        let address = address.address;
         println!("Address to send: {:?}", address);
 
         self.node
