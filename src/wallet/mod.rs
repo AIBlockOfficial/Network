@@ -43,7 +43,7 @@ pub struct FundStore {
 
 #[derive(Debug, Clone)]
 pub struct WalletDb {
-    pub db: Arc<Mutex<SimpleDb>>,
+    db: Arc<Mutex<SimpleDb>>,
 }
 
 impl WalletDb {
@@ -200,6 +200,50 @@ impl WalletDb {
             db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
         })
         .await?)
+    }
+
+    pub fn get_fund_store(&self) -> Option<FundStore> {
+        match self.db.lock().unwrap().get(FUND_KEY) {
+            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
+            Ok(None) => None,
+            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+        }
+    }
+
+    pub fn set_fund_store(&self, fund_store: FundStore) {
+        self.db
+            .lock()
+            .unwrap()
+            .put(FUND_KEY, &serialize(&fund_store).unwrap())
+            .unwrap();
+    }
+
+    pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
+        match self.db.lock().unwrap().get(ADDRESS_KEY) {
+            Ok(Some(list)) => deserialize(&list).unwrap(),
+            Ok(None) => panic!("No address store present in wallet"),
+            Err(e) => panic!("Error accessing wallet: {:?}", e),
+        }
+    }
+
+    pub fn set_address_stores(&self, address_store: BTreeMap<String, AddressStore>) {
+        self.db
+            .lock()
+            .unwrap()
+            .put(ADDRESS_KEY, &serialize(&address_store).unwrap())
+            .unwrap();
+    }
+
+    pub fn get_transaction_store(&self, tx_hash: &str) -> TransactionStore {
+        match self.db.lock().unwrap().get(tx_hash) {
+            Ok(Some(list)) => deserialize(&list).unwrap(),
+            Ok(None) => panic!("No address store present in wallet"),
+            Err(e) => panic!("Error accessing wallet: {:?}", e),
+        }
+    }
+
+    pub fn delete_key(&self, key: &str) {
+        self.db.lock().unwrap().delete(key).unwrap();
     }
 }
 

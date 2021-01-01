@@ -1,9 +1,9 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
-use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT};
+use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{AddressStore, FundStore, TransactionStore, WalletDb};
-use bincode::{deserialize, serialize};
+use crate::wallet::{AddressStore, FundStore, WalletDb};
+use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
@@ -256,12 +256,7 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let fund_store_state = match self.wallet_db.db.lock().unwrap().get(FUND_KEY) {
-            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-            Ok(None) => None,
-            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-        };
-
+        let fund_store_state = self.wallet_db.get_fund_store();
         if fund_store_state.is_none() {
             panic!("No funds available for payment!");
         }
@@ -315,12 +310,7 @@ impl UserNode {
         }
 
         // Save the updated fund store to disk
-        self.wallet_db
-            .db
-            .lock()
-            .unwrap()
-            .put(FUND_KEY, &serialize(&fund_store).unwrap())
-            .unwrap();
+        self.wallet_db.set_fund_store(fund_store);
 
         tx_ins
     }
@@ -380,39 +370,25 @@ impl UserNode {
         tx_hash: String,
         remove_from_wallet: bool,
     ) -> TxIn {
-        let mut db = self.wallet_db.db.lock().unwrap();
-        let mut address_store: BTreeMap<String, AddressStore> = match db.get(ADDRESS_KEY) {
-            Ok(Some(list)) => deserialize(&list).unwrap(),
-            Ok(None) => panic!("No address store present in wallet"),
-            Err(e) => panic!("Error accessing wallet: {:?}", e),
-        };
-
-        let tx_store: TransactionStore = match db.get(tx_hash.clone()) {
-            Ok(Some(val)) => deserialize(&val).unwrap(),
-            Ok(None) => panic!("Address for transaction not found in wallet"),
-            Err(e) => panic!("Error accessing wallet: {:?}", e),
-        };
+        let mut address_store = self.wallet_db.get_address_stores();
+        let tx_store = self.wallet_db.get_transaction_store(&tx_hash);
 
         let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-
-        let pub_key = needed_store.public_key;
-        let s_key = needed_store.secret_key.clone();
-        let signature = sign::sign_detached(tx_hash.as_bytes(), &s_key);
+        let signature = sign::sign_detached(tx_hash.as_bytes(), &needed_store.secret_key);
 
         let tx_const = TxConstructor {
             t_hash: tx_hash.clone(),
             prev_n: 0,
             signatures: vec![signature],
-            pub_keys: vec![pub_key],
+            pub_keys: vec![needed_store.public_key],
         };
 
         if remove_from_wallet {
             // Update the values in the wallet
-            db.delete(&tx_hash).unwrap();
+            self.wallet_db.delete_key(&tx_hash);
 
             address_store.remove(&tx_store.address);
-            db.put(ADDRESS_KEY, &serialize(&address_store).unwrap())
-                .unwrap();
+            self.wallet_db.set_address_stores(address_store);
         }
 
         let tx_ins = construct_payment_tx_ins(vec![tx_const]);
