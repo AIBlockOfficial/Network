@@ -1,10 +1,7 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
-use crate::wallet::{
-    construct_address, generate_payment_address, save_payment_to_wallet,
-    save_transactions_to_wallet, TransactionStore, WalletDb,
-};
+use crate::wallet::{construct_address, TransactionStore, WalletDb};
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -94,7 +91,7 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
 pub async fn create_and_save_fake_to_wallet(
     wallet_db: &WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (final_address, address_keys) = generate_payment_address(wallet_db, 0).await;
+    let (final_address, address_keys) = wallet_db.generate_payment_address(0).await;
 
     let (pkb, _sk) = sign::gen_keypair();
     let receiver_addr = construct_address(pkb, 0);
@@ -107,7 +104,10 @@ pub async fn create_and_save_fake_to_wallet(
 
     // Save fund store
     let payment_to_save = TokenAmount(4000);
-    let _save_f_result = save_payment_to_wallet(wallet_db, t_hash.clone(), payment_to_save).await;
+    wallet_db
+        .save_payment_to_wallet(t_hash.clone(), payment_to_save)
+        .await
+        .unwrap();
 
     // Save transaction store
     let mut t_store = BTreeMap::new();
@@ -117,7 +117,10 @@ pub async fn create_and_save_fake_to_wallet(
     };
     t_store.insert(t_hash, t_map);
     println!("TX STORE: {:?}", t_store);
-    let _save_t_result = save_transactions_to_wallet(wallet_db, t_store).await;
+    wallet_db
+        .save_transactions_to_wallet(t_store)
+        .await
+        .unwrap();
 
     Ok(())
 }

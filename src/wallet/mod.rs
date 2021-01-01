@@ -57,90 +57,128 @@ impl WalletDb {
 
         SimpleDb::new_file(save_path).unwrap()
     }
-}
 
-/// Generates a new payment address, saving the related keys to the wallet
-/// TODO: Add static address capability for frequent payments
-///
-/// ### Arguments
-///
-/// * `net`     - Network version
-pub async fn generate_payment_address(wallet_db: &WalletDb, net: u8) -> (String, AddressStore) {
-    let (pk, sk) = sign::gen_keypair();
-    let final_address = construct_address(pk, net);
-    let address_keys = AddressStore {
-        public_key: pk,
-        secret_key: sk,
-    };
-
-    let save_result =
-        save_address_to_wallet(wallet_db, final_address.clone(), address_keys.clone()).await;
-    if save_result.is_err() {
-        panic!("Error writing address to wallet");
-    }
-
-    (final_address, address_keys)
-}
-
-/// Saves an address and its ancestor keys to the wallet
-///
-/// ### Arguments
-///
-/// * `address` - Address to save to wallet
-/// * `keys`    - Address-related keys to save
-async fn save_address_to_wallet(
-    wallet_db: &WalletDb,
-    address: String,
-    keys: AddressStore,
-) -> Result<(), Error> {
-    let db = wallet_db.db.clone();
-    Ok(task::spawn_blocking(move || {
-        let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
-
-        // Wallet DB handling
-        let mut db = db.lock().unwrap();
-        let address_list_state = match db.get(ADDRESS_KEY) {
-            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-            Ok(None) => None,
-            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+    /// Generates a new payment address, saving the related keys to the wallet
+    /// TODO: Add static address capability for frequent payments
+    ///
+    /// ### Arguments
+    ///
+    /// * `net`     - Network version
+    pub async fn generate_payment_address(&self, net: u8) -> (String, AddressStore) {
+        let (pk, sk) = sign::gen_keypair();
+        let final_address = construct_address(pk, net);
+        let address_keys = AddressStore {
+            public_key: pk,
+            secret_key: sk,
         };
 
-        if let Some(list) = address_list_state {
-            address_list = list;
+        let save_result = self
+            .save_address_to_wallet(final_address.clone(), address_keys.clone())
+            .await;
+        if save_result.is_err() {
+            panic!("Error writing address to wallet");
         }
 
-        // Assign the new address to the store
-        address_list.insert(address.clone(), keys);
+        (final_address, address_keys)
+    }
 
-        // Save to disk
-        db.put(ADDRESS_KEY, Bytes::from(serialize(&address_list).unwrap()))
-            .unwrap();
-    })
-    .await?)
+    /// Saves an address and its ancestor keys to the wallet
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address to save to wallet
+    /// * `keys`    - Address-related keys to save
+    async fn save_address_to_wallet(
+        &self,
+        address: String,
+        keys: AddressStore,
+    ) -> Result<(), Error> {
+        let db = self.db.clone();
+        Ok(task::spawn_blocking(move || {
+            let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
+
+            // Wallet DB handling
+            let mut db = db.lock().unwrap();
+            let address_list_state = match db.get(ADDRESS_KEY) {
+                Ok(Some(list)) => Some(deserialize(&list).unwrap()),
+                Ok(None) => None,
+                Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+            };
+
+            if let Some(list) = address_list_state {
+                address_list = list;
+            }
+
+            // Assign the new address to the store
+            address_list.insert(address.clone(), keys);
+
+            // Save to disk
+            db.put(ADDRESS_KEY, Bytes::from(serialize(&address_list).unwrap()))
+                .unwrap();
+        })
+        .await?)
+    }
+
+    /// Saves an address and the associated transactions with it to the wallet
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_to_save`  - All transactions that are required to be saved to wallet
+    pub async fn save_transactions_to_wallet(
+        &self,
+        tx_to_save: BTreeMap<String, TransactionStore>,
+    ) -> Result<(), Error> {
+        let db = self.db.clone();
+        Ok(task::spawn_blocking(move || {
+            let mut db = db.lock().unwrap();
+            let keys: Vec<_> = tx_to_save.keys().cloned().collect();
+
+            for key in keys {
+                let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
+                db.put(key.clone(), input).unwrap();
+            }
+        })
+        .await?)
+    }
+
+    /// Saves a received payment to the local wallet
+    ///
+    /// ### Arguments
+    ///
+    /// * `hash`    - Hash of the transaction
+    /// * `amount`  - Amount of tokens in the payment
+    pub async fn save_payment_to_wallet(
+        &self,
+        hash: String,
+        amount: TokenAmount,
+    ) -> Result<(), Error> {
+        let db = self.db.clone();
+        Ok(task::spawn_blocking(move || {
+            let mut fund_store = FundStore {
+                running_total: TokenAmount(0),
+                transactions: BTreeMap::new(),
+            };
+
+            // Wallet DB handling
+            let mut db = db.lock().unwrap();
+            let fund_store_state = match db.get(FUND_KEY) {
+                Ok(Some(list)) => Some(deserialize(&list).unwrap()),
+                Ok(None) => None,
+                Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+            };
+            if let Some(store) = fund_store_state {
+                fund_store = store;
+            }
+            // Update the running total and add the transaction to the tab list
+            fund_store.running_total.0 += amount.0;
+            fund_store.transactions.insert(hash, amount);
+            // Save to disk
+            db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
+                .unwrap();
+        })
+        .await?)
+    }
 }
-
-/// Saves an address and the associated transactions with it to the wallet
-///
-/// ### Arguments
-///
-/// * `tx_to_save`  - All transactions that are required to be saved to wallet
-pub async fn save_transactions_to_wallet(
-    wallet_db: &WalletDb,
-    tx_to_save: BTreeMap<String, TransactionStore>,
-) -> Result<(), Error> {
-    let db = wallet_db.db.clone();
-    Ok(task::spawn_blocking(move || {
-        let mut db = db.lock().unwrap();
-        let keys: Vec<_> = tx_to_save.keys().cloned().collect();
-
-        for key in keys {
-            let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
-            db.put(key.clone(), input).unwrap();
-        }
-    })
-    .await?)
-}
-
 /// Builds an address from a public key
 ///
 /// ### Arguments
@@ -158,44 +196,6 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> String {
     second_hash.truncate(16);
 
     hex::encode(second_hash)
-}
-
-/// Saves a received payment to the local wallet
-///
-/// ### Arguments
-///
-/// * `hash`    - Hash of the transaction
-/// * `amount`  - Amount of tokens in the payment
-pub async fn save_payment_to_wallet(
-    wallet_db: &WalletDb,
-    hash: String,
-    amount: TokenAmount,
-) -> Result<(), Error> {
-    let db = wallet_db.db.clone();
-    Ok(task::spawn_blocking(move || {
-        let mut fund_store = FundStore {
-            running_total: TokenAmount(0),
-            transactions: BTreeMap::new(),
-        };
-
-        // Wallet DB handling
-        let mut db = db.lock().unwrap();
-        let fund_store_state = match db.get(FUND_KEY) {
-            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-            Ok(None) => None,
-            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-        };
-        if let Some(store) = fund_store_state {
-            fund_store = store;
-        }
-        // Update the running total and add the transaction to the tab list
-        fund_store.running_total.0 += amount.0;
-        fund_store.transactions.insert(hash, amount);
-        // Save to disk
-        db.put(FUND_KEY, Bytes::from(serialize(&fund_store).unwrap()))
-            .unwrap();
-    })
-    .await?)
 }
 
 #[cfg(test)]

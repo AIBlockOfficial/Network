@@ -2,24 +2,20 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::{ADDRESS_KEY, FUND_KEY, PEER_LIMIT};
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{
-    generate_payment_address, save_payment_to_wallet, save_transactions_to_wallet, AddressStore,
-    FundStore, TransactionStore, WalletDb,
-};
-use bincode::deserialize;
+use crate::wallet::{AddressStore, FundStore, TransactionStore, WalletDb};
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
 };
-
-use bincode::serialize;
 use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
-use tracing::{debug, info_span, warn};
+use tracing::{debug, error_span, info_span, warn};
+use tracing_futures::Instrument;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, UserError>;
@@ -142,29 +138,28 @@ impl UserNode {
 
     /// Hanldes a new incoming message from a peer.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
-        info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<UserRequest>(&frame).map_err(|error| {
-                warn!(?error, "frame-deserialize");
-                error
-            })?;
+        let req = deserialize::<UserRequest>(&frame).map_err(|error| {
+            warn!(?error, "frame-deserialize");
+            error
+        })?;
 
-            info_span!("request", ?req).in_scope(|| {
-                let response = self.handle_request(peer, req);
-                debug!(?response, ?peer, "response");
+        let req_span = error_span!("request", ?req);
+        let response = self.handle_request(peer, req).instrument(req_span).await;
+        debug!(?response, ?peer, "response");
 
-                Ok(response)
-            })
-        })
+        Ok(response)
     }
 
     /// Handles a compute request.
-    fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
+    async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
         println!("RECEIVED REQUEST: {:?}", req);
 
         match req {
             SendAddressRequest => self.receive_payment_address_request(peer),
-            SendPaymentTransaction { transaction } => self.receive_payment_transaction(transaction),
+            SendPaymentTransaction { transaction } => {
+                self.receive_payment_transaction(transaction).await
+            }
             SendPaymentAddress { address } => self.make_payment_transactions(address),
         }
     }
@@ -204,7 +199,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `transaction` - Transaction to receive and save to wallet
-    pub fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
+    pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
         let mut total_add = 0;
         let hash = construct_tx_hash(&transaction);
 
@@ -213,7 +208,10 @@ impl UserNode {
         }
 
         let total_to_save = TokenAmount(total_add);
-        let _ = save_payment_to_wallet(&self.wallet_db, hash, total_to_save);
+        self.wallet_db
+            .save_payment_to_wallet(hash, total_to_save)
+            .await
+            .unwrap();
 
         Response {
             success: true,
@@ -339,7 +337,7 @@ impl UserNode {
         return_amt: TokenAmount,
     ) -> Result<()> {
         let tx_ins = vec![tx_in];
-        let (address, _) = generate_payment_address(&self.wallet_db, 0).await;
+        let (address, _) = self.wallet_db.generate_payment_address(0).await;
 
         let payment_tx = construct_payment_tx(
             tx_ins,
@@ -355,9 +353,14 @@ impl UserNode {
         tx_for_wallet.insert(construct_tx_hash(&payment_tx), tx_store);
 
         // Update saves to the wallet
-        let _ = save_transactions_to_wallet(&self.wallet_db, tx_for_wallet).await;
-        let _ = save_payment_to_wallet(&self.wallet_db, construct_tx_hash(&payment_tx), return_amt)
-            .await;
+        self.wallet_db
+            .save_transactions_to_wallet(tx_for_wallet)
+            .await
+            .unwrap();
+        self.wallet_db
+            .save_payment_to_wallet(construct_tx_hash(&payment_tx), return_amt)
+            .await
+            .unwrap();
 
         // Completely reallocate the payment tx; required because an unwrap will just
         // consume self
@@ -462,7 +465,7 @@ impl UserNode {
     ///
     /// * `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let (address, _) = generate_payment_address(&self.wallet_db, 0).await;
+        let (address, _) = self.wallet_db.generate_payment_address(0).await;
         println!("Address to send: {:?}", address);
 
         self.node

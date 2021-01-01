@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore, WalletDb};
+use crate::wallet::{construct_address, TransactionStore, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -269,25 +269,28 @@ impl MinerNode {
         let mut mining_block = serialize_block_for_pow(block);
         let wallet_db = wallet_db.clone();
         let block_time = block.header.time;
+        let (pk, _sk) = sign::gen_keypair();
+        let address = construct_address(pk, 0);
+
+        let coinbase_amount = TokenAmount(12000);
+        let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address);
+        let coinbase_hash = construct_tx_hash(&current_coinbase);
+
+        // Create address and save to wallet
+        let address = construct_address(pk, 0);
+
+        // Create wallet content
+        let transaction_store = TransactionStore { address, net: 0 };
+        let tx_to_save = Some((coinbase_hash.clone(), transaction_store))
+            .into_iter()
+            .collect();
+
+        wallet_db
+            .save_transactions_to_wallet(tx_to_save)
+            .await
+            .unwrap();
+
         Ok(task::spawn_blocking(move || {
-            let (pk, _sk) = sign::gen_keypair();
-            let address = construct_address(pk, 0);
-
-            let coinbase_amount = TokenAmount(12000);
-            let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address);
-            let coinbase_hash = construct_tx_hash(&current_coinbase);
-
-            // Create address and save to wallet
-            let address = construct_address(pk, 0);
-
-            // Create wallet content
-            let transaction_store = TransactionStore { address, net: 0 };
-            let tx_to_save = Some((coinbase_hash.clone(), transaction_store))
-                .into_iter()
-                .collect();
-
-            let _save_result = save_transactions_to_wallet(&wallet_db, tx_to_save);
-
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();
             while !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
