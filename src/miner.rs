@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{construct_address, TransactionStore, WalletDb};
+use crate::wallet::{TransactionStore, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -19,7 +19,6 @@ use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_ha
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
-use sodiumoxide::crypto::sign;
 use std::{
     error::Error,
     fmt,
@@ -267,17 +266,12 @@ impl MinerNode {
         block: &Block,
     ) -> Result<(Vec<u8>, Transaction)> {
         let mut mining_block = serialize_block_for_pow(block);
-        let wallet_db = wallet_db.clone();
         let block_time = block.header.time;
-        let (pk, _sk) = sign::gen_keypair();
-        let address = construct_address(pk, 0);
+        let (address, _) = wallet_db.generate_payment_address(0).await;
 
         let coinbase_amount = TokenAmount(12000);
-        let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address);
+        let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address.clone());
         let coinbase_hash = construct_tx_hash(&current_coinbase);
-
-        // Create address and save to wallet
-        let address = construct_address(pk, 0);
 
         // Create wallet content
         let transaction_store = TransactionStore { address, net: 0 };
