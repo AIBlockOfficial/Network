@@ -347,18 +347,15 @@ impl UserNode {
             Asset::Token(return_amt.clone()),
             return_amt.clone(),
         );
-
-        let tx_store = TransactionStore { address, net: 0 };
-        let mut tx_for_wallet = BTreeMap::new();
-        tx_for_wallet.insert(construct_tx_hash(&payment_tx), tx_store);
+        let payment_tx_hash = construct_tx_hash(&payment_tx);
 
         // Update saves to the wallet
         self.wallet_db
-            .save_transactions_to_wallet(tx_for_wallet)
+            .save_transaction_to_wallet(payment_tx_hash.clone(), address, 0)
             .await
             .unwrap();
         self.wallet_db
-            .save_payment_to_wallet(construct_tx_hash(&payment_tx), return_amt)
+            .save_payment_to_wallet(payment_tx_hash, return_amt)
             .await
             .unwrap();
 

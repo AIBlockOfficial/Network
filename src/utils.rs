@@ -1,7 +1,7 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
-use crate::wallet::{construct_address, TransactionStore, WalletDb};
+use crate::wallet::{construct_address, WalletDb};
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -15,7 +15,6 @@ use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
-use std::collections::BTreeMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -110,15 +109,9 @@ pub async fn create_and_save_fake_to_wallet(
         .unwrap();
 
     // Save transaction store
-    let mut t_store = BTreeMap::new();
-    let t_map = TransactionStore {
-        address: final_address,
-        net: 0,
-    };
-    t_store.insert(t_hash, t_map);
-    println!("TX STORE: {:?}", t_store);
+    println!("TX STORE: {:?}", (&t_hash, &final_address));
     wallet_db
-        .save_transactions_to_wallet(t_store)
+        .save_transaction_to_wallet(t_hash, final_address, 0)
         .await
         .unwrap();
 

@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{TransactionStore, WalletDb};
+use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -274,13 +274,8 @@ impl MinerNode {
         let coinbase_hash = construct_tx_hash(&current_coinbase);
 
         // Create wallet content
-        let transaction_store = TransactionStore { address, net: 0 };
-        let tx_to_save = Some((coinbase_hash.clone(), transaction_store))
-            .into_iter()
-            .collect();
-
         wallet_db
-            .save_transactions_to_wallet(tx_to_save)
+            .save_transaction_to_wallet(coinbase_hash.clone(), address, 0)
             .await
             .unwrap();
 

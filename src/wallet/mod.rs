@@ -119,6 +119,28 @@ impl WalletDb {
         .await?)
     }
 
+    /// Saves an address and the associated transaction with it to the wallet
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_hash`  - Transaction hash
+    /// * `address`  - Transaction Address
+    /// * `net`      - Network version
+    pub async fn save_transaction_to_wallet(
+        &self,
+        tx_hash: String,
+        address: String,
+        net: u8,
+    ) -> Result<(), Error> {
+        let tx_store = TransactionStore {
+            address,
+            net: net as usize,
+        };
+        let tx_to_save = Some((tx_hash, tx_store)).into_iter().collect();
+
+        self.save_transactions_to_wallet(tx_to_save).await
+    }
+
     /// Saves an address and the associated transactions with it to the wallet
     ///
     /// ### Arguments
@@ -131,11 +153,10 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            let keys: Vec<_> = tx_to_save.keys().cloned().collect();
 
-            for key in keys {
-                let input = Bytes::from(serialize(&tx_to_save.get(&key).unwrap()).unwrap());
-                db.put(key.clone(), input).unwrap();
+            for (key, value) in tx_to_save {
+                let input = serialize(&value).unwrap();
+                db.put(&key, &input).unwrap();
             }
         })
         .await?)
@@ -179,6 +200,7 @@ impl WalletDb {
         .await?)
     }
 }
+
 /// Builds an address from a public key
 ///
 /// ### Arguments
