@@ -110,7 +110,7 @@ pub struct ComputeNode {
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
-    pub partition_list: Vec<ProofOfWork>,
+    pub partition_list: (Vec<ProofOfWork>, Vec<SocketAddr>),
     pub request_list: BTreeMap<SocketAddr, bool>,
     pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
@@ -146,7 +146,7 @@ impl ComputeNode {
             current_random_num: Vec::new(),
             last_coinbase_hash: None,
             request_list: BTreeMap::new(),
-            partition_list: Vec::new(),
+            partition_list: (Vec::new(), Vec::new()),
             partition_key: gen_key(),
             storage_addr,
         })
@@ -367,7 +367,7 @@ impl ComputeNode {
             .send(
                 peer,
                 MineRequest::SendPartitionList {
-                    p_list: self.partition_list.clone(),
+                    p_list: self.partition_list.0.clone(),
                 },
             )
             .await?;
@@ -592,7 +592,7 @@ impl ComputeNode {
         peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
-        if self.partition_list.len() >= PARTITION_LIMIT {
+        if self.partition_list.0.len() >= PARTITION_LIMIT {
             return Response {
                 success: false,
                 reason: "Partition list is already full",
@@ -608,15 +608,17 @@ impl ComputeNode {
             };
         }
 
-        self.partition_list.push(partition_entry);
-        if self.partition_list.len() < PARTITION_LIMIT {
+        self.partition_list.0.push(partition_entry);
+        self.partition_list.1.push(peer);
+
+        if self.partition_list.0.len() < PARTITION_LIMIT {
             return Response {
                 success: true,
                 reason: "Partition PoW received successfully",
             };
         }
 
-        self.partition_key = get_partition_entry_key(&self.partition_list);
+        self.partition_key = get_partition_entry_key(&self.partition_list.0);
 
         Response {
             success: true,
@@ -646,8 +648,8 @@ impl ComputeNode {
 
     /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        for (peer, _) in self.request_list.clone() {
-            let _result = self.send_block(peer).await.unwrap();
+        for peer in self.partition_list.1.clone() {
+            self.send_block(peer).await.unwrap();
         }
 
         Ok(())
@@ -655,8 +657,8 @@ impl ComputeNode {
 
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
-        for (peer, _) in self.request_list.clone() {
-            let _result = self.send_partition_list(peer).await.unwrap();
+        for peer in self.partition_list.1.clone() {
+            self.send_partition_list(peer).await.unwrap();
         }
 
         Ok(())
@@ -665,7 +667,7 @@ impl ComputeNode {
     /// Floods all partition participants with block find notification
     pub async fn flood_block_found_notification(&mut self) -> Result<()> {
         for (peer, _) in self.request_list.clone() {
-            let _result = self.send_bf_notification(peer).await.unwrap();
+            self.send_bf_notification(peer).await.unwrap();
         }
 
         Ok(())

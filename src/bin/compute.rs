@@ -119,7 +119,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Partition list is full",
                     }) => {
                         node.flood_list_to_partition().await.unwrap();
-                        node.partition_list = Vec::new();
 
                         if node.get_mining_block().is_some() {
                             node.flood_block_to_partition().await.unwrap();
