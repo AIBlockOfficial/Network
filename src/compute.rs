@@ -111,7 +111,7 @@ pub struct ComputeNode {
     pub last_coinbase_hash: Option<String>,
     pub partition_key: Key,
     pub partition_list: Vec<ProofOfWork>,
-    pub request_list: BTreeMap<String, bool>,
+    pub request_list: BTreeMap<SocketAddr, bool>,
     pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
@@ -578,7 +578,7 @@ impl ComputeNode {
             self.generate_random_num(5);
         }
 
-        self.request_list.insert(peer.to_string(), false);
+        self.request_list.insert(peer, false);
 
         Response {
             success: true,
@@ -630,12 +630,10 @@ impl ComputeNode {
 
         for (peer, peer_sent) in self.request_list.clone() {
             if !peer_sent {
-                exclusions.push(peer.clone());
-                let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
+                exclusions.push(peer);
+                println!("PEER ADDRESS: {:?}", peer);
 
-                println!("PEER ADDRESS: {:?}", peer_addr);
-
-                let _result = self.send_random_number(peer_addr).await.unwrap();
+                let _result = self.send_random_number(peer).await.unwrap();
             }
         }
 
@@ -649,8 +647,7 @@ impl ComputeNode {
     /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         for (peer, _) in self.request_list.clone() {
-            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
-            let _result = self.send_block(peer_addr).await.unwrap();
+            let _result = self.send_block(peer).await.unwrap();
         }
 
         Ok(())
@@ -659,8 +656,7 @@ impl ComputeNode {
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
         for (peer, _) in self.request_list.clone() {
-            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
-            let _result = self.send_partition_list(peer_addr).await.unwrap();
+            let _result = self.send_partition_list(peer).await.unwrap();
         }
 
         Ok(())
@@ -669,8 +665,7 @@ impl ComputeNode {
     /// Floods all partition participants with block find notification
     pub async fn flood_block_found_notification(&mut self) -> Result<()> {
         for (peer, _) in self.request_list.clone() {
-            let peer_addr: SocketAddr = peer.parse().expect("Unable to parse socket address");
-            let _result = self.send_bf_notification(peer_addr).await.unwrap();
+            let _result = self.send_bf_notification(peer).await.unwrap();
         }
 
         Ok(())
