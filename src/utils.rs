@@ -1,10 +1,7 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
-use crate::wallet::{
-    construct_address, save_address_to_wallet, save_payment_to_wallet, save_transactions_to_wallet,
-    AddressStore, TransactionStore,
-};
+use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
@@ -18,7 +15,6 @@ use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
-use std::collections::BTreeMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -91,35 +87,32 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
 /// for testing. The transaction will contain 4 tokens
 ///
 /// NOTE: This is a test util function
-pub async fn create_and_save_fake_to_wallet() -> Result<(), Box<dyn std::error::Error>> {
-    let (pk, sk) = sign::gen_keypair();
-    let final_address = construct_address(pk, 0);
-    let address_keys = AddressStore {
-        public_key: pk,
-        secret_key: sk.clone(),
-    };
+pub async fn create_and_save_fake_to_wallet(
+    wallet_db: &WalletDb,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (final_address, address_keys) = wallet_db.generate_payment_address().await;
+    let (receiver_addr, _) = wallet_db.generate_payment_address().await;
 
-    let (pkb, _sk) = sign::gen_keypair();
-    let receiver_addr = construct_address(pkb, 0);
-    let (t_hash, _payment_tx) =
-        create_valid_transaction(&"00000".to_owned(), &receiver_addr, &pk, &sk);
-
-    // Save address store
-    let _save_a_result = save_address_to_wallet(final_address.clone(), address_keys).await;
+    let (t_hash, _payment_tx) = create_valid_transaction(
+        &"00000".to_owned(),
+        &receiver_addr.address,
+        &address_keys.public_key,
+        &address_keys.secret_key,
+    );
 
     // Save fund store
     let payment_to_save = TokenAmount(4000);
-    let _save_f_result = save_payment_to_wallet(t_hash.clone(), payment_to_save).await;
+    wallet_db
+        .save_payment_to_wallet(t_hash.clone(), payment_to_save)
+        .await
+        .unwrap();
 
     // Save transaction store
-    let mut t_store = BTreeMap::new();
-    let t_map = TransactionStore {
-        address: final_address,
-        net: 0,
-    };
-    t_store.insert(t_hash, t_map);
-    println!("TX STORE: {:?}", t_store);
-    let _save_t_result = save_transactions_to_wallet(t_store).await;
+    println!("TX STORE: {:?}", (&t_hash, &final_address));
+    wallet_db
+        .save_transaction_to_wallet(t_hash, final_address)
+        .await
+        .unwrap();
 
     Ok(())
 }

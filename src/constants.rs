@@ -1,8 +1,7 @@
-//! # Art
-//!
-//! A library for modeling artistic concepts.
-//!
 use naom::script::OpCodes;
+
+/*------- NETWORK CONSTANTS --------*/
+pub const NETWORK_VERSION: u8 = 0;
 
 /*------- BLOCK CONSTANTS --------*/
 

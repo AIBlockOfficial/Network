@@ -349,15 +349,10 @@ impl ComputeNode {
         println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         println!();
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let block_to_send = Bytes::from(serialize(block).unwrap()).to_vec();
+        let block = serialize(block).unwrap();
 
         self.node
-            .send(
-                peer,
-                MineRequest::SendBlock {
-                    block: block_to_send,
-                },
-            )
+            .send(peer, MineRequest::SendBlock { block })
             .await?;
         Ok(())
     }

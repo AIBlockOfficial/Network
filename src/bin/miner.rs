@@ -52,6 +52,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
         if let Some(index) = matches.value_of("index") {
             settings.set("miner_node_idx", index).unwrap();
+            let mut db_mode = settings.get_table("miner_db_mode").unwrap();
+            if let Some(test_idx) = db_mode.get_mut("Test") {
+                *test_idx = config::Value::new(None, index);
+                settings.set("miner_db_mode", db_mode).unwrap();
+            }
         }
         if let Some(index) = matches.value_of("compute_index") {
             settings.set("miner_compute_node_idx", index).unwrap();

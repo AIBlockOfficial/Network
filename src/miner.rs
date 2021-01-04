@@ -8,29 +8,25 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{construct_address, save_transactions_to_wallet, TransactionStore};
+use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
+use sodiumoxide::crypto::secretbox::Key;
 use std::{
     error::Error,
     fmt,
     net::SocketAddr,
     net::{IpAddr, Ipv4Addr},
-    sync::Arc,
 };
-use tokio::{sync::RwLock, task};
+use tokio::task;
 use tracing::{debug, info_span, warn};
-
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
-
-use sodiumoxide::crypto::secretbox::Key;
-use sodiumoxide::crypto::sign;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -91,8 +87,9 @@ pub struct MinerNode {
     pub rand_num: Vec<u8>,
     pub current_block: Block,
     pub current_coinbase: Transaction,
-    last_pow: Arc<RwLock<ProofOfWork>>,
+    last_pow: Option<ProofOfWork>,
     pub partition_list: Vec<ProofOfWork>,
+    wallet_db: WalletDb,
 }
 
 impl MinerNode {
@@ -114,10 +111,8 @@ impl MinerNode {
             partition_key: None,
             current_block: Block::new(),
             current_coinbase: Transaction::new(),
-            last_pow: Arc::new(RwLock::new(ProofOfWork {
-                address: "".to_string(),
-                nonce: Vec::new(),
-            })),
+            last_pow: None,
+            wallet_db: WalletDb::new(config.miner_db_mode),
         })
     }
 
@@ -257,40 +252,38 @@ impl MinerNode {
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
     pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
-        let (pow, tx) = Self::generate_pow_for_block(&self.current_block).await?;
-        self.current_coinbase = tx.clone();
-        Ok((pow, tx))
+        let block = &self.current_block;
+        let (address, _) = self.wallet_db.generate_payment_address().await;
+        let mining_tx = construct_coinbase_tx(
+            TokenAmount(12000),
+            block.header.time,
+            address.address.clone(),
+        );
+        let mining_tx_hash = construct_tx_hash(&mining_tx);
+        self.wallet_db
+            .save_transaction_to_wallet(mining_tx_hash.clone(), address)
+            .await
+            .unwrap();
+
+        let mining_block = serialize_block_for_pow(block);
+        let pow = Self::generate_pow_for_block(mining_block, mining_tx_hash).await?;
+
+        self.current_coinbase = mining_tx.clone();
+        Ok((pow, mining_tx))
     }
 
-    async fn generate_pow_for_block(block: &Block) -> Result<(Vec<u8>, Transaction)> {
-        let mut mining_block = serialize_block_for_pow(block);
-        let block_time = block.header.time;
+    async fn generate_pow_for_block(
+        mut mining_block: Vec<u8>,
+        mining_tx_hash: String,
+    ) -> Result<Vec<u8>> {
         Ok(task::spawn_blocking(move || {
-            let (pk, _sk) = sign::gen_keypair();
-            let address = construct_address(pk, 0);
-
-            let coinbase_amount = TokenAmount(12000);
-            let current_coinbase = construct_coinbase_tx(coinbase_amount, block_time, address);
-            let coinbase_hash = construct_tx_hash(&current_coinbase);
-
-            // Create address and save to wallet
-            let address = construct_address(pk, 0);
-
-            // Create wallet content
-            let transaction_store = TransactionStore { address, net: 0 };
-            let tx_to_save = Some((coinbase_hash.clone(), transaction_store))
-                .into_iter()
-                .collect();
-
-            let _save_result = save_transactions_to_wallet(tx_to_save);
-
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();
-            while !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
+            while !validate_pow_block(&mut mining_block, &mining_tx_hash, &nonce) {
                 nonce = Self::generate_nonce();
             }
 
-            (nonce, current_coinbase)
+            nonce
         })
         .await?)
     }
@@ -328,16 +321,16 @@ impl MinerNode {
     pub async fn generate_pow_promise(&mut self, address: String) -> Result<Vec<u8>> {
         let pow = Self::generate_pow_for_address(address, None).await?;
 
-        *(self.last_pow.write().await) = pow.clone();
+        self.last_pow = Some(pow.clone());
         let mut pow_body = pow.address.as_bytes().to_vec();
-        pow_body.append(&mut pow.nonce.clone());
+        pow_body.extend(pow.nonce);
 
         Ok(Sha3_256::digest(&pow_body).to_vec())
     }
 
     /// Returns the last PoW.
-    pub async fn last_pow(&self) -> ProofOfWork {
-        self.last_pow.read().await.clone()
+    pub fn last_pow(&self) -> &Option<ProofOfWork> {
+        &self.last_pow
     }
 
     /// Generates a random sequence of values for a nonce

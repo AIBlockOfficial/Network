@@ -193,8 +193,14 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.miner_nodes.iter().enumerate() {
+            let miner_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(info.miner_nodes[idx].address.port() as usize)
+            };
             let miner_config = MinerNodeConfig {
                 miner_node_idx: idx,
+                miner_db_mode,
                 miner_compute_node_idx: 0,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),
@@ -218,11 +224,10 @@ impl Network {
 
         for (idx, name) in config.storage_nodes.iter().enumerate() {
             let storage_raft = if config.storage_raft { 1 } else { 0 };
-            let port = info.storage_nodes[idx].address.port();
             let storage_db_mode = if config.in_memory_db {
                 DbMode::InMemory
             } else {
-                DbMode::Test(port as usize)
+                DbMode::Test(info.storage_nodes[idx].address.port() as usize)
             };
             let storage_config = StorageNodeConfig {
                 storage_node_idx: idx,
@@ -277,8 +282,14 @@ impl Network {
         let mut map = BTreeMap::new();
 
         for (idx, name) in config.user_nodes.iter().enumerate() {
+            let user_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(info.user_nodes[idx].address.port() as usize)
+            };
             let user_config = UserNodeConfig {
                 user_node_idx: idx,
+                user_db_mode,
                 user_compute_node_idx: 0,
                 peer_user_node_idx: 0,
                 compute_nodes: info.compute_nodes.clone(),
