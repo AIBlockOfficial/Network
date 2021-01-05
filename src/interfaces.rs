@@ -241,7 +241,7 @@ pub enum MineRequest {
     SendBlock { block: Vec<u8> },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
-    NotifyBlockFound { win_coinbase: Option<String> },
+    NotifyBlockFound { win_coinbase: String },
 }
 
 impl fmt::Debug for MineRequest {

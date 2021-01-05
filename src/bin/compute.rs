@@ -111,15 +111,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(Response {
                         success: true,
                         reason: "Received partition request successfully",
+                    }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason: "Received first full partition request",
                     }) => {
-                        let _flood = node.flood_rand_num_to_requesters().await.unwrap();
+                        println!("Send first random number to requesters to fill first partition");
+                        node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
                         reason: "Partition list is full",
                     }) => {
                         node.flood_list_to_partition().await.unwrap();
-                        node.partition_list = Vec::new();
 
                         if node.get_mining_block().is_some() {
                             node.flood_block_to_partition().await.unwrap();
@@ -129,12 +133,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        if node.has_current_mined_block() {
-                            println!("Send Block to storage");
-                            println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
-                            let _write_to_store = node.send_block_to_storage().await.unwrap();
-                        }
-                        let _flood = node.flood_block_found_notification().await.unwrap();
+                        println!("Send Block to storage");
+                        println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
+                        node.send_block_to_storage().await.unwrap();
+                        node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
@@ -161,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to mine: {:?}", node.get_mining_block());
+                        node.send_bf_notification().await.unwrap();
                         node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {

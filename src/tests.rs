@@ -265,7 +265,7 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     let (expected0, block_info0) = complete_block(0, None, &initial_utxo, c_mined.len());
 
     create_first_block_act(&mut network).await;
-    compute_all_mining_block_mined(&mut network, c_mined, &block_info0).await;
+    compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info0).await;
 
     //
     // Act
@@ -412,7 +412,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
 
     create_first_block_act(&mut network).await;
-    compute_all_mining_block_mined(&mut network, compute_nodes, &block_info0).await;
+    compute_all_mining_block_mined(&mut network, "miner1", compute_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     add_transactions_act(&mut network, &tx).await;
 
@@ -542,21 +542,21 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg == Cfg::IgnoreMiner {
         let (_, block_info) = complete_block(0, None, &BTreeMap::new(), c_mined.len());
-        compute_all_mining_block_mined(network, c_mined, &block_info).await;
+        compute_all_mining_block_mined(network, "miner1", c_mined, &block_info).await;
         return;
     }
 
     for compute in c_mined {
         if compute_miner_request_list_is_empty(network, compute).await {
             miner_send_partition_request(network, "miner1", compute).await;
-            compute_handle_event(network, compute, "Received partition request successfully").await;
-
-            compute_flood_rand_num_to_requesters(network, compute).await;
-            miner_handle_event(network, "miner1", "Received random number successfully").await;
-
-            miner_send_partition_pow(network, "miner1", compute).await;
-            compute_handle_event(network, compute, "Partition list is full").await;
+            compute_handle_event(network, compute, "Received first full partition request").await;
         }
+
+        compute_flood_rand_num_to_requesters(network, compute).await;
+        miner_handle_event(network, "miner1", "Received random number successfully").await;
+
+        miner_send_partition_pow(network, "miner1", compute).await;
+        compute_handle_event(network, compute, "Partition list is full").await;
 
         compute_flood_block_to_partition(network, compute).await;
         miner_handle_event(network, "miner1", "Pre-block received successfully").await;
@@ -625,7 +625,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
-    compute_all_mining_block_mined(&mut network, c_mined, &block_info1).await;
+    compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info1).await;
 
     let initial_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -1009,23 +1009,26 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
 
 async fn compute_mining_block_mined(
     network: &mut Network,
+    miner: &str,
     compute: &str,
     block_info: &CompleteBlock,
 ) {
+    let miner_addr = network.get_address(miner).await.unwrap();
     let id = network.get_position(compute).unwrap() as u64 + 1;
     let mut c = network.compute(compute).unwrap().lock().await;
     let mined = block_info.per_node.get(&id).unwrap();
 
-    c.mining_block_mined(mined.nonce.clone(), mined.mining_tx.clone());
+    c.mining_block_mined(mined.nonce.clone(), miner_addr, mined.mining_tx.clone());
 }
 
 async fn compute_all_mining_block_mined(
     network: &mut Network,
+    miner: &str,
     compute_group: &[String],
     block_info: &CompleteBlock,
 ) {
     for compute in compute_group {
-        compute_mining_block_mined(network, compute, block_info).await;
+        compute_mining_block_mined(network, miner, compute, block_info).await;
     }
 }
 

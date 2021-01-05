@@ -344,7 +344,7 @@ impl Node {
         let payload = Bytes::from(serialize(&data)?);
 
         self.send_multicast(
-            peers,
+            peers.into_iter(),
             CommMessage::Gossip {
                 payload: payload.clone(),
                 id: message_id,
@@ -356,21 +356,21 @@ impl Node {
         Ok(())
     }
 
-    async fn send_multicast(&self, peers: HashSet<SocketAddr>, msg: CommMessage) {
-        let mut join_handles = Vec::with_capacity(peers.len());
+    async fn send_multicast(&self, peers: impl Iterator<Item = SocketAddr>, msg: CommMessage) {
+        trace!("send_multicast");
 
-        trace!(?peers, "send_multicast");
+        let join_handles: Vec<_> = peers
+            .map(|peer| {
+                let mut node = self.clone();
+                let msg = msg.clone();
 
-        for peer in peers {
-            let mut node = self.clone();
-            let msg = msg.clone();
-
-            join_handles.push(tokio::spawn(async move {
-                if let Err(error) = node.send_message(peer, msg).await {
-                    warn!(?error, "send_multicast");
-                }
-            }));
-        }
+                tokio::spawn(async move {
+                    if let Err(error) = node.send_message(peer, msg).await {
+                        warn!(?error, "send_multicast");
+                    }
+                })
+            })
+            .collect();
 
         join_all(join_handles).await;
     }
@@ -437,6 +437,19 @@ impl Node {
         let id = rand::thread_rng().gen();
         self.send_message(peer, CommMessage::Direct { payload, id })
             .await
+    }
+
+    /// Sends a serialized message to given peers.
+    pub async fn send_to_all(
+        &mut self,
+        peers: impl Iterator<Item = SocketAddr>,
+        data: impl Serialize,
+    ) -> Result<()> {
+        let payload = Bytes::from(serialize(&data)?);
+        let id = rand::thread_rng().gen();
+        self.send_multicast(peers, CommMessage::Direct { payload, id })
+            .await;
+        Ok(())
     }
 
     /// Prepares and sends a handshake message to a given peer.
@@ -618,7 +631,7 @@ impl Node {
 
         tokio::spawn(async move {
             node.send_multicast(
-                peers,
+                peers.into_iter(),
                 CommMessage::Gossip {
                     payload,
                     id: message_id,
