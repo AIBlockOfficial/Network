@@ -671,6 +671,9 @@ impl ComputeNode {
     ) {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
+        self.current_random_num = Self::generate_random_num();
+        self.partition_list = (Vec::new(), Vec::new());
+        self.partition_key = None;
 
         // Update latest coinbase to notify winner
         self.last_coinbase_hash = mining_transaction.1.outputs[0].script_public_key.clone();
