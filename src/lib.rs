@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 mod active_raft;
+mod api;
 mod comms_handler;
 mod compute;
 mod compute_raft;
