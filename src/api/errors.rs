@@ -1,5 +1,3 @@
-use warp;
-
 /// API error struct for a lack of wallet funds
 #[derive(Debug)]
 pub struct ErrorLackOfFunds;

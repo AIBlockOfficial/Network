@@ -2,7 +2,6 @@ use bincode::deserialize;
 use naom::constants::D_DISPLAY_PLACES;
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
-use warp;
 
 use crate::api::errors;
 use crate::constants::{FUND_KEY, WALLET_PATH};
