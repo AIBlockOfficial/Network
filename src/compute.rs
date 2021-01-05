@@ -109,7 +109,7 @@ pub struct ComputeNode {
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
-    pub last_coinbase_hash: Option<String>,
+    pub last_coinbase_hash: Option<(SocketAddr, String, bool)>,
     pub partition_key: Option<Key>,
     pub partition_list: (Vec<ProofOfWork>, Vec<SocketAddr>),
     pub request_list: BTreeSet<SocketAddr>,
@@ -339,55 +339,13 @@ impl ComputeNode {
         comparison_addr
     }
 
-    /// Sends block to a mining node.
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Address to send to
-    pub async fn send_block(&mut self, peer: SocketAddr) -> Result<()> {
-        println!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
-        println!();
-        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let block = serialize(block).unwrap();
-
-        self.node
-            .send(peer, MineRequest::SendBlock { block })
-            .await?;
-        Ok(())
-    }
-
-    /// Sends the full partition list to the participants
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Address to send to
-    pub async fn send_partition_list(&mut self, peer: SocketAddr) -> Result<()> {
-        self.node
-            .send(
-                peer,
-                MineRequest::SendPartitionList {
-                    p_list: self.partition_list.0.clone(),
-                },
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Sends notification of a block find to partition participants
-    /// TODO: Have this match the winner so that they can update their own running total
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Address to send to
-    pub async fn send_bf_notification(&mut self, peer: SocketAddr) -> Result<()> {
-        self.node
-            .send(
-                peer,
-                MineRequest::NotifyBlockFound {
-                    win_coinbase: self.last_coinbase_hash.clone(),
-                },
-            )
-            .await?;
+    /// Sends notification of a block found and stored to the winner.
+    pub async fn send_bf_notification(&mut self) -> Result<()> {
+        if let Some((peer, win_coinbase, true)) = self.last_coinbase_hash.take() {
+            self.node
+                .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
+                .await?;
+        }
         Ok(())
     }
 
@@ -424,17 +382,6 @@ impl ComputeNode {
         };
         self.node.send(self.storage_addr, request).await?;
 
-        Ok(())
-    }
-
-    /// Sends random number to a mining node.
-    pub async fn send_random_number(&mut self, peer: SocketAddr) -> Result<()> {
-        let random_num = self.current_random_num.clone();
-        println!("RANDOM NUMBER IN COMPUTE: {:?}", random_num);
-
-        self.node
-            .send(peer, MineRequest::SendRandomNum { rnum: random_num })
-            .await?;
         Ok(())
     }
 
@@ -488,6 +435,7 @@ impl ComputeNode {
                             }));
                         }
                         Some(CommittedItem::Block) => {
+                            self.validate_wining_miner_tx();
                             self.node_raft.generate_block();
                             return Some(Ok(Response{
                                 success: true,
@@ -630,43 +578,55 @@ impl ComputeNode {
 
     /// Floods the random number to everyone who requested
     pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
-        for peer in self.request_list.clone() {
-            self.send_random_number(peer).await.unwrap();
-        }
+        let rnum = self.current_random_num.clone();
+        info!("RANDOM NUMBER IN COMPUTE: {:?}", rnum);
+
+        self.node
+            .send_to_all(
+                self.request_list.iter().copied(),
+                MineRequest::SendRandomNum { rnum },
+            )
+            .await
+            .unwrap();
 
         Ok(())
     }
 
     /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        for peer in self.partition_list.1.clone() {
-            self.send_block(peer).await.unwrap();
-        }
+        info!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+        let block = serialize(block).unwrap();
+
+        self.node
+            .send_to_all(
+                self.partition_list.1.iter().copied(),
+                MineRequest::SendBlock { block },
+            )
+            .await
+            .unwrap();
 
         Ok(())
     }
 
     /// Floods all peers with the full partition list
     pub async fn flood_list_to_partition(&mut self) -> Result<()> {
-        for peer in self.partition_list.1.clone() {
-            self.send_partition_list(peer).await.unwrap();
-        }
-
-        Ok(())
-    }
-
-    /// Floods all partition participants with block find notification
-    pub async fn flood_block_found_notification(&mut self) -> Result<()> {
-        for peer in self.request_list.clone() {
-            self.send_bf_notification(peer).await.unwrap();
-        }
-
+        self.node
+            .send_to_all(
+                self.partition_list.1.iter().copied(),
+                MineRequest::SendPartitionList {
+                    p_list: self.partition_list.0.clone(),
+                },
+            )
+            .await
+            .unwrap();
         Ok(())
     }
 
     pub fn mining_block_mined(
         &mut self,
         nonce: Vec<u8>,
+        miner: SocketAddr,
         mining_transaction: (String, Transaction),
     ) {
         // Take mining block info: no more mining for it.
@@ -676,7 +636,7 @@ impl ComputeNode {
         self.partition_key = None;
 
         // Update latest coinbase to notify winner
-        self.last_coinbase_hash = mining_transaction.1.outputs[0].script_public_key.clone();
+        self.last_coinbase_hash = Some((miner, mining_transaction.0.clone(), false));
 
         // Set mined block
         self.current_mined_block = Some(MinedBlock {
@@ -685,6 +645,18 @@ impl ComputeNode {
             block_tx,
             mining_transaction,
         });
+    }
+
+    fn validate_wining_miner_tx(&mut self) {
+        if let Some((miner, tx_hash, false)) = self.last_coinbase_hash.take() {
+            if self
+                .node_raft
+                .get_committed_tx_pool()
+                .contains_key(&tx_hash)
+            {
+                self.last_coinbase_hash = Some((miner, tx_hash, true));
+            }
+        }
     }
 }
 
@@ -745,7 +717,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
+        self.mining_block_mined(nonce, address, (coinbase_hash, coinbase));
 
         Response {
             success: true,

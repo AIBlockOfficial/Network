@@ -133,12 +133,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        if node.has_current_mined_block() {
-                            println!("Send Block to storage");
-                            println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
-                            node.send_block_to_storage().await.unwrap();
-                        }
-                        node.flood_block_found_notification().await.unwrap();
+                        println!("Send Block to storage");
+                        println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
+                        node.send_block_to_storage().await.unwrap();
                         node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
@@ -166,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to mine: {:?}", node.get_mining_block());
+                        node.send_bf_notification().await.unwrap();
                         node.flood_block_to_partition().await.unwrap();
                     }
                     Ok(Response {
