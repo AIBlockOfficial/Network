@@ -549,7 +549,7 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     for compute in c_mined {
         if compute_miner_request_list_is_empty(network, compute).await {
             miner_send_partition_request(network, "miner1", compute).await;
-            compute_handle_event(network, compute, "Received partition request successfully").await;
+            compute_handle_event(network, compute, "Received first full partition request").await;
 
             compute_flood_rand_num_to_requesters(network, compute).await;
             miner_handle_event(network, "miner1", "Received random number successfully").await;

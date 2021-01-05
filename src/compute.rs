@@ -19,9 +19,10 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
+use rand::{self, Rng};
 use serde::Serialize;
-use sodiumoxide::crypto::secretbox::{gen_key, Key};
-use std::collections::BTreeMap;
+use sodiumoxide::crypto::secretbox::Key;
+use std::collections::{BTreeMap, BTreeSet};
 use std::{
     collections::HashMap,
     error::Error,
@@ -109,9 +110,10 @@ pub struct ComputeNode {
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<String>,
-    pub partition_key: Key,
+    pub partition_key: Option<Key>,
     pub partition_list: (Vec<ProofOfWork>, Vec<SocketAddr>),
-    pub request_list: BTreeMap<SocketAddr, bool>,
+    pub request_list: BTreeSet<SocketAddr>,
+    pub request_list_first_flood: Option<usize>,
     pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
 }
@@ -143,11 +145,12 @@ impl ComputeNode {
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
             druid_pool: BTreeMap::new(),
-            current_random_num: Vec::new(),
+            current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
-            request_list: BTreeMap::new(),
+            request_list: BTreeSet::new(),
+            request_list_first_flood: Some(PARTITION_LIMIT),
             partition_list: (Vec::new(), Vec::new()),
-            partition_key: gen_key(),
+            partition_key: None,
             storage_addr,
         })
     }
@@ -303,13 +306,9 @@ impl ComputeNode {
     }
 
     /// Generates a garbage random num for use in network testing
-    ///
-    /// ### Arguments
-    ///
-    /// * `size`    - Size of the file in bytes
-    pub fn generate_random_num(&mut self, size: usize) {
-        let random_num = vec![0; size];
-        self.current_random_num = random_num;
+    fn generate_random_num() -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        (0..10).map(|_| rng.gen_range(1, 200)).collect()
     }
 
     /// Gets a decremented socket address of peer for storage
@@ -574,15 +573,18 @@ impl ComputeNode {
     /// Receive a partition request from a miner node
     /// TODO: This may need to be part of the ComputeInterface depending on key agreement
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
-        if self.request_list.is_empty() {
-            self.generate_random_num(5);
-        }
-
-        self.request_list.insert(peer, false);
-
-        Response {
-            success: true,
-            reason: "Received partition request successfully",
+        self.request_list.insert(peer);
+        if self.request_list_first_flood == Some(self.request_list.len()) {
+            self.request_list_first_flood = None;
+            Response {
+                success: true,
+                reason: "Received first full partition request",
+            }
+        } else {
+            Response {
+                success: true,
+                reason: "Received partition request successfully",
+            }
         }
     }
 
@@ -618,7 +620,7 @@ impl ComputeNode {
             };
         }
 
-        self.partition_key = get_partition_entry_key(&self.partition_list.0);
+        self.partition_key = Some(get_partition_entry_key(&self.partition_list.0));
 
         Response {
             success: true,
@@ -628,19 +630,8 @@ impl ComputeNode {
 
     /// Floods the random number to everyone who requested
     pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
-        let mut exclusions = Vec::new();
-
-        for (peer, peer_sent) in self.request_list.clone() {
-            if !peer_sent {
-                exclusions.push(peer);
-                println!("PEER ADDRESS: {:?}", peer);
-
-                let _result = self.send_random_number(peer).await.unwrap();
-            }
-        }
-
-        for exclusion in exclusions {
-            self.request_list.insert(exclusion, true);
+        for peer in self.request_list.clone() {
+            self.send_random_number(peer).await.unwrap();
         }
 
         Ok(())
@@ -666,7 +657,7 @@ impl ComputeNode {
 
     /// Floods all partition participants with block find notification
     pub async fn flood_block_found_notification(&mut self) -> Result<()> {
-        for (peer, _) in self.request_list.clone() {
+        for peer in self.request_list.clone() {
             self.send_bf_notification(peer).await.unwrap();
         }
 
