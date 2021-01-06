@@ -1239,7 +1239,7 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
         Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?}", other),
+        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
 }
 
@@ -1277,7 +1277,7 @@ async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str
     match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
         Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?}", other),
+        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
 }
 
