@@ -231,10 +231,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        println!("Warp API starting at port {}", 3000);
+        println!("Warp API starting at port 3000");
         println!();
 
         let db = db.clone();
+
         async {
             warp::serve(wallet_info(db))
                 .run(([127, 0, 0, 1], 3000))
