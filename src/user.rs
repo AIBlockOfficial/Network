@@ -91,7 +91,7 @@ pub struct UserNode {
     pub trading_peer: Option<SocketAddr>,
     pub next_payment: Option<Transaction>,
     pub return_payment: Option<ReturnPayment>,
-    wallet_db: WalletDb,
+    pub wallet_db: WalletDb,
 }
 
 impl UserNode {

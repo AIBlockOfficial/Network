@@ -4,7 +4,7 @@ use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 
 use crate::api::errors;
-use crate::constants::{FUND_KEY, WALLET_PATH};
+use crate::constants::{DB_PATH_TEST, FUND_KEY, WALLET_PATH};
 use crate::db_utils::get_db_options;
 use crate::wallet::FundStore;
 
@@ -24,7 +24,7 @@ struct PayeeInfo {
 /// Returns a `WalletInfo` struct
 pub async fn get_wallet_info() -> Result<impl warp::Reply, warp::Rejection> {
     let opts = get_db_options();
-    let db = DB::open(&opts, WALLET_PATH).unwrap();
+    let db = DB::open(&opts, format!("{}/{}", WALLET_PATH, DB_PATH_TEST)).unwrap();
     let fund_store_state = match db.get(FUND_KEY) {
         Ok(Some(list)) => Some(deserialize(&list).unwrap()),
         Ok(None) => return Err(warp::reject::custom(errors::ErrorLackOfFunds)),

@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("api_port", 3000).unwrap();
         settings.set_default("user_node_idx", 0).unwrap();
         settings.set_default("user_compute_node_idx", 0).unwrap();
         settings.set_default("peer_user_node_idx", 0).unwrap();
@@ -228,7 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        println!("Warp API starting");
+        println!("Warp API starting at port {}", 3000);
         println!();
 
         async {
