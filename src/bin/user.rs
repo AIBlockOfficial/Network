@@ -145,6 +145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.send_address_request(peer_user_node).await.unwrap();
     }
 
+    let db = node.wallet_db.clone();
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -232,8 +234,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Warp API starting at port {}", 3000);
         println!();
 
+        let db = db.clone();
         async {
-            warp::serve(wallet_info()).run(([127, 0, 0, 1], 3000)).await;
+            warp::serve(wallet_info(db))
+                .run(([127, 0, 0, 1], 3000))
+                .await;
         }
     });
 

@@ -1,12 +1,10 @@
 use bincode::deserialize;
 use naom::constants::D_DISPLAY_PLACES;
-use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 
 use crate::api::errors;
-use crate::constants::{DB_PATH_TEST, FUND_KEY, WALLET_PATH};
-use crate::db_utils::get_db_options;
-use crate::wallet::FundStore;
+use crate::constants::FUND_KEY;
+use crate::wallet::{FundStore, WalletDb};
 
 /// Information about a wallet to be returned to requester
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,9 +20,9 @@ struct PayeeInfo {
 
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
-pub async fn get_wallet_info() -> Result<impl warp::Reply, warp::Rejection> {
-    let opts = get_db_options();
-    let db = DB::open(&opts, format!("{}/{}", WALLET_PATH, DB_PATH_TEST)).unwrap();
+pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
+    let db = wallet_db.db.lock().unwrap();
+
     let fund_store_state = match db.get(FUND_KEY) {
         Ok(Some(list)) => Some(deserialize(&list).unwrap()),
         Ok(None) => return Err(warp::reject::custom(errors::ErrorLackOfFunds)),

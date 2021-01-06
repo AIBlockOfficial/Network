@@ -43,7 +43,7 @@ pub struct FundStore {
 
 #[derive(Debug, Clone)]
 pub struct WalletDb {
-    db: Arc<Mutex<SimpleDb>>,
+    pub db: Arc<Mutex<SimpleDb>>,
 }
 
 impl WalletDb {
