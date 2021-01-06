@@ -1,5 +1,6 @@
 storage_db_mode = {Test = 0}
 miner_db_mode = {Test = 0}
+user_db_mode = {Test = 0}
 compute_seed_utxo = ["000000", "000001", "000002", "000003"]
 compute_raft = 0
 storage_raft = 0
@@ -24,7 +25,7 @@ address = "0.0.0.0:12340"
 address = "0.0.0.0:12341"
 
 [[user_nodes]]
-address = "35.161.167.59:12342"
+address = "0.0.0.0:12342"
 
 [[user_nodes]]
 address = "0.0.0.0:12343"

@@ -2,7 +2,7 @@
 
 use clap::{App, Arg};
 use system::configurations::UserNodeConfig;
-use system::{Response, UserNode};
+use system::{routes::wallet_info, Response, UserNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,9 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-
-    println!("CONFIG: {:?}", config);
-    println!();
 
     let peer_user_node_connected = if matches.is_present("peer_user_connect") {
         Some(
@@ -229,7 +226,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let (result,) = tokio::join!(main_loop_handle);
-    result.unwrap();
+    // Warp API
+    let warp_handle = tokio::spawn({
+        println!("Warp API starting");
+        println!();
+
+        async {
+            warp::serve(wallet_info()).run(([127, 0, 0, 1], 3000)).await;
+        }
+    });
+
+    let (main_result, warp_result) = tokio::join!(main_loop_handle, warp_handle);
+    main_result.unwrap();
+    warp_result.unwrap();
+
     Ok(())
 }

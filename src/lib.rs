@@ -26,6 +26,7 @@ mod user;
 mod utils;
 mod wallet;
 
+pub use api::routes;
 pub use compute::ComputeNode;
 pub use constants::PARTITION_LIMIT;
 pub use db_utils::get_db_options;

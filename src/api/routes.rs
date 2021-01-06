@@ -8,7 +8,7 @@ fn with_peer(peer: &Node) -> impl Filter<Extract = (&Node,), Error = Infallible>
 }
 
 // GET wallet info
-fn wallet_info() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn wallet_info() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path("wallet_info")
         .and(warp::get())
         .and_then(handlers::get_wallet_info)
