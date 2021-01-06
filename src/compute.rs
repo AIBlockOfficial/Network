@@ -187,6 +187,11 @@ impl ComputeNode {
         )
     }
 
+    /// Propose initial block when ready
+    pub async fn propose_initial_uxto_set(&mut self) {
+        self.node_raft.propose_initial_uxto_set().await;
+    }
+
     /// The current utxo_set including block being mined and previous block mining txs.
     pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
         &self.node_raft.get_committed_utxo_set()

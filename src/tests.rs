@@ -206,6 +206,7 @@ async fn create_first_block_act(network: &mut Network) {
     let compute_nodes = &config.compute_nodes;
 
     info!("Test Step Create first Block");
+    compute_all_propose_initial_uxto_set(network, compute_nodes).await;
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
 
     info!("Test Step Connect nodes");
@@ -983,6 +984,17 @@ async fn compute_connect_to_storage(network: &mut Network, compute: &str) {
 async fn compute_all_connect_to_storage(network: &mut Network, compute_group: &[String]) {
     for compute in compute_group {
         compute_connect_to_storage(network, compute).await;
+    }
+}
+
+async fn compute_propose_initial_uxto_set(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.propose_initial_uxto_set().await;
+}
+
+async fn compute_all_propose_initial_uxto_set(network: &mut Network, compute_group: &[String]) {
+    for compute in compute_group {
+        compute_propose_initial_uxto_set(network, compute).await;
     }
 }
 
