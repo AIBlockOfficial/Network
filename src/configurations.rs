@@ -95,6 +95,8 @@ pub struct UserNodeConfig {
     pub miner_nodes: Vec<NodeSpec>,
     /// All peer user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
+    /// API port
+    pub api_port: u16,
 }
 
 /// Configuration option for initial transactions for a compute node

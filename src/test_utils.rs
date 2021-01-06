@@ -296,6 +296,7 @@ impl Network {
                 storage_nodes: info.storage_nodes.clone(),
                 miner_nodes: info.miner_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
+                api_port: 3000,
             };
 
             map.insert(

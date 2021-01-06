@@ -2,7 +2,7 @@
 
 use clap::{App, Arg};
 use system::configurations::UserNodeConfig;
-use system::{Response, UserNode};
+use system::{routes::wallet_info, Response, UserNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("api_port", 3000).unwrap();
         settings.set_default("user_node_idx", 0).unwrap();
         settings.set_default("user_compute_node_idx", 0).unwrap();
         settings.set_default("peer_user_node_idx", 0).unwrap();
@@ -103,9 +104,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    println!("CONFIG: {:?}", config);
-    println!();
-
     let peer_user_node_connected = if matches.is_present("peer_user_connect") {
         Some(
             config
@@ -146,6 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Request a new payment address from peer user
         node.send_address_request(peer_user_node).await.unwrap();
     }
+
+    let db = node.wallet_db.clone();
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -229,7 +229,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let (result,) = tokio::join!(main_loop_handle);
-    result.unwrap();
+    // Warp API
+    let warp_handle = tokio::spawn({
+        println!("Warp API starting at port 3000");
+        println!();
+
+        let db = db.clone();
+
+        async {
+            warp::serve(wallet_info(db))
+                .run(([127, 0, 0, 1], 3000))
+                .await;
+        }
+    });
+
+    let (main_result, warp_result) = tokio::join!(main_loop_handle, warp_handle);
+    main_result.unwrap();
+    warp_result.unwrap();
+
     Ok(())
 }

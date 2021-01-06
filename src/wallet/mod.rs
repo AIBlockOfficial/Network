@@ -43,7 +43,7 @@ pub struct FundStore {
 
 #[derive(Debug, Clone)]
 pub struct WalletDb {
-    db: Arc<Mutex<SimpleDb>>,
+    pub db: Arc<Mutex<SimpleDb>>,
 }
 
 impl WalletDb {
@@ -53,6 +53,12 @@ impl WalletDb {
         }
     }
 
+    /// Creates a new DB instance for a given environment, including construction and
+    /// teardown
+    ///
+    /// ### Arguments
+    ///
+    /// * `db_mode` - The environment to set the DB up in
     fn new_db(db_mode: DbMode) -> SimpleDb {
         let save_path = match db_mode {
             DbMode::Live => format!("{}/{}", WALLET_PATH, DB_PATH_LIVE),
@@ -196,6 +202,8 @@ impl WalletDb {
             // Update the running total and add the transaction to the tab list
             fund_store.running_total.0 += amount.0;
             fund_store.transactions.insert(hash, amount);
+
+            println!("Testing payment to wallet");
             // Save to disk
             db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
         })
