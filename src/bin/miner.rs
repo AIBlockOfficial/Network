@@ -152,7 +152,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         reason: "Block found",
                     }) => {
                         println!("Block nonce has been successfully found");
+                        node.commit_block_found().await;
                     }
+                    Ok(Response {
+                        success: false,
+                        reason: "Block not found",
+                    }) => {}
                     Ok(Response {
                         success: true,
                         reason: &_,

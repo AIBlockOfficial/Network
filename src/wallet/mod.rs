@@ -210,6 +210,7 @@ impl WalletDb {
         .await?)
     }
 
+    // Get the wallet fund store
     pub fn get_fund_store(&self) -> Option<FundStore> {
         match self.db.lock().unwrap().get(FUND_KEY) {
             Ok(Some(list)) => Some(deserialize(&list).unwrap()),
@@ -218,6 +219,7 @@ impl WalletDb {
         }
     }
 
+    // Set the wallet fund store
     pub fn set_fund_store(&self, fund_store: FundStore) {
         self.db
             .lock()
@@ -226,6 +228,7 @@ impl WalletDb {
             .unwrap();
     }
 
+    // Get the wallet address store
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
         match self.db.lock().unwrap().get(ADDRESS_KEY) {
             Ok(Some(list)) => deserialize(&list).unwrap(),
@@ -234,6 +237,7 @@ impl WalletDb {
         }
     }
 
+    // Set the wallet address store
     pub fn set_address_stores(&self, address_store: BTreeMap<String, AddressStore>) {
         self.db
             .lock()
@@ -242,6 +246,7 @@ impl WalletDb {
             .unwrap();
     }
 
+    // Get the wallet transaction store
     pub fn get_transaction_store(&self, tx_hash: &str) -> TransactionStore {
         match self.db.lock().unwrap().get(tx_hash) {
             Ok(Some(list)) => deserialize(&list).unwrap(),

@@ -86,6 +86,8 @@ pub struct ComputeRaft {
     raft_active: ActiveRaft,
     /// Consensused fields.
     consensused: ComputeConsensused,
+    /// Initial utxo_set to propose when ready.
+    initial_utxo_set: Option<BTreeMap<String, Transaction>>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
@@ -148,6 +150,7 @@ impl ComputeRaft {
             first_raft_peer,
             raft_active,
             consensused,
+            initial_utxo_set: Some(utxo_set),
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
             last_block_stored_infos: Vec::new(),
@@ -159,8 +162,6 @@ impl ComputeRaft {
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             proposed_last_id: 0,
         }
-        .propose_initial_uxto_set(utxo_set)
-        .await
     }
 
     /// All the peers to connect to when using raft.
@@ -269,10 +270,10 @@ impl ComputeRaft {
 
     /// Append new transaction to our local pool from which to propose
     /// consensused transactions.
-    async fn propose_initial_uxto_set(mut self, uxto_set: BTreeMap<String, Transaction>) -> Self {
-        self.propose_item(&ComputeRaftItem::FirstBlock(uxto_set))
+    pub async fn propose_initial_uxto_set(&mut self) {
+        let utxo_set = self.initial_utxo_set.take().unwrap();
+        self.propose_item(&ComputeRaftItem::FirstBlock(utxo_set))
             .await;
-        self
     }
 
     /// Process as received block info.
@@ -687,6 +688,7 @@ mod test {
         //
         // Act
         //
+        node.propose_initial_uxto_set().await;
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
         node.propose_block_with_last_info().await;
@@ -731,6 +733,7 @@ mod test {
         let mut expected_block_addr_to_hashes = BTreeMap::new();
         let mut expected_unused_utxo_hashes = Vec::<&str>::new();
 
+        node.propose_initial_uxto_set().await;
         let commit = node.next_commit().await.unwrap();
         let _first_block = node.received_commit(commit).await.unwrap();
         let previous_block = BlockStoredInfo {
@@ -855,6 +858,7 @@ mod test {
         let mut node = new_test_node(&[]).await;
         node.proposed_and_consensused_tx_pool_len_max = 3;
         node.proposed_tx_pool_len_max = 2;
+        node.propose_initial_uxto_set().await;
         let commit = node.next_commit().await;
         node.received_commit(commit.unwrap()).await.unwrap();
 

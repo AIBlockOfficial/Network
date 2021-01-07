@@ -187,6 +187,11 @@ impl ComputeNode {
         )
     }
 
+    /// Propose initial block when ready
+    pub async fn propose_initial_uxto_set(&mut self) {
+        self.node_raft.propose_initial_uxto_set().await;
+    }
+
     /// The current utxo_set including block being mined and previous block mining txs.
     pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
         &self.node_raft.get_committed_utxo_set()
@@ -341,7 +346,10 @@ impl ComputeNode {
 
     /// Sends notification of a block found and stored to the winner.
     pub async fn send_bf_notification(&mut self) -> Result<()> {
-        if let Some((peer, win_coinbase, true)) = self.last_coinbase_hash.take() {
+        let last_winer = self.last_coinbase_hash.take();
+        info!("send_bf_notification {:?}", last_winer);
+
+        if let Some((peer, win_coinbase, true)) = last_winer {
             self.node
                 .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
                 .await?;
@@ -651,7 +659,7 @@ impl ComputeNode {
         if let Some((miner, tx_hash, false)) = self.last_coinbase_hash.take() {
             if self
                 .node_raft
-                .get_committed_tx_pool()
+                .get_committed_utxo_set()
                 .contains_key(&tx_hash)
             {
                 self.last_coinbase_hash = Some((miner, tx_hash, true));
