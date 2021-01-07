@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::WalletDb;
+use crate::wallet::{FundStore, PaymentAddress, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -86,10 +86,11 @@ pub struct MinerNode {
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
     pub current_block: Block,
-    pub current_coinbase: Transaction,
     last_pow: Option<ProofOfWork>,
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
+    current_coinbase: Option<(String, Transaction)>,
+    current_payment_address: Option<PaymentAddress>,
 }
 
 impl MinerNode {
@@ -110,20 +111,16 @@ impl MinerNode {
             rand_num: Vec::new(),
             partition_key: None,
             current_block: Block::new(),
-            current_coinbase: Transaction::new(),
             last_pow: None,
             wallet_db: WalletDb::new(config.miner_db_mode),
+            current_coinbase: None,
+            current_payment_address: None,
         })
     }
 
     /// Returns the miner node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
-    }
-
-    /// Generates a garbage coinbase tx for network testing
-    fn generate_garbage_coinbase() -> Transaction {
-        Transaction::new()
     }
 
     /// Connect to a peer on the network.
@@ -169,20 +166,33 @@ impl MinerNode {
         println!("RECEIVED REQUEST: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase: _ } => Response {
-                success: true,
-                reason: "Block found",
-            },
+            NotifyBlockFound { win_coinbase } => self.receive_block_found(win_coinbase),
             SendBlock { block } => self.receive_pre_block(block),
             SendPartitionList { p_list } => self.receive_partition_list(p_list),
             SendRandomNum { rnum } => self.receive_random_number(rnum),
         }
     }
 
+    /// Handles the receipt of a block found
+    fn receive_block_found(&mut self, win_coinbase: String) -> Response {
+        debug!("RECEIVE BLOCK FOUND: {:?}", win_coinbase);
+        if Some(&win_coinbase) == self.current_coinbase.as_ref().map(|(hash, _)| hash) {
+            Response {
+                success: true,
+                reason: "Block found",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Block not found",
+            }
+        }
+    }
+
     /// Handles the receipt of the random number of partitioning
     fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Response {
         self.rand_num = rand_num;
-        println!("RANDOM NUMBER IN SELF: {:?}", self.rand_num.clone());
+        debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num.clone());
 
         Response {
             success: true,
@@ -248,27 +258,44 @@ impl MinerNode {
         Ok(())
     }
 
+    /// Handles the receipt of a block found
+    pub async fn commit_block_found(&mut self) {
+        let address = self.current_payment_address.take().unwrap();
+        let (tx_hash, tx) = self.current_coinbase.take().unwrap();
+        let tx_amount = tx.outputs.first().unwrap().amount.clone();
+
+        self.wallet_db
+            .save_transaction_to_wallet(tx_hash.clone(), address)
+            .await
+            .unwrap();
+        self.wallet_db
+            .save_payment_to_wallet(tx_hash, tx_amount)
+            .await
+            .unwrap();
+    }
+
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
     /// TODO: Save pk/sk to temp storage
     pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
         let block = &self.current_block;
-        let (address, _) = self.wallet_db.generate_payment_address().await;
+
+        if self.current_payment_address.is_none() {
+            let (address, _) = self.wallet_db.generate_payment_address().await;
+            self.current_payment_address = Some(address);
+        }
+
         let mining_tx = construct_coinbase_tx(
             TokenAmount(12000),
             block.header.time,
-            address.address.clone(),
+            self.current_payment_address.clone().unwrap().address,
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
-        self.wallet_db
-            .save_transaction_to_wallet(mining_tx_hash.clone(), address)
-            .await
-            .unwrap();
 
         let mining_block = serialize_block_for_pow(block);
-        let pow = Self::generate_pow_for_block(mining_block, mining_tx_hash).await?;
+        let pow = Self::generate_pow_for_block(mining_block, mining_tx_hash.clone()).await?;
 
-        self.current_coinbase = mining_tx.clone();
+        self.current_coinbase = Some((mining_tx_hash, mining_tx.clone()));
         Ok((pow, mining_tx))
     }
 
@@ -337,6 +364,25 @@ impl MinerNode {
     fn generate_nonce() -> Vec<u8> {
         let mut rng = rand::thread_rng();
         (0..10).map(|_| rng.gen_range(1, 200)).collect()
+    }
+
+    // Get the wallet fund store
+    pub fn get_fund_store(&self) -> Option<FundStore> {
+        self.wallet_db.get_fund_store()
+    }
+
+    // Get the wallet addresses
+    pub fn get_known_address(&self) -> Vec<String> {
+        self.wallet_db
+            .get_address_stores()
+            .into_iter()
+            .map(|(addr, _)| addr)
+            .collect()
+    }
+
+    // Get the wallet transaction address
+    pub fn get_transaction_address(&self, tx_hash: &str) -> String {
+        self.wallet_db.get_transaction_store(tx_hash).address
     }
 }
 

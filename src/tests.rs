@@ -568,6 +568,65 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn proof_winner_no_raft() {
+    proof_winner(complete_network_config(10900)).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn proof_winner_raft_1_node() {
+    proof_winner(complete_network_config_with_n_compute_raft(10910, 1)).await;
+}
+
+async fn proof_winner(network_config: NetworkConfig) {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_from_config(&network_config).await;
+
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act
+    // Miner reuse can only do one compute node.
+    //
+    proof_of_work_act(&mut network, Cfg::All, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+
+    let info_before = miner_get_wallet_info(&mut network, "miner1").await;
+    proof_winner_act(&mut network).await;
+    let info_after = miner_get_wallet_info(&mut network, "miner1").await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        (&info_before.0, info_before.1.len(), info_before.2.len()),
+        (&TokenAmount(0), 1, 0),
+        "Info Before: {:?}",
+        info_before
+    );
+    assert_eq!(
+        (&info_after.0, info_after.1.len(), info_after.2.len()),
+        (&TokenAmount(12000), 1, 1),
+        "Info After: {:?}",
+        info_after
+    );
+
+    test_step_complete(network).await;
+}
+
+async fn proof_winner_act(network: &mut Network) {
+    info!("Test Step Miner winner:");
+
+    compute_send_bf_found(network, "compute1").await;
+    miner_handle_event(network, "miner1", "Block found").await;
+    miner_commit_block_found(network, "miner1").await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn send_block_to_storage_no_raft() {
     send_block_to_storage(complete_network_config(10300)).await;
 }
@@ -1019,6 +1078,11 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
     }
 }
 
+async fn compute_send_bf_found(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.send_bf_notification().await.unwrap();
+}
+
 async fn compute_mining_block_mined(
     network: &mut Network,
     miner: &str,
@@ -1317,6 +1381,11 @@ async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_
         .unwrap();
 }
 
+async fn miner_commit_block_found(network: &mut Network, miner: &str) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    m.commit_block_found().await;
+}
+
 async fn miner_all_send_pow_for_current(
     network: &mut Network,
     from_miner: &str,
@@ -1324,6 +1393,31 @@ async fn miner_all_send_pow_for_current(
 ) {
     for to_compute in to_compute_group {
         miner_send_pow_for_current(network, from_miner, to_compute).await;
+    }
+}
+
+async fn miner_get_wallet_info(
+    network: &mut Network,
+    miner: &str,
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+) {
+    let m = network.miner(miner).unwrap().lock().await;
+
+    let addresses = m.get_known_address();
+    if let Some(fund) = m.get_fund_store() {
+        let total = fund.running_total;
+
+        let mut txs_to_address_and_ammount = BTreeMap::new();
+        for (tx, amount) in fund.transactions.into_iter() {
+            let addr = m.get_transaction_address(&tx);
+            txs_to_address_and_ammount.insert(tx, (addr, amount));
+        }
+        (total, addresses, txs_to_address_and_ammount)
+    } else {
+        (TokenAmount(0), addresses, BTreeMap::new())
     }
 }
 
