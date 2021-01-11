@@ -44,6 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .set_default("compute_transaction_timeout", 100)
             .unwrap();
         settings
+            .set_default("compute_partition_full_size", 1)
+            .unwrap();
+        settings
+            .set_default("compute_minimum_miner_pool_len", 1)
+            .unwrap();
+
+        settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
         if let Some(index) = matches.value_of("index") {

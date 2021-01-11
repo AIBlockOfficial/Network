@@ -488,7 +488,7 @@ async fn proof_of_work_raft_3_nodes() {
 #[tokio::test(basic_scheduler)]
 async fn proof_of_work_raft_majority_3_nodes() {
     proof_of_work_common(
-        complete_network_config_with_n_compute_raft(10140, 3),
+        complete_network_config_with_n_compute_raft(10240, 3),
         CfgNum::Majority,
     )
     .await;

@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{PARTITION_LIMIT, PEER_LIMIT, UNICORN_LIMIT};
+use crate::constants::{PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
@@ -112,6 +112,7 @@ pub struct ComputeNode {
     pub last_coinbase_hash: Option<(SocketAddr, String, bool)>,
     pub partition_key: Option<Key>,
     pub partition_list: (Vec<ProofOfWork>, Vec<SocketAddr>),
+    pub partition_full_size: usize,
     pub request_list: BTreeSet<SocketAddr>,
     pub request_list_first_flood: Option<usize>,
     pub storage_addr: SocketAddr,
@@ -148,7 +149,8 @@ impl ComputeNode {
             current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
             request_list: BTreeSet::new(),
-            request_list_first_flood: Some(PARTITION_LIMIT),
+            request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
+            partition_full_size: config.compute_partition_full_size,
             partition_list: (Vec::new(), Vec::new()),
             partition_key: None,
             storage_addr,
@@ -550,7 +552,7 @@ impl ComputeNode {
         peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
-        if self.partition_list.0.len() >= PARTITION_LIMIT {
+        if self.partition_list.0.len() >= self.partition_full_size {
             return Response {
                 success: false,
                 reason: "Partition list is already full",
@@ -569,7 +571,7 @@ impl ComputeNode {
         self.partition_list.0.push(partition_entry);
         self.partition_list.1.push(peer);
 
-        if self.partition_list.0.len() < PARTITION_LIMIT {
+        if self.partition_list.0.len() < self.partition_full_size {
             return Response {
                 success: true,
                 reason: "Partition PoW received successfully",

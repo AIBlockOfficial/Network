@@ -940,6 +940,8 @@ mod test {
             compute_raft_tick_timeout: 10,
             compute_transaction_timeout: 50,
             compute_seed_utxo: seed_utxo.iter().map(|v| v.to_string()).collect(),
+            compute_partition_full_size: 1,
+            compute_minimum_miner_pool_len: 1,
         };
         ComputeRaft::new(&compute_config).await
     }

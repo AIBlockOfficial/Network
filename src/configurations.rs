@@ -34,6 +34,10 @@ pub struct ComputeNodeConfig {
     pub compute_transaction_timeout: usize,
     /// Transaction hash to use to seed utxo
     pub compute_seed_utxo: Vec<String>,
+    /// Partition full size
+    pub compute_partition_full_size: usize,
+    /// Minimum miner pool size
+    pub compute_minimum_miner_pool_len: usize,
 }
 
 /// Configuration option for a storage node
