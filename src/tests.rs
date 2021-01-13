@@ -204,14 +204,26 @@ async fn create_first_block(network_config: NetworkConfig) {
 async fn create_first_block_act(network: &mut Network) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
+    let first_request_size = config.compute_minimum_miner_pool_len;
+
+    info!("Test Step Connect nodes");
+    compute_all_connect_to_storage(network, compute_nodes).await;
+    for (compute, miners) in &config.compute_to_miner_mapping {
+        for (idx, miner) in miners.iter().enumerate() {
+            node_connect_to(network, miner, compute).await;
+            miner_send_partition_request(network, miner, compute).await;
+            let evt = if idx == first_request_size - 1 {
+                "Received first full partition request"
+            } else {
+                "Received partition request successfully"
+            };
+            compute_handle_event(network, compute, evt).await;
+        }
+    }
 
     info!("Test Step Create first Block");
     compute_all_propose_initial_uxto_set(network, compute_nodes).await;
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
-
-    info!("Test Step Connect nodes");
-    compute_all_connect_to_storage(network, compute_nodes).await;
-    node_connect_to_all(network, "miner1", compute_nodes).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -494,6 +506,30 @@ async fn proof_of_work_raft_majority_3_nodes() {
     .await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn proof_of_work_multi_no_raft() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10250, false, 1, 3);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_of_work(cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn proof_of_work_multi_raft_1_node() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10260, true, 1, 3);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_of_work(cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn proof_of_work_multi_raft_2_nodes() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10270, true, 2, 6);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_of_work(cfg).await;
+}
+
 async fn proof_of_work(network_config: NetworkConfig) {
     proof_of_work_common(network_config, CfgNum::All).await;
 }
@@ -506,7 +542,6 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let c_mined = &node_select(compute_nodes, cfg_num);
 
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
@@ -517,9 +552,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let block_before = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
-
-    miner_all_send_pow_for_current(&mut network, "miner1", c_mined).await;
-    compute_all_handle_error(&mut network, c_mined, "Not mining given block").await;
+    proof_of_work_send_more_act(&mut network, cfg_num).await;
 
     let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
@@ -538,6 +571,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
+    let partition_size = config.compute_partition_full_size;
     let c_mined = &node_select(compute_nodes, cfg_num);
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
@@ -548,22 +582,51 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     }
 
     for compute in c_mined {
-        if compute_miner_request_list_is_empty(network, compute).await {
-            miner_send_partition_request(network, "miner1", compute).await;
-            compute_handle_event(network, compute, "Received first full partition request").await;
-        }
+        let partition_last_idx = partition_size - 1;
+        let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
+        let in_miners: &[String] = &c_miners[0..partition_size];
+        let win_miner: &String = &in_miners[0];
 
         compute_flood_rand_num_to_requesters(network, compute).await;
-        miner_handle_event(network, "miner1", "Received random number successfully").await;
+        miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
-        miner_send_partition_pow(network, "miner1", compute).await;
-        compute_handle_event(network, compute, "Partition list is full").await;
+        for (idx, miner) in c_miners.iter().enumerate() {
+            miner_send_partition_pow(network, miner, compute).await;
+
+            use std::cmp::Ordering::*;
+            let (success, evt) = match idx.cmp(&partition_last_idx) {
+                Less => (true, "Partition PoW received successfully"),
+                Equal => (true, "Partition list is full"),
+                Greater => (false, "Partition list is already full"),
+            };
+
+            if success {
+                compute_handle_event(network, compute, evt).await;
+            } else {
+                compute_handle_error(network, compute, evt).await;
+            }
+        }
 
         compute_flood_block_to_partition(network, compute).await;
-        miner_handle_event(network, "miner1", "Pre-block received successfully").await;
+        miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
 
-        miner_send_pow_for_current(network, "miner1", compute).await;
+        miner_send_pow_for_current(network, win_miner, compute).await;
         compute_handle_event(network, compute, "Received PoW successfully").await;
+    }
+}
+
+async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
+    let c_mined = &node_select(compute_nodes, cfg_num);
+
+    info!("Test Step Miner block Proof of Work to late");
+    for compute in c_mined {
+        let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
+        for miner in c_miners {
+            miner_send_pow_for_current(network, miner, compute).await;
+            compute_handle_error(network, compute, "Not mining given block").await;
+        }
     }
 }
 
@@ -1357,6 +1420,12 @@ async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str
     }
 }
 
+async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], reason_str: &str) {
+    for miner in miner_group {
+        miner_handle_event(network, miner, reason_str).await;
+    }
+}
+
 async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
@@ -1567,34 +1636,54 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_raft: false,
         storage_raft: false,
         in_memory_db: true,
+        compute_partition_full_size: 1,
+        compute_minimum_miner_pool_len: 1,
         miner_nodes: vec!["miner1".to_string()],
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
         compute_seed_utxo: SEED_UTXO.iter().map(|v| v.to_string()).collect(),
+        compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
+            .into_iter()
+            .collect(),
     }
-}
-
-fn complete_network_config_with_n_miners(initial_port: u16, miner_count: usize) -> NetworkConfig {
-    let mut cfg = complete_network_config(initial_port);
-    cfg.miner_nodes = (0..miner_count)
-        .map(|idx| format!("miner{}", idx + 1))
-        .collect();
-    cfg
 }
 
 fn complete_network_config_with_n_compute_raft(
     initial_port: u16,
     compute_count: usize,
 ) -> NetworkConfig {
+    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, 1)
+}
+
+fn complete_network_config_with_n_compute_miner(
+    initial_port: u16,
+    use_raft: bool,
+    compute_count: usize,
+    miner_count: usize,
+) -> NetworkConfig {
     let mut cfg = complete_network_config(initial_port);
-    cfg.compute_raft = true;
-    cfg.storage_raft = true;
+    cfg.compute_raft = use_raft;
+    cfg.storage_raft = use_raft;
     cfg.compute_nodes = (0..compute_count)
         .map(|idx| format!("compute{}", idx + 1))
         .collect();
     cfg.storage_nodes = (0..compute_count)
         .map(|idx| format!("storage{}", idx + 1))
         .collect();
+    cfg.miner_nodes = (0..miner_count)
+        .map(|idx| format!("miner{}", idx + 1))
+        .collect();
+    cfg.compute_to_miner_mapping = {
+        let miners = cfg.miner_nodes.iter().cloned().cycle();
+        let computes = cfg.compute_nodes.iter().cloned().cycle();
+        let connections = std::cmp::max(cfg.miner_nodes.len(), cfg.compute_nodes.len());
+        let mut mapping = BTreeMap::new();
+        for (miner, compute) in miners.zip(computes).take(connections) {
+            mapping.entry(compute).or_insert_with(Vec::new).push(miner);
+        }
+        mapping
+    };
+
     cfg
 }

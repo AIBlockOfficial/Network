@@ -50,11 +50,14 @@ pub struct NetworkConfig {
     pub compute_raft: bool,
     pub storage_raft: bool,
     pub in_memory_db: bool,
+    pub compute_partition_full_size: usize,
+    pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
     pub user_nodes: Vec<String>,
+    pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
 }
 
 pub struct NetworkInstanceInfo {
@@ -269,8 +272,8 @@ impl Network {
                 compute_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
                 compute_transaction_timeout: 100 / TEST_DURATION_DIVIDER,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
-                compute_partition_full_size: 1,
-                compute_minimum_miner_pool_len: 1,
+                compute_partition_full_size: config.compute_partition_full_size,
+                compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
             };
             let info = format!("{} -> {}", name, info.compute_nodes[idx].address);
             map.insert(
