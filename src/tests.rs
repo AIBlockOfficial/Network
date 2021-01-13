@@ -640,6 +640,30 @@ async fn proof_winner_raft_1_node() {
     proof_winner(complete_network_config_with_n_compute_raft(10910, 1)).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn proof_winner_multi_no_raft() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10920, false, 1, 3);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_winner(cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn proof_winner_multi_raft_1_node() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10930, true, 1, 3);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_winner(cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn proof_winner_multi_raft_2_nodes() {
+    let mut cfg = complete_network_config_with_n_compute_miner(10940, true, 2, 6);
+    cfg.compute_partition_full_size = 2;
+    cfg.compute_minimum_miner_pool_len = 3;
+    proof_winner(cfg).await;
+}
+
 async fn proof_winner(network_config: NetworkConfig) {
     test_step_start();
 
@@ -647,33 +671,45 @@ async fn proof_winner(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
+    let wining_miners: Vec<String> = network_config
+        .compute_to_miner_mapping
+        .values()
+        .map(|ms| ms.first().unwrap().clone())
+        .collect();
 
     create_first_block_act(&mut network).await;
 
     //
     // Act
-    // Miner reuse can only do one compute node.
+    // Does not allow miner reuse.
     //
     proof_of_work_act(&mut network, Cfg::All, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
-    let info_before = miner_get_wallet_info(&mut network, "miner1").await;
+    let info_before = miner_all_get_wallet_info(&mut network, &wining_miners).await;
     proof_winner_act(&mut network).await;
-    let info_after = miner_get_wallet_info(&mut network, "miner1").await;
+    let info_after = miner_all_get_wallet_info(&mut network, &wining_miners).await;
 
     //
     // Assert
     //
+
     assert_eq!(
-        (&info_before.0, info_before.1.len(), info_before.2.len()),
-        (&TokenAmount(0), 1, 0),
+        info_before
+            .iter()
+            .map(|i| (&i.0, i.1.len(), i.2.len()))
+            .collect::<Vec<_>>(),
+        node_all(&wining_miners, (&TokenAmount(0), 1, 0)),
         "Info Before: {:?}",
         info_before
     );
     assert_eq!(
-        (&info_after.0, info_after.1.len(), info_after.2.len()),
-        (&TokenAmount(12000), 1, 1),
+        info_after
+            .iter()
+            .map(|i| (&i.0, i.1.len(), i.2.len()))
+            .collect::<Vec<_>>(),
+        node_all(&wining_miners, (&TokenAmount(12000), 1, 1)),
         "Info After: {:?}",
         info_after
     );
@@ -682,11 +718,18 @@ async fn proof_winner(network_config: NetworkConfig) {
 }
 
 async fn proof_winner_act(network: &mut Network) {
-    info!("Test Step Miner winner:");
+    let config = network.config.clone();
+    let compute_nodes = &config.compute_nodes;
 
-    compute_send_bf_found(network, "compute1").await;
-    miner_handle_event(network, "miner1", "Block found").await;
-    miner_commit_block_found(network, "miner1").await;
+    info!("Test Step Miner winner:");
+    for compute in compute_nodes {
+        let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
+        let win_miner: &String = &c_miners[0];
+
+        compute_send_bf_found(network, compute).await;
+        miner_handle_event(network, win_miner, "Block found").await;
+        miner_commit_block_found(network, win_miner).await;
+    }
 }
 
 #[tokio::test(basic_scheduler)]
@@ -1490,6 +1533,21 @@ async fn miner_get_wallet_info(
     }
 }
 
+async fn miner_all_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> Vec<(
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+)> {
+    let mut result = Vec::new();
+    for name in miner_group {
+        let r = miner_get_wallet_info(network, name).await;
+        result.push(r);
+    }
+    result
+}
 //
 // Test helpers
 //
