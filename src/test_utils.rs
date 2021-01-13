@@ -50,11 +50,14 @@ pub struct NetworkConfig {
     pub compute_raft: bool,
     pub storage_raft: bool,
     pub in_memory_db: bool,
+    pub compute_partition_full_size: usize,
+    pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
     pub user_nodes: Vec<String>,
+    pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
 }
 
 pub struct NetworkInstanceInfo {
@@ -207,9 +210,10 @@ impl Network {
                 miner_nodes: info.miner_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
             };
+            let info = format!("{} -> {}", name, info.miner_nodes[idx].address);
             map.insert(
                 name.clone(),
-                Arc::new(Mutex::new(MinerNode::new(miner_config).await.unwrap())),
+                Arc::new(Mutex::new(MinerNode::new(miner_config).await.expect(&info))),
             );
         }
 
@@ -239,9 +243,12 @@ impl Network {
                 storage_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
                 storage_block_timeout: 1000 / TEST_DURATION_DIVIDER,
             };
+            let info = format!("{} -> {}", name, info.storage_nodes[idx].address);
             map.insert(
                 name.clone(),
-                Arc::new(Mutex::new(StorageNode::new(storage_config).await.unwrap())),
+                Arc::new(Mutex::new(
+                    StorageNode::new(storage_config).await.expect(&info),
+                )),
             );
         }
 
@@ -265,10 +272,15 @@ impl Network {
                 compute_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
                 compute_transaction_timeout: 100 / TEST_DURATION_DIVIDER,
                 compute_seed_utxo: config.compute_seed_utxo.clone(),
+                compute_partition_full_size: config.compute_partition_full_size,
+                compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
             };
+            let info = format!("{} -> {}", name, info.compute_nodes[idx].address);
             map.insert(
                 name.clone(),
-                Arc::new(Mutex::new(ComputeNode::new(compute_config).await.unwrap())),
+                Arc::new(Mutex::new(
+                    ComputeNode::new(compute_config).await.expect(&info),
+                )),
             );
         }
 
@@ -299,9 +311,10 @@ impl Network {
                 api_port: 3000,
             };
 
+            let info = format!("{} -> {}", name, info.user_nodes[idx].address);
             map.insert(
                 name.clone(),
-                Arc::new(Mutex::new(UserNode::new(user_config).await.unwrap())),
+                Arc::new(Mutex::new(UserNode::new(user_config).await.expect(&info))),
             );
         }
 

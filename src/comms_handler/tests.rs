@@ -4,7 +4,11 @@ use super::{Event, Node};
 use crate::interfaces::NodeType;
 use bincode::deserialize;
 use futures::future::join_all;
+use std::time::Duration;
+use tokio::time;
 use tracing::debug;
+
+const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 /// Check that 2 nodes can exchange arbitrary messages in both direction,
 /// using their public address after one node connected to the other.
@@ -75,11 +79,19 @@ async fn multicast() {
 
     // Verify that all other nodes have received the message
     for (i, node) in nodes.iter_mut().enumerate().skip(1) {
-        if let Some(Event::NewFrame { peer: _, frame }) = node.next_event().await {
-            debug!(?i, "received");
+        match time::timeout(TIMEOUT_TEST_WAIT_DURATION, node.next_event()).await {
+            Ok(Some(Event::NewFrame { peer: _, frame })) => {
+                debug!(?i, "received");
 
-            let recv_frame: &str = deserialize(&frame).unwrap();
-            assert_eq!(recv_frame, "Hello");
+                let recv_frame: &str = deserialize(&frame).unwrap();
+                assert_eq!(recv_frame, "Hello");
+            }
+            Ok(None) => {
+                panic!("Channel disconnected {}", i);
+            }
+            Err(_) => {
+                panic!("Timeout elapsed {}", i);
+            }
         }
     }
 }

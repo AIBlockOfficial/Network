@@ -3,6 +3,8 @@ miner_db_mode = {Test = 0}
 compute_seed_utxo = ["000000", "000001", "000002", "000003"]
 compute_raft = 1
 storage_raft = 1
+compute_partition_full_size = 2
+compute_minimum_miner_pool_len = 3
 
 #first node is leader
 [[compute_nodes]]
@@ -23,11 +25,23 @@ address = "127.0.0.1:12340"
 [[miner_nodes]]
 address = "127.0.0.1:12341"
 
-[[user_nodes]]
-address = "35.161.167.59:12342"
+[[miner_nodes]]
+address = "127.0.0.1:12342"
+
+[[miner_nodes]]
+address = "127.0.0.1:12343"
+
+[[miner_nodes]]
+address = "127.0.0.1:12344"
+
+[[miner_nodes]]
+address = "127.0.0.1:12345"
 
 [[user_nodes]]
-address = "127.0.0.1:12343"
+address = "35.161.167.59:12360"
+
+[[user_nodes]]
+address = "127.0.0.1:12361"
 
 [[compute_initial_transactions]]
 t_hash = "000000"
