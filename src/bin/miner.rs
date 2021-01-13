@@ -68,13 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Start node with config {:?}", config);
 
     let compute_node_connected = if matches.is_present("compute_connect") {
-        Some(
-            config
-                .compute_nodes
-                .get(config.miner_compute_node_idx)
-                .unwrap()
-                .address,
-        )
+        let compute_idx = config.miner_compute_node_idx;
+        Some(config.compute_nodes.get(compute_idx).unwrap().address)
     } else {
         None
     };
