@@ -100,6 +100,36 @@ async fn full_flow_raft_20_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_no_raft() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11000, false, 1, 3,
+    ))
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_raft_1_node() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11010, true, 1, 3,
+    ))
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_raft_2_nodes() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11020, true, 2, 6,
+    ))
+    .await;
+}
+
+async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
+    network_config.compute_partition_full_size = 2;
+    network_config.compute_minimum_miner_pool_len = 3;
+    full_flow(network_config).await;
+}
+
 async fn full_flow(network_config: NetworkConfig) {
     full_flow_common(network_config, CfgNum::All).await;
 }
@@ -642,26 +672,32 @@ async fn proof_winner_raft_1_node() {
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_no_raft() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10920, false, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10920, false, 1, 3,
+    ))
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_raft_1_node() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10930, true, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10930, true, 1, 3,
+    ))
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_raft_2_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10940, true, 2, 6);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10940, true, 2, 6,
+    ))
+    .await;
+}
+
+async fn proof_winner_multi(mut network_config: NetworkConfig) {
+    network_config.compute_partition_full_size = 2;
+    network_config.compute_minimum_miner_pool_len = 3;
+    proof_winner(network_config).await;
 }
 
 async fn proof_winner(network_config: NetworkConfig) {
