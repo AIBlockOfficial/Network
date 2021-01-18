@@ -1,7 +1,7 @@
 use rocksdb::{DBCompressionType, Error as DBError, IteratorMode, Options, DB};
 use std::collections::HashMap;
 use std::fmt;
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 
@@ -35,6 +35,7 @@ impl Drop for SimpleDb {
 impl SimpleDb {
     /// Create rocksDB
     pub fn new_file(path: String) -> Result<Self, DBError> {
+        debug!("Open/Create Db at {}", path);
         let options = get_db_options();
         let db = DB::open(&options, path.clone())?;
         Ok(Self::File { options, path, db })

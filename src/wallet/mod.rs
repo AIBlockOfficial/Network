@@ -232,7 +232,7 @@ impl WalletDb {
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
         match self.db.lock().unwrap().get(ADDRESS_KEY) {
             Ok(Some(list)) => deserialize(&list).unwrap(),
-            Ok(None) => panic!("No address store present in wallet"),
+            Ok(None) => BTreeMap::new(),
             Err(e) => panic!("Error accessing wallet: {:?}", e),
         }
     }
@@ -250,7 +250,7 @@ impl WalletDb {
     pub fn get_transaction_store(&self, tx_hash: &str) -> TransactionStore {
         match self.db.lock().unwrap().get(tx_hash) {
             Ok(Some(list)) => deserialize(&list).unwrap(),
-            Ok(None) => panic!("No address store present in wallet"),
+            Ok(None) => panic!("Transaction not present in wallet"),
             Err(e) => panic!("Error accessing wallet: {:?}", e),
         }
     }
