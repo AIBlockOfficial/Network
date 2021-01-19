@@ -1,8 +1,9 @@
 //! App to run a storage node.
 
 use clap::{App, Arg};
+use std::time::Duration;
 use system::configurations::UserNodeConfig;
-use system::{routes::wallet_info, Response, UserNode};
+use system::{routes, Response, UserNode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -73,6 +74,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             settings.set("user_node_idx", index).unwrap();
             let mut db_mode = settings.get_table("user_db_mode").unwrap();
             if let Some(test_idx) = db_mode.get_mut("Test") {
+                let index = {
+                    let user_index_offset = 1000;
+                    let index = index.parse::<usize>().unwrap() + user_index_offset;
+                    index.to_string()
+                };
                 *test_idx = config::Value::new(None, index);
                 settings.set("user_db_mode", db_mode).unwrap();
             }
@@ -133,7 +139,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(compute_node) = compute_node_connected {
         // Connect to a compute node.
-        node.connect_to(compute_node).await?;
+        while let Err(e) = node.connect_to(compute_node).await {
+            println!("Compute connection error: {:?}", e);
+            tokio::time::delay_for(Duration::from_millis(500)).await;
+        }
+        println!("Compute connection complete");
     }
 
     if let Some(peer_user_node) = peer_user_node_connected {
@@ -145,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.send_address_request(peer_user_node).await.unwrap();
     }
 
-    let db = node.wallet_db.clone();
+    let api_inputs = (node.wallet_db.clone(), node.node.clone());
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -172,24 +182,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         success: true,
                         reason: "Next payment transaction successfully constructed",
                     }) => {
+                        let next_payment = node.next_payment.take().unwrap();
+
                         // Send the payment to compute node
-                        let _ = node
-                            .send_payment_to_compute(
-                                compute_node_connected.unwrap(),
-                                node.next_payment.clone().unwrap(),
-                            )
-                            .await
-                            .unwrap();
+                        node.send_payment_to_compute(
+                            compute_node_connected.unwrap(),
+                            next_payment.clone(),
+                        )
+                        .await
+                        .unwrap();
 
                         // Send the payment to the receiving user
-                        let _ = node
-                            .send_payment_to_receiver(
-                                peer_user_node_connected.unwrap(),
-                                node.next_payment.clone().unwrap(),
-                            )
-                            .await
-                            .unwrap();
-                        node.next_payment = None;
+                        if let Some(peer_user) = peer_user_node_connected {
+                            node.send_payment_to_receiver(peer_user, next_payment)
+                                .await
+                                .unwrap();
+                        }
 
                         if let Some(r_payment) = node.return_payment.clone() {
                             // Handle return payment construction
@@ -234,10 +242,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Warp API starting at port 3000");
         println!();
 
-        let db = db.clone();
+        let (db, node) = api_inputs;
 
         async {
-            warp::serve(wallet_info(db))
+            use warp::Filter;
+            warp::serve(routes::wallet_info(db).or(routes::make_payment(node)))
                 .run(([127, 0, 0, 1], 3000))
                 .await;
         }

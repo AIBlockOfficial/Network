@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{AddressStore, FundStore, WalletDb};
+use crate::wallet::{AddressStore, WalletDb};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -85,7 +85,7 @@ pub struct ReturnPayment {
 /// An instance of a MinerNode
 #[derive(Debug)]
 pub struct UserNode {
-    node: Node,
+    pub node: Node,
     pub assets: Vec<Asset>,
     pub amount: TokenAmount,
     pub trading_peer: Option<SocketAddr>,
@@ -256,13 +256,10 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let fund_store_state = self.wallet_db.get_fund_store();
-        if fund_store_state.is_none() {
-            panic!("No funds available for payment!");
-        }
-
-        // At this point a valid fund store must exist
-        let mut fund_store: FundStore = fund_store_state.unwrap();
+        let mut fund_store = self
+            .wallet_db
+            .get_fund_store()
+            .unwrap_or_else(WalletDb::default_fund_store);
 
         // Ensure we have enough funds to proceed with payment
         if fund_store.running_total.0 < amount_required.0 {
