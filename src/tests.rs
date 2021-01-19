@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::constants::{DB_PATH, DB_PATH_TEST};
+use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
 };
@@ -62,10 +62,17 @@ async fn full_flow_no_raft() {
 #[tokio::test(basic_scheduler)]
 async fn full_flow_no_raft_real_db() {
     let mut cfg = complete_network_config(10505);
-    let storage_node_db_path = format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, 10507);
-    if let Err(e) = std::fs::remove_dir_all(storage_node_db_path) {
-        info!("Not removed storage db: {:?}", e);
+    let db_paths = vec![
+        format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, 10507),
+        format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10505),
+        format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10508),
+    ];
+    for to_remove in db_paths {
+        if let Err(e) = std::fs::remove_dir_all(to_remove.clone()) {
+            info!("Not removed local db: {}, {:?}", to_remove, e);
+        }
     }
+
     cfg.in_memory_db = false;
 
     full_flow(cfg).await;
@@ -100,6 +107,36 @@ async fn full_flow_raft_20_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_no_raft() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11000, false, 1, 3,
+    ))
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_raft_1_node() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11010, true, 1, 3,
+    ))
+    .await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_multi_miners_raft_2_nodes() {
+    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+        11020, true, 2, 6,
+    ))
+    .await;
+}
+
+async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
+    network_config.compute_partition_full_size = 2;
+    network_config.compute_minimum_miner_pool_len = 3;
+    full_flow(network_config).await;
+}
+
 async fn full_flow(network_config: NetworkConfig) {
     full_flow_common(network_config, CfgNum::All).await;
 }
@@ -111,7 +148,9 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
+    let miner_nodes = &network_config.miner_nodes;
     let initial_utxo = network.collect_initial_uxto_set();
     let (transactions, _t_hash, tx) = valid_transactions(true);
 
@@ -125,6 +164,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 
     add_transactions_act(&mut network, &tx).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
+    proof_winner_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
@@ -138,15 +178,28 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     let expected_block0_db_count =
-        1 + initial_utxo.len() + stored0.unwrap().mining_transactions.len();
+        1 + initial_utxo.len() + stored0.as_ref().unwrap().mining_transactions.len();
     let expected_block1_db_count =
-        1 + transactions.len() + stored1.unwrap().mining_transactions.len();
+        1 + transactions.len() + stored1.as_ref().unwrap().mining_transactions.len();
     assert_eq!(
         actual0_db_count,
         node_all(
             storage_nodes,
             expected_block0_db_count + expected_block1_db_count
         )
+    );
+
+    let actual_w0 = miner_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
+        (TokenAmount(0), vec![])
+    } else {
+        let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
+        let total = TokenAmount(12000 * mining_txs.len() as u64);
+        (total, mining_txs.keys().collect::<Vec<_>>())
+    };
+    assert_eq!(
+        (actual_w0.0, actual_w0.2.keys().collect::<Vec<_>>()),
+        expected_w0
     );
 
     test_step_complete(network).await;
@@ -642,26 +695,32 @@ async fn proof_winner_raft_1_node() {
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_no_raft() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10920, false, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10920, false, 1, 3,
+    ))
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_raft_1_node() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10930, true, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10930, true, 1, 3,
+    ))
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn proof_winner_multi_raft_2_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10940, true, 2, 6);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
-    proof_winner(cfg).await;
+    proof_winner_multi(complete_network_config_with_n_compute_miner(
+        10940, true, 2, 6,
+    ))
+    .await;
+}
+
+async fn proof_winner_multi(mut network_config: NetworkConfig) {
+    network_config.compute_partition_full_size = 2;
+    network_config.compute_minimum_miner_pool_len = 3;
+    proof_winner(network_config).await;
 }
 
 async fn proof_winner(network_config: NetworkConfig) {
@@ -720,6 +779,11 @@ async fn proof_winner(network_config: NetworkConfig) {
 async fn proof_winner_act(network: &mut Network) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
+
+    if config.miner_nodes.len() < compute_nodes.len() {
+        info!("Test Step Miner winner: Ignored/Miner re-use");
+        return;
+    }
 
     info!("Test Step Miner winner:");
     for compute in compute_nodes {
@@ -1548,6 +1612,27 @@ async fn miner_all_get_wallet_info(
     }
     result
 }
+
+async fn miner_all_combined_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+) {
+    let mut total = TokenAmount(0);
+    let mut addresses = Vec::new();
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for name in miner_group {
+        let (t, mut a, mut txs) = miner_get_wallet_info(network, name).await;
+        total.0 += t.0;
+        addresses.append(&mut a);
+        txs_to_address_and_ammount.append(&mut txs);
+    }
+    (total, addresses, txs_to_address_and_ammount)
+}
+
 //
 // Test helpers
 //
