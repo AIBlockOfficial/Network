@@ -262,7 +262,7 @@ impl MinerNode {
     pub async fn commit_block_found(&mut self) {
         let address = self.current_payment_address.take().unwrap();
         let (tx_hash, tx) = self.current_coinbase.take().unwrap();
-        let tx_amount = tx.outputs.first().unwrap().amount.clone();
+        let tx_amount = tx.outputs.first().unwrap().amount;
 
         self.wallet_db
             .save_transaction_to_wallet(tx_hash.clone(), address)

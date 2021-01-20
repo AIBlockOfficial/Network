@@ -225,15 +225,15 @@ impl UserNode {
     ///
     /// * `address` - Address to assign the payment transaction to
     pub fn make_payment_transactions(&mut self, address: String) -> Response {
-        let tx_ins = self.fetch_inputs_for_payment(self.amount.clone());
+        let tx_ins = self.fetch_inputs_for_payment(self.amount);
 
         let payment_tx = construct_payment_tx(
             tx_ins,
             address,
             None,
             None,
-            Asset::Token(self.amount.clone()),
-            self.amount.clone(),
+            Asset::Token(self.amount),
+            self.amount,
         );
         self.next_payment = Some(payment_tx);
 
@@ -331,8 +331,8 @@ impl UserNode {
             address.address.clone(),
             None,
             None,
-            Asset::Token(return_amt.clone()),
-            return_amt.clone(),
+            Asset::Token(return_amt),
+            return_amt,
         );
         let payment_tx_hash = construct_tx_hash(&payment_tx);
 
