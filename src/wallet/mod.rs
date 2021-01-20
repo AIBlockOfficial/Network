@@ -37,7 +37,7 @@ pub struct AddressStore {
 
 /// A reference to fund stores, where `transactions` contains the hash
 /// of the transaction and a `u64` of its holding amount
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct FundStore {
     pub running_total: TokenAmount,
     pub transactions: BTreeMap<String, TokenAmount>,
@@ -110,26 +110,15 @@ impl WalletDb {
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
-            let mut address_list: BTreeMap<String, AddressStore> = BTreeMap::new();
-
             // Wallet DB handling
             let mut db = db.lock().unwrap();
-            let address_list_state = match db.get(ADDRESS_KEY) {
-                Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-                Ok(None) => None,
-                Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-            };
-
-            if let Some(list) = address_list_state {
-                address_list = list;
-            }
+            let mut address_list = get_address_stores(&db);
 
             // Assign the new address to the store
             address_list.insert(address.clone(), keys);
 
             // Save to disk
-            db.put(ADDRESS_KEY, &serialize(&address_list).unwrap())
-                .unwrap();
+            set_address_stores(&mut db, address_list);
         })
         .await?)
     }
@@ -188,19 +177,14 @@ impl WalletDb {
         Ok(task::spawn_blocking(move || {
             // Wallet DB handling
             let mut db = db.lock().unwrap();
-            let mut fund_store = match db.get(FUND_KEY) {
-                Ok(Some(list)) => deserialize(&list).unwrap(),
-                Ok(None) => Self::default_fund_store(),
-                Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-            };
+            let mut fund_store = get_fund_store(&db);
 
             // Update the running total and add the transaction to the tab list
             fund_store.running_total += amount;
             fund_store.transactions.insert(hash, amount);
 
             println!("Testing payment to wallet");
-            // Save to disk
-            db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
+            set_fund_store(&mut db, fund_store);
         })
         .await?)
     }
@@ -242,57 +226,29 @@ impl WalletDb {
         tx_ins[0].clone()
     }
 
-    // Default fund store
-    pub fn default_fund_store() -> FundStore {
-        FundStore {
-            running_total: TokenAmount(0),
-            transactions: BTreeMap::new(),
-        }
-    }
-
     // Get the wallet fund store
-    pub fn get_fund_store(&self) -> Option<FundStore> {
-        match self.db.lock().unwrap().get(FUND_KEY) {
-            Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-            Ok(None) => None,
-            Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
-        }
+    pub fn get_fund_store(&self) -> FundStore {
+        get_fund_store(&self.db.lock().unwrap())
     }
 
     // Set the wallet fund store
     pub fn set_fund_store(&self, fund_store: FundStore) {
-        self.db
-            .lock()
-            .unwrap()
-            .put(FUND_KEY, &serialize(&fund_store).unwrap())
-            .unwrap();
+        set_fund_store(&mut self.db.lock().unwrap(), fund_store);
     }
 
     // Get the wallet address store
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
-        match self.db.lock().unwrap().get(ADDRESS_KEY) {
-            Ok(Some(list)) => deserialize(&list).unwrap(),
-            Ok(None) => BTreeMap::new(),
-            Err(e) => panic!("Error accessing wallet: {:?}", e),
-        }
+        get_address_stores(&self.db.lock().unwrap())
     }
 
     // Set the wallet address store
     pub fn set_address_stores(&self, address_store: BTreeMap<String, AddressStore>) {
-        self.db
-            .lock()
-            .unwrap()
-            .put(ADDRESS_KEY, &serialize(&address_store).unwrap())
-            .unwrap();
+        set_address_stores(&mut self.db.lock().unwrap(), address_store)
     }
 
     // Get the wallet transaction store
     pub fn get_transaction_store(&self, tx_hash: &str) -> TransactionStore {
-        match self.db.lock().unwrap().get(tx_hash) {
-            Ok(Some(list)) => deserialize(&list).unwrap(),
-            Ok(None) => panic!("Transaction not present in wallet"),
-            Err(e) => panic!("Error accessing wallet: {:?}", e),
-        }
+        get_transaction_store(&self.db.lock().unwrap(), tx_hash)
     }
 
     pub fn delete_key(&self, key: &str) {
@@ -319,6 +275,44 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
     PaymentAddress {
         address: hex::encode(second_hash),
         net,
+    }
+}
+
+// Get the wallet fund store
+pub fn get_fund_store(db: &SimpleDb) -> FundStore {
+    match db.get(FUND_KEY) {
+        Ok(Some(list)) => deserialize(&list).unwrap(),
+        Ok(None) => FundStore::default(),
+        Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+    }
+}
+
+// Set the wallet fund store
+pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
+    db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
+}
+
+// Get the wallet address store
+pub fn get_address_stores(db: &SimpleDb) -> BTreeMap<String, AddressStore> {
+    match db.get(ADDRESS_KEY) {
+        Ok(Some(list)) => deserialize(&list).unwrap(),
+        Ok(None) => BTreeMap::new(),
+        Err(e) => panic!("Error accessing wallet: {:?}", e),
+    }
+}
+
+// Set the wallet address store
+pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, AddressStore>) {
+    db.put(ADDRESS_KEY, &serialize(&address_store).unwrap())
+        .unwrap();
+}
+
+// Get the wallet transaction store
+pub fn get_transaction_store(db: &SimpleDb, tx_hash: &str) -> TransactionStore {
+    match db.get(tx_hash) {
+        Ok(Some(list)) => deserialize(&list).unwrap(),
+        Ok(None) => panic!("Transaction not present in wallet"),
+        Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }
 

@@ -1591,18 +1591,16 @@ async fn miner_get_wallet_info(
     let m = network.miner(miner).unwrap().lock().await;
 
     let addresses = m.get_known_address();
-    if let Some(fund) = m.get_fund_store() {
-        let total = fund.running_total;
 
-        let mut txs_to_address_and_ammount = BTreeMap::new();
-        for (tx, amount) in fund.transactions.into_iter() {
-            let addr = m.get_transaction_address(&tx);
-            txs_to_address_and_ammount.insert(tx, (addr, amount));
-        }
-        (total, addresses, txs_to_address_and_ammount)
-    } else {
-        (TokenAmount(0), addresses, BTreeMap::new())
+    let fund = m.get_fund_store();
+    let total = fund.running_total;
+
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for (tx, amount) in fund.transactions.into_iter() {
+        let addr = m.get_transaction_address(&tx);
+        txs_to_address_and_ammount.insert(tx, (addr, amount));
     }
+    (total, addresses, txs_to_address_and_ammount)
 }
 
 async fn miner_all_get_wallet_info(

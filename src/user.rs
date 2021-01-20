@@ -242,10 +242,7 @@ impl UserNode {
         let mut tx_ins = Vec::new();
 
         // Wallet DB handling
-        let mut fund_store = self
-            .wallet_db
-            .get_fund_store()
-            .unwrap_or_else(WalletDb::default_fund_store);
+        let mut fund_store = self.wallet_db.get_fund_store();
 
         // Ensure we have enough funds to proceed with payment
         if fund_store.running_total.0 < amount_required.0 {

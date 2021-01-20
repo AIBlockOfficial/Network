@@ -367,7 +367,7 @@ impl MinerNode {
     }
 
     // Get the wallet fund store
-    pub fn get_fund_store(&self) -> Option<FundStore> {
+    pub fn get_fund_store(&self) -> FundStore {
         self.wallet_db.get_fund_store()
     }
 
