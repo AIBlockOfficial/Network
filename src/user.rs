@@ -200,14 +200,9 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        let mut total_add = 0;
         let hash = construct_tx_hash(&transaction);
+        let total_to_save = transaction.outputs.iter().map(|out| out.amount).sum();
 
-        for out in transaction.outputs {
-            total_add += out.amount.0;
-        }
-
-        let total_to_save = TokenAmount(total_add);
         self.wallet_db
             .save_payment_to_wallet(hash, total_to_save)
             .await
@@ -261,36 +256,36 @@ impl UserNode {
         }
 
         // Start fetching TxIns
-        let mut amount_made = 0;
+        let mut amount_made = TokenAmount(0);
         let tx_hashes: Vec<_> = fund_store.transactions.keys().cloned().collect();
 
         // Start adding amounts to payment and updating FundStore
         for tx_hash in tx_hashes {
-            let current_amount = fund_store.transactions.get(&tx_hash).unwrap();
+            let current_amount = *fund_store.transactions.get(&tx_hash).unwrap();
 
             // If we've reached target
-            if amount_made == amount_required.0 {
+            if amount_made == amount_required {
                 break;
             }
             // If we've overshot
-            else if current_amount.0 + amount_made > amount_required.0 {
-                let diff = amount_required.0 - amount_made;
+            else if current_amount + amount_made > amount_required {
+                let diff = amount_required - amount_made;
 
-                fund_store.running_total.0 -= current_amount.0;
-                amount_made = amount_required.0;
+                fund_store.running_total -= current_amount;
+                amount_made = amount_required;
 
                 // Add a new return payment transaction
                 let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), false);
                 self.return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
-                    amount: TokenAmount(current_amount.0 - diff),
+                    amount: current_amount - diff,
                     transaction: Transaction::new(),
                 });
             }
             // Else add to used stack
             else {
-                amount_made += current_amount.0;
-                fund_store.running_total.0 -= current_amount.0;
+                amount_made += current_amount;
+                fund_store.running_total -= current_amount;
             }
 
             // Add the new TxIn

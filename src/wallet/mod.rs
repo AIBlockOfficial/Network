@@ -193,7 +193,7 @@ impl WalletDb {
             };
 
             // Update the running total and add the transaction to the tab list
-            fund_store.running_total.0 += amount.0;
+            fund_store.running_total += amount;
             fund_store.transactions.insert(hash, amount);
 
             println!("Testing payment to wallet");
