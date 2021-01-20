@@ -217,11 +217,12 @@ impl UserNode {
     ///
     /// * `address` - Address to assign the payment transaction to
     pub fn make_payment_transactions(&mut self, address: String, amount: TokenAmount) -> Response {
-        let tx_ins = self.fetch_inputs_for_payment(amount);
+        let (tx_ins, return_payment) = self.fetch_inputs_for_payment(amount);
 
         let payment_tx =
             construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
         self.next_payment = Some(payment_tx);
+        self.return_payment = return_payment;
 
         Response {
             success: true,
@@ -238,8 +239,12 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `amount_required` - Amount needed
-    pub fn fetch_inputs_for_payment(&mut self, amount_required: TokenAmount) -> Vec<TxIn> {
+    pub fn fetch_inputs_for_payment(
+        &mut self,
+        amount_required: TokenAmount,
+    ) -> (Vec<TxIn>, Option<ReturnPayment>) {
         let mut tx_ins = Vec::new();
+        let mut return_payment = None;
 
         // Wallet DB handling
         let mut fund_store = self.wallet_db.get_fund_store();
@@ -272,7 +277,7 @@ impl UserNode {
                 let return_tx_in = self
                     .wallet_db
                     .construct_tx_in_from_prev_out(tx_hash.clone(), false);
-                self.return_payment = Some(ReturnPayment {
+                return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
                     amount: current_amount - diff,
                     transaction: Transaction::new(),
@@ -296,7 +301,7 @@ impl UserNode {
         // Save the updated fund store to disk
         self.wallet_db.set_fund_store(fund_store);
 
-        tx_ins
+        (tx_ins, return_payment)
     }
 
     /// Constructs a return payment transaction for unspent tokens
