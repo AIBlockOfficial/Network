@@ -217,7 +217,7 @@ impl UserNode {
     ///
     /// * `address` - Address to assign the payment transaction to
     pub fn make_payment_transactions(&mut self, address: String, amount: TokenAmount) -> Response {
-        let (tx_ins, return_payment) = self.fetch_inputs_for_payment(amount);
+        let (tx_ins, return_payment) = self.wallet_db.fetch_inputs_for_payment(amount);
 
         let payment_tx =
             construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
@@ -228,80 +228,6 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction successfully constructed",
         }
-    }
-
-    /// Fetches valid TxIns based on the wallet's running total and available unspent
-    /// transactions
-    ///
-    /// TODO: Replace errors here with Error enum types that the Result can return
-    /// TODO: Possibly sort addresses found ascending, so that smaller amounts are consumed
-    ///
-    /// ### Arguments
-    ///
-    /// * `amount_required` - Amount needed
-    pub fn fetch_inputs_for_payment(
-        &mut self,
-        amount_required: TokenAmount,
-    ) -> (Vec<TxIn>, Option<ReturnPayment>) {
-        let mut tx_ins = Vec::new();
-        let mut return_payment = None;
-
-        // Wallet DB handling
-        let mut fund_store = self.wallet_db.get_fund_store();
-
-        // Ensure we have enough funds to proceed with payment
-        if fund_store.running_total.0 < amount_required.0 {
-            panic!("Not enough funds available for payment!");
-        }
-
-        // Start fetching TxIns
-        let mut amount_made = TokenAmount(0);
-        let tx_hashes: Vec<_> = fund_store.transactions.keys().cloned().collect();
-
-        // Start adding amounts to payment and updating FundStore
-        for tx_hash in tx_hashes {
-            let current_amount = *fund_store.transactions.get(&tx_hash).unwrap();
-
-            // If we've reached target
-            if amount_made == amount_required {
-                break;
-            }
-            // If we've overshot
-            else if current_amount + amount_made > amount_required {
-                let diff = amount_required - amount_made;
-
-                fund_store.running_total -= current_amount;
-                amount_made = amount_required;
-
-                // Add a new return payment transaction
-                let return_tx_in = self
-                    .wallet_db
-                    .construct_tx_in_from_prev_out(tx_hash.clone(), false);
-                return_payment = Some(ReturnPayment {
-                    tx_in: return_tx_in,
-                    amount: current_amount - diff,
-                    transaction: Transaction::new(),
-                });
-            }
-            // Else add to used stack
-            else {
-                amount_made += current_amount;
-                fund_store.running_total -= current_amount;
-            }
-
-            // Add the new TxIn
-            let tx_in = self
-                .wallet_db
-                .construct_tx_in_from_prev_out(tx_hash.clone(), true);
-            tx_ins.push(tx_in);
-
-            fund_store.transactions.remove(&tx_hash);
-        }
-
-        // Save the updated fund store to disk
-        self.wallet_db.set_fund_store(fund_store);
-
-        (tx_ins, return_payment)
     }
 
     /// Constructs a return payment transaction for unspent tokens
