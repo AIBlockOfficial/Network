@@ -160,7 +160,9 @@ impl UserNode {
             SendPaymentTransaction { transaction } => {
                 self.receive_payment_transaction(transaction).await
             }
-            SendPaymentAddress { address } => self.make_payment_transactions(address),
+            SendPaymentAddress { address, amount } => {
+                self.make_payment_transactions(address, amount)
+            }
         }
     }
 
@@ -224,17 +226,11 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `address` - Address to assign the payment transaction to
-    pub fn make_payment_transactions(&mut self, address: String) -> Response {
-        let tx_ins = self.fetch_inputs_for_payment(self.amount);
+    pub fn make_payment_transactions(&mut self, address: String, amount: TokenAmount) -> Response {
+        let tx_ins = self.fetch_inputs_for_payment(amount);
 
-        let payment_tx = construct_payment_tx(
-            tx_ins,
-            address,
-            None,
-            None,
-            Asset::Token(self.amount),
-            self.amount,
-        );
+        let payment_tx =
+            construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
         self.next_payment = Some(payment_tx);
 
         Response {
@@ -437,10 +433,11 @@ impl UserNode {
     pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         let (address, _) = self.wallet_db.generate_payment_address().await;
         let address = address.address;
+        let amount = self.amount;
         println!("Address to send: {:?}", address);
 
         self.node
-            .send(peer, UserRequest::SendPaymentAddress { address })
+            .send(peer, UserRequest::SendPaymentAddress { address, amount })
             .await?;
         Ok(())
     }

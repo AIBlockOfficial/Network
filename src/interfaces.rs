@@ -2,14 +2,14 @@
 use crate::raft::RaftMessageWrapper;
 use crate::unicorn::UnicornShard;
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
+use naom::primitives::block::Block;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -359,8 +359,13 @@ pub trait ComputeInterface {
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
     SendAddressRequest,
-    SendPaymentAddress { address: String },
-    SendPaymentTransaction { transaction: Transaction },
+    SendPaymentAddress {
+        address: String,
+        amount: TokenAmount,
+    },
+    SendPaymentTransaction {
+        transaction: Transaction,
+    },
 }
 
 impl fmt::Debug for UserRequest {
@@ -369,8 +374,8 @@ impl fmt::Debug for UserRequest {
 
         match *self {
             SendAddressRequest => write!(f, "SendAddressRequest"),
-            SendPaymentAddress { ref address } => write!(f, "SendPaymentAddress"),
-            SendPaymentTransaction { ref transaction } => write!(f, "SendPaymentTransaction"),
+            SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
+            SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
         }
     }
 }

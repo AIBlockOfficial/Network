@@ -1,6 +1,7 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
 use crate::wallet::WalletDb;
+use naom::primitives::asset::TokenAmount;
 use std::convert::Infallible;
 use warp::{self, Filter};
 
@@ -41,6 +42,7 @@ pub fn make_payment(
         .and(warp::post())
         .and(with_peer(peer))
         .and(warp::path::param())
+        .and(warp::path::param().map(TokenAmount))
         .and_then(handlers::make_payment)
         .with(cors)
 }

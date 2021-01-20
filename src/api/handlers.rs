@@ -5,6 +5,7 @@ use crate::interfaces::UserRequest;
 use crate::wallet::{FundStore, WalletDb};
 use bincode::deserialize;
 use naom::constants::D_DISPLAY_PLACES;
+use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -47,8 +48,9 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
 pub async fn make_payment(
     peer: Node,
     address: String,
+    amount: TokenAmount,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let request = UserRequest::SendPaymentAddress { address };
+    let request = UserRequest::SendPaymentAddress { address, amount };
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:make_payment error: {:?}", e);
         return Err(warp::reject::custom(errors::ErrorCannotUserNode));
