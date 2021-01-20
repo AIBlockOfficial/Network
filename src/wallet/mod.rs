@@ -5,6 +5,8 @@ use crate::constants::{
 use crate::db_utils::SimpleDb;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
+use naom::primitives::transaction::{TxConstructor, TxIn};
+use naom::primitives::transaction_utils::construct_payment_tx_ins;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sign;
@@ -201,6 +203,43 @@ impl WalletDb {
             db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
         })
         .await?)
+    }
+
+    /// Constructs a TxIn from a previous output
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_hash`            - Hash to the output to fetch
+    /// * `remove_from_wallet` - Whether to remove txs and address from wallet
+    pub fn construct_tx_in_from_prev_out(
+        &mut self,
+        tx_hash: String,
+        remove_from_wallet: bool,
+    ) -> TxIn {
+        let mut address_store = self.get_address_stores();
+        let tx_store = self.get_transaction_store(&tx_hash);
+
+        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
+        let signature = sign::sign_detached(tx_hash.as_bytes(), &needed_store.secret_key);
+
+        let tx_const = TxConstructor {
+            t_hash: tx_hash.clone(),
+            prev_n: 0,
+            signatures: vec![signature],
+            pub_keys: vec![needed_store.public_key],
+        };
+
+        if remove_from_wallet {
+            // Update the values in the wallet
+            self.delete_key(&tx_hash);
+
+            address_store.remove(&tx_store.address);
+            self.set_address_stores(address_store);
+        }
+
+        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
+
+        tx_ins[0].clone()
     }
 
     // Default fund store

@@ -2,15 +2,12 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{AddressStore, WalletDb};
+use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
-use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
-};
-use sodiumoxide::crypto::sign;
+use naom::primitives::transaction::{Transaction, TxIn};
+use naom::primitives::transaction_utils::{construct_payment_tx, construct_tx_hash};
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
@@ -275,7 +272,9 @@ impl UserNode {
                 amount_made = amount_required;
 
                 // Add a new return payment transaction
-                let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), false);
+                let return_tx_in = self
+                    .wallet_db
+                    .construct_tx_in_from_prev_out(tx_hash.clone(), false);
                 self.return_payment = Some(ReturnPayment {
                     tx_in: return_tx_in,
                     amount: current_amount - diff,
@@ -289,7 +288,9 @@ impl UserNode {
             }
 
             // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), true);
+            let tx_in = self
+                .wallet_db
+                .construct_tx_in_from_prev_out(tx_hash.clone(), true);
             tx_ins.push(tx_in);
 
             fund_store.transactions.remove(&tx_hash);
@@ -342,44 +343,6 @@ impl UserNode {
         self.return_payment = Some(current_r_payment);
 
         Ok(())
-    }
-
-    /// Constructs a TxIn from a previous output
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_hash`     - Hash to the output to fetch
-    /// * `output_vals` - Outpoint information required for TxIn
-    /// * `db`          - Pointer to the wallet DB instance
-    pub fn construct_tx_in_from_prev_out(
-        &mut self,
-        tx_hash: String,
-        remove_from_wallet: bool,
-    ) -> TxIn {
-        let mut address_store = self.wallet_db.get_address_stores();
-        let tx_store = self.wallet_db.get_transaction_store(&tx_hash);
-
-        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-        let signature = sign::sign_detached(tx_hash.as_bytes(), &needed_store.secret_key);
-
-        let tx_const = TxConstructor {
-            t_hash: tx_hash.clone(),
-            prev_n: 0,
-            signatures: vec![signature],
-            pub_keys: vec![needed_store.public_key],
-        };
-
-        if remove_from_wallet {
-            // Update the values in the wallet
-            self.wallet_db.delete_key(&tx_hash);
-
-            address_store.remove(&tx_store.address);
-            self.wallet_db.set_address_stores(address_store);
-        }
-
-        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-
-        tx_ins[0].clone()
     }
 
     /// Sends a payment transaction to the receiving party
