@@ -211,7 +211,7 @@ pub fn create_valid_transaction(
         receiver_addr_hex.to_string(),
         None,
         None,
-        Asset::Token(amount.clone()),
+        Asset::Token(amount),
         amount,
     );
     let t_hash = construct_tx_hash(&payment_tx);

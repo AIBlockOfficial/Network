@@ -31,6 +31,8 @@ target/release/miner --config=src/bin/node_settings_local_raft.toml  --index=1 -
 c9=$!
 target/release/miner --config=src/bin/node_settings_local_raft.toml  --compute_connect > miner_0.log 2>&1 &
 c10=$!
+RUST_LOG="debug" target/release/user  --config=src/bin/node_settings_local_raft.toml --compute_connect > user_0.log 2>&1 &
+c11=$!
 
-trap 'echo Kill All $c1 $c2 $c3 $c4 $c5 $c6; kill $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10' INT
+trap 'echo Kill All $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10 $c11; kill $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10 $c11' INT
 tail -f storage_1.log

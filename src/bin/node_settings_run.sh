@@ -17,6 +17,8 @@ target/release/compute > compute_0.log 2>&1 &
 c2=$!
 target/release/miner --compute_connect > miner_1.log 2>&1 &
 c3=$!
+RUST_LOG="debug" target/release/user --compute_connect > user_0.log 2>&1 &
+c4=$!
 
-trap 'echo Kill All $c1 $c2 $c3; kill $c1 $c2 $c3' INT
+trap 'echo Kill All $c1 $c2 $c3 $c4; kill $c1 $c2 $c3 $c4' INT
 tail -f storage_0.log

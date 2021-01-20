@@ -184,23 +184,16 @@ impl WalletDb {
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
-            let mut fund_store = FundStore {
-                running_total: TokenAmount(0),
-                transactions: BTreeMap::new(),
-            };
-
             // Wallet DB handling
             let mut db = db.lock().unwrap();
-            let fund_store_state = match db.get(FUND_KEY) {
-                Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-                Ok(None) => None,
+            let mut fund_store = match db.get(FUND_KEY) {
+                Ok(Some(list)) => deserialize(&list).unwrap(),
+                Ok(None) => Self::default_fund_store(),
                 Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
             };
-            if let Some(store) = fund_store_state {
-                fund_store = store;
-            }
+
             // Update the running total and add the transaction to the tab list
-            fund_store.running_total.0 += amount.0;
+            fund_store.running_total += amount;
             fund_store.transactions.insert(hash, amount);
 
             println!("Testing payment to wallet");
@@ -208,6 +201,14 @@ impl WalletDb {
             db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
         })
         .await?)
+    }
+
+    // Default fund store
+    pub fn default_fund_store() -> FundStore {
+        FundStore {
+            running_total: TokenAmount(0),
+            transactions: BTreeMap::new(),
+        }
     }
 
     // Get the wallet fund store

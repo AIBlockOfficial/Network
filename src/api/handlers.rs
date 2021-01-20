@@ -1,10 +1,13 @@
+use crate::api::errors;
+use crate::comms_handler::Node;
+use crate::constants::FUND_KEY;
+use crate::interfaces::UserRequest;
+use crate::wallet::{FundStore, WalletDb};
 use bincode::deserialize;
 use naom::constants::D_DISPLAY_PLACES;
+use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
-
-use crate::api::errors;
-use crate::constants::FUND_KEY;
-use crate::wallet::{FundStore, WalletDb};
+use tracing::error;
 
 /// Information about a wallet to be returned to requester
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,4 +42,19 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
     };
 
     Ok(warp::reply::json(&send_val))
+}
+
+/// Post a new payment from the connected wallet.
+pub async fn make_payment(
+    peer: Node,
+    address: String,
+    amount: TokenAmount,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let request = UserRequest::SendPaymentAddress { address, amount };
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:make_payment error: {:?}", e);
+        return Err(warp::reject::custom(errors::ErrorCannotUserNode));
+    }
+
+    Ok(warp::reply::json(&"Payment processing".to_owned()))
 }
