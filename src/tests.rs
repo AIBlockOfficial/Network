@@ -921,20 +921,21 @@ async fn receive_payment_tx_user() {
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
     let mut network = Network::create_from_config(&network_config).await;
+    let amount = TokenAmount(5);
 
     //
     // Act/Assert
     //
     node_connect_to(&mut network, "user1", "user2").await;
     node_connect_to(&mut network, "user1", "compute1").await;
-    user_send_address_request(&mut network, "user1", "user2").await;
+    user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
 
     //
     // Assert
     //
     let actual = user_trading_peer(&mut network, "user2").await;
-    let expected = network.get_address("user1").await;
+    let expected = network.get_address("user1").await.map(|a| (a, amount));
     assert_eq!(actual, expected);
 
     test_step_complete(network).await;
@@ -1502,13 +1503,20 @@ async fn user_send_payment_to_compute(
         .unwrap();
 }
 
-async fn user_send_address_request(network: &mut Network, from_user: &str, to_user: &str) {
+async fn user_send_address_request(
+    network: &mut Network,
+    from_user: &str,
+    to_user: &str,
+    amount: TokenAmount,
+) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_address_request(user_node_addr).await.unwrap();
+    u.send_address_request(user_node_addr, amount)
+        .await
+        .unwrap();
 }
 
-async fn user_trading_peer(network: &mut Network, user: &str) -> Option<SocketAddr> {
+async fn user_trading_peer(network: &mut Network, user: &str) -> Option<(SocketAddr, TokenAmount)> {
     let u = network.user(user).unwrap().lock().await;
     u.trading_peer
 }

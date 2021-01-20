@@ -1,6 +1,7 @@
 //! App to run a storage node.
 
 use clap::{App, Arg};
+use naom::primitives::asset::TokenAmount;
 use std::time::Duration;
 use system::configurations::UserNodeConfig;
 use system::{routes, Response, UserNode};
@@ -121,21 +122,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    let mut amount_to_send: u64 = 0;
 
     // Handle a payment amount
-    if let Some(amount) = matches.value_of("amount") {
-        amount_to_send = match amount.parse::<u64>() {
-            Ok(v) => v,
-            Err(e) => panic!("Unable to pay with amount specified due to error: {:?}", e),
-        };
-    }
+    let amount_to_send = match matches.value_of("amount").map(|a| a.parse::<u64>()) {
+        None => TokenAmount(0),
+        Some(Ok(v)) => TokenAmount(v),
+        Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
+    };
 
     let mut node = UserNode::new(config).await?;
     println!("Started node at {}", node.address());
-
-    // Update payment amount as needed
-    node.amount.0 = amount_to_send;
 
     if let Some(compute_node) = compute_node_connected {
         // Connect to a compute node.
@@ -152,7 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.connect_to(peer_user_node).await?;
 
         // Request a new payment address from peer user
-        node.send_address_request(peer_user_node).await.unwrap();
+        node.send_address_request(peer_user_node, amount_to_send)
+            .await
+            .unwrap();
     }
 
     let api_inputs = (node.wallet_db.clone(), node.node.clone());
@@ -173,10 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Sending new payment address");
                         println!();
 
-                        let _ = node
-                            .send_address_to_peer(node.trading_peer.unwrap())
-                            .await
-                            .unwrap();
+                        node.send_address_to_trading_peer().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
@@ -201,19 +196,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         if let Some(r_payment) = node.return_payment.clone() {
                             // Handle return payment construction
-                            let _ = node
-                                .construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
+                            node.construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
                                 .await
                                 .unwrap();
                             let return_payment = node.return_payment.clone();
 
-                            let _ = node
-                                .send_payment_to_compute(
-                                    compute_node_connected.unwrap(),
-                                    return_payment.unwrap().transaction,
-                                )
-                                .await
-                                .unwrap();
+                            node.send_payment_to_compute(
+                                compute_node_connected.unwrap(),
+                                return_payment.unwrap().transaction,
+                            )
+                            .await
+                            .unwrap();
                             node.return_payment = None;
                         }
                     }

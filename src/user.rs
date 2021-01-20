@@ -87,8 +87,7 @@ pub struct ReturnPayment {
 pub struct UserNode {
     pub node: Node,
     pub assets: Vec<Asset>,
-    pub amount: TokenAmount,
-    pub trading_peer: Option<SocketAddr>,
+    pub trading_peer: Option<(SocketAddr, TokenAmount)>,
     pub next_payment: Option<Transaction>,
     pub return_payment: Option<ReturnPayment>,
     pub wallet_db: WalletDb,
@@ -104,7 +103,6 @@ impl UserNode {
         Ok(UserNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
             assets: Vec::new(),
-            amount: TokenAmount(0),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
@@ -156,7 +154,7 @@ impl UserNode {
         println!("RECEIVED REQUEST: {:?}", req);
 
         match req {
-            SendAddressRequest => self.receive_payment_address_request(peer),
+            SendAddressRequest { amount } => self.receive_payment_address_request(peer, amount),
             SendPaymentTransaction { transaction } => {
                 self.receive_payment_transaction(transaction).await
             }
@@ -414,12 +412,16 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`    - Socket address of peer to request from
-    pub async fn send_address_request(&mut self, peer: SocketAddr) -> Result<()> {
+    pub async fn send_address_request(
+        &mut self,
+        peer: SocketAddr,
+        amount: TokenAmount,
+    ) -> Result<()> {
         let _peer_span = info_span!("sending payment address request");
         println!("Sending request for payment address to peer: {:?}", peer);
 
         self.node
-            .send(peer, UserRequest::SendAddressRequest)
+            .send(peer, UserRequest::SendAddressRequest { amount })
             .await?;
 
         Ok(())
@@ -430,10 +432,10 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`    - Socket address of peer to send the address to
-    pub async fn send_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
+    pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
+        let (peer, amount) = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
         let address = address.address;
-        let amount = self.amount;
         println!("Address to send: {:?}", address);
 
         self.node
@@ -444,8 +446,12 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
-    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response {
-        self.trading_peer = Some(peer);
+    fn receive_payment_address_request(
+        &mut self,
+        peer: SocketAddr,
+        amount: TokenAmount,
+    ) -> Response {
+        self.trading_peer = Some((peer, amount));
 
         Response {
             success: true,

@@ -358,7 +358,9 @@ pub trait ComputeInterface {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
-    SendAddressRequest,
+    SendAddressRequest {
+        amount: TokenAmount,
+    },
     SendPaymentAddress {
         address: String,
         amount: TokenAmount,
@@ -373,7 +375,7 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
-            SendAddressRequest => write!(f, "SendAddressRequest"),
+            SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
         }
@@ -386,5 +388,10 @@ pub trait UseInterface {
     /// ### Arguments
     ///
     /// * `peer`    - Peer who made the request
-    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response;
+    /// * `amount`  - The amount the payment will be
+    fn receive_payment_address_request(
+        &mut self,
+        peer: SocketAddr,
+        amount: TokenAmount,
+    ) -> Response;
 }
