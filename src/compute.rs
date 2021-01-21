@@ -4,7 +4,7 @@ use crate::configurations::ComputeNodeConfig;
 use crate::constants::{PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UtxoSet,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
@@ -16,7 +16,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
 use rand::{self, Rng};
@@ -195,7 +195,7 @@ impl ComputeNode {
     }
 
     /// The current utxo_set including block being mined and previous block mining txs.
-    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+    pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.node_raft.get_committed_utxo_set()
     }
 
@@ -283,7 +283,8 @@ impl ComputeNode {
         let mut txs_valid = true;
 
         for tx in droplet.tx.values() {
-            if !tx_ins_are_valid(tx.inputs.clone(), self.node_raft.get_committed_utxo_set()) {
+            let utxo_set = self.node_raft.get_committed_utxo_set();
+            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)) {
                 txs_valid = false;
                 break;
             }
@@ -356,24 +357,6 @@ impl ComputeNode {
                 .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
                 .await?;
         }
-        Ok(())
-    }
-
-    /// Sends the latest block to storage
-    pub async fn send_first_block_to_storage(&mut self) -> Result<()> {
-        let block_txs = self.node_raft.get_committed_utxo_set().clone();
-        let mut block = Block::new();
-        block.transactions = block_txs.keys().cloned().collect();
-
-        let request = StorageRequest::SendBlock {
-            common: CommonBlockInfo { block, block_txs },
-            mined_info: MinedBlockExtraInfo {
-                nonce: Vec::new(),
-                mining_tx: (String::new(), Transaction::new()),
-            },
-        };
-        self.node.send(self.storage_addr, request).await?;
-
         Ok(())
     }
 
@@ -659,12 +642,10 @@ impl ComputeNode {
 
     fn validate_wining_miner_tx(&mut self) {
         if let Some((miner, tx_hash, false)) = self.last_coinbase_hash.take() {
-            if self
-                .node_raft
-                .get_committed_utxo_set()
-                .contains_key(&tx_hash)
-            {
-                self.last_coinbase_hash = Some((miner, tx_hash, true));
+            let utxo_set = self.node_raft.get_committed_utxo_set();
+            let out_point = OutPoint::new(tx_hash, 0);
+            if utxo_set.contains_key(&out_point) {
+                self.last_coinbase_hash = Some((miner, out_point.t_hash, true));
             }
         }
     }
@@ -791,7 +772,7 @@ impl ComputeInterface for ComputeNode {
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_ins_are_valid(tx.inputs.clone(), utxo_set))
+            .filter(|(_, tx)| tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)))
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 

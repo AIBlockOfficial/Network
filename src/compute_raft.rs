@@ -1,12 +1,14 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
-use crate::interfaces::BlockStoredInfo;
+use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftData, RaftMessageWrapper};
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::get_inputs_previous_out_hash;
+use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction_utils::{
+    get_inputs_previous_out_point, get_tx_with_out_point_cloned,
+};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -20,7 +22,7 @@ use tracing::{debug, error, trace, warn};
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
-    FirstBlock(BTreeMap<String, Transaction>),
+    FirstBlock(UtxoSet),
     Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
@@ -45,7 +47,7 @@ pub enum CommittedItem {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum AccumulatingBlockStoredInfo {
     /// Accumulating first block utxo_set
-    FirstBlock(BTreeMap<String, Transaction>),
+    FirstBlock(UtxoSet),
     /// Accumulating other blocks BlockStoredInfo
     Block(BlockStoredInfo),
 }
@@ -71,7 +73,7 @@ pub struct ComputeConsensused {
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
     /// UTXO set containain the valid transaction to use as previous input hashes.
-    utxo_set: BTreeMap<String, Transaction>,
+    utxo_set: UtxoSet,
     /// Accumulating block:
     /// Require majority of compute node votes for normal blocks.
     /// Require unanimit for first block.
@@ -87,7 +89,7 @@ pub struct ComputeRaft {
     /// Consensused fields.
     consensused: ComputeConsensused,
     /// Initial utxo_set to propose when ready.
-    initial_utxo_set: Option<BTreeMap<String, Transaction>>,
+    initial_utxo_set: Option<UtxoSet>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
@@ -134,7 +136,7 @@ impl ComputeRaft {
         let utxo_set = config
             .compute_seed_utxo
             .iter()
-            .map(|hash| (hash.clone(), Transaction::new()))
+            .map(|hash| (OutPoint::new(hash.clone(), 0), Transaction::new()))
             .collect();
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
@@ -380,7 +382,7 @@ impl ComputeRaft {
     }
 
     /// Current utxo_set including block being mined
-    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+    pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.consensused.get_committed_utxo_set()
     }
 
@@ -418,7 +420,9 @@ impl ComputeConsensused {
         // The block is about to be mined, all transaction accepted can be used
         // to accept next block transactions.
         // TODO: Roll back append and removal if block rejected by miners.
-        self.utxo_set.append(&mut block_tx.clone());
+
+        self.utxo_set
+            .extend(get_tx_with_out_point_cloned(block_tx.iter()));
 
         self.current_block = Some(block);
         self.current_block_tx = block_tx;
@@ -430,7 +434,7 @@ impl ComputeConsensused {
     }
 
     /// Current utxo_set including block being mined
-    pub fn get_committed_utxo_set(&self) -> &BTreeMap<String, Transaction> {
+    pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.utxo_set
     }
 
@@ -443,9 +447,16 @@ impl ComputeConsensused {
 
     /// Processes the very first block with utxo_set
     pub fn generate_first_block(&mut self) {
-        let next_block_tx = self.utxo_set.clone();
-        let mut next_block = Block::new();
-        next_block.transactions = next_block_tx.keys().cloned().collect();
+        let next_block_tx: BTreeMap<_, _> = self
+            .utxo_set
+            .iter()
+            .map(|(out_p, tx)| (out_p.t_hash.clone(), tx.clone()))
+            .collect();
+
+        let next_block = Block {
+            transactions: next_block_tx.keys().cloned().collect(),
+            ..Default::default()
+        };
 
         self.set_committed_mining_block(next_block, next_block_tx)
     }
@@ -518,7 +529,7 @@ impl ComputeConsensused {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        for hash in get_inputs_previous_out_hash(txs.values()) {
+        for hash in get_inputs_previous_out_point(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
             self.utxo_set.remove(hash).unwrap();
         }
@@ -534,7 +545,7 @@ impl ComputeConsensused {
         for (hash_tx, value) in new_txs.iter() {
             let mut removed_roll_back = Vec::new();
 
-            for hash_in in get_inputs_previous_out_hash(Some(value).into_iter()) {
+            for hash_in in get_inputs_previous_out_point(Some(value).into_iter()) {
                 if self.utxo_set.contains_key(hash_in) && removed_all.insert(hash_in) {
                     removed_roll_back.push(hash_in);
                 } else {
@@ -591,11 +602,7 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
-    pub fn append_first_block_info(
-        &mut self,
-        key: ComputeRaftKey,
-        utxo_set: BTreeMap<String, Transaction>,
-    ) {
+    pub fn append_first_block_info(&mut self, key: ComputeRaftKey, utxo_set: UtxoSet) {
         self.append_current_block_stored_info(
             key,
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set),
@@ -630,10 +637,12 @@ impl ComputeConsensused {
                 self.tx_current_block_num = Some(0);
                 self.utxo_set = utxo_set;
             }
-            AccumulatingBlockStoredInfo::Block(mut info) => {
+            AccumulatingBlockStoredInfo::Block(info) => {
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
-                self.utxo_set.append(&mut info.mining_transactions);
+                self.utxo_set.extend(get_tx_with_out_point_cloned(
+                    info.mining_transactions.iter(),
+                ));
             }
         }
     }
@@ -704,8 +713,12 @@ mod test {
         let expected_utxo_t_hashes: BTreeSet<String> =
             seed_utxo.iter().map(|h| h.to_string()).collect();
 
-        let actual_utxo_t_hashes: BTreeSet<String> =
-            node.get_committed_utxo_set().keys().cloned().collect();
+        let actual_utxo_t_hashes: BTreeSet<String> = node
+            .get_committed_utxo_set()
+            .keys()
+            .map(|k| &k.t_hash)
+            .cloned()
+            .collect();
 
         assert_eq!(first_block, Some(CommittedItem::FirstBlock));
         assert_eq!(tx_no_block, Some(CommittedItem::Transactions));
@@ -831,8 +844,12 @@ mod test {
             .map(|b| b.transactions.iter().cloned().collect());
         let actual_block_tx_t_hashes: BTreeSet<String> =
             node.consensused.current_block_tx.keys().cloned().collect();
-        let actual_utxo_t_hashes: BTreeSet<String> =
-            node.get_committed_utxo_set().keys().cloned().collect();
+        let actual_utxo_t_hashes: BTreeSet<String> = node
+            .get_committed_utxo_set()
+            .keys()
+            .map(|k| &k.t_hash)
+            .cloned()
+            .collect();
 
         assert_eq!(
             commits,

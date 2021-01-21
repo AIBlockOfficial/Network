@@ -1160,7 +1160,10 @@ async fn compute_committed_utxo_set(
     compute: &str,
 ) -> BTreeMap<String, Transaction> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.get_committed_utxo_set().clone()
+    c.get_committed_utxo_set()
+        .iter()
+        .map(|(out_p, tx)| (out_p.t_hash.clone(), tx.clone()))
+        .collect()
 }
 
 async fn compute_all_committed_tx_pool(
