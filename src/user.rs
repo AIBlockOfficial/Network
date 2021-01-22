@@ -7,7 +7,9 @@ use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::{Transaction, TxIn};
-use naom::primitives::transaction_utils::{construct_payment_tx, construct_tx_hash};
+use naom::primitives::transaction_utils::{
+    construct_payment_tx, construct_tx_hash, get_tx_out_with_out_point,
+};
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
@@ -227,31 +229,26 @@ impl UserNode {
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
         let hash = construct_tx_hash(&transaction);
-        let total_to_save = transaction.outputs.iter().map(|out| out.amount).sum();
-        let address = PaymentAddress {
-            address: transaction
-                .outputs
-                .first()
-                .unwrap()
-                .script_public_key
-                .clone()
-                .unwrap(),
-            net: 0,
-        };
 
-        debug!(
-            "receive_payment_transaction: {} -> {:?}",
-            total_to_save, address
-        );
+        for (tx_out_p, tx_out) in get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
+        {
+            let amount = tx_out.amount;
+            let address = PaymentAddress {
+                address: tx_out.script_public_key.clone().unwrap(),
+                net: 0,
+            };
 
-        self.wallet_db
-            .save_transaction_to_wallet(hash.clone(), address)
-            .await
-            .unwrap();
-        self.wallet_db
-            .save_payment_to_wallet(hash, total_to_save)
-            .await
-            .unwrap();
+            debug!("receive_payment_transaction: {} -> {:?}", amount, address);
+
+            self.wallet_db
+                .save_transaction_to_wallet(tx_out_p.clone(), address)
+                .await
+                .unwrap();
+            self.wallet_db
+                .save_payment_to_wallet(tx_out_p, amount)
+                .await
+                .unwrap();
+        }
 
         Response {
             success: true,
@@ -281,49 +278,6 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction ready",
         }
-    }
-
-    /// Constructs a return payment transaction for unspent tokens
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_hash`     - Hash of the output to create a return tx from
-    /// * `return_amt`  - The amount to send to the return address
-    pub async fn construct_return_payment_tx(
-        &mut self,
-        tx_in: TxIn,
-        return_amt: TokenAmount,
-    ) -> Result<()> {
-        let tx_ins = vec![tx_in];
-        let (address, _) = self.wallet_db.generate_payment_address().await;
-
-        let payment_tx = construct_payment_tx(
-            tx_ins,
-            address.address.clone(),
-            None,
-            None,
-            Asset::Token(return_amt),
-            return_amt,
-        );
-        let payment_tx_hash = construct_tx_hash(&payment_tx);
-
-        // Update saves to the wallet
-        self.wallet_db
-            .save_transaction_to_wallet(payment_tx_hash.clone(), address)
-            .await
-            .unwrap();
-        self.wallet_db
-            .save_payment_to_wallet(payment_tx_hash, return_amt)
-            .await
-            .unwrap();
-
-        // Completely reallocate the payment tx; required because an unwrap will just
-        // consume self
-        let mut current_r_payment = self.return_payment.clone().unwrap();
-        current_r_payment.transaction = payment_tx;
-        self.return_payment = Some(current_r_payment);
-
-        Ok(())
     }
 
     /// Sends a payment transaction to the receiving party

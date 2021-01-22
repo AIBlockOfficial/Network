@@ -6,7 +6,7 @@ use crate::db_utils::SimpleDb;
 use crate::user::ReturnPayment;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn};
 use naom::primitives::transaction_utils::construct_payment_tx_ins;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -41,7 +41,7 @@ pub struct AddressStore {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct FundStore {
     pub running_total: TokenAmount,
-    pub transactions: BTreeMap<String, TokenAmount>,
+    pub transactions: BTreeMap<OutPoint, TokenAmount>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,13 +81,14 @@ impl WalletDb {
 
             if index == seed_idx {
                 let tx_hash: String = it.next().unwrap().parse().unwrap();
+                let tx_out_p = OutPoint::new(tx_hash, 0);
                 let amount = TokenAmount(it.next().unwrap().parse().unwrap());
 
                 let (address, _) = self.generate_payment_address().await;
-                self.save_transaction_to_wallet(tx_hash.clone(), address)
+                self.save_transaction_to_wallet(tx_out_p.clone(), address)
                     .await
                     .unwrap();
-                self.save_payment_to_wallet(tx_hash, amount).await.unwrap();
+                self.save_payment_to_wallet(tx_out_p, amount).await.unwrap();
             }
         }
         self
@@ -151,7 +152,7 @@ impl WalletDb {
     /// * `address`  - Transaction Address
     pub async fn save_transaction_to_wallet(
         &self,
-        tx_hash: String,
+        tx_hash: OutPoint,
         address: PaymentAddress,
     ) -> Result<(), Error> {
         let PaymentAddress { address, net } = address;
@@ -168,13 +169,14 @@ impl WalletDb {
     /// * `tx_to_save`  - All transactions that are required to be saved to wallet
     pub async fn save_transactions_to_wallet(
         &self,
-        tx_to_save: BTreeMap<String, TransactionStore>,
+        tx_to_save: BTreeMap<OutPoint, TransactionStore>,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
 
             for (key, value) in tx_to_save {
+                let key = serialize(&key).unwrap();
                 let input = serialize(&value).unwrap();
                 db.put(&key, &input).unwrap();
             }
@@ -190,7 +192,7 @@ impl WalletDb {
     /// * `amount`  - Amount of tokens in the payment
     pub async fn save_payment_to_wallet(
         &self,
-        hash: String,
+        hash: OutPoint,
         amount: TokenAmount,
     ) -> Result<(), Error> {
         let db = self.db.clone();
@@ -287,26 +289,27 @@ impl WalletDb {
     /// * `remove_from_wallet` - Whether to remove txs and address from wallet
     pub fn construct_tx_in_from_prev_out(
         &mut self,
-        tx_hash: String,
+        tx_hash: OutPoint,
         remove_from_wallet: bool,
     ) -> TxIn {
         let mut address_store = self.get_address_stores();
         let tx_store = self.get_transaction_store(&tx_hash);
-
+        
         let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-        let signature = sign::sign_detached(tx_hash.as_bytes(), &needed_store.secret_key);
-
+        let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
+        
         let tx_const = TxConstructor {
-            t_hash: tx_hash.clone(),
-            prev_n: 0,
+            t_hash: tx_hash.t_hash.clone(),
+            prev_n: tx_hash.n,
             signatures: vec![signature],
             pub_keys: vec![needed_store.public_key],
         };
-
+        
         if remove_from_wallet {
             // Update the values in the wallet
-            self.delete_key(&tx_hash);
-
+            let tx_hash_ser = serialize(&tx_hash).unwrap();
+            self.delete_key(&tx_hash_ser);
+            
             address_store.remove(&tx_store.address);
             self.set_address_stores(address_store);
         }
@@ -337,11 +340,11 @@ impl WalletDb {
     }
 
     // Get the wallet transaction store
-    pub fn get_transaction_store(&self, tx_hash: &str) -> TransactionStore {
+    pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> TransactionStore {
         get_transaction_store(&self.db.lock().unwrap(), tx_hash)
     }
 
-    pub fn delete_key(&self, key: &str) {
+    pub fn delete_key(&self, key: &[u8]) {
         self.db.lock().unwrap().delete(key).unwrap();
     }
 
@@ -354,7 +357,7 @@ impl WalletDb {
     }
 
     // Get the wallet transaction address
-    pub fn get_transaction_address(&self, tx_hash: &str) -> String {
+    pub fn get_transaction_address(&self, tx_hash: &OutPoint) -> String {
         self.get_transaction_store(tx_hash).address
     }
 }
@@ -411,10 +414,10 @@ pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, Add
 }
 
 // Get the wallet transaction store
-pub fn get_transaction_store(db: &SimpleDb, tx_hash: &str) -> TransactionStore {
-    match db.get(tx_hash) {
+pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> TransactionStore {
+    match db.get(&serialize(&tx_hash).unwrap()) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
-        Ok(None) => panic!("Transaction not present in wallet: {}", tx_hash),
+        Ok(None) => panic!("Transaction not present in wallet: {:?}", tx_hash),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }

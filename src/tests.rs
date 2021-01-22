@@ -13,8 +13,10 @@ use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction_utils::{
+    construct_coinbase_tx, construct_tx_hash, get_tx_with_out_point,
+};
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
@@ -191,10 +193,12 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = TokenAmount(12000 * mining_txs.len() as u64);
-        (total, mining_txs.keys().collect::<Vec<_>>())
+        let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
+
+        (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
     };
     assert_eq!(
-        (actual_w0.0, actual_w0.2.keys().collect::<Vec<_>>()),
+        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
         expected_w0
     );
 
@@ -1053,7 +1057,7 @@ async fn node_get_wallet_info(
 ) -> (
     TokenAmount,
     Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
 ) {
     let (miner, user) = if let Some(miner) = network.miner(node) {
         (Some(miner.lock().await), None)
@@ -1088,7 +1092,7 @@ async fn node_all_get_wallet_info(
 ) -> Vec<(
     TokenAmount,
     Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
 )> {
     let mut result = Vec::new();
     for name in miner_group {
@@ -1104,7 +1108,7 @@ async fn node_all_combined_get_wallet_info(
 ) -> (
     TokenAmount,
     Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
 ) {
     let mut total = TokenAmount(0);
     let mut addresses = Vec::new();

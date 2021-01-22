@@ -9,7 +9,7 @@ use naom::primitives::transaction_utils::{
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::Block,
-    transaction::{Transaction, TxConstructor},
+    transaction::{OutPoint, Transaction, TxConstructor},
 };
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
@@ -99,18 +99,19 @@ pub async fn create_and_save_fake_to_wallet(
         &address_keys.public_key,
         &address_keys.secret_key,
     );
+    let tx_out_p = OutPoint::new(t_hash, 0);
 
     // Save fund store
     let payment_to_save = TokenAmount(4000);
     wallet_db
-        .save_payment_to_wallet(t_hash.clone(), payment_to_save)
+        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save)
         .await
         .unwrap();
 
     // Save transaction store
-    println!("TX STORE: {:?}", (&t_hash, &final_address));
+    println!("TX STORE: {:?}", (&tx_out_p, &final_address));
     wallet_db
-        .save_transaction_to_wallet(t_hash, final_address)
+        .save_transaction_to_wallet(tx_out_p, final_address)
         .await
         .unwrap();
 

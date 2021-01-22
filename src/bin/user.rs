@@ -180,22 +180,6 @@ async fn main() {
                         node.send_next_payment_to_destinations(compute_node_connected.unwrap())
                             .await
                             .unwrap();
-
-                        if let Some(r_payment) = node.return_payment.clone() {
-                            // Handle return payment construction
-                            node.construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
-                                .await
-                                .unwrap();
-                            let return_payment = node.return_payment.clone();
-
-                            node.send_transaction_to_compute(
-                                compute_node_connected.unwrap(),
-                                return_payment.unwrap().transaction,
-                            )
-                            .await
-                            .unwrap();
-                            node.return_payment = None;
-                        }
                     }
                     Ok(Response {
                         success: true,
