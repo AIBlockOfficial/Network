@@ -97,13 +97,19 @@ impl UserNode {
             .get(config.user_node_idx)
             .ok_or(UserError::ConfigError("Invalid user index"))?
             .address;
+
+        let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
+        let wallet_db = WalletDb::new(config.user_db_mode)
+            .with_seed(config.user_node_idx, &config.user_wallet_seeds)
+            .await;
+
         Ok(UserNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
+            node,
             assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
-            wallet_db: WalletDb::new(config.user_db_mode),
+            wallet_db,
         })
     }
 
@@ -226,7 +232,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Next payment transaction successfully constructed",
+            reason: "Next payment transaction ready",
         }
     }
 

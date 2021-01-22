@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
-                        reason: "Next payment transaction successfully constructed",
+                        reason: "Next payment transaction ready",
                     }) => {
                         let next_payment = node.next_payment.take().unwrap();
 

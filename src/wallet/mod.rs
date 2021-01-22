@@ -74,6 +74,25 @@ impl WalletDb {
         SimpleDb::new_file(save_path).unwrap()
     }
 
+    pub async fn with_seed(self, index: usize, seeds: &[String]) -> Self {
+        for seed in seeds {
+            let mut it = seed.split('-');
+            let seed_idx: usize = it.next().unwrap().parse().unwrap();
+
+            if index == seed_idx {
+                let tx_hash: String = it.next().unwrap().parse().unwrap();
+                let amount = TokenAmount(it.next().unwrap().parse().unwrap());
+
+                let (address, _) = self.generate_payment_address().await;
+                self.save_transaction_to_wallet(tx_hash.clone(), address)
+                    .await
+                    .unwrap();
+                self.save_payment_to_wallet(tx_hash, amount).await.unwrap();
+            }
+        }
+        self
+    }
+
     /// Generates a new payment address, saving the related keys to the wallet
     /// TODO: Add static address capability for frequent payments
     ///

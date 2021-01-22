@@ -20,7 +20,6 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -31,10 +30,7 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-const SEED_UTXO: [&str; 1] = ["000000"];
-const SEED_UTXO_BLOCK_HASH: &str =
-    "e18f57f62c7bb00811c032b56c8113c83520c1bf9b8428cc96e4c8d5b704d11b";
-const HASH_LEN: usize = 64;
+const SEED_UTXO: [&str; 3] = ["000000", "000001", "000002"];
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
@@ -477,6 +473,9 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let (_, block_info0) = complete_block(0, None, &BTreeMap::new(), compute_nodes.len());
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
 
+    let mut left_init_utxo = network.collect_initial_uxto_set();
+    left_init_utxo.remove(SEED_UTXO[0]).unwrap();
+
     create_first_block_act(&mut network).await;
     compute_all_mining_block_mined(&mut network, "miner1", compute_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
@@ -503,7 +502,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
         node_all(compute_nodes, Some(vec![t_hash]))
     );
 
-    let expected_utxo = merge_txs(&transactions, &block0_mining_tx);
+    let expected_utxo = merge_txs_3(&left_init_utxo, &transactions, &block0_mining_tx);
     assert_eq!(len_and_map(&utxo_set_after[0]), len_and_map(&expected_utxo));
     assert_eq!(equal_first(&utxo_set_after), node_all(compute_nodes, true));
 
@@ -920,6 +919,7 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
+    network_config.user_wallet_seeds = vec![wallet_seed(0, SEED_UTXO[1], &TokenAmount(10))];
     let mut network = Network::create_from_config(&network_config).await;
     let amount = TokenAmount(5);
 
@@ -930,13 +930,14 @@ async fn receive_payment_tx_user() {
     node_connect_to(&mut network, "user1", "compute1").await;
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
+    user_send_address_to_trading_peer(&mut network, "user2").await;
+    user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
     //
     // Assert
     //
-    let actual = user_trading_peer(&mut network, "user2").await;
-    let expected = network.get_address("user1").await.map(|a| (a, amount));
-    assert_eq!(actual, expected);
+    let actual = user_next_payment_outs(&mut network, "user1").await;
+    assert_eq!(actual, vec![amount]);
 
     test_step_complete(network).await;
 }
@@ -1519,9 +1520,18 @@ async fn user_send_address_request(
         .unwrap();
 }
 
-async fn user_trading_peer(network: &mut Network, user: &str) -> Option<(SocketAddr, TokenAmount)> {
+async fn user_next_payment_outs(network: &mut Network, user: &str) -> Vec<TokenAmount> {
     let u = network.user(user).unwrap().lock().await;
-    u.trading_peer
+    u.next_payment
+        .iter()
+        .flat_map(|tx| tx.outputs.iter())
+        .map(|out| out.amount)
+        .collect()
+}
+
+async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.send_address_to_trading_peer().await.unwrap();
 }
 
 //
@@ -1720,6 +1730,10 @@ fn merge_txs_3(
         .collect()
 }
 
+fn wallet_seed(user_idx: u16, tx_hash: &str, amount: &TokenAmount) -> String {
+    format!("{}-{}-{}", user_idx, tx_hash, amount.0)
+}
+
 fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transaction> {
     block
         .per_node
@@ -1795,6 +1809,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
         compute_seed_utxo: SEED_UTXO.iter().map(|v| v.to_string()).collect(),
+        user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()
             .collect(),

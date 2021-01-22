@@ -53,6 +53,7 @@ pub struct NetworkConfig {
     pub compute_partition_full_size: usize,
     pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: Vec<String>,
+    pub user_wallet_seeds: Vec<String>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
@@ -309,6 +310,7 @@ impl Network {
                 miner_nodes: info.miner_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 api_port: 3000,
+                user_wallet_seeds: config.user_wallet_seeds.clone(),
             };
 
             let info = format!("{} -> {}", name, info.user_nodes[idx].address);
