@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::WalletDb;
+use crate::wallet::{PaymentAddress, WalletDb};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -85,7 +85,7 @@ pub struct UserNode {
     pub node: Node,
     pub assets: Vec<Asset>,
     pub trading_peer: Option<(SocketAddr, TokenAmount)>,
-    pub next_payment: Option<Transaction>,
+    pub next_payment: Option<(SocketAddr, Transaction)>,
     pub return_payment: Option<ReturnPayment>,
     pub wallet_db: WalletDb,
 }
@@ -162,7 +162,7 @@ impl UserNode {
                 self.receive_payment_transaction(transaction).await
             }
             SendPaymentAddress { address, amount } => {
-                self.make_payment_transactions(address, amount)
+                self.make_payment_transactions(peer, address, amount)
             }
         }
     }
@@ -174,7 +174,30 @@ impl UserNode {
     ///
     /// * `compute_peer`    - Compute peer to send the payment tx to
     /// * `payment_tx`      - Transaction to send
-    pub async fn send_payment_to_compute(
+    pub async fn send_next_payment_to_destinations(
+        &mut self,
+        compute_peer: SocketAddr,
+    ) -> Result<()> {
+        let (peer, tx) = self.next_payment.take().unwrap();
+
+        self.send_transaction_to_compute(compute_peer, tx.clone())
+            .await?;
+
+        if peer != self.address() {
+            self.send_payment_to_receiver(peer, tx).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Sends the next internal payment transaction to be processed by the connected Compute
+    /// node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute_peer`    - Compute peer to send the payment tx to
+    /// * `payment_tx`      - Transaction to send
+    pub async fn send_transaction_to_compute(
         &mut self,
         compute_peer: SocketAddr,
         payment_tx: Transaction,
@@ -205,7 +228,26 @@ impl UserNode {
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
         let hash = construct_tx_hash(&transaction);
         let total_to_save = transaction.outputs.iter().map(|out| out.amount).sum();
+        let address = PaymentAddress {
+            address: transaction
+                .outputs
+                .first()
+                .unwrap()
+                .script_public_key
+                .clone()
+                .unwrap(),
+            net: 0,
+        };
 
+        debug!(
+            "receive_payment_transaction: {} -> {:?}",
+            total_to_save, address
+        );
+
+        self.wallet_db
+            .save_transaction_to_wallet(hash.clone(), address)
+            .await
+            .unwrap();
         self.wallet_db
             .save_payment_to_wallet(hash, total_to_save)
             .await
@@ -213,7 +255,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Payment transaction received and saved successfully",
+            reason: "Payment transaction received",
         }
     }
 
@@ -222,12 +264,17 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `address` - Address to assign the payment transaction to
-    pub fn make_payment_transactions(&mut self, address: String, amount: TokenAmount) -> Response {
+    pub fn make_payment_transactions(
+        &mut self,
+        peer: SocketAddr,
+        address: String,
+        amount: TokenAmount,
+    ) -> Response {
         let (tx_ins, return_payment) = self.wallet_db.fetch_inputs_for_payment(amount);
 
         let payment_tx =
             construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
-        self.next_payment = Some(payment_tx);
+        self.next_payment = Some((peer, payment_tx));
         self.return_payment = return_payment;
 
         Response {
@@ -334,6 +381,11 @@ impl UserNode {
             .send(peer, UserRequest::SendPaymentAddress { address, amount })
             .await?;
         Ok(())
+    }
+
+    // Get the wallet db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
     }
 }
 

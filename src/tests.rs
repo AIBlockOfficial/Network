@@ -185,7 +185,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
         )
     );
 
-    let actual_w0 = miner_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
     } else {
@@ -418,7 +418,7 @@ async fn add_transactions_act(network: &mut Network, tx: &Transaction) {
 
     info!("Test Step Add Transactions");
     node_connect_to(network, "user1", "compute1").await;
-    user_send_payment_to_compute(network, "user1", "compute1", tx).await;
+    user_send_transaction_to_compute(network, "user1", "compute1", tx).await;
     compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
     node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
 }
@@ -745,9 +745,9 @@ async fn proof_winner(network_config: NetworkConfig) {
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
-    let info_before = miner_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_before = node_all_get_wallet_info(&mut network, &wining_miners).await;
     proof_winner_act(&mut network).await;
-    let info_after = miner_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_after = node_all_get_wallet_info(&mut network, &wining_miners).await;
 
     //
     // Assert
@@ -919,25 +919,49 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
-    network_config.user_wallet_seeds = vec![wallet_seed(0, SEED_UTXO[1], &TokenAmount(10))];
+    network_config.user_wallet_seeds = vec![wallet_seed(0, SEED_UTXO[1], &TokenAmount(11))];
     let mut network = Network::create_from_config(&network_config).await;
+    let user_nodes = &network_config.user_nodes;
     let amount = TokenAmount(5);
+
+    create_first_block_act(&mut network).await;
 
     //
     // Act/Assert
     //
+    let before = node_all_get_wallet_info(&mut network, user_nodes).await;
+
     node_connect_to(&mut network, "user1", "user2").await;
     node_connect_to(&mut network, "user1", "compute1").await;
+
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
+
     user_send_address_to_trading_peer(&mut network, "user2").await;
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
+    user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
+    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    user_handle_event(&mut network, "user2", "Payment transaction received").await;
+
+    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+
     //
     // Assert
+    // Left over from source transaction is burnt as there are no
+    // return payment executed.
     //
-    let actual = user_next_payment_outs(&mut network, "user1").await;
-    assert_eq!(actual, vec![amount]);
+    assert_eq!(
+        before
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(11), TokenAmount(0)]
+    );
+    assert_eq!(
+        after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
+        vec![TokenAmount(0), TokenAmount(5)]
+    );
 
     test_step_complete(network).await;
 }
@@ -985,6 +1009,8 @@ async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
         u.lock().await.connect_to(to_addr).await.unwrap();
     } else if let Some(m) = network.miner(from) {
         m.lock().await.connect_to(to_addr).await.unwrap();
+    } else {
+        panic!("node not found");
     }
 }
 
@@ -1019,6 +1045,77 @@ async fn node_all_handle_event(network: &mut Network, node_group: &[String], rea
         ));
     }
     let _ = join_all(join_handles).await;
+}
+
+async fn node_get_wallet_info(
+    network: &mut Network,
+    node: &str,
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+) {
+    let (miner, user) = if let Some(miner) = network.miner(node) {
+        (Some(miner.lock().await), None)
+    } else if let Some(user) = network.user(node) {
+        (None, Some(user.lock().await))
+    } else {
+        (None, None)
+    };
+
+    let wallet = match (&miner, &user) {
+        (Some(m), _) => m.get_wallet_db(),
+        (_, Some(u)) => u.get_wallet_db(),
+        _ => panic!("node not found"),
+    };
+
+    let addresses = wallet.get_known_address();
+
+    let fund = wallet.get_fund_store();
+    let total = fund.running_total;
+
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for (tx, amount) in fund.transactions.into_iter() {
+        let addr = wallet.get_transaction_address(&tx);
+        txs_to_address_and_ammount.insert(tx, (addr, amount));
+    }
+    (total, addresses, txs_to_address_and_ammount)
+}
+
+async fn node_all_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> Vec<(
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+)> {
+    let mut result = Vec::new();
+    for name in miner_group {
+        let r = node_get_wallet_info(network, name).await;
+        result.push(r);
+    }
+    result
+}
+
+async fn node_all_combined_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<String, (String, TokenAmount)>,
+) {
+    let mut total = TokenAmount(0);
+    let mut addresses = Vec::new();
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for name in miner_group {
+        let (t, mut a, mut txs) = node_get_wallet_info(network, name).await;
+        total += t;
+        addresses.append(&mut a);
+        txs_to_address_and_ammount.append(&mut txs);
+    }
+    (total, addresses, txs_to_address_and_ammount)
 }
 
 //
@@ -1494,7 +1591,7 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     }
 }
 
-async fn user_send_payment_to_compute(
+async fn user_send_transaction_to_compute(
     network: &mut Network,
     from_user: &str,
     to_compute: &str,
@@ -1502,7 +1599,19 @@ async fn user_send_payment_to_compute(
 ) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_payment_to_compute(compute_node_addr, tx.clone())
+    u.send_transaction_to_compute(compute_node_addr, tx.clone())
+        .await
+        .unwrap();
+}
+
+async fn user_send_next_payment_to_destinations(
+    network: &mut Network,
+    from_user: &str,
+    to_compute: &str,
+) {
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let mut u = network.user(from_user).unwrap().lock().await;
+    u.send_next_payment_to_destinations(compute_node_addr)
         .await
         .unwrap();
 }
@@ -1518,15 +1627,6 @@ async fn user_send_address_request(
     u.send_address_request(user_node_addr, amount)
         .await
         .unwrap();
-}
-
-async fn user_next_payment_outs(network: &mut Network, user: &str) -> Vec<TokenAmount> {
-    let u = network.user(user).unwrap().lock().await;
-    u.next_payment
-        .iter()
-        .flat_map(|tx| tx.outputs.iter())
-        .map(|out| out.amount)
-        .collect()
 }
 
 async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
@@ -1591,65 +1691,6 @@ async fn miner_all_send_pow_for_current(
     for to_compute in to_compute_group {
         miner_send_pow_for_current(network, from_miner, to_compute).await;
     }
-}
-
-async fn miner_get_wallet_info(
-    network: &mut Network,
-    miner: &str,
-) -> (
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-) {
-    let m = network.miner(miner).unwrap().lock().await;
-
-    let addresses = m.get_known_address();
-
-    let fund = m.get_fund_store();
-    let total = fund.running_total;
-
-    let mut txs_to_address_and_ammount = BTreeMap::new();
-    for (tx, amount) in fund.transactions.into_iter() {
-        let addr = m.get_transaction_address(&tx);
-        txs_to_address_and_ammount.insert(tx, (addr, amount));
-    }
-    (total, addresses, txs_to_address_and_ammount)
-}
-
-async fn miner_all_get_wallet_info(
-    network: &mut Network,
-    miner_group: &[String],
-) -> Vec<(
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-)> {
-    let mut result = Vec::new();
-    for name in miner_group {
-        let r = miner_get_wallet_info(network, name).await;
-        result.push(r);
-    }
-    result
-}
-
-async fn miner_all_combined_get_wallet_info(
-    network: &mut Network,
-    miner_group: &[String],
-) -> (
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-) {
-    let mut total = TokenAmount(0);
-    let mut addresses = Vec::new();
-    let mut txs_to_address_and_ammount = BTreeMap::new();
-    for name in miner_group {
-        let (t, mut a, mut txs) = miner_get_wallet_info(network, name).await;
-        total.0 += t.0;
-        addresses.append(&mut a);
-        txs_to_address_and_ammount.append(&mut txs);
-    }
-    (total, addresses, txs_to_address_and_ammount)
 }
 
 //

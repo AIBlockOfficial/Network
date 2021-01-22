@@ -344,6 +344,19 @@ impl WalletDb {
     pub fn delete_key(&self, key: &str) {
         self.db.lock().unwrap().delete(key).unwrap();
     }
+
+    // Get the wallet addresses
+    pub fn get_known_address(&self) -> Vec<String> {
+        self.get_address_stores()
+            .into_iter()
+            .map(|(addr, _)| addr)
+            .collect()
+    }
+
+    // Get the wallet transaction address
+    pub fn get_transaction_address(&self, tx_hash: &str) -> String {
+        self.get_transaction_store(tx_hash).address
+    }
 }
 
 /// Builds an address from a public key
@@ -401,7 +414,7 @@ pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, Add
 pub fn get_transaction_store(db: &SimpleDb, tx_hash: &str) -> TransactionStore {
     match db.get(tx_hash) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
-        Ok(None) => panic!("Transaction not present in wallet"),
+        Ok(None) => panic!("Transaction not present in wallet: {}", tx_hash),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }

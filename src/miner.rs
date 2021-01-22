@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{FundStore, PaymentAddress, WalletDb};
+use crate::wallet::{PaymentAddress, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -366,23 +366,9 @@ impl MinerNode {
         (0..10).map(|_| rng.gen_range(1, 200)).collect()
     }
 
-    // Get the wallet fund store
-    pub fn get_fund_store(&self) -> FundStore {
-        self.wallet_db.get_fund_store()
-    }
-
-    // Get the wallet addresses
-    pub fn get_known_address(&self) -> Vec<String> {
-        self.wallet_db
-            .get_address_stores()
-            .into_iter()
-            .map(|(addr, _)| addr)
-            .collect()
-    }
-
-    // Get the wallet transaction address
-    pub fn get_transaction_address(&self, tx_hash: &str) -> String {
-        self.wallet_db.get_transaction_store(tx_hash).address
+    // Get the wallet db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
     }
 }
 

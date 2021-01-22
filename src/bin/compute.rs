@@ -8,7 +8,7 @@ use system::create_valid_transaction;
 use system::{ComputeNode, ComputeRequest, Response};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = App::new("Zenotta Compute Node")
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (setup, config)
     };
     println!("Start node with config {:?}", config);
-    let node = ComputeNode::new(config).await?;
+    let node = ComputeNode::new(config).await.unwrap();
 
     println!("Started node at {}", node.address());
 
@@ -198,5 +198,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
     main.unwrap();
     raft.unwrap();
-    Ok(())
 }
