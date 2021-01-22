@@ -1,7 +1,7 @@
 storage_db_mode = {Test = 0}
 miner_db_mode = {Test = 0}
 user_db_mode = {Test = 1000}
-compute_seed_utxo = ["000000", "000001", "000010", "000011"]
+compute_seed_utxo = ["5-000000", "000001", "000010", "000011"]
 user_wallet_seeds = ["0-000010-123", "1-000011-1234"]
 compute_raft = 1
 storage_raft = 1

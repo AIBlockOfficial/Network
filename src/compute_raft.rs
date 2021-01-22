@@ -136,7 +136,7 @@ impl ComputeRaft {
         let utxo_set = config
             .compute_seed_utxo
             .iter()
-            .map(|hash| (OutPoint::new(hash.clone(), 0), Transaction::new()))
+            .map(|hash| (config_to_out_point(&hash), Transaction::new()))
             .collect();
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
@@ -667,6 +667,16 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
         *from = result.split_off(&max_key);
     }
     result
+}
+
+fn config_to_out_point(seed: &str) -> OutPoint {
+    let mut it = seed.split('-');
+
+    match (it.next(), it.next()) {
+        (Some(h), None) => OutPoint::new(h.to_string(), 0),
+        (Some(n), Some(h)) => OutPoint::new(h.to_string(), n.parse().unwrap()),
+        _ => panic!("invalid seed: {}", seed),
+    }
 }
 
 #[cfg(test)]
