@@ -3,10 +3,9 @@ use crate::constants::{
     ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, NETWORK_VERSION, WALLET_PATH,
 };
 use crate::db_utils::SimpleDb;
-use crate::user::ReturnPayment;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn};
+use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::primitives::transaction_utils::construct_payment_tx_ins;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -212,7 +211,7 @@ impl WalletDb {
     }
 
     /// Fetches valid TxIns based on the wallet's running total and available unspent
-    /// transactions
+    /// transactions, and total value
     ///
     /// TODO: Replace errors here with Error enum types that the Result can return
     /// TODO: Possibly sort addresses found ascending, so that smaller amounts are consumed
@@ -223,9 +222,8 @@ impl WalletDb {
     pub fn fetch_inputs_for_payment(
         &mut self,
         amount_required: TokenAmount,
-    ) -> (Vec<TxIn>, Option<ReturnPayment>) {
+    ) -> (Vec<TxIn>, TokenAmount) {
         let mut tx_ins = Vec::new();
-        let mut return_payment = None;
 
         // Wallet DB handling
         let mut fund_store = self.get_fund_store();
@@ -243,42 +241,24 @@ impl WalletDb {
         for tx_hash in tx_hashes {
             let current_amount = *fund_store.transactions.get(&tx_hash).unwrap();
 
-            // If we've reached target
-            if amount_made == amount_required {
-                break;
-            }
-            // If we've overshot
-            else if current_amount + amount_made > amount_required {
-                let diff = amount_required - amount_made;
-
-                fund_store.running_total -= current_amount;
-                amount_made = amount_required;
-
-                // Add a new return payment transaction
-                let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), false);
-                return_payment = Some(ReturnPayment {
-                    tx_in: return_tx_in,
-                    amount: current_amount - diff,
-                    transaction: Transaction::new(),
-                });
-            }
-            // Else add to used stack
-            else {
-                amount_made += current_amount;
-                fund_store.running_total -= current_amount;
-            }
+            amount_made += current_amount;
+            fund_store.running_total -= current_amount;
 
             // Add the new TxIn
             let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), true);
             tx_ins.push(tx_in);
 
             fund_store.transactions.remove(&tx_hash);
+
+            if amount_made >= amount_required {
+                break;
+            }
         }
 
         // Save the updated fund store to disk
         self.set_fund_store(fund_store);
 
-        (tx_ins, return_payment)
+        (tx_ins, amount_made)
     }
 
     /// Constructs a TxIn from a previous output
@@ -294,22 +274,22 @@ impl WalletDb {
     ) -> TxIn {
         let mut address_store = self.get_address_stores();
         let tx_store = self.get_transaction_store(&tx_hash);
-        
+
         let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
         let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
-        
+
         let tx_const = TxConstructor {
             t_hash: tx_hash.t_hash.clone(),
             prev_n: tx_hash.n,
             signatures: vec![signature],
             pub_keys: vec![needed_store.public_key],
         };
-        
+
         if remove_from_wallet {
             // Update the values in the wallet
             let tx_hash_ser = serialize(&tx_hash).unwrap();
             self.delete_key(&tx_hash_ser);
-            
+
             address_store.remove(&tx_store.address);
             self.set_address_stores(address_store);
         }

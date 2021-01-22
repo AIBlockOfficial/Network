@@ -964,7 +964,7 @@ async fn receive_payment_tx_user() {
     );
     assert_eq!(
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
-        vec![TokenAmount(0), TokenAmount(5)]
+        vec![TokenAmount(6), TokenAmount(5)]
     );
 
     test_step_complete(network).await;

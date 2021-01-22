@@ -6,9 +6,9 @@ use crate::wallet::{PaymentAddress, WalletDb};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{Transaction, TxIn};
+use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_tx_hash, get_tx_out_with_out_point,
+    construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
 };
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
@@ -164,7 +164,7 @@ impl UserNode {
                 self.receive_payment_transaction(transaction).await
             }
             SendPaymentAddress { address, amount } => {
-                self.make_payment_transactions(peer, address, amount)
+                self.make_payment_transactions(peer, address, amount).await
             }
         }
     }
@@ -185,6 +185,7 @@ impl UserNode {
         self.send_transaction_to_compute(compute_peer, tx.clone())
             .await?;
 
+        self.store_payment_transaction(tx.clone()).await;
         if peer != self.address() {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -228,17 +229,35 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
+        self.store_payment_transaction(transaction).await;
+
+        Response {
+            success: true,
+            reason: "Payment transaction received",
+        }
+    }
+
+    /// Store payment transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to receive and save to wallet
+    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
+        let addresses = self.wallet_db.get_address_stores();
 
         for (tx_out_p, tx_out) in get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
         {
             let amount = tx_out.amount;
-            let address = PaymentAddress {
-                address: tx_out.script_public_key.clone().unwrap(),
-                net: 0,
-            };
+            let address = tx_out.script_public_key.clone().unwrap();
+            let address = PaymentAddress { address, net: 0 };
 
-            debug!("receive_payment_transaction: {} -> {:?}", amount, address);
+            if !addresses.contains_key(&address.address) {
+                // That TxOut is not ours to use
+                continue;
+            }
+
+            debug!("store_payment_transaction: {} -> {:?}", amount, address);
 
             self.wallet_db
                 .save_transaction_to_wallet(tx_out_p.clone(), address)
@@ -249,30 +268,32 @@ impl UserNode {
                 .await
                 .unwrap();
         }
-
-        Response {
-            success: true,
-            reason: "Payment transaction received",
-        }
     }
 
     /// Creates a new payment transaction and assigns it as an internal attribute
+    /// Update wallet removing used transactions/addresses, adding return address
     ///
     /// ### Arguments
     ///
     /// * `address` - Address to assign the payment transaction to
-    pub fn make_payment_transactions(
+    pub async fn make_payment_transactions(
         &mut self,
         peer: SocketAddr,
         address: String,
         amount: TokenAmount,
     ) -> Response {
-        let (tx_ins, return_payment) = self.wallet_db.fetch_inputs_for_payment(amount);
+        let (tx_ins, total_amont) = self.wallet_db.fetch_inputs_for_payment(amount);
+        let mut tx_outs = vec![TxOut::new_amount(address, amount)];
 
-        let payment_tx =
-            construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
+        if total_amont > amount {
+            let excess = total_amont - amount;
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_amount(excess_address.address, excess));
+        }
+
+        let payment_tx = construct_payments_tx(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
-        self.return_payment = return_payment;
+        self.return_payment = None;
 
         Response {
             success: true,
