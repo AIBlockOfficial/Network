@@ -3,9 +3,10 @@ use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftData, RaftMessageWrapper};
+use crate::utils::make_utxo_set_from_seed;
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{
     get_inputs_previous_out_point, get_tx_with_out_point_cloned,
 };
@@ -133,12 +134,7 @@ impl ComputeRaft {
         let propose_transactions_timeout_at =
             Instant::now() + propose_transactions_timeout_duration;
 
-        let utxo_set = config
-            .compute_seed_utxo
-            .iter()
-            .flat_map(|seed| config_to_out_point(&seed))
-            .map(|out_p| (out_p, Transaction::new()))
-            .collect();
+        let utxo_set = make_utxo_set_from_seed(&config.compute_seed_utxo);
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
@@ -670,18 +666,6 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
     result
 }
 
-fn config_to_out_point(seed: &str) -> impl Iterator<Item = OutPoint> {
-    let mut it = seed.split('-');
-
-    let (h, n) = match (it.next(), it.next()) {
-        (Some(h), None) => (h.to_string(), 1),
-        (Some(n), Some(h)) => (h.to_string(), n.parse::<i32>().unwrap()),
-        _ => panic!("invalid seed: {}", seed),
-    };
-
-    (0..n).map(move |out_n| OutPoint::new(h.clone(), out_n))
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -969,7 +953,7 @@ mod test {
             user_nodes: vec![],
             compute_raft_tick_timeout: 10,
             compute_transaction_timeout: 50,
-            compute_seed_utxo: seed_utxo.iter().map(|v| v.to_string()).collect(),
+            compute_seed_utxo: seed_utxo.iter().map(|v| (0, v.to_string())).collect(),
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
         };
@@ -987,7 +971,7 @@ mod test {
             .iter()
             .copied()
             .zip(receiver_addrs.iter().copied())
-            .map(|(hash, addr)| (create_valid_transaction(hash, addr, &pk, &sk), addr))
+            .map(|(hash, addr)| (create_valid_transaction(hash, 0, addr, &pk, &sk), addr))
             .collect();
 
         new_hashes.extend(

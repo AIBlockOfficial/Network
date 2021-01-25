@@ -88,6 +88,7 @@ async fn main() {
                 .map(|transaction| {
                     create_valid_transaction(
                         &transaction.t_hash,
+                        0,
                         &transaction.receiver_address,
                         &pk,
                         &sk,

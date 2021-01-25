@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::net::SocketAddr;
 
 /// Configuration info for a node
@@ -33,7 +33,8 @@ pub struct ComputeNodeConfig {
     /// Index of the current node in compute_nodes
     pub compute_transaction_timeout: usize,
     /// Transaction hash to use to seed utxo
-    pub compute_seed_utxo: Vec<String>,
+    #[serde(deserialize_with = "deserialize_compute_seed_utxo")]
+    pub compute_seed_utxo: Vec<(i32, String)>,
     /// Partition full size
     pub compute_partition_full_size: usize,
     /// Minimum miner pool size
@@ -116,4 +117,30 @@ pub struct InititalTransactions {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
     pub compute_initial_transactions: Vec<InititalTransactions>,
+}
+
+/// Deserializing function for compute_seed_utxo field
+fn deserialize_compute_seed_utxo<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<(i32, String)>, D::Error> {
+    let values: Vec<String> = Deserialize::deserialize(deserializer)?;
+    Ok(configs_to_out_point(values.iter().map(|s| s.as_str())))
+}
+
+/// Generating the compute_seed_utxo Vec from given seed strings
+pub fn configs_to_out_point<'a>(values: impl Iterator<Item = &'a str>) -> Vec<(i32, String)> {
+    values.flat_map(|seed| config_to_out_point(&seed)).collect()
+}
+
+/// Generating the compute_seed_utxo values from given seed string
+fn config_to_out_point(seed: &str) -> impl Iterator<Item = (i32, String)> {
+    let mut it = seed.split('-');
+
+    let (h, n) = match (it.next(), it.next()) {
+        (Some(h), None) => (h.to_string(), 1),
+        (Some(n), Some(h)) => (h.to_string(), n.parse::<i32>().unwrap()),
+        _ => panic!("invalid seed: {}", seed),
+    };
+
+    (0..n).map(move |out_n| (out_n, h.clone()))
 }
