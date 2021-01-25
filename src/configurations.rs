@@ -102,7 +102,7 @@ pub struct UserNodeConfig {
     /// API port
     pub api_port: u16,
     /// Wallet seeds: "user_idx-tx_hash-amount"
-    pub user_wallet_seeds: Vec<String>,
+    pub user_wallet_seeds: Vec<Vec<String>>,
 }
 
 /// Configuration option for initial transactions for a compute node

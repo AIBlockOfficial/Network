@@ -923,7 +923,7 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
-    network_config.user_wallet_seeds = vec![wallet_seed(0, SEED_UTXO[1], &TokenAmount(11))];
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(0, SEED_UTXO[1], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.user_nodes;
     let amount = TokenAmount(5);

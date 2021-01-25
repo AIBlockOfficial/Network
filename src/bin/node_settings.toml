@@ -2,8 +2,8 @@ storage_db_mode = {Test = 0}
 miner_db_mode = {Test = 0}
 user_db_mode = {Test = 1000}
 api_port = 3000
-compute_seed_utxo = ["5-000000", "000001", "000010", "000011"]
-user_wallet_seeds = ["0-000010-123", "1-000011-1234"]
+compute_seed_utxo = ["5-000000", "000001", "000010", "2-000011"]
+user_wallet_seeds = [["0-000010-123"], ["0-000011-1234", "1-000011-1235"]]
 compute_raft = 0
 storage_raft = 0
 compute_partition_full_size = 1

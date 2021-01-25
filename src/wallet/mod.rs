@@ -73,22 +73,28 @@ impl WalletDb {
         SimpleDb::new_file(save_path).unwrap()
     }
 
-    pub async fn with_seed(self, index: usize, seeds: &[String]) -> Self {
+    pub async fn with_seed(self, index: usize, seeds: &[Vec<String>]) -> Self {
+        let seeds = if let Some(seeds) = seeds.get(index) {
+            seeds
+        } else {
+            return self;
+        };
+
         for seed in seeds {
             let mut it = seed.split('-');
-            let seed_idx: usize = it.next().unwrap().parse().unwrap();
 
-            if index == seed_idx {
-                let tx_hash: String = it.next().unwrap().parse().unwrap();
-                let tx_out_p = OutPoint::new(tx_hash, 0);
-                let amount = TokenAmount(it.next().unwrap().parse().unwrap());
+            let n = it.next().unwrap().parse().unwrap();
+            let tx_hash = it.next().unwrap().parse().unwrap();
+            let amount = it.next().unwrap().parse().unwrap();
 
-                let (address, _) = self.generate_payment_address().await;
-                self.save_transaction_to_wallet(tx_out_p.clone(), address)
-                    .await
-                    .unwrap();
-                self.save_payment_to_wallet(tx_out_p, amount).await.unwrap();
-            }
+            let amount = TokenAmount(amount);
+            let tx_out_p = OutPoint::new(tx_hash, n);
+
+            let (address, _) = self.generate_payment_address().await;
+            self.save_transaction_to_wallet(tx_out_p.clone(), address)
+                .await
+                .unwrap();
+            self.save_payment_to_wallet(tx_out_p, amount).await.unwrap();
         }
         self
     }

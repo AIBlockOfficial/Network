@@ -53,7 +53,7 @@ pub struct NetworkConfig {
     pub compute_partition_full_size: usize,
     pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: Vec<String>,
-    pub user_wallet_seeds: Vec<String>,
+    pub user_wallet_seeds: Vec<Vec<String>>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,

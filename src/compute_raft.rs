@@ -136,7 +136,8 @@ impl ComputeRaft {
         let utxo_set = config
             .compute_seed_utxo
             .iter()
-            .map(|hash| (config_to_out_point(&hash), Transaction::new()))
+            .flat_map(|seed| config_to_out_point(&seed))
+            .map(|out_p| (out_p, Transaction::new()))
             .collect();
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
@@ -669,14 +670,16 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
     result
 }
 
-fn config_to_out_point(seed: &str) -> OutPoint {
+fn config_to_out_point(seed: &str) -> impl Iterator<Item = OutPoint> {
     let mut it = seed.split('-');
 
-    match (it.next(), it.next()) {
-        (Some(h), None) => OutPoint::new(h.to_string(), 0),
-        (Some(n), Some(h)) => OutPoint::new(h.to_string(), n.parse().unwrap()),
+    let (h, n) = match (it.next(), it.next()) {
+        (Some(h), None) => (h.to_string(), 1),
+        (Some(n), Some(h)) => (h.to_string(), n.parse::<i32>().unwrap()),
         _ => panic!("invalid seed: {}", seed),
-    }
+    };
+
+    (0..n).map(move |out_n| OutPoint::new(h.clone(), out_n))
 }
 
 #[cfg(test)]
