@@ -20,6 +20,12 @@ async fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("api_port")
+                .long("api_port")
+                .help("The port to run the http API from")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("amount")
                 .short("a")
                 .long("amount")
@@ -85,6 +91,10 @@ async fn main() {
             }
         }
 
+        if let Some(api_port) = matches.value_of("api_port") {
+            settings.set("api_port", api_port).unwrap();
+        }
+
         if let Some(index) = matches.value_of("compute_index") {
             settings.set("user_compute_node_idx", index).unwrap();
         }
@@ -130,6 +140,7 @@ async fn main() {
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
+    let api_port = config.api_port;
     let mut node = UserNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
@@ -206,12 +217,13 @@ async fn main() {
         println!("Warp API starting at port 3000");
         println!();
 
+        let api_port: u16 = api_port;
         let (db, node) = api_inputs;
 
-        async {
+        async move {
             use warp::Filter;
             warp::serve(routes::wallet_info(db).or(routes::make_payment(node)))
-                .run(([127, 0, 0, 1], 3000))
+                .run(([127, 0, 0, 1], api_port))
                 .await;
         }
     });
