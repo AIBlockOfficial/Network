@@ -1,9 +1,7 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
-use crate::constants::FUND_KEY;
 use crate::interfaces::UserRequest;
-use crate::wallet::{FundStore, WalletDb};
-use bincode::deserialize;
+use crate::wallet::WalletDb;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -24,21 +22,13 @@ struct PayeeInfo {
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
 pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
-    let db = wallet_db.db.lock().unwrap();
-
-    let fund_store_state = match db.get(FUND_KEY) {
-        Ok(Some(list)) => Some(deserialize(&list).unwrap()),
-        Ok(None) => return Err(warp::reject::custom(errors::ErrorLackOfFunds)),
+    let fund_store = match wallet_db.get_fund_store_err() {
+        Ok(fund) => fund,
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
-    // At this point a valid fund store must exist
-    let fund_store: FundStore = fund_store_state.unwrap();
-    let amount_to_send = fund_store.running_total.0 as f64 / D_DISPLAY_PLACES;
-
-    // Final fund info to send
     let send_val = WalletInfo {
-        running_total: amount_to_send,
+        running_total: fund_store.running_total.0 as f64 / D_DISPLAY_PLACES,
     };
 
     Ok(warp::reply::json(&send_val))

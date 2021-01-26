@@ -2,7 +2,7 @@ use crate::configurations::DbMode;
 use crate::constants::{
     ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, NETWORK_VERSION, WALLET_PATH,
 };
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{DBError, SimpleDb};
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
@@ -45,7 +45,7 @@ pub struct FundStore {
 
 #[derive(Debug, Clone)]
 pub struct WalletDb {
-    pub db: Arc<Mutex<SimpleDb>>,
+    db: Arc<Mutex<SimpleDb>>,
 }
 
 impl WalletDb {
@@ -243,6 +243,11 @@ impl WalletDb {
         get_fund_store(&self.db.lock().unwrap())
     }
 
+    // Get the wallet fund store with errors
+    pub fn get_fund_store_err(&self) -> Result<FundStore, DBError> {
+        get_fund_store_err(&self.db.lock().unwrap())
+    }
+
     // Get the wallet address store
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
         get_address_stores(&self.db.lock().unwrap())
@@ -291,10 +296,18 @@ pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
 
 // Get the wallet fund store
 pub fn get_fund_store(db: &SimpleDb) -> FundStore {
-    match db.get(FUND_KEY) {
-        Ok(Some(list)) => deserialize(&list).unwrap(),
-        Ok(None) => FundStore::default(),
+    match get_fund_store_err(db) {
+        Ok(v) => v,
         Err(e) => panic!("Failed to access the wallet database with error: {:?}", e),
+    }
+}
+
+// Get the wallet fund store
+pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
+    match db.get(FUND_KEY) {
+        Ok(Some(list)) => Ok(deserialize(&list).unwrap()),
+        Ok(None) => Ok(FundStore::default()),
+        Err(e) => Err(e),
     }
 }
 
