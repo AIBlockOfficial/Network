@@ -277,15 +277,19 @@ impl UserNode {
         address: String,
         amount: TokenAmount,
     ) -> Response {
-        let (tx_ins, total_amont) = self.wallet_db.fetch_inputs_for_payment(amount);
-        let mut tx_outs = vec![TxOut::new_amount(address, amount)];
+        let (tx_cons, total_amont, tx_used) = self.wallet_db.fetch_inputs_for_payment(amount).await;
 
+        let mut tx_outs = vec![TxOut::new_amount(address, amount)];
         if total_amont > amount {
             let excess = total_amont - amount;
             let (excess_address, _) = self.wallet_db.generate_payment_address().await;
             tx_outs.push(TxOut::new_amount(excess_address.address, excess));
         }
 
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, total_amont, tx_used)
+            .await;
         let payment_tx = construct_payments_tx(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
         self.return_payment = None;

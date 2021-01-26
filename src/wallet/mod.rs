@@ -198,84 +198,44 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `amount_required` - Amount needed
-    pub fn fetch_inputs_for_payment(
+    pub async fn fetch_inputs_for_payment(
         &mut self,
         amount_required: TokenAmount,
-    ) -> (Vec<TxIn>, TokenAmount) {
-        let mut tx_ins = Vec::new();
-
-        // Wallet DB handling
-        let mut fund_store = self.get_fund_store();
-
-        // Ensure we have enough funds to proceed with payment
-        if fund_store.running_total.0 < amount_required.0 {
-            panic!("Not enough funds available for payment!");
-        }
-
-        // Start fetching TxIns
-        let mut amount_made = TokenAmount(0);
-        let tx_hashes: Vec<_> = fund_store.transactions.keys().cloned().collect();
-
-        // Start adding amounts to payment and updating FundStore
-        for tx_hash in tx_hashes {
-            let current_amount = *fund_store.transactions.get(&tx_hash).unwrap();
-
-            amount_made += current_amount;
-            fund_store.running_total -= current_amount;
-
-            // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), true);
-            tx_ins.push(tx_in);
-
-            fund_store.transactions.remove(&tx_hash);
-
-            if amount_made >= amount_required {
-                break;
-            }
-        }
-
-        // Save the updated fund store to disk
-        self.set_fund_store(fund_store);
-
-        (tx_ins, amount_made)
+    ) -> (
+        Vec<TxConstructor>,
+        TokenAmount,
+        Vec<(OutPoint, TransactionStore)>,
+    ) {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            fetch_inputs_for_payment(&db, amount_required)
+        })
+        .await
+        .unwrap()
     }
 
-    /// Constructs a TxIn from a previous output
+    /// Consume given used transaction and produce TxIns
+    ///
     ///
     /// ### Arguments
     ///
-    /// * `tx_hash`            - Hash to the output to fetch
-    /// * `remove_from_wallet` - Whether to remove txs and address from wallet
-    pub fn construct_tx_in_from_prev_out(
+    /// * `tx_cons`         - TxIn TxConstructors
+    /// * `amount_consumed` - Amount consumed by tx_cons & tx_used
+    /// * `tx_used`         - TxOut used for TxIns
+    pub async fn consume_inputs_for_payment(
         &mut self,
-        tx_hash: OutPoint,
-        remove_from_wallet: bool,
-    ) -> TxIn {
-        let mut address_store = self.get_address_stores();
-        let tx_store = self.get_transaction_store(&tx_hash);
-
-        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-        let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
-
-        let tx_const = TxConstructor {
-            t_hash: tx_hash.t_hash.clone(),
-            prev_n: tx_hash.n,
-            signatures: vec![signature],
-            pub_keys: vec![needed_store.public_key],
-        };
-
-        if remove_from_wallet {
-            // Update the values in the wallet
-            let tx_hash_ser = serialize(&tx_hash).unwrap();
-            self.delete_key(&tx_hash_ser);
-
-            address_store.remove(&tx_store.address);
-            self.set_address_stores(address_store);
-        }
-
-        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-
-        tx_ins[0].clone()
+        tx_cons: Vec<TxConstructor>,
+        amount_consumed: TokenAmount,
+        tx_used: Vec<(OutPoint, TransactionStore)>,
+    ) -> Vec<TxIn> {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let mut db = db.lock().unwrap();
+            consume_inputs_for_payment(&mut db, tx_cons, amount_consumed, tx_used)
+        })
+        .await
+        .unwrap()
     }
 
     // Get the wallet fund store
@@ -283,28 +243,14 @@ impl WalletDb {
         get_fund_store(&self.db.lock().unwrap())
     }
 
-    // Set the wallet fund store
-    pub fn set_fund_store(&self, fund_store: FundStore) {
-        set_fund_store(&mut self.db.lock().unwrap(), fund_store);
-    }
-
     // Get the wallet address store
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
         get_address_stores(&self.db.lock().unwrap())
     }
 
-    // Set the wallet address store
-    pub fn set_address_stores(&self, address_store: BTreeMap<String, AddressStore>) {
-        set_address_stores(&mut self.db.lock().unwrap(), address_store)
-    }
-
     // Get the wallet transaction store
     pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> TransactionStore {
         get_transaction_store(&self.db.lock().unwrap(), tx_hash)
-    }
-
-    pub fn delete_key(&self, key: &[u8]) {
-        self.db.lock().unwrap().delete(key).unwrap();
     }
 
     // Get the wallet addresses
@@ -392,6 +338,12 @@ pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> TransactionSt
     }
 }
 
+// Delete transaction store
+pub fn delete_transaction_store(db: &mut SimpleDb, tx_hash: &OutPoint) {
+    let tx_hash_ser = serialize(&tx_hash).unwrap();
+    db.delete(&tx_hash_ser).unwrap();
+}
+
 // Save transaction
 pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: PaymentAddress) {
     let PaymentAddress { address, net } = address;
@@ -400,6 +352,85 @@ pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address:
     let key = serialize(&tx_hash).unwrap();
     let input = serialize(&tx_store).unwrap();
     db.put(&key, &input).unwrap();
+}
+
+// Make TxConstructors from stored TxOut
+// Also return the used info for db cleanup
+pub fn fetch_inputs_for_payment(
+    db: &SimpleDb,
+    amount_required: TokenAmount,
+) -> (
+    Vec<TxConstructor>,
+    TokenAmount,
+    Vec<(OutPoint, TransactionStore)>,
+) {
+    let mut tx_cons = Vec::new();
+    let mut tx_used = Vec::new();
+    let mut amount_made = TokenAmount(0);
+
+    let fund_store = get_fund_store(db);
+    if fund_store.running_total < amount_required {
+        panic!("Not enough funds available for payment!");
+    }
+
+    for (tx_hash, amount) in fund_store.transactions {
+        amount_made += amount;
+
+        let (cons, used) = tx_constructor_from_prev_out(db, tx_hash);
+        tx_cons.push(cons);
+        tx_used.push(used);
+
+        if amount_made >= amount_required {
+            break;
+        }
+    }
+
+    (tx_cons, amount_made, tx_used)
+}
+
+// Consume the used transactions updating the wallet and produce TxIn
+pub fn consume_inputs_for_payment(
+    db: &mut SimpleDb,
+    tx_cons: Vec<TxConstructor>,
+    amount_consumed: TokenAmount,
+    tx_used: Vec<(OutPoint, TransactionStore)>,
+) -> Vec<TxIn> {
+    let mut fund_store = get_fund_store(db);
+    let mut address_store = get_address_stores(db);
+
+    fund_store.running_total -= amount_consumed;
+    for (tx_hash, tx_store) in tx_used {
+        fund_store.transactions.remove(&tx_hash).unwrap();
+        address_store.remove(&tx_store.address).unwrap();
+        delete_transaction_store(db, &tx_hash);
+    }
+
+    set_fund_store(db, fund_store);
+    set_address_stores(db, address_store);
+
+    construct_payment_tx_ins(tx_cons)
+}
+
+// Make TxConstructor from stored TxOut
+// Also return the used info for db cleanup
+pub fn tx_constructor_from_prev_out(
+    db: &SimpleDb,
+    tx_hash: OutPoint,
+) -> (TxConstructor, (OutPoint, TransactionStore)) {
+    let address_store = get_address_stores(db);
+    let tx_store = get_transaction_store(db, &tx_hash);
+
+    let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
+    let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
+
+    let tx_const = TxConstructor {
+        t_hash: tx_hash.t_hash.clone(),
+        prev_n: tx_hash.n,
+        signatures: vec![signature],
+        pub_keys: vec![needed_store.public_key],
+    };
+
+    (tx_const, (tx_hash, tx_store))
 }
 
 #[cfg(test)]
