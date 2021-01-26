@@ -9,9 +9,7 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::{
-    create_valid_transaction_with_ins_outs, get_sanction_addresses, make_utxo_set_from_seed,
-};
+use crate::utils::{create_valid_transaction_with_ins_outs, get_sanction_addresses};
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
