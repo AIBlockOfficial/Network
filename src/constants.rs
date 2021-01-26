@@ -52,6 +52,9 @@ pub const ADDRESS_KEY: &str = "a";
 /// Key for a running total of wallet funds
 pub const FUND_KEY: &str = "f";
 
+/// Path to sanction list
+pub const SANC_LIST_PATH: &str = "src/db/sanc_list.json";
+
 /*------- LIMIT CONSTANTS -------*/
 
 /// Limit for the transaction pool per compute node

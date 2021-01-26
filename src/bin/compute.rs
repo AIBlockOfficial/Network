@@ -35,6 +35,7 @@ async fn main() {
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings.set_default("jurisdiction", "US").unwrap();
         settings.set_default("compute_node_idx", 0).unwrap();
         settings.set_default("compute_raft", 0).unwrap();
         settings

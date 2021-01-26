@@ -39,6 +39,8 @@ pub struct ComputeNodeConfig {
     pub compute_partition_full_size: usize,
     /// Minimum miner pool size
     pub compute_minimum_miner_pool_len: usize,
+    /// Node's legal jurisdiction
+    pub jurisdiction: String,
 }
 
 /// Configuration option for a storage node

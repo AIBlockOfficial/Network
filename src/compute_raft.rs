@@ -960,6 +960,7 @@ mod test {
             compute_seed_utxo: seed_utxo.iter().map(|v| (1, v.to_string())).collect(),
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
+            jurisdiction: "US".to_string(),
         };
         ComputeRaft::new(&compute_config).await
     }
