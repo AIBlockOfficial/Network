@@ -11,7 +11,6 @@ use naom::primitives::{
     block::Block,
     transaction::{OutPoint, Transaction, TxConstructor, TxOut},
 };
-use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
@@ -21,7 +20,6 @@ use std::fs::File;
 use std::future;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
@@ -94,7 +92,7 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
 ///
 /// * `path`         - Path to the sanction list
 /// * `jurisdiction` - Jurisdiction to fetch sanctioned addresses for
-pub fn get_sanction_addresses(path: String, jurisdiction: &String) -> Vec<String> {
+pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
