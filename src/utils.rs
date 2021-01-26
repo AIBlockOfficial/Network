@@ -101,18 +101,11 @@ pub async fn create_and_save_fake_to_wallet(
         &address_keys.secret_key,
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
-
-    // Save fund store
     let payment_to_save = TokenAmount(4000);
-    wallet_db
-        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save)
-        .await
-        .unwrap();
 
-    // Save transaction store
     println!("TX STORE: {:?}", (&tx_out_p, &final_address));
     wallet_db
-        .save_transaction_to_wallet(tx_out_p, final_address)
+        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save, final_address)
         .await
         .unwrap();
 

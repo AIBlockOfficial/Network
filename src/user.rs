@@ -258,13 +258,8 @@ impl UserNode {
             }
 
             debug!("store_payment_transaction: {} -> {:?}", amount, address);
-
             self.wallet_db
-                .save_transaction_to_wallet(tx_out_p.clone(), address)
-                .await
-                .unwrap();
-            self.wallet_db
-                .save_payment_to_wallet(tx_out_p, amount)
+                .save_payment_to_wallet(tx_out_p, amount, address)
                 .await
                 .unwrap();
         }

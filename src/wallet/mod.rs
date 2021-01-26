@@ -91,10 +91,9 @@ impl WalletDb {
             let tx_out_p = OutPoint::new(tx_hash, n);
 
             let (address, _) = self.generate_payment_address().await;
-            self.save_transaction_to_wallet(tx_out_p.clone(), address)
+            self.save_payment_to_wallet(tx_out_p, amount, address)
                 .await
                 .unwrap();
-            self.save_payment_to_wallet(tx_out_p, amount).await.unwrap();
         }
         self
     }
@@ -160,31 +159,10 @@ impl WalletDb {
         tx_hash: OutPoint,
         address: PaymentAddress,
     ) -> Result<(), Error> {
-        let PaymentAddress { address, net } = address;
-        let tx_store = TransactionStore { address, net };
-        let tx_to_save = Some((tx_hash, tx_store)).into_iter().collect();
-
-        self.save_transactions_to_wallet(tx_to_save).await
-    }
-
-    /// Saves an address and the associated transactions with it to the wallet
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_to_save`  - All transactions that are required to be saved to wallet
-    pub async fn save_transactions_to_wallet(
-        &self,
-        tx_to_save: BTreeMap<OutPoint, TransactionStore>,
-    ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-
-            for (key, value) in tx_to_save {
-                let key = serialize(&key).unwrap();
-                let input = serialize(&value).unwrap();
-                db.put(&key, &input).unwrap();
-            }
+            save_transaction_to_wallet(&mut db, tx_hash, address);
         })
         .await?)
     }
@@ -193,25 +171,20 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `hash`    - Hash of the transaction
+    /// * `tx_hash  - Hash of the transaction
     /// * `amount`  - Amount of tokens in the payment
+    /// * `address` - Transaction Address
     pub async fn save_payment_to_wallet(
         &self,
-        hash: OutPoint,
+        tx_hash: OutPoint,
         amount: TokenAmount,
+        address: PaymentAddress,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
-            // Wallet DB handling
             let mut db = db.lock().unwrap();
-            let mut fund_store = get_fund_store(&db);
-
-            // Update the running total and add the transaction to the tab list
-            fund_store.running_total += amount;
-            fund_store.transactions.insert(hash, amount);
-
-            println!("Testing payment to wallet");
-            set_fund_store(&mut db, fund_store);
+            save_transaction_to_wallet(&mut db, tx_hash.clone(), address);
+            save_payment_to_fund_store(&mut db, tx_hash, amount);
         })
         .await?)
     }
@@ -384,6 +357,17 @@ pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
     db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
 }
 
+// Save a payment to fund store
+pub fn save_payment_to_fund_store(db: &mut SimpleDb, hash: OutPoint, amount: TokenAmount) {
+    let mut fund_store = get_fund_store(db);
+
+    let old_amount = fund_store.transactions.insert(hash, amount);
+    fund_store.running_total -= old_amount.unwrap_or_default();
+    fund_store.running_total += amount;
+
+    set_fund_store(db, fund_store);
+}
+
 // Get the wallet address store
 pub fn get_address_stores(db: &SimpleDb) -> BTreeMap<String, AddressStore> {
     match db.get(ADDRESS_KEY) {
@@ -406,6 +390,16 @@ pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> TransactionSt
         Ok(None) => panic!("Transaction not present in wallet: {:?}", tx_hash),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
+}
+
+// Save transaction
+pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: PaymentAddress) {
+    let PaymentAddress { address, net } = address;
+    let tx_store = TransactionStore { address, net };
+
+    let key = serialize(&tx_hash).unwrap();
+    let input = serialize(&tx_store).unwrap();
+    db.put(&key, &input).unwrap();
 }
 
 #[cfg(test)]
