@@ -41,6 +41,8 @@ pub struct ComputeNodeConfig {
     pub compute_minimum_miner_pool_len: usize,
     /// Node's legal jurisdiction
     pub jurisdiction: String,
+    /// Node's address sanction list
+    pub sanction_list: Vec<String>,
 }
 
 /// Configuration option for a storage node

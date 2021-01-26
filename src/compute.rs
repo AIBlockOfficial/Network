@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{PEER_LIMIT, SANC_LIST_PATH, UNICORN_LIMIT};
+use crate::constants::{PEER_LIMIT, UNICORN_LIMIT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UtxoSet,
@@ -12,8 +12,6 @@ use crate::utils::{
     serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
 };
 
-use serde_json::json;
-
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -21,13 +19,11 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
-use naom::script::utils::{tx_ins_are_valid, tx_sanction_filter};
+use naom::script::utils::tx_ins_are_valid;
 use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::Read;
 use std::{
     collections::HashMap,
     error::Error,
@@ -156,7 +152,7 @@ impl ComputeNode {
             current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
             request_list: BTreeSet::new(),
-            sanction_list: Self::get_sanction_addresses(&config.jurisdiction),
+            sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
@@ -320,25 +316,6 @@ impl ComputeNode {
         block_tx: BTreeMap<String, Transaction>,
     ) {
         self.node_raft.set_committed_mining_block(block, block_tx)
-    }
-
-    /// Gets the locally set list of sanctioned addresses
-    fn get_sanction_addresses(jurisdiction: &String) -> Vec<String> {
-        let mut file = match File::open(SANC_LIST_PATH) {
-            Ok(f) => f,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut buff = String::new();
-        file.read_to_string(&mut buff).unwrap();
-
-        let sancs = json!(buff);
-        let addresses = serde_json::from_value(sancs.get(jurisdiction).unwrap().to_owned());
-
-        match addresses {
-            Ok(v) => v,
-            Err(_) => Vec::new(),
-        }
     }
 
     /// Generates a garbage random num for use in network testing
@@ -800,8 +777,11 @@ impl ComputeInterface for ComputeNode {
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_sanction_filter(&tx.inputs, &self.sanction_list))
-            .filter(|(_, tx)| tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)))
+            .filter(|(_, tx)| {
+                tx_ins_are_valid(&tx.inputs, |v| {
+                    utxo_set.contains_key(v) && !self.sanction_list.contains(&v.t_hash)
+                })
+            })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 

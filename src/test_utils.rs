@@ -277,6 +277,7 @@ impl Network {
                 compute_partition_full_size: config.compute_partition_full_size,
                 compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
                 jurisdiction: "US".to_string(),
+                sanction_list: Vec::new(),
             };
             let info = format!("{} -> {}", name, info.compute_nodes[idx].address);
             map.insert(

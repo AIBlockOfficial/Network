@@ -28,6 +28,7 @@ mod wallet;
 
 pub use api::routes;
 pub use compute::ComputeNode;
+pub use constants::SANC_LIST_PROD;
 pub use db_utils::get_db_options;
 pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface, UseInterface};
 pub use miner::MinerNode;
@@ -35,6 +36,7 @@ pub use storage::StorageNode;
 pub use user::UserNode;
 pub use utils::{
     command_input_to_socket, create_and_save_fake_to_wallet, create_valid_transaction,
+    get_sanction_addresses,
 };
 
 #[cfg(not(features = "mock"))]

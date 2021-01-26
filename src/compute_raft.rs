@@ -961,6 +961,7 @@ mod test {
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
             jurisdiction: "US".to_string(),
+            sanction_list: Vec::new(),
         };
         ComputeRaft::new(&compute_config).await
     }

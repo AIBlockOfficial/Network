@@ -53,7 +53,10 @@ pub const ADDRESS_KEY: &str = "a";
 pub const FUND_KEY: &str = "f";
 
 /// Path to sanction list
-pub const SANC_LIST_PATH: &str = "src/db/sanc_list.json";
+pub const SANC_LIST_PROD: &str = "src/db/sanc_list.json";
+
+/// Path to test sanction list
+pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
 /*------- LIMIT CONSTANTS -------*/
 

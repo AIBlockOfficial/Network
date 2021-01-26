@@ -4,7 +4,7 @@ use clap::{App, Arg};
 use sodiumoxide::crypto::sign;
 use std::time::Duration;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
-use system::create_valid_transaction;
+use system::{create_valid_transaction, get_sanction_addresses, SANC_LIST_PROD};
 use system::{ComputeNode, ComputeRequest, Response};
 
 #[tokio::main]
@@ -29,12 +29,15 @@ async fn main() {
         )
         .get_matches();
 
-    let (setup, config) = {
+    let (setup, mut config) = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
 
+        settings
+            .set_default("sanction_list", Vec::<String>::new())
+            .unwrap();
         settings.set_default("jurisdiction", "US").unwrap();
         settings.set_default("compute_node_idx", 0).unwrap();
         settings.set_default("compute_raft", 0).unwrap();
@@ -57,6 +60,8 @@ async fn main() {
         (setup, config)
     };
     println!("Start node with config {:?}", config);
+
+    config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = ComputeNode::new(config).await.unwrap();
 
     println!("Started node at {}", node.address());
