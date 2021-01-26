@@ -5,7 +5,7 @@ use system::configurations::StorageNodeConfig;
 use system::{Response, StorageNode};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = App::new("Zenotta Storage Node")
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config
     };
     println!("Start node with config {:?}", config);
-    let node = StorageNode::new(config).await?;
+    let node = StorageNode::new(config).await.unwrap();
 
     println!("Started node at {}", node.address());
 
@@ -116,5 +116,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
     main.unwrap();
     raft.unwrap();
-    Ok(())
 }

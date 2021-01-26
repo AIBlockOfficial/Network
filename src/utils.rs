@@ -1,15 +1,15 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
-use crate::interfaces::ProofOfWork;
+use crate::interfaces::{ProofOfWork, UtxoSet};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+    construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
 };
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::Block,
-    transaction::{Transaction, TxConstructor},
+    transaction::{OutPoint, Transaction, TxConstructor, TxOut},
 };
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
@@ -95,22 +95,24 @@ pub async fn create_and_save_fake_to_wallet(
 
     let (t_hash, _payment_tx) = create_valid_transaction(
         &"00000".to_owned(),
+        0,
         &receiver_addr.address,
         &address_keys.public_key,
         &address_keys.secret_key,
     );
+    let tx_out_p = OutPoint::new(t_hash, 0);
 
     // Save fund store
     let payment_to_save = TokenAmount(4000);
     wallet_db
-        .save_payment_to_wallet(t_hash.clone(), payment_to_save)
+        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save)
         .await
         .unwrap();
 
     // Save transaction store
-    println!("TX STORE: {:?}", (&t_hash, &final_address));
+    println!("TX STORE: {:?}", (&tx_out_p, &final_address));
     wallet_db
-        .save_transaction_to_wallet(t_hash, final_address)
+        .save_transaction_to_wallet(tx_out_p, final_address)
         .await
         .unwrap();
 
@@ -191,29 +193,64 @@ fn validate_pow(pow: &[u8]) -> bool {
 
 pub fn create_valid_transaction(
     t_hash_hex: &str,
+    prev_n: i32,
     receiver_addr_hex: &str,
     pub_key: &PublicKey,
     secret_key: &SecretKey,
 ) -> (String, Transaction) {
-    let signature = sign::sign_detached(&t_hash_hex.as_bytes(), &secret_key);
+    create_valid_transaction_with_ins_outs(
+        &[(prev_n, t_hash_hex)],
+        &[receiver_addr_hex],
+        pub_key,
+        secret_key,
+    )
+}
 
-    let tx_const = TxConstructor {
-        t_hash: t_hash_hex.to_string(),
-        prev_n: 0,
-        signatures: vec![signature],
-        pub_keys: vec![*pub_key],
+pub fn create_valid_transaction_with_ins_outs(
+    tx_in: &[(i32, &str)],
+    receiver_addr_hexs: &[&str],
+    pub_key: &PublicKey,
+    secret_key: &SecretKey,
+) -> (String, Transaction) {
+    let tx_ins = {
+        let mut tx_in_cons = Vec::new();
+        for (prev_n, t_hash_hex) in tx_in {
+            let signature = sign::sign_detached(&t_hash_hex.as_bytes(), &secret_key);
+            tx_in_cons.push(TxConstructor {
+                t_hash: t_hash_hex.to_string(),
+                prev_n: *prev_n,
+                signatures: vec![signature],
+                pub_keys: vec![*pub_key],
+            });
+        }
+        construct_payment_tx_ins(tx_in_cons)
     };
 
-    let amount = TokenAmount(4000);
-    let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-    let payment_tx = construct_payment_tx(
-        tx_ins,
-        receiver_addr_hex.to_string(),
-        None,
-        None,
-        Asset::Token(amount),
-        amount,
-    );
+    let tx_outs = {
+        let mut tx_outs = Vec::new();
+        let amount = TokenAmount(4000);
+
+        for addr in receiver_addr_hexs {
+            tx_outs.push(TxOut {
+                value: Some(Asset::Token(amount)),
+                amount,
+                script_public_key: Some(addr.to_string()),
+                drs_block_hash: None,
+                drs_tx_hash: None,
+            });
+        }
+        tx_outs
+    };
+
+    let payment_tx = construct_payments_tx(tx_ins, tx_outs);
     let t_hash = construct_tx_hash(&payment_tx);
+
     (t_hash, payment_tx)
+}
+
+pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> UtxoSet {
+    seed.iter()
+        .map(|(out_n, hash)| OutPoint::new(hash.clone(), *out_n))
+        .map(|out_p| (out_p, Transaction::new()))
+        .collect()
 }

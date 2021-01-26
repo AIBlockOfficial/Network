@@ -3,24 +3,26 @@
 use crate::compute::ComputeNode;
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
+    StorageRequest, UtxoSet,
 };
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::create_valid_transaction;
+use crate::utils::{create_valid_transaction_with_ins_outs, make_utxo_set_from_seed};
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction_utils::{
+    construct_coinbase_tx, construct_tx_hash, get_tx_with_out_point, get_tx_with_out_point_cloned,
+};
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -31,10 +33,15 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-const SEED_UTXO: [&str; 1] = ["000000"];
-const SEED_UTXO_BLOCK_HASH: &str =
-    "e18f57f62c7bb00811c032b56c8113c83520c1bf9b8428cc96e4c8d5b704d11b";
-const HASH_LEN: usize = 64;
+const SEED_UTXO: &[(i32, &str)] = &[
+    (0, "000000"),
+    (0, "000001"),
+    (1, "000001"),
+    (2, "000001"),
+    (0, "000002"),
+];
+const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
+const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
@@ -152,7 +159,8 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let storage_nodes = &network_config.storage_nodes;
     let miner_nodes = &network_config.miner_nodes;
     let initial_utxo = network.collect_initial_uxto_set();
-    let (transactions, _t_hash, tx) = valid_transactions(true);
+    let initial_utxo_txs = to_transaction_set(&initial_utxo);
+    let transactions = valid_transactions(true);
 
     //
     // Act
@@ -162,7 +170,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
-    add_transactions_act(&mut network, &tx).await;
+    add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     proof_winner_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
@@ -178,7 +186,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     let expected_block0_db_count =
-        1 + initial_utxo.len() + stored0.as_ref().unwrap().mining_transactions.len();
+        1 + initial_utxo_txs.len() + stored0.as_ref().unwrap().mining_transactions.len();
     let expected_block1_db_count =
         1 + transactions.len() + stored1.as_ref().unwrap().mining_transactions.len();
     assert_eq!(
@@ -189,16 +197,18 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
         )
     );
 
-    let actual_w0 = miner_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = TokenAmount(12000 * mining_txs.len() as u64);
-        (total, mining_txs.keys().collect::<Vec<_>>())
+        let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
+
+        (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
     };
     assert_eq!(
-        (actual_w0.0, actual_w0.2.keys().collect::<Vec<_>>()),
+        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
         expected_w0
     );
 
@@ -327,8 +337,9 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
     let initial_utxo = network.collect_initial_uxto_set();
+    let initial_utxo_txs = to_transaction_set(&initial_utxo);
     let c_mined = &node_select(compute_nodes, cfg_num);
-    let (expected0, block_info0) = complete_block(0, None, &initial_utxo, c_mined.len());
+    let (expected0, block_info0) = complete_first_block(&initial_utxo, c_mined.len());
 
     create_first_block_act(&mut network).await;
     compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info0).await;
@@ -359,7 +370,7 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     assert_eq!(
         actual0_db_count,
-        node_all(storage_nodes, 1 + initial_utxo.len() + c_mined.len())
+        node_all(storage_nodes, 1 + initial_utxo_txs.len() + c_mined.len())
     );
 
     test_step_complete(network).await;
@@ -398,13 +409,13 @@ async fn add_transactions(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let (transactions, _t_hash, tx) = valid_transactions(true);
+    let transactions = valid_transactions(true);
     create_first_block_act(&mut network).await;
 
     //
     // Act
     //
-    add_transactions_act(&mut network, &tx).await;
+    add_transactions_act(&mut network, &transactions).await;
 
     //
     // Assert
@@ -416,14 +427,18 @@ async fn add_transactions(network_config: NetworkConfig) {
     test_step_complete(network).await;
 }
 
-async fn add_transactions_act(network: &mut Network, tx: &Transaction) {
+async fn add_transactions_act(network: &mut Network, txs: &BTreeMap<String, Transaction>) {
     let config = network.config.clone();
     let compute_nodes = &config.compute_nodes;
 
     info!("Test Step Add Transactions");
     node_connect_to(network, "user1", "compute1").await;
-    user_send_payment_to_compute(network, "user1", "compute1", tx).await;
-    compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
+    for tx in txs.values() {
+        user_send_transaction_to_compute(network, "user1", "compute1", tx).await;
+    }
+    for _tx in txs.values() {
+        compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
+    }
     node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
 }
 
@@ -473,14 +488,20 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let (transactions, t_hash, tx) = valid_transactions(true);
-    let (_, block_info0) = complete_block(0, None, &BTreeMap::new(), compute_nodes.len());
+    let transactions = valid_transactions(true);
+    let transactions_h = transactions.keys().cloned().collect::<Vec<_>>();
+    let transactions_utxo = to_utxo_set(&transactions);
+    let (_, block_info0) = complete_first_block(&BTreeMap::new(), compute_nodes.len());
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
+    let block0_mining_utxo = to_utxo_set(&block0_mining_tx);
+
+    let mut left_init_utxo = network.collect_initial_uxto_set();
+    remove_keys(&mut left_init_utxo, valid_txs_in().keys());
 
     create_first_block_act(&mut network).await;
     compute_all_mining_block_mined(&mut network, "miner1", compute_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
-    add_transactions_act(&mut network, &tx).await;
+    add_transactions_act(&mut network, &transactions).await;
 
     //
     // Act
@@ -500,10 +521,10 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     assert_eq!(block_transaction_before, node_all(compute_nodes, None));
     assert_eq!(
         block_transaction_after,
-        node_all(compute_nodes, Some(vec![t_hash]))
+        node_all(compute_nodes, Some(transactions_h))
     );
 
-    let expected_utxo = merge_txs(&transactions, &block0_mining_tx);
+    let expected_utxo = merge_txs_3(&left_init_utxo, &transactions_utxo, &block0_mining_utxo);
     assert_eq!(len_and_map(&utxo_set_after[0]), len_and_map(&expected_utxo));
     assert_eq!(equal_first(&utxo_set_after), node_all(compute_nodes, true));
 
@@ -629,7 +650,7 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg == Cfg::IgnoreMiner {
-        let (_, block_info) = complete_block(0, None, &BTreeMap::new(), c_mined.len());
+        let (_, block_info) = complete_first_block(&BTreeMap::new(), c_mined.len());
         compute_all_mining_block_mined(network, "miner1", c_mined, &block_info).await;
         return;
     }
@@ -746,9 +767,9 @@ async fn proof_winner(network_config: NetworkConfig) {
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
-    let info_before = miner_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_before = node_all_get_wallet_info(&mut network, &wining_miners).await;
     proof_winner_act(&mut network).await;
-    let info_after = miner_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_after = node_all_get_wallet_info(&mut network, &wining_miners).await;
 
     //
     // Assert
@@ -845,7 +866,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let storage_nodes = &network_config.storage_nodes;
     let c_mined = &node_select(compute_nodes, cfg_num);
 
-    let (transactions, _t_hash, _tx) = valid_transactions(true);
+    let transactions = valid_transactions(true);
     let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
     let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
     let block1_mining_tx = complete_block_mining_txs(&block_info1);
@@ -920,23 +941,49 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(SEED_UTXO[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
+    let user_nodes = &network_config.user_nodes;
     let amount = TokenAmount(5);
+
+    create_first_block_act(&mut network).await;
 
     //
     // Act/Assert
     //
+    let before = node_all_get_wallet_info(&mut network, user_nodes).await;
+
     node_connect_to(&mut network, "user1", "user2").await;
     node_connect_to(&mut network, "user1", "compute1").await;
+
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
 
+    user_send_address_to_trading_peer(&mut network, "user2").await;
+    user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
+
+    user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
+    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    user_handle_event(&mut network, "user2", "Payment transaction received").await;
+
+    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+
     //
     // Assert
+    // Left over from source transaction is burnt as there are no
+    // return payment executed.
     //
-    let actual = user_trading_peer(&mut network, "user2").await;
-    let expected = network.get_address("user1").await.map(|a| (a, amount));
-    assert_eq!(actual, expected);
+    assert_eq!(
+        before
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(11), TokenAmount(0)]
+    );
+    assert_eq!(
+        after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
+        vec![TokenAmount(6), TokenAmount(5)]
+    );
 
     test_step_complete(network).await;
 }
@@ -984,6 +1031,8 @@ async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
         u.lock().await.connect_to(to_addr).await.unwrap();
     } else if let Some(m) = network.miner(from) {
         m.lock().await.connect_to(to_addr).await.unwrap();
+    } else {
+        panic!("node not found");
     }
 }
 
@@ -1018,6 +1067,77 @@ async fn node_all_handle_event(network: &mut Network, node_group: &[String], rea
         ));
     }
     let _ = join_all(join_handles).await;
+}
+
+async fn node_get_wallet_info(
+    network: &mut Network,
+    node: &str,
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
+) {
+    let (miner, user) = if let Some(miner) = network.miner(node) {
+        (Some(miner.lock().await), None)
+    } else if let Some(user) = network.user(node) {
+        (None, Some(user.lock().await))
+    } else {
+        (None, None)
+    };
+
+    let wallet = match (&miner, &user) {
+        (Some(m), _) => m.get_wallet_db(),
+        (_, Some(u)) => u.get_wallet_db(),
+        _ => panic!("node not found"),
+    };
+
+    let addresses = wallet.get_known_address();
+
+    let fund = wallet.get_fund_store();
+    let total = fund.running_total;
+
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for (tx, amount) in fund.transactions.into_iter() {
+        let addr = wallet.get_transaction_address(&tx);
+        txs_to_address_and_ammount.insert(tx, (addr, amount));
+    }
+    (total, addresses, txs_to_address_and_ammount)
+}
+
+async fn node_all_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> Vec<(
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
+)> {
+    let mut result = Vec::new();
+    for name in miner_group {
+        let r = node_get_wallet_info(network, name).await;
+        result.push(r);
+    }
+    result
+}
+
+async fn node_all_combined_get_wallet_info(
+    network: &mut Network,
+    miner_group: &[String],
+) -> (
+    TokenAmount,
+    Vec<String>,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
+) {
+    let mut total = TokenAmount(0);
+    let mut addresses = Vec::new();
+    let mut txs_to_address_and_ammount = BTreeMap::new();
+    for name in miner_group {
+        let (t, mut a, mut txs) = node_get_wallet_info(network, name).await;
+        total += t;
+        addresses.append(&mut a);
+        txs_to_address_and_ammount.append(&mut txs);
+    }
+    (total, addresses, txs_to_address_and_ammount)
 }
 
 //
@@ -1146,7 +1266,7 @@ async fn compute_current_block_transactions(
 async fn compute_all_committed_utxo_set(
     network: &mut Network,
     compute_group: &[String],
-) -> Vec<BTreeMap<String, Transaction>> {
+) -> Vec<UtxoSet> {
     let mut result = Vec::new();
     for name in compute_group {
         let r = compute_committed_utxo_set(network, name).await;
@@ -1155,10 +1275,7 @@ async fn compute_all_committed_utxo_set(
     result
 }
 
-async fn compute_committed_utxo_set(
-    network: &mut Network,
-    compute: &str,
-) -> BTreeMap<String, Transaction> {
+async fn compute_committed_utxo_set(network: &mut Network, compute: &str) -> UtxoSet {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_utxo_set().clone()
 }
@@ -1490,7 +1607,7 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     }
 }
 
-async fn user_send_payment_to_compute(
+async fn user_send_transaction_to_compute(
     network: &mut Network,
     from_user: &str,
     to_compute: &str,
@@ -1498,7 +1615,19 @@ async fn user_send_payment_to_compute(
 ) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_payment_to_compute(compute_node_addr, tx.clone())
+    u.send_transaction_to_compute(compute_node_addr, tx.clone())
+        .await
+        .unwrap();
+}
+
+async fn user_send_next_payment_to_destinations(
+    network: &mut Network,
+    from_user: &str,
+    to_compute: &str,
+) {
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let mut u = network.user(from_user).unwrap().lock().await;
+    u.send_next_payment_to_destinations(compute_node_addr)
         .await
         .unwrap();
 }
@@ -1516,9 +1645,9 @@ async fn user_send_address_request(
         .unwrap();
 }
 
-async fn user_trading_peer(network: &mut Network, user: &str) -> Option<(SocketAddr, TokenAmount)> {
-    let u = network.user(user).unwrap().lock().await;
-    u.trading_peer
+async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.send_address_to_trading_peer().await.unwrap();
 }
 
 //
@@ -1580,67 +1709,6 @@ async fn miner_all_send_pow_for_current(
     }
 }
 
-async fn miner_get_wallet_info(
-    network: &mut Network,
-    miner: &str,
-) -> (
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-) {
-    let m = network.miner(miner).unwrap().lock().await;
-
-    let addresses = m.get_known_address();
-    if let Some(fund) = m.get_fund_store() {
-        let total = fund.running_total;
-
-        let mut txs_to_address_and_ammount = BTreeMap::new();
-        for (tx, amount) in fund.transactions.into_iter() {
-            let addr = m.get_transaction_address(&tx);
-            txs_to_address_and_ammount.insert(tx, (addr, amount));
-        }
-        (total, addresses, txs_to_address_and_ammount)
-    } else {
-        (TokenAmount(0), addresses, BTreeMap::new())
-    }
-}
-
-async fn miner_all_get_wallet_info(
-    network: &mut Network,
-    miner_group: &[String],
-) -> Vec<(
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-)> {
-    let mut result = Vec::new();
-    for name in miner_group {
-        let r = miner_get_wallet_info(network, name).await;
-        result.push(r);
-    }
-    result
-}
-
-async fn miner_all_combined_get_wallet_info(
-    network: &mut Network,
-    miner_group: &[String],
-) -> (
-    TokenAmount,
-    Vec<String>,
-    BTreeMap<String, (String, TokenAmount)>,
-) {
-    let mut total = TokenAmount(0);
-    let mut addresses = Vec::new();
-    let mut txs_to_address_and_ammount = BTreeMap::new();
-    for name in miner_group {
-        let (t, mut a, mut txs) = miner_get_wallet_info(network, name).await;
-        total.0 += t.0;
-        addresses.append(&mut a);
-        txs_to_address_and_ammount.append(&mut txs);
-    }
-    (total, addresses, txs_to_address_and_ammount)
-}
-
 //
 // Test helpers
 //
@@ -1655,10 +1723,7 @@ async fn test_step_complete(network: Network) {
     info!("Test Step complete")
 }
 
-fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Transaction) {
-    let intial_t_hash = SEED_UTXO[0];
-    let receiver_addr = "000001";
-
+fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
         println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
@@ -1673,15 +1738,18 @@ fn valid_transactions(fixed: bool) -> (BTreeMap<String, Transaction>, String, Tr
         (pk, sk)
     };
 
-    let (t_hash, payment_tx) = create_valid_transaction(intial_t_hash, receiver_addr, &pk, &sk);
+    let txs = vec![
+        (&VALID_TXS_IN[0..1], &VALID_TXS_OUT[0..1]),
+        (&VALID_TXS_IN[1..3], &VALID_TXS_OUT[1..3]),
+    ];
 
-    let transactions = {
-        let mut m = BTreeMap::new();
-        m.insert(t_hash.clone(), payment_tx.clone());
-        m
-    };
+    let mut transactions = BTreeMap::new();
+    for (ins, outs) in &txs {
+        let (t_hash, payment_tx) = create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk);
+        transactions.insert(t_hash, payment_tx);
+    }
 
-    (transactions, t_hash, payment_tx)
+    transactions
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
@@ -1692,6 +1760,15 @@ fn len_and_map<K, V>(values: &BTreeMap<K, V>) -> (usize, &BTreeMap<K, V>) {
     (values.len(), &values)
 }
 
+fn remove_keys<'a, Q: 'a + ?Sized + Ord, K: std::borrow::Borrow<Q> + Ord, V>(
+    value: &mut BTreeMap<K, V>,
+    keys: impl Iterator<Item = &'a Q>,
+) {
+    for key in keys {
+        value.remove(key).unwrap();
+    }
+}
+
 fn substract_vec(value1: &[usize], value2: &[usize]) -> Vec<usize> {
     value1
         .iter()
@@ -1700,22 +1777,34 @@ fn substract_vec(value1: &[usize], value2: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn merge_txs(
-    v1: &BTreeMap<String, Transaction>,
-    v2: &BTreeMap<String, Transaction>,
-) -> BTreeMap<String, Transaction> {
-    merge_txs_3(v1, v2, &BTreeMap::new())
-}
-
-fn merge_txs_3(
-    v1: &BTreeMap<String, Transaction>,
-    v2: &BTreeMap<String, Transaction>,
-    v3: &BTreeMap<String, Transaction>,
-) -> BTreeMap<String, Transaction> {
+fn merge_txs_3(v1: &UtxoSet, v2: &UtxoSet, v3: &UtxoSet) -> UtxoSet {
     v1.clone()
         .into_iter()
         .chain(v2.clone().into_iter())
         .chain(v3.clone().into_iter())
+        .collect()
+}
+
+fn wallet_seed(out_p: (i32, &str), amount: &TokenAmount) -> String {
+    format!("{}-{}-{}", out_p.0, out_p.1, amount.0)
+}
+
+fn valid_txs_in() -> UtxoSet {
+    let values: Vec<(i32, String)> = VALID_TXS_IN
+        .iter()
+        .map(|(n, h)| (*n, h.to_string()))
+        .collect();
+    make_utxo_set_from_seed(&values)
+}
+
+fn to_utxo_set(txs: &BTreeMap<String, Transaction>) -> UtxoSet {
+    get_tx_with_out_point_cloned(txs.iter()).collect()
+}
+
+fn to_transaction_set(utxo_set: &UtxoSet) -> BTreeMap<String, Transaction> {
+    utxo_set
+        .iter()
+        .map(|(out_p, tx)| (out_p.t_hash.clone(), tx.clone()))
         .collect()
 }
 
@@ -1725,6 +1814,14 @@ fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transact
         .values()
         .map(|m_info| m_info.mining_tx.clone())
         .collect()
+}
+
+fn complete_first_block(
+    utxo_set: &UtxoSet,
+    mining_txs: usize,
+) -> ((String, String), CompleteBlock) {
+    let next_block_tx = to_transaction_set(utxo_set);
+    complete_block(0, None, &next_block_tx, mining_txs)
 }
 
 fn complete_block(
@@ -1793,7 +1890,8 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
-        compute_seed_utxo: SEED_UTXO.iter().map(|v| v.to_string()).collect(),
+        compute_seed_utxo: SEED_UTXO.iter().map(|(n, v)| (*n, v.to_string())).collect(),
+        user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()
             .collect(),

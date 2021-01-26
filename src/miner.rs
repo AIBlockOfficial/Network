@@ -8,13 +8,13 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{FundStore, PaymentAddress, WalletDb};
+use crate::wallet::{PaymentAddress, WalletDb};
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -262,14 +262,16 @@ impl MinerNode {
     pub async fn commit_block_found(&mut self) {
         let address = self.current_payment_address.take().unwrap();
         let (tx_hash, tx) = self.current_coinbase.take().unwrap();
+
+        let tx_out_p = OutPoint::new(tx_hash, 0);
         let tx_amount = tx.outputs.first().unwrap().amount;
 
         self.wallet_db
-            .save_transaction_to_wallet(tx_hash.clone(), address)
+            .save_transaction_to_wallet(tx_out_p.clone(), address)
             .await
             .unwrap();
         self.wallet_db
-            .save_payment_to_wallet(tx_hash, tx_amount)
+            .save_payment_to_wallet(tx_out_p, tx_amount)
             .await
             .unwrap();
     }
@@ -366,23 +368,9 @@ impl MinerNode {
         (0..10).map(|_| rng.gen_range(1, 200)).collect()
     }
 
-    // Get the wallet fund store
-    pub fn get_fund_store(&self) -> Option<FundStore> {
-        self.wallet_db.get_fund_store()
-    }
-
-    // Get the wallet addresses
-    pub fn get_known_address(&self) -> Vec<String> {
-        self.wallet_db
-            .get_address_stores()
-            .into_iter()
-            .map(|(addr, _)| addr)
-            .collect()
-    }
-
-    // Get the wallet transaction address
-    pub fn get_transaction_address(&self, tx_hash: &str) -> String {
-        self.wallet_db.get_transaction_store(tx_hash).address
+    // Get the wallet db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
     }
 }
 

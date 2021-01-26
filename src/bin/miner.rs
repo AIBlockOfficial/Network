@@ -7,7 +7,7 @@ use system::configurations::MinerNodeConfig;
 use system::{MinerNode, Response};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = App::new("Zenotta Mining Node")
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let mut node = MinerNode::new(config).await?;
+    let mut node = MinerNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
     if let Some(compute_node) = compute_node_connected {
@@ -175,5 +175,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (result,) = tokio::join!(main_loop_handle);
     result.unwrap();
-    Ok(())
 }

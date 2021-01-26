@@ -6,11 +6,12 @@ use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
 };
+use crate::interfaces::UtxoSet;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
+use crate::utils::make_utxo_set_from_seed;
 use futures::future::join_all;
-use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -52,7 +53,8 @@ pub struct NetworkConfig {
     pub in_memory_db: bool,
     pub compute_partition_full_size: usize,
     pub compute_minimum_miner_pool_len: usize,
-    pub compute_seed_utxo: Vec<String>,
+    pub compute_seed_utxo: Vec<(i32, String)>,
+    pub user_wallet_seeds: Vec<Vec<String>>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,
@@ -309,6 +311,7 @@ impl Network {
                 miner_nodes: info.miner_nodes.clone(),
                 user_nodes: info.user_nodes.clone(),
                 api_port: 3000,
+                user_wallet_seeds: config.user_wallet_seeds.clone(),
             };
 
             let info = format!("{} -> {}", name, info.user_nodes[idx].address);
@@ -374,11 +377,7 @@ impl Network {
         None
     }
 
-    pub fn collect_initial_uxto_set(&self) -> BTreeMap<String, Transaction> {
-        self.config
-            .compute_seed_utxo
-            .iter()
-            .map(|h| (h.clone(), Transaction::new()))
-            .collect()
+    pub fn collect_initial_uxto_set(&self) -> UtxoSet {
+        make_utxo_set_from_seed(&self.config.compute_seed_utxo)
     }
 }

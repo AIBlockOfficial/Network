@@ -7,7 +7,7 @@ use system::configurations::UserNodeConfig;
 use system::{routes, Response, UserNode};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = App::new("Zenotta Mining Node")
@@ -130,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
-    let mut node = UserNode::new(config).await?;
+    let mut node = UserNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
     if let Some(compute_node) = compute_node_connected {
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(peer_user_node) = peer_user_node_connected {
         println!("ADDRESS: {:?}", peer_user_node);
         // Connect to a peer user node for payment.
-        node.connect_to(peer_user_node).await?;
+        node.connect_to(peer_user_node).await.unwrap();
 
         // Request a new payment address from peer user
         node.send_address_request(peer_user_node, amount_to_send)
@@ -175,40 +175,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Ok(Response {
                         success: true,
-                        reason: "Next payment transaction successfully constructed",
+                        reason: "Next payment transaction ready",
                     }) => {
-                        let next_payment = node.next_payment.take().unwrap();
-
-                        // Send the payment to compute node
-                        node.send_payment_to_compute(
-                            compute_node_connected.unwrap(),
-                            next_payment.clone(),
-                        )
-                        .await
-                        .unwrap();
-
-                        // Send the payment to the receiving user
-                        if let Some(peer_user) = peer_user_node_connected {
-                            node.send_payment_to_receiver(peer_user, next_payment)
-                                .await
-                                .unwrap();
-                        }
-
-                        if let Some(r_payment) = node.return_payment.clone() {
-                            // Handle return payment construction
-                            node.construct_return_payment_tx(r_payment.tx_in, r_payment.amount)
-                                .await
-                                .unwrap();
-                            let return_payment = node.return_payment.clone();
-
-                            node.send_payment_to_compute(
-                                compute_node_connected.unwrap(),
-                                return_payment.unwrap().transaction,
-                            )
+                        node.send_next_payment_to_destinations(compute_node_connected.unwrap())
                             .await
                             .unwrap();
-                            node.return_payment = None;
-                        }
                     }
                     Ok(Response {
                         success: true,
@@ -248,6 +219,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (main_result, warp_result) = tokio::join!(main_loop_handle, warp_handle);
     main_result.unwrap();
     warp_result.unwrap();
-
-    Ok(())
 }

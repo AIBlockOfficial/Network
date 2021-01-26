@@ -2,15 +2,14 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{AddressStore, WalletDb};
+use crate::wallet::{PaymentAddress, WalletDb};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{Transaction, TxConstructor, TxIn};
+use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::primitives::transaction_utils::{
-    construct_payment_tx, construct_payment_tx_ins, construct_tx_hash,
+    construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
 };
-use sodiumoxide::crypto::sign;
 use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
@@ -88,7 +87,7 @@ pub struct UserNode {
     pub node: Node,
     pub assets: Vec<Asset>,
     pub trading_peer: Option<(SocketAddr, TokenAmount)>,
-    pub next_payment: Option<Transaction>,
+    pub next_payment: Option<(SocketAddr, Transaction)>,
     pub return_payment: Option<ReturnPayment>,
     pub wallet_db: WalletDb,
 }
@@ -100,13 +99,19 @@ impl UserNode {
             .get(config.user_node_idx)
             .ok_or(UserError::ConfigError("Invalid user index"))?
             .address;
+
+        let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
+        let wallet_db = WalletDb::new(config.user_db_mode)
+            .with_seed(config.user_node_idx, &config.user_wallet_seeds)
+            .await;
+
         Ok(UserNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::User).await?,
+            node,
             assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
-            wallet_db: WalletDb::new(config.user_db_mode),
+            wallet_db,
         })
     }
 
@@ -159,7 +164,7 @@ impl UserNode {
                 self.receive_payment_transaction(transaction).await
             }
             SendPaymentAddress { address, amount } => {
-                self.make_payment_transactions(address, amount)
+                self.make_payment_transactions(peer, address, amount).await
             }
         }
     }
@@ -171,7 +176,31 @@ impl UserNode {
     ///
     /// * `compute_peer`    - Compute peer to send the payment tx to
     /// * `payment_tx`      - Transaction to send
-    pub async fn send_payment_to_compute(
+    pub async fn send_next_payment_to_destinations(
+        &mut self,
+        compute_peer: SocketAddr,
+    ) -> Result<()> {
+        let (peer, tx) = self.next_payment.take().unwrap();
+
+        self.send_transaction_to_compute(compute_peer, tx.clone())
+            .await?;
+
+        self.store_payment_transaction(tx.clone()).await;
+        if peer != self.address() {
+            self.send_payment_to_receiver(peer, tx).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Sends the next internal payment transaction to be processed by the connected Compute
+    /// node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute_peer`    - Compute peer to send the payment tx to
+    /// * `payment_tx`      - Transaction to send
+    pub async fn send_transaction_to_compute(
         &mut self,
         compute_peer: SocketAddr,
         payment_tx: Transaction,
@@ -200,186 +229,76 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        let hash = construct_tx_hash(&transaction);
-        let total_to_save = transaction.outputs.iter().map(|out| out.amount).sum();
-
-        self.wallet_db
-            .save_payment_to_wallet(hash, total_to_save)
-            .await
-            .unwrap();
+        self.store_payment_transaction(transaction).await;
 
         Response {
             success: true,
-            reason: "Payment transaction received and saved successfully",
+            reason: "Payment transaction received",
+        }
+    }
+
+    /// Store payment transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `transaction` - Transaction to receive and save to wallet
+    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
+        let hash = construct_tx_hash(&transaction);
+        let addresses = self.wallet_db.get_address_stores();
+
+        for (tx_out_p, tx_out) in get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
+        {
+            let amount = tx_out.amount;
+            let address = tx_out.script_public_key.clone().unwrap();
+            let address = PaymentAddress { address, net: 0 };
+
+            if !addresses.contains_key(&address.address) {
+                // That TxOut is not ours to use
+                continue;
+            }
+
+            debug!("store_payment_transaction: {} -> {:?}", amount, address);
+
+            self.wallet_db
+                .save_transaction_to_wallet(tx_out_p.clone(), address)
+                .await
+                .unwrap();
+            self.wallet_db
+                .save_payment_to_wallet(tx_out_p, amount)
+                .await
+                .unwrap();
         }
     }
 
     /// Creates a new payment transaction and assigns it as an internal attribute
+    /// Update wallet removing used transactions/addresses, adding return address
     ///
     /// ### Arguments
     ///
     /// * `address` - Address to assign the payment transaction to
-    pub fn make_payment_transactions(&mut self, address: String, amount: TokenAmount) -> Response {
-        let tx_ins = self.fetch_inputs_for_payment(amount);
+    pub async fn make_payment_transactions(
+        &mut self,
+        peer: SocketAddr,
+        address: String,
+        amount: TokenAmount,
+    ) -> Response {
+        let (tx_ins, total_amont) = self.wallet_db.fetch_inputs_for_payment(amount);
+        let mut tx_outs = vec![TxOut::new_amount(address, amount)];
 
-        let payment_tx =
-            construct_payment_tx(tx_ins, address, None, None, Asset::Token(amount), amount);
-        self.next_payment = Some(payment_tx);
+        if total_amont > amount {
+            let excess = total_amont - amount;
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_amount(excess_address.address, excess));
+        }
+
+        let payment_tx = construct_payments_tx(tx_ins, tx_outs);
+        self.next_payment = Some((peer, payment_tx));
+        self.return_payment = None;
 
         Response {
             success: true,
-            reason: "Next payment transaction successfully constructed",
+            reason: "Next payment transaction ready",
         }
-    }
-
-    /// Fetches valid TxIns based on the wallet's running total and available unspent
-    /// transactions
-    ///
-    /// TODO: Replace errors here with Error enum types that the Result can return
-    /// TODO: Possibly sort addresses found ascending, so that smaller amounts are consumed
-    ///
-    /// ### Arguments
-    ///
-    /// * `amount_required` - Amount needed
-    pub fn fetch_inputs_for_payment(&mut self, amount_required: TokenAmount) -> Vec<TxIn> {
-        let mut tx_ins = Vec::new();
-
-        // Wallet DB handling
-        let mut fund_store = self
-            .wallet_db
-            .get_fund_store()
-            .unwrap_or_else(WalletDb::default_fund_store);
-
-        // Ensure we have enough funds to proceed with payment
-        if fund_store.running_total.0 < amount_required.0 {
-            panic!("Not enough funds available for payment!");
-        }
-
-        // Start fetching TxIns
-        let mut amount_made = TokenAmount(0);
-        let tx_hashes: Vec<_> = fund_store.transactions.keys().cloned().collect();
-
-        // Start adding amounts to payment and updating FundStore
-        for tx_hash in tx_hashes {
-            let current_amount = *fund_store.transactions.get(&tx_hash).unwrap();
-
-            // If we've reached target
-            if amount_made == amount_required {
-                break;
-            }
-            // If we've overshot
-            else if current_amount + amount_made > amount_required {
-                let diff = amount_required - amount_made;
-
-                fund_store.running_total -= current_amount;
-                amount_made = amount_required;
-
-                // Add a new return payment transaction
-                let return_tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), false);
-                self.return_payment = Some(ReturnPayment {
-                    tx_in: return_tx_in,
-                    amount: current_amount - diff,
-                    transaction: Transaction::new(),
-                });
-            }
-            // Else add to used stack
-            else {
-                amount_made += current_amount;
-                fund_store.running_total -= current_amount;
-            }
-
-            // Add the new TxIn
-            let tx_in = self.construct_tx_in_from_prev_out(tx_hash.clone(), true);
-            tx_ins.push(tx_in);
-
-            fund_store.transactions.remove(&tx_hash);
-        }
-
-        // Save the updated fund store to disk
-        self.wallet_db.set_fund_store(fund_store);
-
-        tx_ins
-    }
-
-    /// Constructs a return payment transaction for unspent tokens
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_hash`     - Hash of the output to create a return tx from
-    /// * `return_amt`  - The amount to send to the return address
-    pub async fn construct_return_payment_tx(
-        &mut self,
-        tx_in: TxIn,
-        return_amt: TokenAmount,
-    ) -> Result<()> {
-        let tx_ins = vec![tx_in];
-        let (address, _) = self.wallet_db.generate_payment_address().await;
-
-        let payment_tx = construct_payment_tx(
-            tx_ins,
-            address.address.clone(),
-            None,
-            None,
-            Asset::Token(return_amt),
-            return_amt,
-        );
-        let payment_tx_hash = construct_tx_hash(&payment_tx);
-
-        // Update saves to the wallet
-        self.wallet_db
-            .save_transaction_to_wallet(payment_tx_hash.clone(), address)
-            .await
-            .unwrap();
-        self.wallet_db
-            .save_payment_to_wallet(payment_tx_hash, return_amt)
-            .await
-            .unwrap();
-
-        // Completely reallocate the payment tx; required because an unwrap will just
-        // consume self
-        let mut current_r_payment = self.return_payment.clone().unwrap();
-        current_r_payment.transaction = payment_tx;
-        self.return_payment = Some(current_r_payment);
-
-        Ok(())
-    }
-
-    /// Constructs a TxIn from a previous output
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx_hash`     - Hash to the output to fetch
-    /// * `output_vals` - Outpoint information required for TxIn
-    /// * `db`          - Pointer to the wallet DB instance
-    pub fn construct_tx_in_from_prev_out(
-        &mut self,
-        tx_hash: String,
-        remove_from_wallet: bool,
-    ) -> TxIn {
-        let mut address_store = self.wallet_db.get_address_stores();
-        let tx_store = self.wallet_db.get_transaction_store(&tx_hash);
-
-        let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-        let signature = sign::sign_detached(tx_hash.as_bytes(), &needed_store.secret_key);
-
-        let tx_const = TxConstructor {
-            t_hash: tx_hash.clone(),
-            prev_n: 0,
-            signatures: vec![signature],
-            pub_keys: vec![needed_store.public_key],
-        };
-
-        if remove_from_wallet {
-            // Update the values in the wallet
-            self.wallet_db.delete_key(&tx_hash);
-
-            address_store.remove(&tx_store.address);
-            self.wallet_db.set_address_stores(address_store);
-        }
-
-        let tx_ins = construct_payment_tx_ins(vec![tx_const]);
-
-        tx_ins[0].clone()
     }
 
     /// Sends a payment transaction to the receiving party
@@ -437,6 +356,11 @@ impl UserNode {
             .send(peer, UserRequest::SendPaymentAddress { address, amount })
             .await?;
         Ok(())
+    }
+
+    // Get the wallet db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
     }
 }
 
