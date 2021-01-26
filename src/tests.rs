@@ -9,14 +9,15 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::{create_valid_transaction_with_ins_outs, make_utxo_set_from_seed};
+use crate::utils::create_valid_transaction_with_ins_outs;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::primitives::transaction_utils::{
-    construct_coinbase_tx, construct_tx_hash, get_tx_with_out_point, get_tx_with_out_point_cloned,
+    construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
+    get_tx_with_out_point,
 };
 use sha3::Digest;
 use sha3::Sha3_256;
@@ -33,13 +34,7 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-const SEED_UTXO: &[(i32, &str)] = &[
-    (0, "000000"),
-    (0, "000001"),
-    (1, "000001"),
-    (2, "000001"),
-    (0, "000002"),
-];
+const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
 const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
 const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
 
@@ -158,8 +153,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
     let miner_nodes = &network_config.miner_nodes;
-    let initial_utxo = network.collect_initial_uxto_set();
-    let initial_utxo_txs = to_transaction_set(&initial_utxo);
+    let initial_utxo_txs = network.collect_initial_uxto_txs();
     let transactions = valid_transactions(true);
 
     //
@@ -248,7 +242,7 @@ async fn create_first_block(network_config: NetworkConfig) {
     //
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
-    let expected_utxo = network.collect_initial_uxto_set();
+    let expected_utxo = to_utxo_set(&network.collect_initial_uxto_txs());
 
     //
     // Act
@@ -336,10 +330,9 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
-    let initial_utxo = network.collect_initial_uxto_set();
-    let initial_utxo_txs = to_transaction_set(&initial_utxo);
+    let initial_utxo_txs = network.collect_initial_uxto_txs();
     let c_mined = &node_select(compute_nodes, cfg_num);
-    let (expected0, block_info0) = complete_first_block(&initial_utxo, c_mined.len());
+    let (expected0, block_info0) = complete_first_block(&initial_utxo_txs, c_mined.len());
 
     create_first_block_act(&mut network).await;
     compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info0).await;
@@ -495,7 +488,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
     let block0_mining_utxo = to_utxo_set(&block0_mining_tx);
 
-    let mut left_init_utxo = network.collect_initial_uxto_set();
+    let mut left_init_utxo = to_utxo_set(&network.collect_initial_uxto_txs());
     remove_keys(&mut left_init_utxo, valid_txs_in().keys());
 
     create_first_block_act(&mut network).await;
@@ -941,7 +934,7 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
-    network_config.user_wallet_seeds = vec![vec![wallet_seed(SEED_UTXO[0], &TokenAmount(11))]];
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.user_nodes;
     let amount = TokenAmount(5);
@@ -1790,22 +1783,14 @@ fn wallet_seed(out_p: (i32, &str), amount: &TokenAmount) -> String {
 }
 
 fn valid_txs_in() -> UtxoSet {
-    let values: Vec<(i32, String)> = VALID_TXS_IN
+    VALID_TXS_IN
         .iter()
-        .map(|(n, h)| (*n, h.to_string()))
-        .collect();
-    make_utxo_set_from_seed(&values)
+        .map(|(n, h)| (OutPoint::new(h.to_string(), *n), TxOut::new()))
+        .collect()
 }
 
 fn to_utxo_set(txs: &BTreeMap<String, Transaction>) -> UtxoSet {
-    get_tx_with_out_point_cloned(txs.iter()).collect()
-}
-
-fn to_transaction_set(utxo_set: &UtxoSet) -> BTreeMap<String, Transaction> {
-    utxo_set
-        .iter()
-        .map(|(out_p, tx)| (out_p.t_hash.clone(), tx.clone()))
-        .collect()
+    get_tx_out_with_out_point_cloned(txs.iter()).collect()
 }
 
 fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transaction> {
@@ -1817,10 +1802,9 @@ fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transact
 }
 
 fn complete_first_block(
-    utxo_set: &UtxoSet,
+    next_block_tx: &BTreeMap<String, Transaction>,
     mining_txs: usize,
 ) -> ((String, String), CompleteBlock) {
-    let next_block_tx = to_transaction_set(utxo_set);
     complete_block(0, None, &next_block_tx, mining_txs)
 }
 

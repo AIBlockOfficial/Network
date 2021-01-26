@@ -1,6 +1,6 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
-use crate::interfaces::{ProofOfWork, UtxoSet};
+use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
@@ -15,6 +15,7 @@ use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
+use std::collections::BTreeMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -241,9 +242,14 @@ pub fn create_valid_transaction_with_ins_outs(
     (t_hash, payment_tx)
 }
 
-pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> UtxoSet {
+pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> BTreeMap<String, Transaction> {
     seed.iter()
-        .map(|(out_n, hash)| OutPoint::new(hash.clone(), *out_n))
-        .map(|out_p| (out_p, Transaction::new()))
+        .map(|(n, hash)| {
+            let tx = Transaction {
+                outputs: (0..*n).map(|_| TxOut::new()).collect(),
+                ..Transaction::default()
+            };
+            (hash.clone(), tx)
+        })
         .collect()
 }

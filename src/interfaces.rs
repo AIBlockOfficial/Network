@@ -4,14 +4,14 @@ use crate::unicorn::UnicornShard;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
-pub type UtxoSet = BTreeMap<OutPoint, Transaction>;
+pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
