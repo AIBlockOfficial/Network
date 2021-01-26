@@ -11,6 +11,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
     serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
 };
+
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -105,6 +106,7 @@ pub struct DruidDroplet {
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
+    pub jurisdiction: String,
     pub current_mined_block: Option<MinedBlock>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub unicorn_limit: usize,
@@ -117,6 +119,7 @@ pub struct ComputeNode {
     pub request_list_first_flood: Option<usize>,
     pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
+    pub sanction_list: Vec<String>,
 }
 
 impl ComputeNode {
@@ -149,6 +152,8 @@ impl ComputeNode {
             current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
             request_list: BTreeSet::new(),
+            sanction_list: config.sanction_list,
+            jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
             partition_list: (Vec::new(), Vec::new()),
@@ -772,7 +777,11 @@ impl ComputeInterface for ComputeNode {
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)))
+            .filter(|(_, tx)| {
+                tx_ins_are_valid(&tx.inputs, |v| {
+                    utxo_set.contains_key(v) && !self.sanction_list.contains(&v.t_hash)
+                })
+            })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 

@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
+use crate::constants::{DB_PATH, DB_PATH_TEST, SANC_LIST_TEST, WALLET_PATH};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, UtxoSet,
@@ -9,7 +9,9 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::create_valid_transaction_with_ins_outs;
+use crate::utils::{
+    create_valid_transaction_with_ins_outs, get_sanction_addresses, make_utxo_set_from_seed,
+};
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -54,6 +56,18 @@ enum Cfg {
 enum CfgNum {
     All,
     Majority,
+}
+
+#[test]
+fn will_get_sanctioned_addresses() {
+    let addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), &"US".to_string());
+    assert!(addresses.contains(&"gjlkhflgkhdfklg".to_string()));
+
+    let no_ju_addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), &"UK".to_string());
+    assert_eq!(no_ju_addresses, Vec::<String>::new());
+
+    let no_fs_addresses = get_sanction_addresses("/blah.json".to_string(), &"UK".to_string());
+    assert_eq!(no_fs_addresses, Vec::<String>::new());
 }
 
 #[tokio::test(basic_scheduler)]

@@ -16,7 +16,9 @@ use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::future;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -81,6 +83,33 @@ pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>
             tokio::time::delay_for(Duration::from_millis(500)).await;
         }
         trace!(?peer, "Try to connect to succeeded");
+    }
+}
+
+/// Gets the locally set list of sanctioned addresses
+///
+/// ### Arguments
+///
+/// * `path`         - Path to the sanction list
+/// * `jurisdiction` - Jurisdiction to fetch sanctioned addresses for
+pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut buff = String::new();
+    file.read_to_string(&mut buff).unwrap();
+
+    let sancs: serde_json::value::Value = serde_json::from_str(&buff).unwrap();
+
+    match sancs[jurisdiction].as_array() {
+        Some(v) => (*v
+            .iter()
+            .map(|i| i.as_str().unwrap().to_string())
+            .collect::<Vec<String>>())
+        .to_vec(),
+        None => Vec::new(),
     }
 }
 
