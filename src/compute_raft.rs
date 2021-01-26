@@ -8,7 +8,7 @@ use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{
-    get_inputs_previous_out_point, get_tx_with_out_point_cloned,
+    get_inputs_previous_out_point, get_tx_out_with_out_point_cloned,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -23,7 +23,7 @@ use tracing::{debug, error, trace, warn};
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeRaftItem {
-    FirstBlock(UtxoSet),
+    FirstBlock(BTreeMap<String, Transaction>),
     Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
@@ -48,7 +48,7 @@ pub enum CommittedItem {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum AccumulatingBlockStoredInfo {
     /// Accumulating first block utxo_set
-    FirstBlock(UtxoSet),
+    FirstBlock(BTreeMap<String, Transaction>),
     /// Accumulating other blocks BlockStoredInfo
     Block(BlockStoredInfo),
 }
@@ -73,6 +73,8 @@ pub struct ComputeConsensused {
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
+    /// The very first block to consensus.
+    initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
     /// UTXO set containain the valid transaction to use as previous input hashes.
     utxo_set: UtxoSet,
     /// Accumulating block:
@@ -90,7 +92,7 @@ pub struct ComputeRaft {
     /// Consensused fields.
     consensused: ComputeConsensused,
     /// Initial utxo_set to propose when ready.
-    initial_utxo_set: Option<UtxoSet>,
+    local_initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
@@ -149,7 +151,7 @@ impl ComputeRaft {
             first_raft_peer,
             raft_active,
             consensused,
-            initial_utxo_set: Some(utxo_set),
+            local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: BTreeMap::new(),
             local_tx_druid_pool: Vec::new(),
             last_block_stored_infos: Vec::new(),
@@ -270,7 +272,7 @@ impl ComputeRaft {
     /// Append new transaction to our local pool from which to propose
     /// consensused transactions.
     pub async fn propose_initial_uxto_set(&mut self) {
-        let utxo_set = self.initial_utxo_set.take().unwrap();
+        let utxo_set = self.local_initial_utxo_txs.take().unwrap();
         self.propose_item(&ComputeRaftItem::FirstBlock(utxo_set))
             .await;
     }
@@ -419,7 +421,7 @@ impl ComputeConsensused {
         // TODO: Roll back append and removal if block rejected by miners.
 
         self.utxo_set
-            .extend(get_tx_with_out_point_cloned(block_tx.iter()));
+            .extend(get_tx_out_with_out_point_cloned(block_tx.iter()));
 
         self.current_block = Some(block);
         self.current_block_tx = block_tx;
@@ -444,12 +446,7 @@ impl ComputeConsensused {
 
     /// Processes the very first block with utxo_set
     pub fn generate_first_block(&mut self) {
-        let next_block_tx: BTreeMap<_, _> = self
-            .utxo_set
-            .iter()
-            .map(|(out_p, tx)| (out_p.t_hash.clone(), tx.clone()))
-            .collect();
-
+        let next_block_tx = self.initial_utxo_txs.take().unwrap();
         let next_block = Block {
             transactions: next_block_tx.keys().cloned().collect(),
             ..Default::default()
@@ -599,7 +596,11 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
-    pub fn append_first_block_info(&mut self, key: ComputeRaftKey, utxo_set: UtxoSet) {
+    pub fn append_first_block_info(
+        &mut self,
+        key: ComputeRaftKey,
+        utxo_set: BTreeMap<String, Transaction>,
+    ) {
         self.append_current_block_stored_info(
             key,
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set),
@@ -632,12 +633,12 @@ impl ComputeConsensused {
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.tx_current_block_num = Some(0);
-                self.utxo_set = utxo_set;
+                self.initial_utxo_txs = Some(utxo_set);
             }
             AccumulatingBlockStoredInfo::Block(info) => {
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
-                self.utxo_set.extend(get_tx_with_out_point_cloned(
+                self.utxo_set.extend(get_tx_out_with_out_point_cloned(
                     info.mining_transactions.iter(),
                 ));
             }
@@ -701,6 +702,7 @@ mod test {
 
         let commit = node.next_commit().await.unwrap();
         let first_block = node.received_commit(commit).await;
+        node.generate_first_block();
         let commit = node.next_commit().await.unwrap();
         let tx_no_block = node.received_commit(commit).await;
 
@@ -746,6 +748,7 @@ mod test {
         node.propose_initial_uxto_set().await;
         let commit = node.next_commit().await.unwrap();
         let _first_block = node.received_commit(commit).await.unwrap();
+        node.generate_first_block();
         let previous_block = BlockStoredInfo {
             block_hash: "0123".to_string(),
             block_num: 0,
@@ -875,6 +878,7 @@ mod test {
         node.propose_initial_uxto_set().await;
         let commit = node.next_commit().await;
         node.received_commit(commit.unwrap()).await.unwrap();
+        node.generate_first_block();
 
         //
         // Act
@@ -953,7 +957,7 @@ mod test {
             user_nodes: vec![],
             compute_raft_tick_timeout: 10,
             compute_transaction_timeout: 50,
-            compute_seed_utxo: seed_utxo.iter().map(|v| (0, v.to_string())).collect(),
+            compute_seed_utxo: seed_utxo.iter().map(|v| (1, v.to_string())).collect(),
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
         };

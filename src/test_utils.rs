@@ -6,12 +6,12 @@ use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
 };
-use crate::interfaces::UtxoSet;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
 use crate::utils::make_utxo_set_from_seed;
 use futures::future::join_all;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -377,7 +377,7 @@ impl Network {
         None
     }
 
-    pub fn collect_initial_uxto_set(&self) -> UtxoSet {
+    pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(&self.config.compute_seed_utxo)
     }
 }

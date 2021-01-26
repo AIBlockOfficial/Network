@@ -1,4 +1,5 @@
-use rocksdb::{DBCompressionType, Error as DBError, IteratorMode, Options, DB};
+pub use rocksdb::Error as DBError;
+use rocksdb::{DBCompressionType, IteratorMode, Options, DB};
 use std::collections::HashMap;
 use std::fmt;
 use tracing::{debug, warn};

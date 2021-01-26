@@ -1,6 +1,6 @@
 use crate::comms_handler::Node;
 use crate::constants::MINING_DIFFICULTY;
-use crate::interfaces::{ProofOfWork, UtxoSet};
+use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
@@ -15,6 +15,7 @@ use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
+use std::collections::BTreeMap;
 use std::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -101,18 +102,11 @@ pub async fn create_and_save_fake_to_wallet(
         &address_keys.secret_key,
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
-
-    // Save fund store
     let payment_to_save = TokenAmount(4000);
-    wallet_db
-        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save)
-        .await
-        .unwrap();
 
-    // Save transaction store
     println!("TX STORE: {:?}", (&tx_out_p, &final_address));
     wallet_db
-        .save_transaction_to_wallet(tx_out_p, final_address)
+        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save, final_address)
         .await
         .unwrap();
 
@@ -248,9 +242,14 @@ pub fn create_valid_transaction_with_ins_outs(
     (t_hash, payment_tx)
 }
 
-pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> UtxoSet {
+pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> BTreeMap<String, Transaction> {
     seed.iter()
-        .map(|(out_n, hash)| OutPoint::new(hash.clone(), *out_n))
-        .map(|out_p| (out_p, Transaction::new()))
+        .map(|(n, hash)| {
+            let tx = Transaction {
+                outputs: (0..*n).map(|_| TxOut::new()).collect(),
+                ..Transaction::default()
+            };
+            (hash.clone(), tx)
+        })
         .collect()
 }

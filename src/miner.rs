@@ -267,11 +267,7 @@ impl MinerNode {
         let tx_amount = tx.outputs.first().unwrap().amount;
 
         self.wallet_db
-            .save_transaction_to_wallet(tx_out_p.clone(), address)
-            .await
-            .unwrap();
-        self.wallet_db
-            .save_payment_to_wallet(tx_out_p, tx_amount)
+            .save_payment_to_wallet(tx_out_p, tx_amount, address)
             .await
             .unwrap();
     }
