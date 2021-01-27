@@ -654,6 +654,37 @@ impl ComputeNode {
             }
         }
     }
+
+    /// Checks whether a transaction's locktime has expired
+    ///
+    /// ### Arguments
+    ///
+    /// * `utxo_set`    - UTXO set
+    /// * `tx`          - Transaction to check
+    fn lock_expired(&self, utxo_set: &UtxoSet, tx: &OutPoint) -> bool {
+        let mut lock_expiry = false;
+
+        if let Some(txout) = utxo_set.get(tx) {
+            if txout.locktime == 0 {
+                lock_expiry = true;
+            }
+
+            if self.current_mined_block.is_some() {
+                let block_height = self
+                    .current_mined_block
+                    .as_ref()
+                    .unwrap()
+                    .block
+                    .header
+                    .b_num;
+                if block_height >= txout.locktime {
+                    lock_expiry = true;
+                }
+            }
+        }
+
+        lock_expiry
+    }
 }
 
 impl ComputeInterface for ComputeNode {
@@ -779,7 +810,9 @@ impl ComputeInterface for ComputeNode {
             .filter(|(_, tx)| !tx.is_coinbase())
             .filter(|(_, tx)| {
                 tx_ins_are_valid(&tx.inputs, |v| {
-                    utxo_set.contains_key(v) && !self.sanction_list.contains(&v.t_hash)
+                    utxo_set.contains_key(v)
+                        && !self.sanction_list.contains(&v.t_hash)
+                        && self.lock_expired(&utxo_set, &v)
                 })
             })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
