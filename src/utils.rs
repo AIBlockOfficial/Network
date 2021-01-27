@@ -257,6 +257,7 @@ pub fn create_valid_transaction_with_ins_outs(
             tx_outs.push(TxOut {
                 value: Some(Asset::Token(amount)),
                 amount,
+                locktime: 0,
                 script_public_key: Some(addr.to_string()),
                 drs_block_hash: None,
                 drs_tx_hash: None,
