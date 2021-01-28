@@ -200,7 +200,7 @@ impl WalletDb {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment(&db, amount_required)
+            fetch_inputs_for_payment_from_db(&db, amount_required)
         })
         .await
         .unwrap()
@@ -223,7 +223,7 @@ impl WalletDb {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            consume_inputs_for_payment(&mut db, tx_cons, amount_consumed, tx_used)
+            consume_inputs_for_payment_to_wallet(&mut db, tx_cons, amount_consumed, tx_used)
         })
         .await
         .unwrap()
@@ -338,7 +338,7 @@ pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address:
 
 // Make TxConstructors from stored TxOut
 // Also return the used info for db cleanup
-pub fn fetch_inputs_for_payment(
+pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
 ) -> (
@@ -371,7 +371,7 @@ pub fn fetch_inputs_for_payment(
 }
 
 // Consume the used transactions updating the wallet and produce TxIn
-pub fn consume_inputs_for_payment(
+pub fn consume_inputs_for_payment_to_wallet(
     db: &mut SimpleDb,
     tx_cons: Vec<TxConstructor>,
     amount_consumed: TokenAmount,
@@ -403,7 +403,9 @@ pub fn tx_constructor_from_prev_out(
     let tx_store = get_transaction_store(db, &tx_hash);
 
     let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-    let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
+
+    let hash_to_sign = hex::encode(serialize(&tx_hash).unwrap());
+    let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
         t_hash: tx_hash.t_hash.clone(),
