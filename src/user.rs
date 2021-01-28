@@ -2,11 +2,11 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{PaymentAddress, WalletDb};
+use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{PaymentAddress, Transaction, TxIn, TxOut};
 use naom::primitives::transaction_utils::{
     construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
 };

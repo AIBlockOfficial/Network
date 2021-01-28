@@ -6,22 +6,15 @@ use crate::db_utils::{DBError, SimpleDb};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
-use naom::primitives::transaction_utils::construct_payment_tx_ins;
+use naom::primitives::transaction::{OutPoint, PaymentAddress, TxConstructor, TxIn};
+use naom::primitives::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PaymentAddress {
-    pub address: String,
-    pub net: u8,
-}
 
 /// Data structure for wallet storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,28 +260,6 @@ impl WalletDb {
     // Get the wallet transaction address
     pub fn get_transaction_address(&self, tx_hash: &OutPoint) -> String {
         self.get_transaction_store(tx_hash).address
-    }
-}
-
-/// Builds an address from a public key
-///
-/// ### Arguments
-///
-/// * `pub_key` - A public key to build an address from
-/// * `net`     - Network version
-pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
-    let first_pubkey_bytes = serialize(&pub_key).unwrap();
-    let mut first_hash = Sha3_256::digest(&first_pubkey_bytes).to_vec();
-
-    // TODO: Add RIPEMD
-
-    first_hash.insert(0, net);
-    let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
-    second_hash.truncate(16);
-
-    PaymentAddress {
-        address: hex::encode(second_hash),
-        net,
     }
 }
 

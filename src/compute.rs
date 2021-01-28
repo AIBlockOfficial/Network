@@ -17,7 +17,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
 use rand::{self, Rng};
@@ -122,7 +122,7 @@ pub struct ComputeNode {
     pub sanction_list: Vec<String>,
 }
 
-impl ComputeNode {
+impl<'a> ComputeNode {
     /// Generates a new compute node instance
     ///
     /// ### Arguments
@@ -289,7 +289,11 @@ impl ComputeNode {
 
         for tx in droplet.tx.values() {
             let utxo_set = self.node_raft.get_committed_utxo_set();
-            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)) {
+
+            if !tx_ins_are_valid(&tx.inputs, |v| {
+                let tx_out = utxo_set.get(&v).unwrap().clone();
+                return Some(tx_out);
+            }) {
                 txs_valid = false;
                 break;
             }
@@ -669,9 +673,7 @@ impl ComputeNode {
         if let Some(txout) = utxo_set.get(tx) {
             if txout.locktime == 0 {
                 lock_expiry = true;
-            }
-
-            if self.current_mined_block.is_some() {
+            } else if self.current_mined_block.is_some() {
                 let block_height = self
                     .current_mined_block
                     .as_ref()
@@ -686,6 +688,25 @@ impl ComputeNode {
         }
 
         lock_expiry
+    }
+
+    /// Fully validates an outpoint for on spend
+    ///
+    /// ### Arguments
+    ///
+    /// * `v`   - Outpoint to validate
+    fn fully_validate_out_point(&self, v: OutPoint) -> Option<TxOut> {
+        let utxo_set = self.node_raft.get_committed_utxo_set();
+
+        if utxo_set.contains_key(&v)
+            && !self.sanction_list.contains(&v.t_hash)
+            && self.lock_expired(&utxo_set, &v)
+        {
+            let tx_out = utxo_set.clone().get(&v).unwrap().clone();
+            return Some(tx_out);
+        }
+
+        None
     }
 }
 
@@ -806,17 +827,10 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        let utxo_set = self.node_raft.get_committed_utxo_set();
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| {
-                tx_ins_are_valid(&tx.inputs, |v| {
-                    utxo_set.contains_key(v)
-                        && !self.sanction_list.contains(&v.t_hash)
-                        && self.lock_expired(&utxo_set, &v)
-                })
-            })
+            .filter(|(_, tx)| tx_ins_are_valid(&tx.inputs, |v| self.fully_validate_out_point(v)))
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 
