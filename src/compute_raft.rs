@@ -2,7 +2,7 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
-use crate::raft::{RaftData, RaftMessageWrapper};
+use crate::raft::{RaftCommit, RaftData, RaftMessageWrapper};
 use crate::utils::make_utxo_set_from_seed;
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
@@ -181,14 +181,15 @@ impl ComputeRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<RaftData> {
+    pub async fn next_commit(&self) -> Option<RaftCommit> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
-        let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
+    pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
+        let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_commit.data)
+        {
             Ok((key, item)) => {
                 if self.proposed_in_flight.remove(&key).is_some() {
                     if let ComputeRaftItem::Transactions(ref txs) = &item {

@@ -8,12 +8,20 @@ use tokio::time::{timeout_at, Instant};
 use tracing::{info, trace};
 
 pub type RaftData = Vec<u8>;
-pub type CommitSender = MpscTracingSender<Vec<RaftData>>;
-pub type CommitReceiver = mpsc::Receiver<Vec<RaftData>>;
+pub type CommitSender = MpscTracingSender<Vec<RaftCommit>>;
+pub type CommitReceiver = mpsc::Receiver<Vec<RaftCommit>>;
 pub type RaftCmdSender = mpsc::UnboundedSender<RaftCmd>;
 pub type RaftCmdReceiver = mpsc::UnboundedReceiver<RaftCmd>;
 pub type RaftMsgSender = MpscTracingSender<Message>;
 pub type RaftMsgReceiver = mpsc::Receiver<Message>;
+
+/// Raft Commit entry
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct RaftCommit {
+    pub term: u64,
+    pub index: u64,
+    pub data: Vec<u8>,
+}
 
 /// Channels needed to interact with the running raft instance.
 pub struct RaftNodeChannels {
@@ -253,7 +261,11 @@ impl RaftNode {
                 // Skip emtpy entry sent when the peer becomes Leader.
                 .filter(|entry| !entry.get_data().is_empty())
                 .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
-                .map(|mut entry| entry.take_data())
+                .map(|mut entry| RaftCommit {
+                    term: entry.get_term(),
+                    index: entry.get_index(),
+                    data: entry.take_data(),
+                })
                 .collect();
 
             if !committed.is_empty() {
@@ -373,7 +385,8 @@ mod tests {
     async fn recv_commited(test_nodes: &mut Vec<TestNode>) -> Vec<Vec<RaftData>> {
         let mut received = Vec::new();
         for test_node in test_nodes {
-            received.push(test_node.committed_rx.recv().await.unwrap());
+            let commits = test_node.committed_rx.recv().await.unwrap();
+            received.push(commits.into_iter().map(|e| e.data).collect());
         }
         received
     }
