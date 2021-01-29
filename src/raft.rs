@@ -20,8 +20,29 @@ pub type RaftMsgReceiver = mpsc::Receiver<Message>;
 pub struct RaftCommit {
     pub term: u64,
     pub index: u64,
-    pub data: RaftData,
-    pub is_snapshot_data: bool,
+    pub data: RaftCommitData,
+}
+
+/// Raft Commit data
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RaftCommitData {
+    Proposed(RaftData),
+    Snapshot(RaftData),
+}
+
+impl RaftCommitData {
+    fn take_data(self) -> RaftData {
+        match self {
+            Self::Proposed(data) => data,
+            Self::Snapshot(data) => data,
+        }
+    }
+}
+
+impl Default for RaftCommitData {
+    fn default() -> Self {
+        Self::Proposed(Default::default())
+    }
 }
 
 /// Channels needed to interact with the running raft instance.
@@ -277,8 +298,7 @@ impl RaftNode {
             committed.push(RaftCommit {
                 term: snapshot.get_metadata().term,
                 index: snapshot.get_metadata().index,
-                data: ready.snapshot().data.clone(),
-                is_snapshot_data: true,
+                data: RaftCommitData::Snapshot(ready.snapshot().data.clone()),
             });
         }
 
@@ -292,8 +312,7 @@ impl RaftNode {
                     .map(|mut entry| RaftCommit {
                         term: entry.get_term(),
                         index: entry.get_index(),
-                        data: entry.take_data(),
-                        is_snapshot_data: false,
+                        data: RaftCommitData::Proposed(entry.take_data()),
                     }),
             );
         }
@@ -557,7 +576,7 @@ mod tests {
     async fn one_recv_commited(test_node: &mut TestNode) -> Vec<RaftData> {
         let commits = test_node.committed_rx.recv().await.unwrap();
         test_node.last_committed = Some(commits.last().cloned().unwrap());
-        commits.into_iter().map(|e| e.data).collect()
+        commits.into_iter().map(|e| e.data.take_data()).collect()
     }
 
     fn expected_commited(test_nodes: &[TestNode], expected: &[RaftData]) -> Vec<Vec<RaftData>> {

@@ -1,7 +1,7 @@
 use crate::configurations::NodeSpec;
 use crate::raft::{
-    CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftData, RaftMessageWrapper,
-    RaftMsgReceiver, RaftNode,
+    CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
+    RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -150,7 +150,7 @@ impl ActiveRaft {
             self.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
         } else {
             self.committed_rx.lock().await.1.push_back(RaftCommit {
-                data,
+                data: RaftCommitData::Proposed(data),
                 ..RaftCommit::default()
             });
         }
