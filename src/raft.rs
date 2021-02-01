@@ -201,9 +201,11 @@ impl RaftNode {
     async fn next_event(&mut self) -> Option<()> {
         match timeout_at(self.tick_timeout_at, self.cmd_rx.recv()).await {
             Ok(Some(RaftCmd::Propose { data })) => {
+                trace!("next_event Propose({}, {:?})", self.node.raft.id, data);
                 self.propose_data_backlog.push(data);
             }
             Ok(Some(RaftCmd::Snapshot { idx, data })) => {
+                trace!("next_event snapshot({}, idx: {})", self.node.raft.id, idx);
                 let mut wl = self.node.mut_store().wl();
                 let (prev_idx, need_compact) = self.previous_snapshot_idx;
                 if idx != prev_idx {
@@ -235,6 +237,7 @@ impl RaftNode {
                     ?self.incoming_msgs_count,
                     ?self.committed_entries_and_groups_count,
                     ?self.outgoing_msgs_and_groups_count,
+                    ?self.previous_snapshot_idx,
                     "Closing Raft: Summary"
                 );
                 return None;
