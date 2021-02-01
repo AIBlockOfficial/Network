@@ -119,6 +119,8 @@ pub struct RaftNode {
     incoming_msgs_count: usize,
     /// Total tick count.
     total_tick_count: usize,
+    /// Last snapshot index, and whether it need compacting.
+    previous_snapshot_idx: (u64, bool),
 }
 
 impl RaftNode {
@@ -153,6 +155,7 @@ impl RaftNode {
             outgoing_msgs_and_groups_count: (0, 0),
             incoming_msgs_count: 0,
             total_tick_count: 0,
+            previous_snapshot_idx: (0, false),
         }
     }
 
@@ -202,8 +205,14 @@ impl RaftNode {
             }
             Ok(Some(RaftCmd::Snapshot { idx, data })) => {
                 let mut wl = self.node.mut_store().wl();
-                wl.create_snapshot(idx, None, None, data).unwrap();
-                wl.compact(idx).unwrap();
+                let (prev_idx, need_compact) = self.previous_snapshot_idx;
+                if idx != prev_idx {
+                    wl.create_snapshot(idx, None, None, data).unwrap();
+                }
+                if need_compact {
+                    wl.compact(prev_idx).unwrap();
+                }
+                self.previous_snapshot_idx = (idx, idx != prev_idx);
             }
             Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => {
                 trace!("next_event receive message({}, {:?})", self.node.raft.id, m);
@@ -440,8 +449,10 @@ mod tests {
         close_nodes_loops(test_nodes, join_handles).await;
     }
 
+    // Setup a peer group running all raft loops and dispatching messages.
+    // Node not receiving message can catch up, snapshot exist but record still there.
     #[tokio::test(basic_scheduler)]
-    async fn test_snap_catch_up_3() {
+    async fn test_skip_snapshot_catch_up_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
@@ -451,15 +462,81 @@ mod tests {
 
         info!("Process with majority ignoring unresponsive node");
         all_recv_send_proposed_data(majority_test_nodes, 0, vec![17]).await;
-        info!("Snapshot");
         all_snapshot(majority_test_nodes, snapshot.clone()).await;
+        all_recv_send_proposed_data(majority_test_nodes, 0, vec![33]).await;
+
+        info!("Unresponsive node back catching up");
+        peer_msg_lost.lock().await.clear();
+        let commit0 = one_recv_commited(last_test_node).await;
+        assert_eq!(commit0, vec![vec![17]]);
+        let commit1 = one_recv_commited(last_test_node).await;
+        assert_eq!(commit1, vec![vec![33]]);
+
+        info!("Complete test");
+        close_nodes_loops(test_nodes, join_handles).await;
+    }
+
+    // Setup a peer group running all raft loops and dispatching messages.
+    // Node not receiving message can catch up, need to use snapshot as record is gone.
+    #[tokio::test(basic_scheduler)]
+    async fn test_snap_catch_up_3() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let (peer_indexes, mut test_nodes) = test_configs(3);
+        let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
+        let join_handles = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
+        let (snapshot1, snapshot2) = (vec![12], vec![13]);
+
+        info!("Process with majority ignoring unresponsive node");
+        all_recv_send_proposed_data(majority_test_nodes, 0, vec![17]).await;
+        info!("Two Snapshot so record compacted up to first one");
+        all_snapshot(majority_test_nodes, snapshot1.clone()).await;
+        all_snapshot(majority_test_nodes, snapshot2).await;
         info!("Proposal after snapshot");
         all_recv_send_proposed_data(majority_test_nodes, 0, vec![33]).await;
 
         info!("Unresponsive node back catching up");
         peer_msg_lost.lock().await.clear();
         let commit0 = one_recv_commited(last_test_node).await;
-        assert_eq!(commit0, vec![snapshot]);
+        assert_eq!(commit0, vec![snapshot1]);
+        let commit0 = one_recv_commited(last_test_node).await;
+        assert_eq!(commit0, vec![vec![33]]);
+
+        info!("Complete test");
+        close_nodes_loops(test_nodes, join_handles).await;
+    }
+
+    // Setup a peer group running all raft loops and dispatching messages.
+    // Node not receiving message can catch up, and then need to use snapshot as record is gone.
+    #[tokio::test(basic_scheduler)]
+    async fn test_snap_catch_up_after_start_3() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let (peer_indexes, mut test_nodes) = test_configs(3);
+        let peer_msg_lost_set: HashSet<u64> = Some(3).into_iter().collect();
+        let peer_msg_lost = Arc::new(Mutex::new(peer_msg_lost_set.clone()));
+        let join_handles = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
+        let (snapshot1, snapshot2) = (vec![12], vec![13]);
+
+        info!("Process with majority ignoring unresponsive node and catch up");
+        all_recv_send_proposed_data(majority_test_nodes, 0, vec![17]).await;
+        peer_msg_lost.lock().await.clear();
+        let commit0 = one_recv_commited(last_test_node).await;
+        assert_eq!(commit0, vec![vec![17]]);
+        *peer_msg_lost.lock().await = peer_msg_lost_set;
+
+        info!("Process with majority ignoring unresponsive node");
+        all_recv_send_proposed_data(majority_test_nodes, 0, vec![18]).await;
+        info!("Two Snapshot so record compacted up to first one");
+        all_snapshot(majority_test_nodes, snapshot1.clone()).await;
+        all_snapshot(majority_test_nodes, snapshot2).await;
+        info!("Proposal after snapshot");
+        all_recv_send_proposed_data(majority_test_nodes, 0, vec![33]).await;
+
+        info!("Unresponsive node back catching up");
+        peer_msg_lost.lock().await.clear();
+        let commit0 = one_recv_commited(last_test_node).await;
+        assert_eq!(commit0, vec![snapshot1]);
         let commit0 = one_recv_commited(last_test_node).await;
         assert_eq!(commit0, vec![vec![33]]);
 
