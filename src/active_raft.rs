@@ -155,4 +155,11 @@ impl ActiveRaft {
             });
         }
     }
+
+    /// Create a snapshot at the given idx with the given data.
+    pub fn create_snapshot(&mut self, idx: u64, data: RaftData) {
+        if self.use_raft {
+            self.cmd_tx.send(RaftCmd::Snapshot { idx, data }).unwrap();
+        }
+    }
 }

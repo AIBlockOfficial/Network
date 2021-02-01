@@ -427,6 +427,7 @@ impl ComputeNode {
                     match self.node_raft.received_commit(commit_data).await {
                         Some(CommittedItem::FirstBlock) => {
                             self.node_raft.generate_first_block();
+                            self.node_raft.event_processed_generate_snapshot();
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "First Block committed",
@@ -435,6 +436,7 @@ impl ComputeNode {
                         Some(CommittedItem::Block) => {
                             self.validate_wining_miner_tx();
                             self.node_raft.generate_block();
+                            self.node_raft.event_processed_generate_snapshot();
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block committed",
