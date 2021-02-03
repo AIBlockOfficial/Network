@@ -3,6 +3,7 @@
 use clap::{App, Arg};
 use system::configurations::StorageNodeConfig;
 use system::{Response, StorageNode};
+use tracing::error;
 
 #[tokio::main]
 async fn main() {
@@ -90,7 +91,9 @@ async fn main() {
                         reason: "Block complete stored",
                     }) => {
                         println!("Block stored: Send to compute");
-                        node.send_stored_block().await.unwrap();
+                        if let Err(e) = node.send_stored_block().await {
+                            error!("Block stored not sent {:?}", e);
+                        }
                     }
                     Ok(Response {
                         success: true,
