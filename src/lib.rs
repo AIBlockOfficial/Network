@@ -36,7 +36,7 @@ pub use storage::StorageNode;
 pub use user::UserNode;
 pub use utils::{
     command_input_to_socket, create_and_save_fake_to_wallet, create_valid_transaction,
-    get_sanction_addresses,
+    create_valid_transaction_with_info, get_sanction_addresses,
 };
 
 #[cfg(not(features = "mock"))]

@@ -20,6 +20,12 @@ async fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("initial_block_config")
+                .long("initial_block_config")
+                .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("api_port")
                 .long("api_port")
                 .help("The port to run the http API from")
@@ -68,6 +74,9 @@ async fn main() {
         let setting_file = matches
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
+        let intial_block_setting_file = matches
+            .value_of("initial_block_config")
+            .unwrap_or("src/bin/initial_block.json");
 
         settings.set_default("api_port", 3000).unwrap();
         settings.set_default("user_node_idx", 0).unwrap();
@@ -75,6 +84,9 @@ async fn main() {
         settings.set_default("peer_user_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
+            .unwrap();
+        settings
+            .merge(config::File::with_name(intial_block_setting_file))
             .unwrap();
 
         if let Some(index) = matches.value_of("index") {

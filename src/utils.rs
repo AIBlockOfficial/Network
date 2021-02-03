@@ -1,7 +1,8 @@
 use crate::comms_handler::Node;
-use crate::constants::MINING_DIFFICULTY;
+use crate::configurations::{InititalTxSpec, UtxoSetSpec, WalletTxSpec};
+use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION};
 use crate::interfaces::ProofOfWork;
-use crate::wallet::WalletDb;
+use crate::wallet::{construct_address, WalletDb};
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
     construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
@@ -214,6 +215,7 @@ fn validate_pow(pow: &[u8]) -> bool {
     pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
 }
 
+/// Create a valid transaction from givent info
 pub fn create_valid_transaction(
     t_hash_hex: &str,
     prev_n: i32,
@@ -229,6 +231,23 @@ pub fn create_valid_transaction(
     )
 }
 
+/// Create a valid transaction from givent info
+pub fn create_valid_transaction_with_info(tx: &InititalTxSpec) -> (String, Transaction) {
+    let tx_out_p = decode_wallet_out_point(&tx.out_point);
+    let sk = decode_secret_key(&tx.secret_key);
+    let pk = decode_pub_key(&tx.public_key);
+    let receiver_public_key = decode_pub_key(&tx.receiver_public_key);
+    let receiver_address = construct_address(receiver_public_key, NETWORK_VERSION).address;
+
+    create_valid_transaction_with_ins_outs(
+        &[(tx_out_p.n, &tx_out_p.t_hash)],
+        &[&receiver_address],
+        &pk,
+        &sk,
+    )
+}
+
+/// Create a valid transaction from givent info
 pub fn create_valid_transaction_with_ins_outs(
     tx_in: &[(i32, &str)],
     receiver_addr_hexs: &[&str],
@@ -272,14 +291,51 @@ pub fn create_valid_transaction_with_ins_outs(
     (t_hash, payment_tx)
 }
 
-pub fn make_utxo_set_from_seed(seed: &[(i32, String)]) -> BTreeMap<String, Transaction> {
+/// Generate utxo_set transactions from seed info
+pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
     seed.iter()
-        .map(|(n, hash)| {
+        .map(|(tx_hash, public_keys)| {
             let tx = Transaction {
-                outputs: (0..*n).map(|_| TxOut::new()).collect(),
+                outputs: public_keys
+                    .iter()
+                    .map(|tx_out| {
+                        let pk_slice = hex::decode(&tx_out.public_key).unwrap();
+                        let pk = PublicKey::from_slice(&pk_slice).unwrap();
+                        let script_public_key = construct_address(pk, NETWORK_VERSION).address;
+
+                        TxOut::new_amount(script_public_key, TokenAmount::default())
+                    })
+                    .collect(),
                 ..Transaction::default()
             };
-            (hash.clone(), tx)
+            (tx_hash.clone(), tx)
         })
         .collect()
+}
+
+/// Generate wallet transactions from seed info
+pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
+    let tx_out_p = decode_wallet_out_point(&seed.out_point);
+    let amount = TokenAmount(seed.amount);
+    let sk = decode_secret_key(&seed.secret_key);
+    let pk = decode_pub_key(&seed.public_key);
+
+    (tx_out_p, pk, sk, amount)
+}
+
+pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
+    let mut it = out_point.split('-');
+    let n = it.next().unwrap().parse().unwrap();
+    let tx_hash = it.next().unwrap().parse().unwrap();
+    OutPoint::new(tx_hash, n)
+}
+
+pub fn decode_pub_key(key: &str) -> PublicKey {
+    let key_slice = hex::decode(key).unwrap();
+    PublicKey::from_slice(&key_slice).unwrap()
+}
+
+pub fn decode_secret_key(key: &str) -> SecretKey {
+    let key_slice = hex::decode(key).unwrap();
+    SecretKey::from_slice(&key_slice).unwrap()
 }
