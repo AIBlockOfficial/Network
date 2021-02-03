@@ -52,7 +52,7 @@ pub enum ProposeBlockTimeout {
 
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StorageConsensused {
     /// Sufficient majority
     sufficient_majority: usize,
@@ -62,6 +62,8 @@ pub struct StorageConsensused {
     current_block_complete_timeout_peer_ids: BTreeSet<u64>,
     /// Part block completed by Peer ids.
     current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
+    /// The last commited raft index.
+    last_committed_raft_idx_and_term: (u64, u64),
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -144,13 +146,22 @@ impl StorageRaft {
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<()> {
+        self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
-            RaftCommitData::Snapshot(_data) => panic!("Not implemented"),
+            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
         }
     }
 
-    pub async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
+    /// Apply snapshot
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<()> {
+        warn!("apply_snapshot called self.consensused updated");
+        self.consensused = deserialize(&consensused_ser).unwrap();
+        None
+    }
+
+    /// Apply commited proposal
+    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
         let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
             Ok((key, item)) => (key, item),
             Err(error) => {
@@ -257,6 +268,16 @@ impl StorageRaft {
             common,
             per_node: mined_info,
         });
+    }
+
+    /// Generate a snapshot, needs to happen at the end of the event processing.
+    pub fn event_processed_generate_snapshot(&mut self) {
+        let consensused_ser = serialize(&self.consensused).unwrap();
+        let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
+
+        debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
+        self.raft_active
+            .create_snapshot(snapshot_idx, consensused_ser);
     }
 
     pub fn generate_complete_block(&mut self) -> CompleteBlock {

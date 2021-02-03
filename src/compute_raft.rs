@@ -193,11 +193,19 @@ impl ComputeRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
-            RaftCommitData::Snapshot(_data) => panic!("Not implemented"),
+            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
         }
     }
 
-    pub async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
+    /// Apply snapshot
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
+        warn!("apply_snapshot called self.consensused updated");
+        self.consensused = deserialize(&consensused_ser).unwrap();
+        None
+    }
+
+    /// Apply commited proposal
+    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
         let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
             Ok((key, item)) => {
                 if self.proposed_in_flight.remove(&key).is_some() {
