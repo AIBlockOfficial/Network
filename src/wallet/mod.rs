@@ -1,8 +1,9 @@
-use crate::configurations::DbMode;
+use crate::configurations::{DbMode, WalletTxSpec};
 use crate::constants::{
     ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, NETWORK_VERSION, WALLET_PATH,
 };
 use crate::db_utils::{DBError, SimpleDb};
+use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
@@ -73,7 +74,7 @@ impl WalletDb {
         SimpleDb::new_file(save_path).unwrap()
     }
 
-    pub async fn with_seed(self, index: usize, seeds: &[Vec<String>]) -> Self {
+    pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {
         let seeds = if let Some(seeds) = seeds.get(index) {
             seeds
         } else {
@@ -81,16 +82,8 @@ impl WalletDb {
         };
 
         for seed in seeds {
-            let mut it = seed.split('-');
-
-            let n = it.next().unwrap().parse().unwrap();
-            let tx_hash = it.next().unwrap().parse().unwrap();
-            let amount = it.next().unwrap().parse().unwrap();
-
-            let amount = TokenAmount(amount);
-            let tx_out_p = OutPoint::new(tx_hash, n);
-
-            let (address, _) = self.generate_payment_address().await;
+            let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
+            let (address, _) = self.store_payment_address(pk, sk).await;
             self.save_payment_to_wallet(tx_out_p, amount, address)
                 .await
                 .unwrap();
@@ -100,12 +93,17 @@ impl WalletDb {
 
     /// Generates a new payment address, saving the related keys to the wallet
     /// TODO: Add static address capability for frequent payments
-    ///
-    /// ### Arguments
-    ///
-    /// * `net`     - Network version
     pub async fn generate_payment_address(&self) -> (PaymentAddress, AddressStore) {
         let (public_key, secret_key) = sign::gen_keypair();
+        self.store_payment_address(public_key, secret_key).await
+    }
+
+    /// Store a new payment address, saving the related keys to the wallet
+    pub async fn store_payment_address(
+        &self,
+        public_key: PublicKey,
+        secret_key: SecretKey,
+    ) -> (PaymentAddress, AddressStore) {
         let final_address = construct_address(public_key, NETWORK_VERSION);
         let address_keys = AddressStore {
             public_key,

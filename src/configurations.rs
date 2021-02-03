@@ -1,10 +1,33 @@
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
+
+pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
 
 /// Configuration info for a node
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodeSpec {
     pub address: SocketAddr,
+}
+
+/// Configuration info for a TxOut
+#[derive(Debug, Clone, Deserialize)]
+pub struct TxOutSpec {
+    /// Hex encoded public key to seed script_public_key
+    pub public_key: String,
+}
+
+/// Configuration info for a TxOut
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTxSpec {
+    /// OutPoint specification: "n-tx_hash"
+    pub out_point: String,
+    /// Hex encoded secret key
+    pub secret_key: String,
+    /// Hex encoded public key
+    pub public_key: String,
+    /// Amount for the transaction
+    pub amount: u64,
 }
 
 /// Configuration info for a database
@@ -32,9 +55,8 @@ pub struct ComputeNodeConfig {
     pub compute_raft_tick_timeout: usize,
     /// Index of the current node in compute_nodes
     pub compute_transaction_timeout: usize,
-    /// Transaction hash to use to seed utxo
-    #[serde(deserialize_with = "deserialize_compute_seed_utxo")]
-    pub compute_seed_utxo: Vec<(i32, String)>,
+    /// Transaction hash and TxOut info to use to seed utxo
+    pub compute_seed_utxo: UtxoSetSpec,
     /// Partition full size
     pub compute_partition_full_size: usize,
     /// Minimum miner pool size
@@ -106,38 +128,25 @@ pub struct UserNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// API port
     pub api_port: u16,
-    /// Wallet seeds: "user_idx-tx_hash-amount"
-    pub user_wallet_seeds: Vec<Vec<String>>,
+    /// Wallet seeds
+    pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
 }
 
 /// Configuration option for initial transactions for a compute node
 #[derive(Debug, Clone, Deserialize)]
-pub struct InititalTransactions {
-    pub t_hash: String,
-    pub receiver_address: String,
+pub struct InititalTxSpec {
+    /// OutPoint specification: "n-tx_hash"
+    pub out_point: String,
+    /// Hex encoded secret key
+    pub secret_key: String,
+    /// Hex encoded public key
+    pub public_key: String,
+    /// Hex encoded public key to send transaction to
+    pub receiver_public_key: String,
 }
 
 /// Configuration option for setup of compute node
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
-    pub compute_initial_transactions: Vec<InititalTransactions>,
-}
-
-/// Deserializing function for compute_seed_utxo field
-fn deserialize_compute_seed_utxo<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<(i32, String)>, D::Error> {
-    let values: Vec<String> = Deserialize::deserialize(deserializer)?;
-    Ok(values.iter().map(|s| config_to_out_point(&s)).collect())
-}
-
-/// Generating the compute_seed_utxo values from given seed string
-fn config_to_out_point(seed: &str) -> (i32, String) {
-    let mut it = seed.split('-');
-
-    match (it.next(), it.next()) {
-        (Some(h), None) => (1, h.to_string()),
-        (Some(n), Some(h)) => (n.parse::<i32>().unwrap(), h.to_string()),
-        _ => panic!("invalid seed: {}", seed),
-    }
+    pub compute_initial_transactions: Vec<Vec<InititalTxSpec>>,
 }

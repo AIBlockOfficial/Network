@@ -5,6 +5,7 @@
 use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
+    UtxoSetSpec, WalletTxSpec,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -12,7 +13,6 @@ use crate::user::UserNode;
 use crate::utils::make_utxo_set_from_seed;
 use futures::future::join_all;
 use naom::primitives::transaction::Transaction;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub struct Network {
 
 /// Represents a virtual network configuration.
 /// Can be created using the builder or deserialized from JSON.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct NetworkConfig {
     pub initial_port: u16,
     pub compute_raft: bool,
@@ -53,8 +53,8 @@ pub struct NetworkConfig {
     pub in_memory_db: bool,
     pub compute_partition_full_size: usize,
     pub compute_minimum_miner_pool_len: usize,
-    pub compute_seed_utxo: Vec<(i32, String)>,
-    pub user_wallet_seeds: Vec<Vec<String>>,
+    pub compute_seed_utxo: UtxoSetSpec,
+    pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     pub miner_nodes: Vec<String>,
     pub compute_nodes: Vec<String>,
     pub storage_nodes: Vec<String>,

@@ -690,7 +690,7 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::configurations::NodeSpec;
+    use crate::configurations::{NodeSpec, TxOutSpec};
     use crate::utils::create_valid_transaction;
     use sodiumoxide::crypto::sign;
     use std::collections::BTreeSet;
@@ -969,6 +969,10 @@ mod test {
         let compute_node = NodeSpec {
             address: "0.0.0.0:0".parse().unwrap(),
         };
+        let tx_out = TxOutSpec {
+            public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
+                .to_owned(),
+        };
         let compute_config = ComputeNodeConfig {
             compute_raft: 0,
             compute_node_idx: 0,
@@ -977,7 +981,10 @@ mod test {
             user_nodes: vec![],
             compute_raft_tick_timeout: 10,
             compute_transaction_timeout: 50,
-            compute_seed_utxo: seed_utxo.iter().map(|v| (1, v.to_string())).collect(),
+            compute_seed_utxo: seed_utxo
+                .iter()
+                .map(|v| (v.to_string(), vec![tx_out.clone()]))
+                .collect(),
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
             jurisdiction: "US".to_string(),

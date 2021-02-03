@@ -1,6 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
+use crate::configurations::{TxOutSpec, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{DB_PATH, DB_PATH_TEST, SANC_LIST_TEST, WALLET_PATH};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
@@ -41,6 +42,9 @@ const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
 const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
 const BLOCK_RECEIVED_AND_STORED: [&str; 2] = [BLOCK_RECEIVED, BLOCK_STORED];
+
+const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_SEC_KEY: &str = "0186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca45371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Cfg {
@@ -1734,10 +1738,8 @@ fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
         println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
         (pk, sk)
     } else {
-        let sk_slice = hex::decode("0186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca45371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c").unwrap();
-        let pk_slice =
-            hex::decode("5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c")
-                .unwrap();
+        let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
+        let pk_slice = hex::decode(COMMON_PUB_KEY).unwrap();
         let sk = SecretKey::from_slice(&sk_slice).unwrap();
         let pk = PublicKey::from_slice(&pk_slice).unwrap();
         (pk, sk)
@@ -1755,6 +1757,21 @@ fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
     }
 
     transactions
+}
+
+fn make_compute_seed_utxo(seed: &[(i32, &str)]) -> UtxoSetSpec {
+    seed.iter()
+        .map(|(n, v)| {
+            (
+                v.to_string(),
+                (0..*n)
+                    .map(|_| TxOutSpec {
+                        public_key: COMMON_PUB_KEY.to_owned(),
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
@@ -1790,8 +1807,13 @@ fn merge_txs_3(v1: &UtxoSet, v2: &UtxoSet, v3: &UtxoSet) -> UtxoSet {
         .collect()
 }
 
-fn wallet_seed(out_p: (i32, &str), amount: &TokenAmount) -> String {
-    format!("{}-{}-{}", out_p.0, out_p.1, amount.0)
+fn wallet_seed(out_p: (i32, &str), amount: &TokenAmount) -> WalletTxSpec {
+    WalletTxSpec {
+        out_point: format!("{}-{}", out_p.0, out_p.1),
+        secret_key: COMMON_SEC_KEY.to_owned(),
+        public_key: COMMON_PUB_KEY.to_owned(),
+        amount: amount.0,
+    }
 }
 
 fn valid_txs_in() -> UtxoSet {
@@ -1886,7 +1908,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
-        compute_seed_utxo: SEED_UTXO.iter().map(|(n, v)| (*n, v.to_string())).collect(),
+        compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO),
         user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()

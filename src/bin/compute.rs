@@ -1,10 +1,9 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use sodiumoxide::crypto::sign;
 use std::time::Duration;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
-use system::{create_valid_transaction, get_sanction_addresses, SANC_LIST_PROD};
+use system::{create_valid_transaction_with_info, get_sanction_addresses, SANC_LIST_PROD};
 use system::{ComputeNode, ComputeRequest, Response};
 
 #[tokio::main]
@@ -21,6 +20,12 @@ async fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("initial_block_config")
+                .long("initial_block_config")
+                .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
@@ -34,6 +39,9 @@ async fn main() {
         let setting_file = matches
             .value_of("config")
             .unwrap_or("src/bin/node_settings.toml");
+        let intial_block_setting_file = matches
+            .value_of("initial_block_config")
+            .unwrap_or("src/bin/initial_block.json");
 
         settings
             .set_default("sanction_list", Vec::<String>::new())
@@ -51,6 +59,9 @@ async fn main() {
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
+        settings
+            .merge(config::File::with_name(intial_block_setting_file))
+            .unwrap();
         if let Some(index) = matches.value_of("index") {
             settings.set("compute_node_idx", index).unwrap();
         }
@@ -60,8 +71,10 @@ async fn main() {
         (setup, config)
     };
     println!("Start node with config {:?}", config);
+    println!("Start node with setup {:?}", setup);
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
+    let compute_node_idx = config.compute_node_idx;
     let node = ComputeNode::new(config).await.unwrap();
 
     println!("Started node at {}", node.address());
@@ -85,25 +98,17 @@ async fn main() {
         let mut node = node;
 
         // Kick off with some transactions
-        let initial_send_transactions = {
-            let (pk, sk) = sign::gen_keypair();
+        let initial_send_transactions = setup
+            .compute_initial_transactions
+            .get(compute_node_idx)
+            .map(|tx_seeds| {
+                let transactions = tx_seeds
+                    .iter()
+                    .map(create_valid_transaction_with_info)
+                    .collect();
 
-            let transactions = setup
-                .compute_initial_transactions
-                .iter()
-                .map(|transaction| {
-                    create_valid_transaction(
-                        &transaction.t_hash,
-                        0,
-                        &transaction.receiver_address,
-                        &pk,
-                        &sk,
-                    )
-                })
-                .collect();
-
-            ComputeRequest::SendTransactions { transactions }
-        };
+                ComputeRequest::SendTransactions { transactions }
+            });
 
         while let Err(e) = node.connect_to_storage().await {
             println!("Storage connection error: {:?}", e);
@@ -154,12 +159,12 @@ async fn main() {
                         println!("First Block ready to mine: {:?}", node.get_mining_block());
                         node.flood_rand_num_to_requesters().await.unwrap();
 
-                        // Only add transactions when they can be accepted
-                        let resp = node.inject_next_event(
-                            "0.0.0.0:6666".parse().unwrap(),
-                            initial_send_transactions.clone(),
-                        );
-                        println!("initial transactions inject Response: {:?}", resp);
+                        if let Some(txs) = &initial_send_transactions {
+                            // Only add transactions when they can be accepted
+                            let resp = node
+                                .inject_next_event("0.0.0.0:6666".parse().unwrap(), txs.clone());
+                            println!("initial transactions inject Response: {:?}", resp);
+                        }
                     }
                     Ok(Response {
                         success: true,
