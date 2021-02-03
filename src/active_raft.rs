@@ -1,6 +1,7 @@
 use crate::configurations::NodeSpec;
 use crate::raft::{
-    CommitReceiver, RaftCmd, RaftCmdSender, RaftData, RaftMessageWrapper, RaftMsgReceiver, RaftNode,
+    CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
+    RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -23,7 +24,7 @@ pub struct ActiveRaft {
     msg_out_rx: Arc<Mutex<RaftMsgReceiver>>,
     /// Channel to receive commited entries from the running RaftNode to process.
     /// and extra data not processed yet.
-    committed_rx: Arc<Mutex<(CommitReceiver, VecDeque<RaftData>)>>,
+    committed_rx: Arc<Mutex<(CommitReceiver, VecDeque<RaftCommit>)>>,
     /// Map to the address of the peers.
     peer_addr: HashMap<u64, SocketAddr>,
     /// Collection of the peer this node is responsible to connect to.
@@ -118,7 +119,7 @@ impl ActiveRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<RaftData> {
+    pub async fn next_commit(&self) -> Option<RaftCommit> {
         let mut committed_rx = self.committed_rx.lock().await;
 
         loop {
@@ -148,7 +149,17 @@ impl ActiveRaft {
         if self.use_raft {
             self.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
         } else {
-            self.committed_rx.lock().await.1.push_back(data);
+            self.committed_rx.lock().await.1.push_back(RaftCommit {
+                data: RaftCommitData::Proposed(data),
+                ..RaftCommit::default()
+            });
+        }
+    }
+
+    /// Create a snapshot at the given idx with the given data.
+    pub fn create_snapshot(&mut self, idx: u64, data: RaftData) {
+        if self.use_raft {
+            self.cmd_tx.send(RaftCmd::Snapshot { idx, data }).unwrap();
         }
     }
 }

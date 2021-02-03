@@ -8,6 +8,12 @@ echo " "
 cargo build --bins --release
 echo " "
 echo "//-----------------------------//"
+echo "Delete databases"
+echo "//-----------------------------//"
+echo " "
+rm -rf src/db/db/test.* src/wallet/wallet/test.*
+echo " "
+echo "//-----------------------------//"
 echo "Running nodes for node_settings_local_raft.toml"
 echo "//-----------------------------//"
 echo " "
@@ -34,5 +40,6 @@ c10=$!
 RUST_LOG="debug" target/release/user  --config=src/bin/node_settings_local_raft.toml --compute_connect > user_0.log 2>&1 &
 c11=$!
 
+echo $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10 $c11
 trap 'echo Kill All $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10 $c11; kill $c1 $c2 $c3 $c4 $c5 $c6 $c7 $c8 $c9 $c10 $c11' INT
 tail -f storage_1.log

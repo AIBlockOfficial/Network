@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
-use crate::raft::{RaftData, RaftMessageWrapper};
+use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -137,13 +137,20 @@ impl StorageRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<RaftData> {
+    pub async fn next_commit(&self) -> Option<RaftCommit> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<()> {
+    pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<()> {
+        match raft_commit.data {
+            RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
+            RaftCommitData::Snapshot(_data) => panic!("Not implemented"),
+        }
+    }
+
+    pub async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
         let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
             Ok((key, item)) => (key, item),
             Err(error) => {

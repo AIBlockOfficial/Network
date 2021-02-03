@@ -2,7 +2,7 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
-use crate::raft::{RaftData, RaftMessageWrapper};
+use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::utils::make_utxo_set_from_seed;
 use bincode::{deserialize, serialize};
 use naom::primitives::block::Block;
@@ -55,7 +55,7 @@ pub enum AccumulatingBlockStoredInfo {
 
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ComputeConsensused {
     /// Sufficient majority
     unanimous_majority: usize,
@@ -81,6 +81,8 @@ pub struct ComputeConsensused {
     /// Require majority of compute node votes for normal blocks.
     /// Require unanimit for first block.
     current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+    /// The last commited raft index.
+    last_committed_raft_idx_and_term: (u64, u64),
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -181,13 +183,21 @@ impl ComputeRaft {
     }
 
     /// Blocks & waits for a next commit from a peer.
-    pub async fn next_commit(&self) -> Option<RaftData> {
+    pub async fn next_commit(&self) -> Option<RaftCommit> {
         self.raft_active.next_commit().await
     }
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    pub async fn received_commit(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
+    pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
+        self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
+        match raft_commit.data {
+            RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
+            RaftCommitData::Snapshot(_data) => panic!("Not implemented"),
+        }
+    }
+
+    pub async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
         let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
             Ok((key, item)) => {
                 if self.proposed_in_flight.remove(&key).is_some() {
@@ -388,6 +398,16 @@ impl ComputeRaft {
     /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
         self.consensused.take_mining_block()
+    }
+
+    /// Generate a snapshot, needs to happen at the end of the event processing.
+    pub fn event_processed_generate_snapshot(&mut self) {
+        let consensused_ser = serialize(&self.consensused).unwrap();
+        let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
+
+        debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
+        self.raft_active
+            .create_snapshot(snapshot_idx, consensused_ser);
     }
 
     /// Processes the very first block with utxo_set

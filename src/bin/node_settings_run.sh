@@ -8,6 +8,12 @@ echo " "
 cargo build --bins --release
 echo " "
 echo "//-----------------------------//"
+echo "Delete databases"
+echo "//-----------------------------//"
+echo " "
+rm -rf src/db/db/test.* src/wallet/wallet/test.*
+echo " "
+echo "//-----------------------------//"
 echo "Running nodes for node_settings_local_raft.toml"
 echo "//-----------------------------//"
 echo " "
