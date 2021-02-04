@@ -668,7 +668,6 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
-    /// 
     /// ### Arguments
     ///
     /// * `key`   - ComputerRaftKey object of the first block
