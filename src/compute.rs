@@ -122,7 +122,7 @@ pub struct ComputeNode {
     pub sanction_list: Vec<String>,
 }
 
-impl<'a> ComputeNode {
+impl ComputeNode {
     /// Generates a new compute node instance
     ///
     /// ### Arguments
@@ -811,14 +811,10 @@ impl ComputeInterface for ComputeNode {
             .filter(|(_, tx)| !tx.is_coinbase())
             .filter(|(_, tx)| {
                 tx_ins_are_valid(&tx.inputs, |v| {
-                    if utxo_set.contains_key(&v)
-                        && !self.sanction_list.contains(&v.t_hash)
-                        && self.lock_expired(&utxo_set, &v)
-                    {
-                        return utxo_set.get(&v);
-                    }
-
-                    None
+                    utxo_set
+                        .get(&v)
+                        .filter(|_| !self.sanction_list.contains(&v.t_hash))
+                        .filter(|_| self.lock_expired(&utxo_set, &v))
                 })
             })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))

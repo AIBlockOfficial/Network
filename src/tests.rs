@@ -420,7 +420,6 @@ async fn add_transactions(network_config: NetworkConfig) {
     let compute_nodes = &network_config.compute_nodes;
     let transactions = valid_transactions(true);
 
-    println!("TRANSACTIONS: {:?}", transactions);
     create_first_block_act(&mut network).await;
 
     //
@@ -1899,8 +1898,6 @@ fn complete_block(
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
-    println!("UTXO IN CONFIG: {:?}", make_compute_seed_utxo(SEED_UTXO));
-
     NetworkConfig {
         initial_port,
         compute_raft: false,
