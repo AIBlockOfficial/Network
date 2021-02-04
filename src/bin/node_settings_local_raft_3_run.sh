@@ -17,13 +17,32 @@ echo "//-----------------------------//"
 echo "Running nodes for node_settings_local_raft_3.toml"
 echo "//-----------------------------//"
 echo " "
-RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2 > storage_2.log 2>&1 &
+
+# Using https://unix.stackexchange.com/questions/68956/block-network-access-of-a-process
+# create groups:
+# > sudo groupadd test_s2
+# > sudo groupadd test_c2
+# > sudo usermod -a -G test_s2 $USER
+# > sudo usermod -a -G test_c2 $USER
+# > sudo groups $USER
+if [ "$1" = "use_test_groups" ]
+then
+    TEST_S2="test_s2"
+    TEST_C2="test_c2"
+else
+    TEST_S2=$USER
+    TEST_C2=$USER
+fi
+sg $TEST_S2 "echo use $TEST_S2 group for storage 2"
+sg $TEST_C2 "echo use $TEST_C2 group for compute 2"
+
+RUST_LOG="debug,raft=warn" sg $TEST_S2 "target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
 s2=$!
 RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=1 > storage_1.log 2>&1 &
 s1=$!
 RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="warn" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2 > compute_2.log 2>&1 &
+RUST_LOG="warn" sg $TEST_C2 "target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
 c2=$!
 RUST_LOG="warn" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=1 > compute_1.log 2>&1 &
 c1=$!

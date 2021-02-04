@@ -291,6 +291,9 @@ impl RaftNode {
                 .wl()
                 .apply_snapshot(ready.snapshot().clone())
                 .unwrap();
+
+            let snap_idx = ready.snapshot().get_metadata().index;
+            self.previous_snapshot_idx = (snap_idx, false);
         }
 
         if !ready.entries().is_empty() {
