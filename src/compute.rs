@@ -127,7 +127,7 @@ impl ComputeNode {
     ///
     /// ### Arguments
     ///
-    /// * `address` - Address for the current compute node
+    /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
     pub async fn new(config: ComputeNodeConfig) -> Result<ComputeNode> {
         let addr = config
             .compute_nodes
@@ -307,10 +307,17 @@ impl ComputeNode {
         }
     }
 
+    ///Returns the mining block from the node_raft
     pub fn get_mining_block(&self) -> &Option<Block> {
         self.node_raft.get_mining_block()
     }
 
+    /// Sets the commited mining block to the given block and transaction BTreeMap
+    ///
+    /// ### Arguments
+    ///
+    /// * `block`  - Block to be set to commited mining block
+    /// * `block_tx` - BTreeMap of the block transactions
     pub fn set_committed_mining_block(
         &mut self,
         block: Block,
@@ -401,7 +408,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `address` - Address of the contributing node
-    /// * `pow`     - PoW to flood
+    /// * `_commit` - POW reference (&ProofOfWork)
     pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
         println!("Flooding commit to peers not implemented");
     }
@@ -469,7 +476,11 @@ impl ComputeNode {
             }
         }
     }
-
+    /// Haddles errors or events that are passed
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Error or event to be handled
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
             Event::NewFrame { peer, frame } => {
@@ -482,6 +493,10 @@ impl ComputeNode {
     }
 
     /// Hanldes a new incoming message from a peer.
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer's address
+    /// * 'frame' - Bytes representing the new frame.
     async fn handle_new_frame(
         &mut self,
         peer: SocketAddr,
@@ -500,6 +515,10 @@ impl ComputeNode {
     }
 
     /// Handles a compute request.
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer's address
+    /// * 'req' - ComputeRequest object holding the request
     async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
         trace!("handle_request");
@@ -521,6 +540,9 @@ impl ComputeNode {
 
     /// Receive a partition request from a miner node
     /// TODO: This may need to be part of the ComputeInterface depending on key agreement
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer's address
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
         if self.request_list_first_flood == Some(self.request_list.len()) {
@@ -538,6 +560,10 @@ impl ComputeNode {
     }
 
     /// Receives the light POW for partition inclusion
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer's address
+    /// * 'partition_entry' - ProofOfWork object for the partition entry being recieved.
     fn receive_partition_entry(
         &mut self,
         peer: SocketAddr,
@@ -624,6 +650,12 @@ impl ComputeNode {
         Ok(())
     }
 
+    /// Logs the winner of the block and changes the current block to a new block to be mined
+    /// ### Arguments
+    ///
+    /// * `nonce` - Sequence number in a Vec<u8>
+    /// * 'miner' - address of the miner who won the block
+    /// * 'mining_transaction' - String and transaction to be put into a BTreeMap    
     pub fn mining_block_mined(
         &mut self,
         nonce: Vec<u8>,
@@ -648,6 +680,7 @@ impl ComputeNode {
         });
     }
 
+    ///Validates the miner who won as the winner of the block.
     fn validate_wining_miner_tx(&mut self) {
         if let Some((miner, tx_hash, false)) = self.last_coinbase_hash.take() {
             let utxo_set = self.node_raft.get_committed_utxo_set();
@@ -689,6 +722,12 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
+    /// recieves commit of ProofOfWork
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`    - Address of the node commiting the proof of work
+    /// * `commit`     - ProofOfWork for a block coming from address address
     fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
         if let Some(entry) = self.unicorn_list.get_mut(&address) {
             if entry.is_valid(commit.clone()) {
@@ -711,6 +750,13 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
+    /// Recieves a ProofOfWork from miner
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`    - Address of miner
+    /// * `nonce`          - Sequenc number of the block held in a Vec<u8>
+    /// * 'coinbase' - The transaction object  of the mining 
     fn receive_pow(
         &mut self,
         address: SocketAddr,
