@@ -169,7 +169,7 @@ impl StorageNode {
                     if self.node_raft.received_commit(commit_data).await.is_some() {
                         let block = self.node_raft.generate_complete_block();
                         self.store_complete_block(block);
-
+                        self.node_raft.event_processed_generate_snapshot();
                         return Some(Ok(Response{
                             success: true,
                             reason: "Block complete stored",

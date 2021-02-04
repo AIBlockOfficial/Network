@@ -64,7 +64,7 @@ impl ActiveRaft {
         // TODO: Connect to all other peers once connection can succeed from both sides.
         let raft_peers_to_connect = peer_addr_vec
             .iter()
-            .filter(|(idx, _)| *idx > peer_id)
+            .filter(|(idx, _)| *idx < peer_id)
             .map(|(_, addr)| *addr)
             .collect();
 

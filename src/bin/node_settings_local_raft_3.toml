@@ -1,0 +1,60 @@
+storage_db_mode = {Test = 0}
+miner_db_mode = {Test = 0}
+user_db_mode = {Test = 1000}
+compute_raft = 1
+storage_raft = 1
+compute_partition_full_size = 2
+compute_minimum_miner_pool_len = 3
+
+#first node is leader
+[[compute_nodes]]
+address = "127.0.0.1:12300"
+
+[[compute_nodes]]
+address = "127.0.0.1:12301"
+
+[[compute_nodes]]
+address = "127.0.0.1:12302"
+
+[[storage_nodes]]
+address = "127.0.0.1:8080"
+
+[[storage_nodes]]
+address = "127.0.0.1:8081"
+
+[[storage_nodes]]
+address = "127.0.0.1:8082"
+
+[[miner_nodes]]
+address = "127.0.0.1:12340"
+
+[[miner_nodes]]
+address = "127.0.0.1:12341"
+
+[[miner_nodes]]
+address = "127.0.0.1:12342"
+
+[[miner_nodes]]
+address = "127.0.0.1:12343"
+
+[[miner_nodes]]
+address = "127.0.0.1:12344"
+
+[[miner_nodes]]
+address = "127.0.0.1:12345"
+
+[[miner_nodes]]
+address = "127.0.0.1:12346"
+
+[[miner_nodes]]
+address = "127.0.0.1:12347"
+
+[[miner_nodes]]
+address = "127.0.0.1:12348"
+
+
+[[user_nodes]]
+address = "127.0.0.1:12360"
+
+[[user_nodes]]
+address = "127.0.0.1:12361"
