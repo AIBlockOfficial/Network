@@ -8,7 +8,7 @@ use crate::utils::{
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
     validate_pow_block, validate_pow_for_address,
 };
-use crate::wallet::{PaymentAddress, WalletDb};
+use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -90,7 +90,7 @@ pub struct MinerNode {
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
-    current_payment_address: Option<PaymentAddress>,
+    current_payment_address: Option<String>,
 }
 
 impl MinerNode {
@@ -286,7 +286,7 @@ impl MinerNode {
         let mining_tx = construct_coinbase_tx(
             TokenAmount(12000),
             block.header.time,
-            self.current_payment_address.clone().unwrap().address,
+            self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 

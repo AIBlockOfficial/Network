@@ -419,6 +419,7 @@ async fn add_transactions(network_config: NetworkConfig) {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let transactions = valid_transactions(true);
+
     create_first_block_act(&mut network).await;
 
     //

@@ -1,34 +1,18 @@
 use crate::configurations::{DbMode, WalletTxSpec};
-use crate::constants::{
-    ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, NETWORK_VERSION, WALLET_PATH,
-};
+use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, WALLET_PATH};
 use crate::db_utils::{DBError, SimpleDb};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
-use naom::primitives::transaction_utils::construct_payment_tx_ins;
+use naom::primitives::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PaymentAddress {
-    pub address: String,
-    pub net: u8,
-}
-
-/// Data structure for wallet storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionStore {
-    pub address: String,
-    pub net: u8,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
@@ -93,7 +77,7 @@ impl WalletDb {
 
     /// Generates a new payment address, saving the related keys to the wallet
     /// TODO: Add static address capability for frequent payments
-    pub async fn generate_payment_address(&self) -> (PaymentAddress, AddressStore) {
+    pub async fn generate_payment_address(&self) -> (String, AddressStore) {
         let (public_key, secret_key) = sign::gen_keypair();
         self.store_payment_address(public_key, secret_key).await
     }
@@ -103,15 +87,15 @@ impl WalletDb {
         &self,
         public_key: PublicKey,
         secret_key: SecretKey,
-    ) -> (PaymentAddress, AddressStore) {
-        let final_address = construct_address(public_key, NETWORK_VERSION);
+    ) -> (String, AddressStore) {
+        let final_address = construct_address(public_key);
         let address_keys = AddressStore {
             public_key,
             secret_key,
         };
 
         let save_result = self
-            .save_address_to_wallet(final_address.address.clone(), address_keys.clone())
+            .save_address_to_wallet(final_address.clone(), address_keys.clone())
             .await;
         if save_result.is_err() {
             panic!("Error writing address to wallet");
@@ -155,7 +139,7 @@ impl WalletDb {
     pub async fn save_transaction_to_wallet(
         &self,
         tx_hash: OutPoint,
-        address: PaymentAddress,
+        address: String,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
@@ -176,7 +160,7 @@ impl WalletDb {
         &self,
         tx_hash: OutPoint,
         amount: TokenAmount,
-        address: PaymentAddress,
+        address: String,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
@@ -199,15 +183,11 @@ impl WalletDb {
     pub async fn fetch_inputs_for_payment(
         &mut self,
         amount_required: TokenAmount,
-    ) -> (
-        Vec<TxConstructor>,
-        TokenAmount,
-        Vec<(OutPoint, TransactionStore)>,
-    ) {
+    ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment(&db, amount_required)
+            fetch_inputs_for_payment_from_db(&db, amount_required)
         })
         .await
         .unwrap()
@@ -225,12 +205,12 @@ impl WalletDb {
         &mut self,
         tx_cons: Vec<TxConstructor>,
         amount_consumed: TokenAmount,
-        tx_used: Vec<(OutPoint, TransactionStore)>,
+        tx_used: Vec<(OutPoint, String)>,
     ) -> Vec<TxIn> {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            consume_inputs_for_payment(&mut db, tx_cons, amount_consumed, tx_used)
+            consume_inputs_for_payment_to_wallet(&mut db, tx_cons, amount_consumed, tx_used)
         })
         .await
         .unwrap()
@@ -251,8 +231,8 @@ impl WalletDb {
         get_address_stores(&self.db.lock().unwrap())
     }
 
-    // Get the wallet transaction store
-    pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> TransactionStore {
+    // Get the wallet address
+    pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> String {
         get_transaction_store(&self.db.lock().unwrap(), tx_hash)
     }
 
@@ -266,29 +246,7 @@ impl WalletDb {
 
     // Get the wallet transaction address
     pub fn get_transaction_address(&self, tx_hash: &OutPoint) -> String {
-        self.get_transaction_store(tx_hash).address
-    }
-}
-
-/// Builds an address from a public key
-///
-/// ### Arguments
-///
-/// * `pub_key` - A public key to build an address from
-/// * `net`     - Network version
-pub fn construct_address(pub_key: PublicKey, net: u8) -> PaymentAddress {
-    let first_pubkey_bytes = serialize(&pub_key).unwrap();
-    let mut first_hash = Sha3_256::digest(&first_pubkey_bytes).to_vec();
-
-    // TODO: Add RIPEMD
-
-    first_hash.insert(0, net);
-    let mut second_hash = Sha3_256::digest(&first_hash).to_vec();
-    second_hash.truncate(16);
-
-    PaymentAddress {
-        address: hex::encode(second_hash),
-        net,
+        self.get_transaction_store(tx_hash)
     }
 }
 
@@ -340,8 +298,8 @@ pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, Add
         .unwrap();
 }
 
-// Get the wallet transaction store
-pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> TransactionStore {
+// Get the wallet transaction store (address/tx combo)
+pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> String {
     match db.get(&serialize(&tx_hash).unwrap()) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
         Ok(None) => panic!("Transaction not present in wallet: {:?}", tx_hash),
@@ -356,25 +314,18 @@ pub fn delete_transaction_store(db: &mut SimpleDb, tx_hash: &OutPoint) {
 }
 
 // Save transaction
-pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: PaymentAddress) {
-    let PaymentAddress { address, net } = address;
-    let tx_store = TransactionStore { address, net };
-
+pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: String) {
     let key = serialize(&tx_hash).unwrap();
-    let input = serialize(&tx_store).unwrap();
+    let input = serialize(&address).unwrap();
     db.put(&key, &input).unwrap();
 }
 
 // Make TxConstructors from stored TxOut
 // Also return the used info for db cleanup
-pub fn fetch_inputs_for_payment(
+pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
-) -> (
-    Vec<TxConstructor>,
-    TokenAmount,
-    Vec<(OutPoint, TransactionStore)>,
-) {
+) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
     let mut amount_made = TokenAmount(0);
@@ -400,11 +351,11 @@ pub fn fetch_inputs_for_payment(
 }
 
 // Consume the used transactions updating the wallet and produce TxIn
-pub fn consume_inputs_for_payment(
+pub fn consume_inputs_for_payment_to_wallet(
     db: &mut SimpleDb,
     tx_cons: Vec<TxConstructor>,
     amount_consumed: TokenAmount,
-    tx_used: Vec<(OutPoint, TransactionStore)>,
+    tx_used: Vec<(OutPoint, String)>,
 ) -> Vec<TxIn> {
     let mut fund_store = get_fund_store(db);
     let mut address_store = get_address_stores(db);
@@ -412,7 +363,7 @@ pub fn consume_inputs_for_payment(
     fund_store.running_total -= amount_consumed;
     for (tx_hash, tx_store) in tx_used {
         fund_store.transactions.remove(&tx_hash).unwrap();
-        address_store.remove(&tx_store.address).unwrap();
+        address_store.remove(&tx_store).unwrap();
         delete_transaction_store(db, &tx_hash);
     }
 
@@ -427,12 +378,14 @@ pub fn consume_inputs_for_payment(
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     tx_hash: OutPoint,
-) -> (TxConstructor, (OutPoint, TransactionStore)) {
+) -> (TxConstructor, (OutPoint, String)) {
     let address_store = get_address_stores(db);
     let tx_store = get_transaction_store(db, &tx_hash);
 
-    let needed_store: &AddressStore = address_store.get(&tx_store.address).unwrap();
-    let signature = sign::sign_detached(&tx_hash.t_hash.as_bytes(), &needed_store.secret_key);
+    let needed_store: &AddressStore = address_store.get(&tx_store).unwrap();
+
+    let hash_to_sign = hex::encode(serialize(&tx_hash).unwrap());
+    let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
         t_hash: tx_hash.t_hash.clone(),
@@ -455,15 +408,9 @@ mod tests {
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
         ]);
-        let addr = construct_address(pk, 0);
+        let addr = construct_address(pk);
 
-        assert_eq!(
-            addr,
-            PaymentAddress {
-                address: "fd86f2230f4fd5bfd9cd882732792279".to_string(),
-                net: 0
-            }
-        );
+        assert_eq!(addr, "197e990a0e00fd6ae13daecc18180df6".to_string(),);
     }
 
     #[test]
@@ -473,8 +420,8 @@ mod tests {
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
         ]);
-        let addr = construct_address(pk, 0);
+        let addr = construct_address(pk);
 
-        assert_eq!(addr.address.len(), 32);
+        assert_eq!(addr.len(), 32);
     }
 }

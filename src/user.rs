@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::UserNodeConfig;
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
-use crate::wallet::{PaymentAddress, WalletDb};
+use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -250,9 +250,8 @@ impl UserNode {
         {
             let amount = tx_out.amount;
             let address = tx_out.script_public_key.clone().unwrap();
-            let address = PaymentAddress { address, net: 0 };
 
-            if !addresses.contains_key(&address.address) {
+            if !addresses.contains_key(&address) {
                 // That TxOut is not ours to use
                 continue;
             }
@@ -283,7 +282,7 @@ impl UserNode {
         if total_amont > amount {
             let excess = total_amont - amount;
             let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_amount(excess_address.address, excess));
+            tx_outs.push(TxOut::new_amount(excess_address, excess));
         }
 
         let tx_ins = self
@@ -348,7 +347,6 @@ impl UserNode {
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
         let (peer, amount) = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
-        let address = address.address;
         println!("Address to send: {:?}", address);
 
         self.node

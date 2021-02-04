@@ -1,11 +1,11 @@
 use crate::comms_handler::Node;
 use crate::configurations::{InititalTxSpec, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION};
+use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
-use crate::wallet::{construct_address, WalletDb};
+use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::primitives::transaction_utils::{
-    construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
+    construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
 };
 use naom::primitives::{
     asset::{Asset, TokenAmount},
@@ -127,7 +127,7 @@ pub async fn create_and_save_fake_to_wallet(
     let (t_hash, _payment_tx) = create_valid_transaction(
         &"00000".to_owned(),
         0,
-        &receiver_addr.address,
+        &receiver_addr,
         &address_keys.public_key,
         &address_keys.secret_key,
     );
@@ -237,7 +237,7 @@ pub fn create_valid_transaction_with_info(tx: &InititalTxSpec) -> (String, Trans
     let sk = decode_secret_key(&tx.secret_key);
     let pk = decode_pub_key(&tx.public_key);
     let receiver_public_key = decode_pub_key(&tx.receiver_public_key);
-    let receiver_address = construct_address(receiver_public_key, NETWORK_VERSION).address;
+    let receiver_address = construct_address(receiver_public_key);
 
     create_valid_transaction_with_ins_outs(
         &[(tx_out_p.n, &tx_out_p.t_hash)],
@@ -257,7 +257,10 @@ pub fn create_valid_transaction_with_ins_outs(
     let tx_ins = {
         let mut tx_in_cons = Vec::new();
         for (prev_n, t_hash_hex) in tx_in {
-            let signature = sign::sign_detached(&t_hash_hex.as_bytes(), &secret_key);
+            let signable = OutPoint::new(t_hash_hex.to_string(), *prev_n);
+            let signable_h = hex::encode(serialize(&signable).unwrap());
+
+            let signature = sign::sign_detached(&signable_h.as_bytes(), &secret_key);
             tx_in_cons.push(TxConstructor {
                 t_hash: t_hash_hex.to_string(),
                 prev_n: *prev_n,
@@ -265,6 +268,7 @@ pub fn create_valid_transaction_with_ins_outs(
                 pub_keys: vec![*pub_key],
             });
         }
+
         construct_payment_tx_ins(tx_in_cons)
     };
 
@@ -301,7 +305,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                     .map(|tx_out| {
                         let pk_slice = hex::decode(&tx_out.public_key).unwrap();
                         let pk = PublicKey::from_slice(&pk_slice).unwrap();
-                        let script_public_key = construct_address(pk, NETWORK_VERSION).address;
+                        let script_public_key = construct_address(pk);
 
                         TxOut::new_amount(script_public_key, TokenAmount::default())
                     })

@@ -289,7 +289,8 @@ impl ComputeNode {
 
         for tx in droplet.tx.values() {
             let utxo_set = self.node_raft.get_committed_utxo_set();
-            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.contains_key(v)) {
+
+            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.get(&v)) {
                 txs_valid = false;
                 break;
             }
@@ -669,9 +670,7 @@ impl ComputeNode {
         if let Some(txout) = utxo_set.get(tx) {
             if txout.locktime == 0 {
                 lock_expiry = true;
-            }
-
-            if self.current_mined_block.is_some() {
+            } else if self.current_mined_block.is_some() {
                 let block_height = self
                     .current_mined_block
                     .as_ref()
@@ -812,9 +811,10 @@ impl ComputeInterface for ComputeNode {
             .filter(|(_, tx)| !tx.is_coinbase())
             .filter(|(_, tx)| {
                 tx_ins_are_valid(&tx.inputs, |v| {
-                    utxo_set.contains_key(v)
-                        && !self.sanction_list.contains(&v.t_hash)
-                        && self.lock_expired(&utxo_set, &v)
+                    utxo_set
+                        .get(&v)
+                        .filter(|_| !self.sanction_list.contains(&v.t_hash))
+                        .filter(|_| self.lock_expired(&utxo_set, &v))
                 })
             })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
