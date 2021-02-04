@@ -125,6 +125,10 @@ impl fmt::Debug for ComputeRaft {
 
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
+    /// 
+    /// ### Arguments
+    ///
+    /// * '&ComputerNodeConfig' - Holds the configuration option for a computer node.
     pub async fn new(config: &ComputeNodeConfig) -> Self {
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
@@ -188,7 +192,11 @@ impl ComputeRaft {
     }
 
     /// Process result from next_commit.
-    /// Return Some if block to mine is ready to generate.
+    /// Return Some CommitedIten if block to mine is ready to generate. Returns not implemented if not implemented
+    ///
+    /// ### Arguments
+    ///
+    /// * 'raft_commit' - a RaftCommit struct from the raft.rs class to be proposed to commit.
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
@@ -204,6 +212,12 @@ impl ComputeRaft {
         None
     }
 
+    /// Process data in RaftData.
+    /// Return Some CommitedItem if block to mine is ready to generate or none if there is a deserialize error.
+    ///
+    /// ### Arguments
+    ///
+    /// * 'raft_data' - a RaftData struct from the raft.rs class that holds the data to be proposed to commit.
     /// Apply commited proposal
     async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
         let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
