@@ -19,7 +19,7 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
-use naom::script::utils::tx_ins_are_valid;
+use naom::script::utils::tx_is_valid;
 use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
@@ -290,7 +290,7 @@ impl ComputeNode {
         for tx in droplet.tx.values() {
             let utxo_set = self.node_raft.get_committed_utxo_set();
 
-            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.get(&v)) {
+            if !tx_is_valid(&tx, |v| utxo_set.get(&v)) {
                 txs_valid = false;
                 break;
             }
@@ -810,7 +810,7 @@ impl ComputeInterface for ComputeNode {
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
             .filter(|(_, tx)| {
-                tx_ins_are_valid(&tx.inputs, |v| {
+                tx_is_valid(&tx, |v| {
                     utxo_set
                         .get(&v)
                         .filter(|_| !self.sanction_list.contains(&v.t_hash))
