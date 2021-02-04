@@ -292,6 +292,10 @@ impl ComputeRaft {
     }
 
     /// Process a raft message: send to spawned raft loop.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `msg`   - holds the recieved message in a RaftMessageWrapper.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.raft_active.received_message(msg).await
     }
@@ -346,6 +350,10 @@ impl ComputeRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `item`   - ComputeRaftItem reference (&ComputeRaftItem).
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         self.proposed_last_id += 1;
         let key = ComputeRaftKey {
@@ -361,11 +369,12 @@ impl ComputeRaft {
     }
 
     /// The current tx_pool that will be used to generate next block
+    /// Returns a BTreeMap reference which contains a String and a Transaction.
     pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
         &self.consensused.tx_pool
     }
 
-    /// Whether adding these will grow our pool within the limit.
+    /// Whether adding these will grow our pool within the limit. Returns a bool. 
     pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
         self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
     }
@@ -382,6 +391,10 @@ impl ComputeRaft {
 
     /// Append new transaction to our local pool from which to propose
     /// consensused transactions.
+    /// 
+    /// ### Arguments
+    /// 
+    /// * 'transactions' - a mutable BTreeMap that has a String and a Transaction parameters
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
         self.local_tx_pool.append(&mut transactions);
     }
@@ -444,6 +457,9 @@ impl ComputeRaft {
     }
 
     /// Find transactions for the current block.
+    /// ### Arguments
+    ///
+    /// * `new_txs`   - BTreeMap reference that has a String and a Transaction parameters
     pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
         self.consensused.find_invalid_new_txs(new_txs)
     }
@@ -452,6 +468,10 @@ impl ComputeRaft {
 impl ComputeConsensused {
     /// Set consensused committed block to mine.
     /// Internal call, public for test only.
+    /// ### Arguments
+    ///
+    /// * `block`   - mining Block to be set to be comitted
+    /// * `block_tx`   - BTreeMap associated with Block to be set to be comitted.
     pub fn set_committed_mining_block(
         &mut self,
         block: Block,
@@ -513,6 +533,10 @@ impl ComputeConsensused {
     }
 
     /// Apply all consensused transactions to the block
+    /// ### Arguments
+    ///
+    /// * `block`   - commited Block to be set to be updated
+    /// * `block_tx`   - BTreeMap associated with Block to be set to be updated.
     fn update_committed_dde_tx(
         &mut self,
         block: &mut Block,
@@ -531,6 +555,10 @@ impl ComputeConsensused {
     }
 
     /// Apply all valid consensused transactions to the block until BLOCK_SIZE_IN_TX
+    /// ### Arguments
+    ///
+    /// * `block`   - current Block to be set to be updated
+    /// * `block_tx`   - BTreeMap associated with Block to be set to be updated.
     fn update_current_block_tx(
         &mut self,
         block: &mut Block,
@@ -549,6 +577,9 @@ impl ComputeConsensused {
     }
 
     /// Apply the consensused information for the header.
+    /// ### Arguments
+    ///
+    /// * `block`   - Block to be set to be updated
     fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_current_block_previous_hash).unwrap();
         let b_num = self.tx_current_block_num.unwrap();
@@ -559,6 +590,11 @@ impl ComputeConsensused {
     }
 
     /// Apply set of valid transactions to the block.
+    /// ### Arguments
+    ///
+    /// * `txs`   - given valid BTreeMap of transactions to apply to block
+    /// * `block`   - current Block to be to be updated
+    /// * `block_tx`   - Block BTreeMap to be to be updated
     fn update_current_block_tx_with_given_valid_txs(
         &mut self,
         mut txs: BTreeMap<String, Transaction>,
@@ -574,6 +610,9 @@ impl ComputeConsensused {
     }
 
     /// Find transactions for the current block.
+    /// ### Arguments
+    ///
+    /// * `new_txs` - Transactions being checked?  -- note: unsure
     pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
         let mut invalid = Vec::new();
 
@@ -604,6 +643,9 @@ impl ComputeConsensused {
     }
 
     /// Check if computing the given block.
+    /// ### Arguments
+    ///
+    /// * `block_num`   - u64 sequence number for the block to be checked
     pub fn is_current_block(&self, block_num: u64) -> bool {
         if let Some(tx_current_block_num) = self.tx_current_block_num {
             block_num == tx_current_block_num
@@ -638,6 +680,10 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
+    /// ### Arguments
+    ///
+    /// * `key`   - ComputerRaftKey object of the first block
+    /// * `utxo_set`   - transaction BTreeMap of the first block.
     pub fn append_first_block_info(
         &mut self,
         key: ComputeRaftKey,
