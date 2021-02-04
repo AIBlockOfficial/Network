@@ -257,7 +257,7 @@ pub fn create_valid_transaction_with_ins_outs(
     let tx_ins = {
         let mut tx_in_cons = Vec::new();
         for (prev_n, t_hash_hex) in tx_in {
-            let signable = OutPoint::new(t_hash_hex.to_string(), prev_n.clone());
+            let signable = OutPoint::new(t_hash_hex.to_string(), *prev_n);
             let signable_h = hex::encode(serialize(&signable).unwrap());
 
             let signature = sign::sign_detached(&signable_h.as_bytes(), &secret_key);
