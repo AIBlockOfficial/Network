@@ -680,6 +680,7 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
+    /// 
     /// ### Arguments
     ///
     /// * `key`   - ComputerRaftKey object of the first block
@@ -696,11 +697,21 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for a non first block info
+    /// 
+    /// ### Arguments
+    ///
+    /// * `key`   - ComputerRaftKey object of the block to append
+    /// * `block` - BlockStoredInfo to be appended.
     pub fn append_block_stored_info(&mut self, key: ComputeRaftKey, block: BlockStoredInfo) {
         self.append_current_block_stored_info(key, AccumulatingBlockStoredInfo::Block(block))
     }
 
     /// Append the given vote.
+    ///     
+    /// ### Arguments
+    ///
+    /// * `key`   - ComputerRaftKey object of the block to append
+    /// * `block` - AccumulatingBlockStoredInfo to be appended.
     pub fn append_current_block_stored_info(
         &mut self,
         key: ComputeRaftKey,
@@ -746,6 +757,10 @@ impl ComputeConsensused {
 }
 
 /// Take the first `n` items of the given map.
+/// ### Arguments
+///
+/// * `n`   - number of items
+/// * `from` - BTreeMap for values to be taken from
 fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTreeMap<K, V> {
     let mut result = std::mem::take(from);
     if let Some(max_key) = result.keys().nth(n).cloned() {
