@@ -17,7 +17,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_ins_are_valid;
 use rand::{self, Rng};
@@ -290,10 +290,7 @@ impl<'a> ComputeNode {
         for tx in droplet.tx.values() {
             let utxo_set = self.node_raft.get_committed_utxo_set();
 
-            if !tx_ins_are_valid(&tx.inputs, |v| {
-                let tx_out = utxo_set.get(&v).unwrap().clone();
-                return Some(tx_out);
-            }) {
+            if !tx_ins_are_valid(&tx.inputs, |v| utxo_set.get(&v)) {
                 txs_valid = false;
                 break;
             }
@@ -689,25 +686,6 @@ impl<'a> ComputeNode {
 
         lock_expiry
     }
-
-    /// Fully validates an outpoint for on spend
-    ///
-    /// ### Arguments
-    ///
-    /// * `v`   - Outpoint to validate
-    fn fully_validate_out_point(&self, v: OutPoint) -> Option<TxOut> {
-        let utxo_set = self.node_raft.get_committed_utxo_set();
-
-        if utxo_set.contains_key(&v)
-            && !self.sanction_list.contains(&v.t_hash)
-            && self.lock_expired(&utxo_set, &v)
-        {
-            let tx_out = utxo_set.clone().get(&v).unwrap().clone();
-            return Some(tx_out);
-        }
-
-        None
-    }
 }
 
 impl ComputeInterface for ComputeNode {
@@ -827,10 +805,22 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
+        let utxo_set = self.node_raft.get_committed_utxo_set();
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| tx_ins_are_valid(&tx.inputs, |v| self.fully_validate_out_point(v)))
+            .filter(|(_, tx)| {
+                tx_ins_are_valid(&tx.inputs, |v| {
+                    if utxo_set.contains_key(&v)
+                        && !self.sanction_list.contains(&v.t_hash)
+                        && self.lock_expired(&utxo_set, &v)
+                    {
+                        return utxo_set.get(&v);
+                    }
+
+                    None
+                })
+            })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
             .collect();
 

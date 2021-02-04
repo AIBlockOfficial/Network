@@ -14,7 +14,7 @@ use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, PaymentAddress, Transaction};
+use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -90,7 +90,7 @@ pub struct MinerNode {
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
-    current_payment_address: Option<PaymentAddress>,
+    current_payment_address: Option<String>,
 }
 
 impl MinerNode {
@@ -286,7 +286,7 @@ impl MinerNode {
         let mining_tx = construct_coinbase_tx(
             TokenAmount(12000),
             block.header.time,
-            self.current_payment_address.clone().unwrap().address,
+            self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
