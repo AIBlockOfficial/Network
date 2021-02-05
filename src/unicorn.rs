@@ -29,6 +29,10 @@ impl UnicornShard {
     }
 
     /// Checks for UnicornShard validity
+    /// 
+    /// ### Arguments
+    ///
+    /// * `commit` - ProofOfWork being checked for validity.
     pub fn is_valid(&mut self, mut commit: ProofOfWork) -> bool {
         let mut commit_body = commit.address.as_bytes().to_vec();
         commit_body.append(&mut commit.nonce);
