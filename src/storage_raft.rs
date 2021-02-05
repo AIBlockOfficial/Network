@@ -152,7 +152,7 @@ impl StorageRaft {
     /// 
     /// ### Arguments
     ///
-    /// * `raft_commit` - RaftCommit object holding the data for the next commit
+    /// * `raft_commit` - RaftCommit object holding the data from the commit
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<()> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
@@ -215,6 +215,10 @@ impl StorageRaft {
     }
 
     /// Process a raft message: send to spawned raft loop.
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `msg` - RaftMessageWrapper object. Contains the recieved message to be sent to the raft.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.raft_active.received_message(msg).await
     }
@@ -249,6 +253,10 @@ impl StorageRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
+    /// 
+    /// ### Arguments
+    /// 
+    ///  * `item` - &StorageRaftItem. The item to be proposed to a radt.
     async fn propose_item(&mut self, item: &StorageRaftItem) {
         self.proposed_last_id += 1;
         let key = StorageRaftKey {
@@ -264,6 +272,12 @@ impl StorageRaft {
 
     /// Append block to our local pool from which to propose
     /// consensused blocks.
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `peer` - socket address of the sending peer
+    /// * `common` - CommonBlockInfo holding all block infomation to be stored
+    /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
     pub fn append_to_our_blocks(
         &mut self,
         peer: SocketAddr,
