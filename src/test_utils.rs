@@ -70,6 +70,11 @@ pub struct NetworkInstanceInfo {
 }
 
 impl Network {
+    ///Creates a Network instance using a config object
+    /// 
+    /// ###Arguments
+    /// 
+    /// * `config` - Holds the values to instanciate a Network object
     pub async fn create_from_config(config: &NetworkConfig) -> Self {
         let info = Self::init_instance_info(config);
         let miner_nodes = Self::init_miners(&config, &info).await;
@@ -187,7 +192,7 @@ impl Network {
         }
     }
 
-    
+    ///Returns a u16, of the initial_port and node length, and a Vec of node specs
     fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeSpec>) {
         (
             initial_port + node_len as u16,
