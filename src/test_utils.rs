@@ -89,6 +89,7 @@ impl Network {
         .await
     }
 
+    ///Creates and tests rafts
     async fn spawn_raft_loops(mut self) -> Self {
         if self.config.compute_raft {
             // Need to connect first so Raft messages can be sent.
@@ -143,6 +144,7 @@ impl Network {
         self
     }
 
+    ///Completes and ends raft loops.
     pub async fn close_raft_loops_and_drop(self) {
         if self.config.compute_raft {
             info!("Close compute raft");
@@ -161,6 +163,11 @@ impl Network {
         join_all(self.raft_loop_handles).await;
     }
 
+    ///Creates a NetworkInstanceInfo object with config object values.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - &NetworkConfig object containing parameters for the NetworkInstanceInfo object creation. 
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let next_port = config.initial_port;
@@ -180,6 +187,7 @@ impl Network {
         }
     }
 
+    
     fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeSpec>) {
         (
             initial_port + node_len as u16,
@@ -191,6 +199,12 @@ impl Network {
         )
     }
 
+    ///Clones storage nodes, compute nodes, miner nodes and user nodes. The miner nodes are initialised and a map is returned.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - &NetworkConfig holding configuration Infomation.
+    /// * `info` - &NetworkInstanceInfo holding nodes to be cloned.
     async fn init_miners(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
@@ -222,6 +236,12 @@ impl Network {
         map
     }
 
+    ///Clones storage nodes, compute nodes, miner nodes and user nodes. The storage nodes are initialised and a map is returned.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - &NetworkConfig holding configuration Infomation.
+    /// * `info` - &NetworkInstanceInfo holding nodes to be cloned.
     async fn init_storage(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
@@ -257,6 +277,12 @@ impl Network {
         map
     }
 
+     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The compute nodes are initialised and a map is returned.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - &NetworkConfig holding configuration Infomation.
+    /// * `info` - &NetworkInstanceInfo holding nodes to be cloned.
     async fn init_compute(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
@@ -290,7 +316,12 @@ impl Network {
 
         map
     }
-
+    ///Clones storage nodes, compute nodes, miner nodes and user nodes. The user nodes are initialised and a map is returned.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - &NetworkConfig holding configuration Infomation.
+    /// * `info` - &NetworkInstanceInfo holding nodes to be cloned.
     async fn init_users(
         config: &NetworkConfig,
         info: &NetworkInstanceInfo,
@@ -326,26 +357,52 @@ impl Network {
         map
     }
 
+    ///Returns a mutable reference to the miner node with the matching name
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the miner node's name to be found.
     pub fn miner(&mut self, name: &str) -> Option<&mut ArcMinerNode> {
         self.miner_nodes.get_mut(name)
     }
 
+    ///Returns a mutable interator of the miner nodes.
     pub fn miners_iter_mut(&mut self) -> impl Iterator<Item = &mut ArcMinerNode> {
         self.miner_nodes.values_mut()
     }
 
+    ///returns a mutable reference to the compute node with the matching name.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the compute node's name to be found.
     pub fn compute(&mut self, name: &str) -> Option<&mut ArcComputeNode> {
         self.compute_nodes.get_mut(name)
     }
 
+    ///returns a mutable reference to the storage node with the matching name.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the storage node's name to be found.
     pub fn storage(&mut self, name: &str) -> Option<&mut ArcStorageNode> {
         self.storage_nodes.get_mut(name)
     }
 
+    ///returns a mutable reference to the user node with the matching name.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the user node's name to be found.
     pub fn user(&mut self, name: &str) -> Option<&mut ArcUserNode> {
         self.user_nodes.get_mut(name)
     }
 
+    ///Searches all node types and returns an address to the node with the matching name.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the name of the node found.
     pub async fn get_address(&mut self, name: &str) -> Option<SocketAddr> {
         if let Some(miner) = self.miner_nodes.get(name) {
             return Some(miner.lock().await.address());
@@ -362,6 +419,11 @@ impl Network {
         None
     }
 
+    ///Searches all node types and returns the position of the node with the matching name.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the name of the node found.
     pub fn get_position(&mut self, name: &str) -> Option<usize> {
         let is_name = |n: &String| n.as_str() == name;
         if let Some(miner) = self.config.miner_nodes.iter().position(is_name) {
@@ -379,6 +441,7 @@ impl Network {
         None
     }
 
+    ///Returns a list of initial transactions 
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(&self.config.compute_seed_utxo)
     }
