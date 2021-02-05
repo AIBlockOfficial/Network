@@ -169,11 +169,10 @@ impl StorageRaft {
     }
 
     /// Checks a commit of the RaftData for validity
-    /// 
+    /// Apply commited proposal
     /// ### Arguments
     ///
     /// * `raft_commit` - RaftCommit object holding the data for the commit
-    /// Apply commited proposal
     async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
         let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
             Ok((key, item)) => (key, item),
