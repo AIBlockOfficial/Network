@@ -125,9 +125,7 @@ impl fmt::Debug for ComputeRaft {
 
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
-    /// 
     /// ### Arguments
-    ///
     /// * '&ComputerNodeConfig' - Holds the configuration option for a computer node.
     pub async fn new(config: &ComputeNodeConfig) -> Self {
         let raft_active = ActiveRaft::new(
@@ -193,9 +191,7 @@ impl ComputeRaft {
 
     /// Process result from next_commit.
     /// Return Some CommitedIten if block to mine is ready to generate. Returns 'not implemented' if not implemented
-    ///
     /// ### Arguments
-    ///
     /// * 'raft_commit' - a RaftCommit struct from the raft.rs class to be proposed to commit.
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
@@ -214,9 +210,7 @@ impl ComputeRaft {
 
     /// Process data in RaftData.
     /// Return Some CommitedItem if block to mine is ready to generate or none if there is a deserialize error.
-    ///
     /// ### Arguments
-    ///
     /// * 'raft_data' - a RaftData struct from the raft.rs class that holds the data to be proposed to commit.
     /// Apply commited proposal
     async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
@@ -292,9 +286,7 @@ impl ComputeRaft {
     }
 
     /// Process a raft message: send to spawned raft loop.
-    /// 
     /// ### Arguments
-    ///
     /// * `msg`   - holds the recieved message in a RaftMessageWrapper.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.raft_active.received_message(msg).await
@@ -350,9 +342,7 @@ impl ComputeRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
-    /// 
     /// ### Arguments
-    ///
     /// * `item`   - ComputeRaftItem reference (&ComputeRaftItem).
     async fn propose_item(&mut self, item: &ComputeRaftItem) {
         self.proposed_last_id += 1;
@@ -391,9 +381,7 @@ impl ComputeRaft {
 
     /// Append new transaction to our local pool from which to propose
     /// consensused transactions.
-    /// 
     /// ### Arguments
-    /// 
     /// * 'transactions' - a mutable BTreeMap that has a String and a Transaction parameters
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
         self.local_tx_pool.append(&mut transactions);
@@ -469,7 +457,6 @@ impl ComputeConsensused {
     /// Set consensused committed block to mine.
     /// Internal call, public for test only.
     /// ### Arguments
-    ///
     /// * `block`   - mining Block to be set to be comitted
     /// * `block_tx`   - BTreeMap associated with Block to be set to be comitted.
     pub fn set_committed_mining_block(

@@ -124,9 +124,7 @@ pub struct ComputeNode {
 
 impl ComputeNode {
     /// Generates a new compute node instance
-    ///
     /// ### Arguments
-    ///
     /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
     pub async fn new(config: ComputeNodeConfig) -> Result<ComputeNode> {
         let addr = config
@@ -220,9 +218,7 @@ impl ComputeNode {
     }
 
     /// Processes a dual double entry transaction
-    ///
     /// ### Arguments
-    ///
     /// * `transaction` - Transaction to process
     pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
         if let Some(druid) = transaction.clone().druid {
@@ -262,9 +258,7 @@ impl ComputeNode {
     }
 
     /// Processes a dual double entry transaction's DRUID with the current pool
-    ///
     /// ### Arguments
-    ///
     /// * `druid`       - DRUID to match on
     /// * `transaction` - Transaction to process
     pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
@@ -280,9 +274,7 @@ impl ComputeNode {
     }
 
     /// Executes a waiting dual double entry transaction that is ready to execute
-    ///
     /// ### Arguments
-    ///
     /// * `droplet`  - DRUID droplet of transactions to execute
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
         let mut txs_valid = true;
@@ -313,9 +305,7 @@ impl ComputeNode {
     }
 
     /// Sets the commited mining block to the given block and transaction BTreeMap
-    ///
     /// ### Arguments
-    ///
     /// * `block`  - Block to be set to commited mining block
     /// * `block_tx` - BTreeMap of the block transactions
     pub fn set_committed_mining_block(
@@ -333,9 +323,7 @@ impl ComputeNode {
     }
 
     /// Gets a decremented socket address of peer for storage
-    ///
     /// ### Arguments
-    ///
     /// * `address`    - Address to decrement
     fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
         let mut storage_address = address;
@@ -346,9 +334,7 @@ impl ComputeNode {
     }
 
     /// Util function to get a socket address for PID table checks
-    ///
     /// ### Arguments
-    ///
     /// * `address`    - Peer's address
     fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
         let comparison_port = address.port() + 1;
@@ -393,7 +379,6 @@ impl ComputeNode {
 
     /// Floods all peers with a PoW for UnicornShard creation
     /// TODO: Add in comms handling for sending and receiving requests
-    ///
     /// ### Arguments
     ///
     /// * `address` - Address of the contributing node
