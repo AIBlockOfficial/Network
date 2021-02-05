@@ -82,26 +82,22 @@ impl ActiveRaft {
     }
 
     /// Returns a boolean of whether or not the raft is bypassed. False for bypassed. True for not bypassed.
-    ///
     pub fn use_raft(&self) -> bool {
         self.use_raft
     }
 
     /// Returns the peer ID of this raft
-    ///
     pub fn peer_id(&self) -> u64 {
         self.peer_id
     }
 
     /// Returns a map to the addresses of this raft's peers
-    ///
     pub fn peers_len(&self) -> usize {
         self.peer_addr.len()
     }
 
     /// All the peers to connect to when using raft.
     /// Returns an iterator that iterates over the addresses of the peers
-    ///
     pub fn raft_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
         self.raft_peers_to_connect.iter()
     }
