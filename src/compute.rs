@@ -480,7 +480,7 @@ impl ComputeNode {
     ///
     /// ### Arguments
     ///
-    /// * `event` - Error or event to be handled
+    /// * `event` - Event holding the frame to be handled
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
             Event::NewFrame { peer, frame } => {
@@ -495,7 +495,7 @@ impl ComputeNode {
     /// Hanldes a new incoming message from a peer.
     /// ### Arguments
     ///
-    /// * `peer` - Peer's address
+    /// * `peer` - Sending peer's socket address
     /// * 'frame' - Bytes representing the new frame.
     async fn handle_new_frame(
         &mut self,
@@ -517,7 +517,7 @@ impl ComputeNode {
     /// Handles a compute request.
     /// ### Arguments
     ///
-    /// * `peer` - Peer's address
+    /// * `peer` - Sending peer's socket address
     /// * 'req' - ComputeRequest object holding the request
     async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
         use ComputeRequest::*;
@@ -542,7 +542,7 @@ impl ComputeNode {
     /// TODO: This may need to be part of the ComputeInterface depending on key agreement
     /// ### Arguments
     ///
-    /// * `peer` - Peer's address
+    /// * `peer` - Sending peer's socket address
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
         if self.request_list_first_flood == Some(self.request_list.len()) {
@@ -562,7 +562,7 @@ impl ComputeNode {
     /// Receives the light POW for partition inclusion
     /// ### Arguments
     ///
-    /// * `peer` - Peer's address
+    /// * `peer` - Sending peer's socket address
     /// * 'partition_entry' - ProofOfWork object for the partition entry being recieved.
     fn receive_partition_entry(
         &mut self,
