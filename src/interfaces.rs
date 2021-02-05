@@ -63,6 +63,7 @@ impl Default for ProofOfWorkBlock {
 }
 
 impl ProofOfWorkBlock {
+    ///Proof of work block constructor
     pub fn new() -> Self {
         ProofOfWorkBlock {
             nonce: Vec::new(),
