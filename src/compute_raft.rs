@@ -192,7 +192,7 @@ impl ComputeRaft {
     }
 
     /// Process result from next_commit.
-    /// Return Some CommitedIten if block to mine is ready to generate. Returns not implemented if not implemented
+    /// Return Some CommitedIten if block to mine is ready to generate. Returns 'not implemented' if not implemented
     ///
     /// ### Arguments
     ///
@@ -610,9 +610,10 @@ impl ComputeConsensused {
     }
 
     /// Find transactions for the current block.
+    /// Finds and returns invalid transactions
     /// ### Arguments
     ///
-    /// * `new_txs` - Transactions being checked?  -- note: unsure
+    /// * `new_txs` - Transactions being iterated through and checked
     pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
         let mut invalid = Vec::new();
 

@@ -799,6 +799,8 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
+    /// Returns the internal unicorn table in a Vector of the UnicornShards from unicorn_list. 
+    /// The unicorn_list is a HashMap of the socketAddress and the UnicornShard
     fn get_unicorn_table(&self) -> Vec<UnicornShard> {
         let mut unicorn_table = Vec::with_capacity(self.unicorn_list.len());
 
