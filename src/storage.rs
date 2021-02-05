@@ -135,7 +135,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     ///
-    /// * `from_peer_addr` - Address that the data was sent from.
+    /// * `from_peer_addr` - Socket address that the data was sent from.
     /// * `data` - payload used to create a new frame in the node.
     pub fn inject_next_event(
         &self,
@@ -230,7 +230,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer` - SocketAddr holding address of the sender. 
+    /// * `peer` - Socket address of the sender. 
     /// * `frame` - Bytes object holding the message from the sender.
     async fn handle_new_frame(
         &mut self,
@@ -253,7 +253,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer` - SocketAddr object holding the peer address that the compute request came from.
+    /// * `peer` - Socket address for the peer that the compute request came from.
     /// * `req` - StorageRequest object holding the compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
@@ -335,7 +335,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     /// 
-    /// * `key` - Given key.
+    /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
         self.db.get(key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
@@ -347,7 +347,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     /// 
-    /// * `key` - Given key.
+    /// * `key` - Given key to find the block.
     pub fn get_stored_block<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -362,7 +362,7 @@ impl StorageNode {
     /// 
     /// ### Arguments
     /// 
-    /// * `key` - Given key.
+    /// * `key` - Given key used to find the transaction.
     pub fn get_stored_tx<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Transaction>> {
         Ok(self
             .get_stored_value(key)
