@@ -12,9 +12,6 @@ use tokio::sync::Mutex;
 
 /// Provide RAFT loop and in/out channels to interact with it.
 ///
-/// ### Arguments
-///
-/// none
 pub struct ActiveRaft {
     /// false if RAFT is bypassed.
     use_raft: bool,
