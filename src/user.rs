@@ -126,6 +126,10 @@ impl UserNode {
     }
 
     /// Connect to a peer on the network.
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `peer` - Socket Address of the peer to connect to.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
         Ok(())
@@ -153,7 +157,7 @@ impl UserNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer` - SocketAddrs object containing the address of the sending peer node.
+    /// * `peer` - Socket Address of the sending peer node.
     /// * `frame` - Byte object holding the frame being handled.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         let req = deserialize::<UserRequest>(&frame).map_err(|error| {
@@ -261,7 +265,7 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `transaction` - Transaction to receive and save to wallet
+    /// * `transaction` - Transaction to be received and saved to wallet
     pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
         let addresses = self.wallet_db.get_address_stores();
@@ -289,7 +293,7 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `peer` -  SocketAdress object containing the address of the peer recieving the payment.
+    /// * `peer` -  SocketAdress of the peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
     /// * `amount` - TokenAmount object of the price/amount payed
     pub async fn make_payment_transactions(
@@ -325,7 +329,7 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `peer`        - Peer to send the transaction to
+    /// * `peer`        - socket address of the peer to send the transaction to
     /// * `transaction` - The transaction to be sent
     pub async fn send_payment_to_receiver(
         &mut self,
