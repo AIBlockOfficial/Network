@@ -144,7 +144,7 @@ impl MinerNode {
     /// 
     /// ### Arguments
     ///
-    /// * `event`   - Event object representing the event to be handled.
+    /// * `event`   - Event object to be handled.
     async fn handle_event(&mut self, event: Event) -> Result<Response> {
         match event {
             Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
@@ -155,7 +155,7 @@ impl MinerNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer`   - Address of the peer sending the message.
+    /// * `peer`   - Socket address of the peer sending the message.
     /// * `frame`   - Bytes object holding the frame
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
@@ -174,6 +174,10 @@ impl MinerNode {
     }
 
     /// Handles a compute request.
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
     fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
         use MineRequest::*;
@@ -252,7 +256,7 @@ impl MinerNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer`   - SockeyAddr object holding the recipient's address
+    /// * `peer`   - Socket address of recipient
     /// * `nonce`   - sequence number of a block in Vec<u8>
     /// * `coinbase`   - Transaction object
     pub async fn send_pow(
@@ -271,7 +275,7 @@ impl MinerNode {
     /// 
     /// ### Arguments
     ///
-    /// * `peer`   - SockeyAddr object holding the recipient's address
+    /// * `peer`   - Socket address of recipient/peer
     /// * `partition_entry`   - partition ProofOfWork being sent 
     pub async fn send_partition_pow(
         &mut self,
@@ -288,7 +292,7 @@ impl MinerNode {
     /// 
     /// ### Arguments
     ///
-    /// * `compute`   - SockeyAddr object holding the recipient's address
+    /// * `compute`   - Socket address of recipient
     pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
         let _peer_span = info_span!("sending partition participation request");
 
