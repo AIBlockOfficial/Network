@@ -124,6 +124,11 @@ pub struct RaftNode {
 }
 
 impl RaftNode {
+    /// RaftNode constructor.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `raft_Config` - RaftConfig object containing tick_timeout_duration and cfg
     pub fn new(raft_config: RaftConfig) -> Self {
         let storage = MemStorage::new();
         let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
@@ -160,6 +165,11 @@ impl RaftNode {
     }
 
     /// Create the RaftConfig and needed channels to run the loop.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `node_cfg` - Config object 
+    /// * `tick_timeout_duration` - Duration object holding the tick timeout duration
     pub fn init_config(
         node_cfg: Config,
         tick_timeout_duration: Duration,
@@ -255,6 +265,9 @@ impl RaftNode {
         Some(())
     }
 
+    ///If current node has_ready is true then it returns. Otherwise, it sends messages to peers and updates ready.
+    /// 
+    /// Advance notifies the node that the application has applied and saved progress in the last Ready results.
     async fn process_ready(&mut self) {
         if !self.node.has_ready() {
             return;
@@ -275,6 +288,11 @@ impl RaftNode {
         self.node.advance(ready);
     }
 
+    /// Sends all messages to peers
+    /// 
+    /// ### Arguments
+    ///
+    /// * `ready` - Ready object that contains the messages to be sent. 
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
         self.outgoing_msgs_and_groups_count.1 += if ready.messages.is_empty() { 0 } else { 1 };
         for msg in ready.messages.drain(..) {
@@ -284,6 +302,7 @@ impl RaftNode {
         }
     }
 
+    
     fn update_ready_mut_store(&mut self, ready: &mut Ready) {
         if !raft::is_empty_snap(ready.snapshot()) {
             self.node
