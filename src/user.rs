@@ -93,6 +93,11 @@ pub struct UserNode {
 }
 
 impl UserNode {
+    ///Constructor to create a new UserNode
+    /// 
+    /// ### Arguments
+    ///
+    /// * `config` - UserNodeConfig object containing UserNode parameters.
     pub async fn new(config: UserNodeConfig) -> Result<UserNode> {
         let addr = config
             .user_nodes
@@ -133,6 +138,11 @@ impl UserNode {
         self.handle_event(event).await.into()
     }
 
+    ///Passes a frame from an event to the handle_new_frame method
+    /// 
+    /// ### Arguments
+    ///
+    /// * `event` - Event object holding the frame to be passed.
     async fn handle_event(&mut self, event: Event) -> Result<Response> {
         match event {
             Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
@@ -140,6 +150,11 @@ impl UserNode {
     }
 
     /// Hanldes a new incoming message from a peer.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `peer` - SocketAddrs object containing the address of the sending peer node.
+    /// * `frame` - Byte object holding the frame being handled.
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         let req = deserialize::<UserRequest>(&frame).map_err(|error| {
             warn!(?error, "frame-deserialize");
@@ -154,6 +169,11 @@ impl UserNode {
     }
 
     /// Handles a compute request.
+    /// 
+    /// ### Arguments
+    ///
+    /// * `peer` - SocketAddress holding the address of the peer sending the request.
+    /// * `req` - UserRequest object containing the compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
         println!("RECEIVED REQUEST: {:?}", req);
@@ -175,7 +195,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `compute_peer`    - Compute peer to send the payment tx to
-    /// * `payment_tx`      - Transaction to send
+    /// /// * `payment_tx`      - Transaction to send
     pub async fn send_next_payment_to_destinations(
         &mut self,
         compute_peer: SocketAddr,
@@ -269,7 +289,9 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
+    /// * `peer` -  SocketAdress object containing the address of the peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
+    /// * `amount` - TokenAmount object of the price/amount payed
     pub async fn make_payment_transactions(
         &mut self,
         peer: SocketAddr,
@@ -324,6 +346,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`    - Socket address of peer to request from
+    /// * `amount`    - Amount being payed
     pub async fn send_address_request(
         &mut self,
         peer: SocketAddr,
@@ -343,7 +366,7 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `peer`    - Socket address of peer to send the address to
+    /// ///* `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
         let (peer, amount) = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
