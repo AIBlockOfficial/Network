@@ -65,7 +65,7 @@ impl SimpleDb {
     /// 
     /// ### Arguments
     ///
-    /// * `key` - position to map value
+    /// * `key` - reference to the value in database to when the entry is added
     /// * `value` - value to be added to the db
     pub fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<(), DBError> {
         match self {
@@ -83,7 +83,7 @@ impl SimpleDb {
     /// 
     /// ### Arguments
     ///
-    /// * `key` - position to map value to be deleted
+    /// * `key` - position in database to be deleted
     pub fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), DBError> {
         match self {
             Self::File { db, .. } => {
@@ -100,7 +100,7 @@ impl SimpleDb {
     /// 
     /// ### Arguments
     ///
-    /// * `key` - position to map value to be returned
+    /// * `key` - used to find position in database
     pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>, DBError> {
         match self {
             Self::File { db, .. } => db.get(key),
