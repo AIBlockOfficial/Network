@@ -1,6 +1,6 @@
 //! Tests for peer-to-peer communication.
 
-use super::{Event, Node};
+use super::{CommsError, Event, Node};
 use crate::interfaces::NodeType;
 use bincode::deserialize;
 use futures::future::join_all;
@@ -16,13 +16,8 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let mut n1 = Node::new("127.0.0.1:0".parse().unwrap(), 4, NodeType::Compute)
-        .await
-        .unwrap();
-
-    let mut n2 = Node::new("127.0.0.1:0".parse().unwrap(), 4, NodeType::Compute)
-        .await
-        .unwrap();
+    let mut nodes = create_compute_nodes(2).await;
+    let (mut n2, mut n1) = (nodes.pop().unwrap(), nodes.pop().unwrap());
 
     n2.connect_to(n1.address()).await.unwrap();
     n2.send(n1.address(), "Hello1").await.unwrap();
@@ -45,23 +40,18 @@ async fn direct_messages() {
 /// 4. We check that all other nodes (node_2, node_3, ... node_N) have received the same message.
 #[tokio::test]
 async fn multicast() {
-    const NUM_NODES: usize = 16;
     let _ = tracing_subscriber::fmt::try_init();
 
     // Initialize nodes.
-    let mut nodes = Vec::with_capacity(NUM_NODES);
-
-    for _i in 0..NUM_NODES {
-        let mut node = Node::new("127.0.0.1:0".parse().unwrap(), NUM_NODES, NodeType::Compute)
-            .await
-            .unwrap();
-        node.set_connect_to_handshake_contacts(true);
-        nodes.push(node);
-    }
+    let num_nodes = 16;
+    let mut nodes = create_compute_nodes(num_nodes).await;
+    nodes
+        .iter_mut()
+        .for_each(|n| n.set_connect_to_handshake_contacts(true));
 
     // Connect everyone in a ring.
     let first_node = nodes[0].address();
-    let mut conn_handles = Vec::with_capacity(NUM_NODES);
+    let mut conn_handles = Vec::new();
 
     for (i, node) in nodes.iter().enumerate().skip(1) {
         let mut node = node.clone();
@@ -94,4 +84,47 @@ async fn multicast() {
             }
         }
     }
+}
+
+/// Check that 2 nodes connected node are disconnected once one of them disconnect.
+#[tokio::test]
+async fn disconnect_connection() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut nodes = create_compute_nodes(2).await;
+    let (mut n2, mut n1) = (nodes.pop().unwrap(), nodes.pop().unwrap());
+    n2.connect_to(n1.address()).await.unwrap();
+
+    //
+    // Act
+    //
+    n1.disconnect_all().await;
+    n2.wait_disconnect_all().await;
+    let actual2 = n2.send(n1.address(), "Hello1").await;
+    let actual1 = n1.send(n2.address(), "Hello2").await;
+
+    //
+    // Assert
+    //
+    let actual = (actual1, actual2);
+    assert!(
+        matches!(
+            actual,
+            (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound)),
+        ),
+        "{:?}",
+        actual
+    );
+}
+
+async fn create_compute_nodes(num_nodes: usize) -> Vec<Node> {
+    let mut nodes = Vec::new();
+    for _ in 0..num_nodes {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        nodes.push(Node::new(addr, num_nodes, NodeType::Compute).await.unwrap());
+    }
+    nodes
 }

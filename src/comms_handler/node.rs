@@ -97,7 +97,8 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::{Stream, StreamExt},
-    sync::{mpsc, Mutex, Notify, RwLock},
+    sync::{mpsc, oneshot, Mutex, Notify, RwLock},
+    task::JoinHandle,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
@@ -154,6 +155,10 @@ pub(crate) struct Peer {
     /// Notification to trigger a task waiting for a handshake response.
     // TODO: move it to a separate state enum, manage state transitions in a better way
     notify_handshake_response: Option<Arc<Notify>>,
+    /// Stop receiving when message sent or Sender dropped.
+    close_receiver_tx: oneshot::Sender<()>,
+    /// Joining handles for this connection tasks.
+    sock_in_out_join_handles: (Option<JoinHandle<()>>, Option<JoinHandle<()>>),
 }
 
 impl fmt::Debug for Peer {
@@ -328,6 +333,30 @@ impl Node {
         handshake_response.notified().await;
 
         Ok(())
+    }
+
+    /// Disconnect all remote peers.
+    pub async fn disconnect_all(&mut self) {
+        let mut all_peers = {
+            let mut all_peers = self.peers.write().await;
+            let all_peers: &mut PeerList = &mut all_peers;
+            std::mem::take(all_peers)
+        };
+
+        trace!("disconnect_all {:?}", all_peers);
+        let join_handles = take_join_handles(all_peers.iter_mut().map(|(_, p)| p));
+        all_peers.clear();
+        join_all(join_handles).await;
+    }
+
+    /// Wait for all current connection to be disconnected.
+    pub async fn wait_disconnect_all(&mut self) {
+        let join_handles = {
+            let mut all_peers = self.peers.write().await;
+            let all_peers: &mut PeerList = &mut all_peers;
+            take_join_handles(all_peers.iter_mut().map(|(_, p)| p))
+        };
+        join_all(join_handles).await;
     }
 
     /// Sends a multicast message to a group of peers in our ring.
@@ -750,19 +779,20 @@ impl Node {
 
         // Spawn the sender task.
         // Redirect messages from the mpsc channel into the TCP socket
-        tokio::spawn(
+        let sock_out_h = tokio::spawn(
             async move {
                 if let Err(error) = sock_out.send_all(&mut send_rx).await {
                     error!(?error, "Error while redirecting messages");
                 }
+                trace!("sock_out dropped for {:?}", peer_addr);
             }
             .instrument(span.clone()),
         );
 
         // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
         // and manage the peer state transitions.
-        let messages = get_messages_stream(sock_in);
-        tokio::spawn({
+        let (messages, close_receiver_tx) = get_messages_stream(sock_in);
+        let sock_in_h = tokio::spawn({
             let node = self.clone();
             let send_tx = send_tx.clone().into();
             let peers = self.peers.clone();
@@ -787,6 +817,7 @@ impl Node {
                                     public_address
                                 } else {
                                     // Peer not present
+                                    trace!("sock_in dropped for {:?}", peer_addr);
                                     return;
                                 }
                             }
@@ -796,6 +827,7 @@ impl Node {
                             warn!("Remove peer: {}, err: {:?}", peer_addr, err);
                             let mut peers_list = peers.write().await;
                             let _ = peers_list.remove(&peer_addr);
+                            trace!("sock_in dropped for {:?}", peer_addr);
                             return;
                         }
                     }
@@ -808,6 +840,7 @@ impl Node {
                 warn!("Remove peer: {}", public_address);
                 let mut peers_list = peers.write().await;
                 let _ = peers_list.remove(&public_address);
+                trace!("sock_in dropped for {:?}", peer_addr);
             }
             .instrument(span)
         });
@@ -822,6 +855,8 @@ impl Node {
             } else {
                 Some(Arc::new(Notify::new()))
             },
+            close_receiver_tx,
+            sock_in_out_join_handles: (Some(sock_in_h), Some(sock_out_h)),
         }
     }
 }
@@ -829,8 +864,8 @@ impl Node {
 /// Transforms a stream of incoming TCP frames into a stream of deserialized messages.
 fn get_messages_stream(
     sock_in: FramedRead<tokio::io::ReadHalf<TcpStream>, LengthDelimitedCodec>,
-) -> impl Stream<Item = CommMessage> {
-    sock_in.filter_map(|frame| {
+) -> (impl Stream<Item = CommMessage>, oneshot::Sender<()>) {
+    let messages = sock_in.filter_map(|frame| {
         trace!(?frame, "recv_frame");
 
         let frame = match frame {
@@ -848,5 +883,23 @@ fn get_messages_stream(
                 None
             }
         }
-    })
+    });
+
+    use futures::{FutureExt, TryFutureExt};
+    let (close_tx, close_rx) = oneshot::channel::<()>();
+    let cancellable_messages = messages
+        .map(Some)
+        .chain(tokio::stream::once(None))
+        .merge(close_rx.unwrap_or_else(|_| ()).into_stream().map(|_| None))
+        .take_while(|e| e.is_some())
+        .map(|e| e.unwrap());
+
+    (cancellable_messages, close_tx)
+}
+
+fn take_join_handles<'a>(peers: impl Iterator<Item = &'a mut Peer>) -> Vec<JoinHandle<()>> {
+    peers
+        .map(|p| &mut p.sock_in_out_join_handles)
+        .flat_map(|hs| hs.0.take().into_iter().chain(hs.1.take()))
+        .collect()
 }
