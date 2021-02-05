@@ -302,7 +302,10 @@ impl RaftNode {
         }
     }
 
-    
+    ///Updates the node object of this class with values from the Ready object input. 
+    /// ### Arguments
+    ///
+    /// * `ready` - Ready object. Values from this object are used to update the node object in this class.
     fn update_ready_mut_store(&mut self, ready: &mut Ready) {
         if !raft::is_empty_snap(ready.snapshot()) {
             self.node
@@ -324,6 +327,10 @@ impl RaftNode {
         }
     }
 
+    ///Commits entries Ready object input exectues send on the class's committed_tx object
+    /// ### Arguments
+    ///
+    /// * `ready` - Ready object. Values from this object are commited.
     async fn apply_committed_entries(&mut self, ready: &mut Ready) {
         let mut committed = Vec::new();
 
