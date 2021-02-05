@@ -16,8 +16,9 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let mut nodes = create_compute_nodes(2).await;
-    let (mut n2, mut n1) = (nodes.pop().unwrap(), nodes.pop().unwrap());
+    let mut nodes = create_compute_nodes(2, 2).await;
+    let mut n1 = nodes.remove(0);
+    let mut n2 = nodes.remove(0);
 
     n2.connect_to(n1.address()).await.unwrap();
     n2.send(n1.address(), "Hello1").await.unwrap();
@@ -43,8 +44,7 @@ async fn multicast() {
     let _ = tracing_subscriber::fmt::try_init();
 
     // Initialize nodes.
-    let num_nodes = 16;
-    let mut nodes = create_compute_nodes(num_nodes).await;
+    let mut nodes = create_compute_nodes(16, 16).await;
     nodes
         .iter_mut()
         .for_each(|n| n.set_connect_to_handshake_contacts(true));
@@ -94,15 +94,18 @@ async fn disconnect_connection() {
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(2).await;
-    let (mut n2, mut n1) = (nodes.pop().unwrap(), nodes.pop().unwrap());
+    let mut nodes = create_compute_nodes(2, 1).await;
+    let mut n1 = nodes.remove(0);
+    let mut n2 = nodes.remove(0);
     n2.connect_to(n1.address()).await.unwrap();
 
     //
     // Act
     //
-    n1.disconnect_all().await;
-    n2.wait_disconnect_all().await;
+    let join_n2 = n2.take_join_handle(n1.address()).await;
+    let join_n1 = n1.disconnect_all().await;
+    join_all(join_n2.into_iter().chain(join_n1.into_iter())).await;
+
     let actual2 = n2.send(n1.address(), "Hello1").await;
     let actual1 = n1.send(n2.address(), "Hello2").await;
 
@@ -120,11 +123,60 @@ async fn disconnect_connection() {
     );
 }
 
-async fn create_compute_nodes(num_nodes: usize) -> Vec<Node> {
+/// Check behaviour when peer list is full.
+#[tokio::test]
+async fn connect_full_from() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut nodes = create_compute_nodes(3, 1).await;
+    let mut n1 = nodes.remove(0);
+    let mut n2 = nodes.remove(0);
+    let mut n3 = nodes.remove(0);
+    
+    //
+    // Act
+    //
+    n1.connect_to(n2.address()).await.unwrap();
+    let conn_error = n1.connect_to(n3.address()).await;
+
+    let actual3_1 = n3.send(n1.address(), "Hello3_1").await;
+    let actual1_3 = n1.send(n3.address(), "Hello1_3").await;
+
+    let actual2_1 = n2.send(n1.address(), "Hello2_1").await;
+    let actual1_2 = n1.send(n2.address(), "Hello1_2").await;
+
+    //
+    // Assert
+    //
+    let actual = (conn_error, actual3_1, actual1_3, actual2_1, actual1_2);
+    assert!(
+        matches!(
+            actual,
+            (
+                Err(CommsError::PeerListFull),
+                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound),
+                Ok(()),
+                Ok(()),
+            ),
+        ),
+        "{:?}",
+        actual
+    );
+}
+
+async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
     let mut nodes = Vec::new();
     for _ in 0..num_nodes {
         let addr = "127.0.0.1:0".parse().unwrap();
-        nodes.push(Node::new(addr, num_nodes, NodeType::Compute).await.unwrap());
+        nodes.push(
+            Node::new(addr, peer_limit, NodeType::Compute)
+                .await
+                .unwrap(),
+        );
     }
     nodes
 }

@@ -335,8 +335,8 @@ impl Node {
         Ok(())
     }
 
-    /// Disconnect all remote peers.
-    pub async fn disconnect_all(&mut self) {
+    /// Disconnect all remote peers and provide JoinHandles.
+    pub async fn disconnect_all(&mut self) -> Vec<JoinHandle<()>> {
         let mut all_peers = {
             let mut all_peers = self.peers.write().await;
             let all_peers: &mut PeerList = &mut all_peers;
@@ -344,19 +344,13 @@ impl Node {
         };
 
         trace!("disconnect_all {:?}", all_peers);
-        let join_handles = take_join_handles(all_peers.iter_mut().map(|(_, p)| p));
-        all_peers.clear();
-        join_all(join_handles).await;
+        take_join_handles(all_peers.iter_mut().map(|(_, p)| p))
     }
 
-    /// Wait for all current connection to be disconnected.
-    pub async fn wait_disconnect_all(&mut self) {
-        let join_handles = {
-            let mut all_peers = self.peers.write().await;
-            let all_peers: &mut PeerList = &mut all_peers;
-            take_join_handles(all_peers.iter_mut().map(|(_, p)| p))
-        };
-        join_all(join_handles).await;
+    /// Take the specified join handle to wait on externally.
+    pub async fn take_join_handle(&mut self, addr: SocketAddr) -> Vec<JoinHandle<()>> {
+        let mut all_peers = self.peers.write().await;
+        take_join_handles(all_peers.get_mut(&addr).into_iter())
     }
 
     /// Sends a multicast message to a group of peers in our ring.
