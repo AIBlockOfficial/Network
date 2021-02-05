@@ -342,7 +342,7 @@ pub trait ComputeInterface {
     /// ### Arguments
     ///
     /// * `peer` - Address of the storage peer sending the block
-    /// * 'BlockStoredInfo' - Infomation about the recieved block
+    /// * `BlockStoredInfo` - Infomation about the recieved block
     fn receive_block_stored(
         &mut self,
         peer: SocketAddr,
