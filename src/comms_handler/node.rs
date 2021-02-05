@@ -885,14 +885,10 @@ fn get_messages_stream(
         }
     });
 
-    use futures::{FutureExt, TryFutureExt};
+    use super::stream_cancel::StreamCancel;
+    use futures::TryFutureExt;
     let (close_tx, close_rx) = oneshot::channel::<()>();
-    let cancellable_messages = messages
-        .map(Some)
-        .chain(tokio::stream::once(None))
-        .merge(close_rx.unwrap_or_else(|_| ()).into_stream().map(|_| None))
-        .take_while(|e| e.is_some())
-        .map(|e| e.unwrap());
+    let cancellable_messages = messages.take_until(close_rx.unwrap_or_else(|_| ()));
 
     (cancellable_messages, close_tx)
 }

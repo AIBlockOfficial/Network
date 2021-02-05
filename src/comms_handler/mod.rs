@@ -2,6 +2,7 @@
 
 mod error;
 mod node;
+mod stream_cancel;
 #[cfg(test)]
 mod tests;
 
