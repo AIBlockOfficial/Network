@@ -12,7 +12,7 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 /// Check that 2 nodes can exchange arbitrary messages in both direction,
 /// using their public address after one node connected to the other.
-#[tokio::test]
+#[tokio::test(basic_scheduler)]
 async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -39,7 +39,7 @@ async fn direct_messages() {
 /// 2. node_1 will send a multicast message to F (= Fanout, e.g. 8) nodes.
 /// 3. Everyone connects to node_1, and the contact list should be propagated to all other nodes.
 /// 4. We check that all other nodes (node_2, node_3, ... node_N) have received the same message.
-#[tokio::test]
+#[tokio::test(basic_scheduler)]
 async fn multicast() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -87,7 +87,7 @@ async fn multicast() {
 }
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
-#[tokio::test]
+#[tokio::test(basic_scheduler)]
 async fn disconnect_connection() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -123,9 +123,18 @@ async fn disconnect_connection() {
     );
 }
 
-/// Check behaviour when peer list is full.
-#[tokio::test]
+#[tokio::test(basic_scheduler)]
 async fn connect_full_from() {
+    connect_full(true).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn connect_full_to() {
+    connect_full(false).await;
+}
+
+/// Check behaviour when peer list is full.
+async fn connect_full(from_full: bool) {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
@@ -135,12 +144,21 @@ async fn connect_full_from() {
     let mut n1 = nodes.remove(0);
     let mut n2 = nodes.remove(0);
     let mut n3 = nodes.remove(0);
-    
+
     //
     // Act
     //
-    n1.connect_to(n2.address()).await.unwrap();
-    let conn_error = n1.connect_to(n3.address()).await;
+    let conn_error = if from_full {
+        n1.connect_to(n2.address()).await.unwrap();
+        let err = n1.connect_to(n3.address()).await;
+        let is_expected = matches!(err, Err(CommsError::PeerListFull));
+        (err, is_expected)
+    } else {
+        n2.connect_to(n1.address()).await.unwrap();
+        let err = n3.connect_to(n1.address()).await;
+        let is_expected = matches!(err, Err(CommsError::PeerNotFound));
+        (err, is_expected)
+    };
 
     let actual3_1 = n3.send(n1.address(), "Hello3_1").await;
     let actual1_3 = n1.send(n3.address(), "Hello1_3").await;
@@ -156,7 +174,7 @@ async fn connect_full_from() {
         matches!(
             actual,
             (
-                Err(CommsError::PeerListFull),
+                (Err(_), true),
                 Err(CommsError::PeerNotFound),
                 Err(CommsError::PeerNotFound),
                 Ok(()),

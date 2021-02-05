@@ -97,7 +97,7 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::{Stream, StreamExt},
-    sync::{mpsc, oneshot, Mutex, Notify, RwLock},
+    sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -154,7 +154,7 @@ pub(crate) struct Peer {
     public_address: Option<SocketAddr>,
     /// Notification to trigger a task waiting for a handshake response.
     // TODO: move it to a separate state enum, manage state transitions in a better way
-    notify_handshake_response: Option<Arc<Notify>>,
+    notify_handshake_response: (Option<oneshot::Sender<()>>, Option<oneshot::Receiver<()>>),
     /// Stop receiving when message sent or Sender dropped.
     close_receiver_tx: oneshot::Sender<()>,
     /// Joining handles for this connection tasks.
@@ -322,15 +322,23 @@ impl Node {
 
         // Wait for a handshake response
         let handshake_response = {
-            let peers = self.peers.read().await;
-            let peer = peers.get(&peer).ok_or(CommsError::PeerNotFound)?;
+            let mut peers = self.peers.write().await;
+            let peer = peers.get_mut(&peer).ok_or(CommsError::PeerNotFound)?;
             peer.notify_handshake_response
-                .as_ref()
+                .1
+                .take()
                 .ok_or(CommsError::PeerInvalidState)?
-                .clone()
         };
+
         // TODO: make sure we have a timeout here in case if a peer is unresponsive.
-        handshake_response.notified().await;
+        // If timeout, should drop the Peer.
+        match handshake_response.await {
+            Ok(()) => trace!("complete connection to {:?}", peer),
+            Err(_) => {
+                trace!("complete failed connection to {:?}", peer);
+                return Err(CommsError::PeerNotFound);
+            }
+        }
 
         Ok(())
     }
@@ -706,13 +714,15 @@ impl Node {
         peer_addr: SocketAddr,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
-        let all_peers = self.peers.write().await;
+        let mut all_peers = self.peers.write().await;
 
         // Notify the peer about the handshake response if someone's waiting for it.
         {
-            let peer = all_peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
-            if let Some(ref notify) = peer.notify_handshake_response {
-                notify.notify();
+            let peer = all_peers
+                .get_mut(&peer_addr)
+                .ok_or(CommsError::PeerNotFound)?;
+            if let Some(notify) = peer.notify_handshake_response.0.take() {
+                notify.send(()).unwrap();
             }
         }
 
@@ -845,9 +855,10 @@ impl Node {
             peer_type: None,
             public_address: if !is_initiator { Some(peer_addr) } else { None },
             notify_handshake_response: if is_initiator {
-                None
+                (None, None)
             } else {
-                Some(Arc::new(Notify::new()))
+                let (tx, rx) = oneshot::channel::<()>();
+                (Some(tx), Some(rx))
             },
             close_receiver_tx,
             sock_in_out_join_handles: (Some(sock_in_h), Some(sock_out_h)),
