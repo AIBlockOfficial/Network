@@ -27,6 +27,10 @@ use tokio::time::{self, Instant};
 use tracing::{trace, warn};
 
 /// Blocks & waits for timeout.
+/// 
+/// ### Arguments
+/// 
+/// * `timeout` - Instant instance to mark the end point of the timeout
 pub async fn timeout_at(timeout: Instant) {
     if let Ok(()) = time::timeout_at(timeout, future::pending::<()>()).await {
         panic!("pending completed");
@@ -75,7 +79,12 @@ impl<T> MpscTracingSender<T> {
     }
 }
 
-/// Return future that will connect to given peers on the network.
+/// Attempts to connect to all peers
+/// 
+/// ### Arguments
+/// 
+/// * `node` - Node attempting to connect to peers.
+/// * `peers` - Vec of socket ddresses of peers
 pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>) {
     for peer in peers {
         trace!(?peer, "Try to connect to");
