@@ -17,8 +17,8 @@ async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
     let mut nodes = create_compute_nodes(2, 2).await;
-    let mut n1 = nodes.remove(0);
-    let mut n2 = nodes.remove(0);
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, _) = tail.split_first_mut().unwrap();
 
     n2.connect_to(n1.address()).await.unwrap();
     n2.send(n1.address(), "Hello1").await.unwrap();
@@ -32,6 +32,8 @@ async fn direct_messages() {
         let recv_frame: &str = deserialize(&frame).unwrap();
         assert_eq!(recv_frame, "Hello2");
     }
+
+    complete_compute_nodes(nodes).await;
 }
 
 /// In this test, we
@@ -84,6 +86,8 @@ async fn multicast() {
             }
         }
     }
+
+    complete_compute_nodes(nodes).await;
 }
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
@@ -95,8 +99,8 @@ async fn disconnect_connection() {
     // Arrange
     //
     let mut nodes = create_compute_nodes(2, 1).await;
-    let mut n1 = nodes.remove(0);
-    let mut n2 = nodes.remove(0);
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, _) = tail.split_first_mut().unwrap();
     n2.connect_to(n1.address()).await.unwrap();
 
     //
@@ -121,30 +125,48 @@ async fn disconnect_connection() {
         "{:?}",
         actual
     );
+
+    complete_compute_nodes(nodes).await;
 }
 
 /// Check a node cannot connect to a node that stopped listening.
 #[tokio::test(basic_scheduler)]
-async fn listen_stopped() {
+async fn listen_paused_resumed_stopped() {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(2, 1).await;
-    let mut n1 = nodes.remove(0);
-    let mut n2 = nodes.remove(0);
+    let mut nodes = create_compute_nodes(3, 3).await;
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
 
     //
     // Act
     //
+    n1.set_pause_listening(true).await;
+    let actual_paused = n2.connect_to(n1.address()).await;
+    n1.set_pause_listening(false).await;
+    let actual_resumed = n2.connect_to(n1.address()).await;
+
     join_all(n1.stop_listening().await).await;
-    let actual = n2.connect_to(n1.address()).await;
+    let actual_stopped = n3.connect_to(n1.address()).await;
 
     //
     // Assert
     //
-    assert!(matches!(actual, Err(CommsError::Io(_)),), "{:?}", actual);
+    let actual = (actual_paused, actual_resumed, actual_stopped);
+    assert!(
+        matches!(
+            actual,
+            (Err(CommsError::PeerNotFound), Ok(_), Err(CommsError::Io(_)))
+        ),
+        "{:?}",
+        actual
+    );
+
+    complete_compute_nodes(nodes).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -165,9 +187,9 @@ async fn connect_full(from_full: bool) {
     // Arrange
     //
     let mut nodes = create_compute_nodes(3, 1).await;
-    let mut n1 = nodes.remove(0);
-    let mut n2 = nodes.remove(0);
-    let mut n3 = nodes.remove(0);
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
 
     //
     // Act
@@ -208,6 +230,8 @@ async fn connect_full(from_full: bool) {
         "{:?}",
         actual
     );
+
+    complete_compute_nodes(nodes).await;
 }
 
 async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
@@ -221,4 +245,10 @@ async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> 
         );
     }
     nodes
+}
+
+async fn complete_compute_nodes(nodes: Vec<Node>) {
+    for mut node in nodes.into_iter() {
+        join_all(node.stop_listening().await).await;
+    }
 }

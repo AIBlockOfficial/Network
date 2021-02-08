@@ -97,7 +97,7 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::{Stream, StreamExt},
-    sync::{mpsc, oneshot, Mutex, RwLock},
+    sync::{mpsc, oneshot, Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -124,6 +124,8 @@ pub struct Node {
     listener_cmd_tx: mpsc::Sender<ListenerCmd>,
     /// Joining handle for this node tasks.
     listener_join_handles: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Notify listener event
+    listener_cmd_notified: Arc<Notify>,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
     /// Node type.
@@ -181,9 +183,10 @@ enum PeerState {
     Ready,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ListenerCmd {
     Stop,
+    SetPause(bool),
 }
 
 impl Node {
@@ -206,6 +209,7 @@ impl Node {
             listener_address,
             listener_cmd_tx,
             listener_join_handles: Arc::new(Mutex::new(None)),
+            listener_cmd_notified: Arc::new(Notify::new()),
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
@@ -240,10 +244,14 @@ impl Node {
                 let mut listener = listener
                     .map(Cmd::Event)
                     .merge(listener_cmd_rx.map(Cmd::Cmd));
+                let mut paused = false;
 
                 while let Some(new_conn) = listener.next().await {
                     match new_conn {
                         Cmd::Event(Ok(conn)) => {
+                            if paused {
+                                continue;
+                            }
                             // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
@@ -259,8 +267,14 @@ impl Node {
                         Cmd::Event(Err(error)) => {
                             warn!(?error, "Connection failure");
                         }
+                        Cmd::Cmd(ListenerCmd::SetPause(pause)) => {
+                            warn!("listen paused={}", pause);
+                            paused = pause;
+                            node.listener_cmd_notified.notify();
+                        }
                         Cmd::Cmd(ListenerCmd::Stop) => {
                             warn!("listen stopped");
+                            node.listener_cmd_notified.notify();
                             return;
                         }
                     }
@@ -370,12 +384,22 @@ impl Node {
         Ok(())
     }
 
+    /// Pause/Resume accepting new connections
+    pub async fn set_pause_listening(&mut self, pause: bool) {
+        let cmd = ListenerCmd::SetPause(pause);
+        self.listener_cmd_tx.send(cmd).await.unwrap();
+        self.listener_cmd_notified.notified().await;
+    }
+
     /// Stop accepting new connections
     pub async fn stop_listening(&mut self) -> Vec<JoinHandle<()>> {
         trace!("stop_listening {:?}", self.listener_address);
-        self.listener_cmd_tx.send(ListenerCmd::Stop).await.unwrap();
-        let handle = self.listener_join_handles.lock().await.take();
-        handle.into_iter().collect()
+        if let Some(handle) = self.listener_join_handles.lock().await.take() {
+            self.listener_cmd_tx.send(ListenerCmd::Stop).await.unwrap();
+            vec![handle]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Disconnect all remote peers and provide JoinHandles.
