@@ -107,6 +107,12 @@ impl KeyAgreement {
     }
 
     /// Convenience method to run the first key agreement round of computation
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - payment address value as Vec<u8>
+    /// * `unicorn ` - Unicorn value as Vec<u8>
+    /// * `nonce` - block sequence number value as Vec<u8>
     pub fn first_round(
         &mut self,
         address: &mut Vec<u8>,
@@ -119,6 +125,11 @@ impl KeyAgreement {
     }
 
     /// Convenience method to run the second key agreement round of computation
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer_value_left` - Vec<u8> value held by peer to the left
+    /// * `peer_value_right` - Vec<u8> value held by peer to the right
     pub fn second_round(&mut self, peer_value_left: Vec<u8>, peer_value_right: Vec<u8>) {
         self.compute_t_values(peer_value_left, peer_value_right);
         self.build_concatenation();

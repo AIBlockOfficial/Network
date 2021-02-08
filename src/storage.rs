@@ -82,6 +82,11 @@ pub struct StorageNode {
 }
 
 impl StorageNode {
+    ///Constructor for a new StorageNode
+    ///
+    /// ### Arguments
+    ///
+    /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
     pub async fn new(config: StorageNodeConfig) -> Result<StorageNode> {
         let addr = config
             .storage_nodes
@@ -104,6 +109,11 @@ impl StorageNode {
         })
     }
 
+    ///Creates a new database(db) object in selected mode
+    ///
+    /// ### Arguments
+    ///
+    /// * `db_moode` - DbMode object containing the mode with which to create the database.
     fn new_db(db_mode: DbMode) -> SimpleDb {
         let save_path = match db_mode {
             DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
@@ -121,6 +131,12 @@ impl StorageNode {
         self.node.address()
     }
 
+    ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
+    ///
+    /// ### Arguments
+    ///
+    /// * `from_peer_addr` - Socket address that the data was sent from.
+    /// * `data` - payload used to create a new frame in the node.
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -194,6 +210,11 @@ impl StorageNode {
         }
     }
 
+    /// Takes message from the event and passes it to handle_new_frame to handle the message
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event object containing a message from a peer.
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
             Event::NewFrame { peer, frame } => {
@@ -206,6 +227,11 @@ impl StorageNode {
     }
 
     /// Hanldes a new incoming message from a peer.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Socket address of the sender.
+    /// * `frame` - Bytes object holding the message from the sender.
     async fn handle_new_frame(
         &mut self,
         peer: SocketAddr,
@@ -224,6 +250,11 @@ impl StorageNode {
     }
 
     /// Handles a compute request.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Socket address for the peer that the compute request came from.
+    /// * `req` - StorageRequest object holding the compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
         match req {
@@ -242,6 +273,11 @@ impl StorageNode {
         }
     }
 
+    ///Stores a completed block including transactions and mining transactions.
+    ///
+    /// ### Arguments
+    ///
+    /// * `complete` - CompleteBlock object to be stored.
     fn store_complete_block(&mut self, complete: CompleteBlock) {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
@@ -296,6 +332,10 @@ impl StorageNode {
     }
 
     /// Get the stored value at the given key
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
         self.db.get(key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
@@ -304,6 +344,10 @@ impl StorageNode {
     }
 
     /// Get the stored block at the given key
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - Given key to find the block.
     pub fn get_stored_block<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -315,6 +359,10 @@ impl StorageNode {
     }
 
     /// Get the stored Transaction at the given key
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - Given key used to find the transaction.
     pub fn get_stored_tx<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Transaction>> {
         Ok(self
             .get_stored_value(key)

@@ -92,6 +92,10 @@ impl fmt::Debug for StorageRaft {
 
 impl StorageRaft {
     /// Create a StorageRaft, need to spawn the raft loop to use raft.
+    ///
+    /// ### Arguments
+    ///
+    /// * `config` - &StorageNodeConfig containing the parameters for the new StorageRaft
     pub fn new(config: &StorageNodeConfig) -> Self {
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
@@ -145,6 +149,10 @@ impl StorageRaft {
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
+    ///
+    /// ### Arguments
+    ///
+    /// * `raft_commit` - RaftCommit object holding the data from the commit
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<()> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
@@ -160,7 +168,11 @@ impl StorageRaft {
         None
     }
 
+    /// Checks a commit of the RaftData for validity
     /// Apply commited proposal
+    /// ### Arguments
+    ///
+    /// * `raft_commit` - RaftCommit object holding the data for the commit
     async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
         let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
             Ok((key, item)) => (key, item),
@@ -202,6 +214,10 @@ impl StorageRaft {
     }
 
     /// Process a raft message: send to spawned raft loop.
+    ///
+    /// ### Arguments
+    ///
+    /// * `msg` - RaftMessageWrapper object. Contains the recieved message to be sent to the raft.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.raft_active.received_message(msg).await
     }
@@ -236,6 +252,10 @@ impl StorageRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `item` - &StorageRaftItem. The item to be proposed to a radt.
     async fn propose_item(&mut self, item: &StorageRaftItem) {
         self.proposed_last_id += 1;
         let key = StorageRaftKey {
@@ -251,6 +271,12 @@ impl StorageRaft {
 
     /// Append block to our local pool from which to propose
     /// consensused blocks.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - socket address of the sending peer
+    /// * `common` - CommonBlockInfo holding all block infomation to be stored
+    /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
     pub fn append_to_our_blocks(
         &mut self,
         peer: SocketAddr,
@@ -280,21 +306,31 @@ impl StorageRaft {
             .create_snapshot(snapshot_idx, consensused_ser);
     }
 
+    ///Creates and returns a complete block
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
         self.propose_block_timeout_at = self.next_propose_block_timeout_at();
         self.consensused.generate_complete_block()
     }
 
+    ///Returns the clock time after the proposed block time out
     fn next_propose_block_timeout_at(&mut self) -> ProposeBlockTimeout {
         ProposeBlockTimeout::Some(Instant::now() + self.propose_block_timeout_duration)
     }
 }
 
 impl StorageConsensused {
+    ///Returns a bool variable of whether or not the input value matches the current block number
+    ///
+    /// ### Arguments
+    ///
+    /// * `block_num` - u64 object to be compared to the current block number
     pub fn is_current_block(&self, block_num: u64) -> bool {
         block_num == self.current_block_num
     }
 
+    ///Returns false is current block timeout peer ids length of this class is less than the sufficient_majority object of this class.
+    /// Returns true if a calculated completed block length of this class is greater or equal to the sufficient_majority object of this class.
+    ///
     pub fn has_block_ready_to_store(&self) -> bool {
         if self.current_block_complete_timeout_peer_ids.len() < self.sufficient_majority {
             return false;
@@ -310,11 +346,23 @@ impl StorageConsensused {
         completed_blocks_len >= self.sufficient_majority
     }
 
+    ///Inserts a prosper_id into the current_block_complete_timeout_peer_ids.
+    /// proposer_id is take from key
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - StorageRaftKey containing the proposer_id to be appended.
     pub fn append_received_block_timeout(&mut self, key: StorageRaftKey) {
         self.current_block_complete_timeout_peer_ids
             .insert(key.proposer_id);
     }
 
+    ///Appends a RecievedBlock into the current_block_completed_parts
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - StorageRaftKey containing the proposer_id to be appended.
+    /// * `block` - RecievedBlock object that is being appended.
     pub fn append_received_block(&mut self, key: StorageRaftKey, block: ReceivedBlock) {
         let block_ser = serialize(&block.common).unwrap();
         let block_hash = Sha3_256::digest(&block_ser).to_vec();
@@ -329,6 +377,7 @@ impl StorageConsensused {
             .insert(key.proposer_id, node_info);
     }
 
+    ///generates a completed block and returns it.
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
         self.current_block_num += 1;
         let _timeouts = std::mem::take(&mut self.current_block_complete_timeout_peer_ids);

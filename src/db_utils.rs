@@ -48,6 +48,7 @@ impl SimpleDb {
         Self::InMemory { key_values }
     }
 
+    /// Destroys the database in memory
     fn destroy(&mut self) {
         match self {
             Self::File { options, path, .. } => {
@@ -61,6 +62,11 @@ impl SimpleDb {
     }
 
     /// Add entry to database
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - reference to the value in database to when the entry is added
+    /// * `value` - value to be added to the db
     pub fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<(), DBError> {
         match self {
             Self::File { db, .. } => {
@@ -74,6 +80,10 @@ impl SimpleDb {
     }
 
     /// Remove entry from database
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - position in database to be deleted
     pub fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), DBError> {
         match self {
             Self::File { db, .. } => {
@@ -87,6 +97,10 @@ impl SimpleDb {
     }
 
     /// Get entry from database
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - used to find position in database
     pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>, DBError> {
         match self {
             Self::File { db, .. } => db.get(key),
@@ -102,7 +116,7 @@ impl SimpleDb {
         }
     }
 
-    /// Get entries from database
+    /// Get entries from database as iterable db items
     pub fn iter_clone(&self) -> Box<dyn Iterator<Item = DbIteratorItem> + '_> {
         match self {
             Self::File { db, .. } => {

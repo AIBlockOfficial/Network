@@ -63,6 +63,7 @@ impl Default for ProofOfWorkBlock {
 }
 
 impl ProofOfWorkBlock {
+    ///Proof of work block constructor
     pub fn new() -> Self {
         ProofOfWorkBlock {
             nonce: Vec::new(),
@@ -339,6 +340,10 @@ pub trait ComputeInterface {
     fn get_service_levels(&self) -> Response;
 
     /// Receives block info from its storage node
+    /// ### Arguments
+    ///
+    /// * `peer` - Address of the storage peer sending the block
+    /// * `BlockStoredInfo` - Infomation about the recieved block
     fn receive_block_stored(
         &mut self,
         peer: SocketAddr,
@@ -346,9 +351,17 @@ pub trait ComputeInterface {
     ) -> Response;
 
     /// Receives transactions to be bundled into blocks
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions` - BTreeMap of transactions to be bundled into blocks.
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;
 
     /// Executes a received and approved contract
+    ///
+    /// ### Arguments
+    ///
+    /// * `contract` - Contract struct containing the contract to be executed.
     fn execute_contract(&self, contract: Contract) -> Response;
 
     /// Returns the next block reward value

@@ -98,7 +98,7 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
-    /// * `comms_address`   - endpoint address used for communications
+    /// * `config`   - MinerNodeConfig object that hold the miner_nodes and miner_db_mode
     pub async fn new(config: MinerNodeConfig) -> Result<MinerNode> {
         let addr = config
             .miner_nodes
@@ -124,6 +124,10 @@ impl MinerNode {
     }
 
     /// Connect to a peer on the network.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`   - Address of the peer to connect to.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
         Ok(())
@@ -136,6 +140,11 @@ impl MinerNode {
         self.handle_event(event).await.into()
     }
 
+    /// Handles an event using handle_new_frame
+    ///
+    /// ### Arguments
+    ///
+    /// * `event`   - Event object to be handled.
     async fn handle_event(&mut self, event: Event) -> Result<Response> {
         match event {
             Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
@@ -143,6 +152,11 @@ impl MinerNode {
     }
 
     /// Hanldes a new incoming message from a peer.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`   - Socket address of the peer sending the message.
+    /// * `frame`   - Bytes object holding the frame
     async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
         info_span!("peer", ?peer).in_scope(|| {
             let req = deserialize::<MineRequest>(&frame).map_err(|error| {
@@ -160,6 +174,10 @@ impl MinerNode {
     }
 
     /// Handles a compute request.
+    ///
+    /// ### Arguments
+    ///
+    /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
     fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
         use MineRequest::*;
@@ -174,6 +192,10 @@ impl MinerNode {
     }
 
     /// Handles the receipt of a block found
+    ///
+    /// ### Arguments
+    ///
+    /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
     fn receive_block_found(&mut self, win_coinbase: String) -> Response {
         debug!("RECEIVE BLOCK FOUND: {:?}", win_coinbase);
         if Some(&win_coinbase) == self.current_coinbase.as_ref().map(|(hash, _)| hash) {
@@ -190,6 +212,10 @@ impl MinerNode {
     }
 
     /// Handles the receipt of the random number of partitioning
+    ///
+    /// ### Arguments
+    ///
+    /// * `rand_num`   - random num to be recieved in Vec<u8>
     fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Response {
         self.rand_num = rand_num;
         debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num.clone());
@@ -201,6 +227,10 @@ impl MinerNode {
     }
 
     /// Handles the receipt of the filled partition list
+    ///
+    /// ### Arguments
+    ///
+    /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
     fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
         self.partition_key = Some(get_partition_entry_key(&p_list));
         self.partition_list = p_list;
@@ -223,6 +253,12 @@ impl MinerNode {
     }
 
     /// Sends PoW to a compute node.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`   - Socket address of recipient
+    /// * `nonce`   - sequence number of a block in Vec<u8>
+    /// * `coinbase`   - Transaction object
     pub async fn send_pow(
         &mut self,
         peer: SocketAddr,
@@ -236,6 +272,11 @@ impl MinerNode {
     }
 
     /// Sends the light partition PoW to a compute node
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`   - Socket address of recipient/peer
+    /// * `partition_entry`   - partition ProofOfWork being sent
     pub async fn send_partition_pow(
         &mut self,
         peer: SocketAddr,
@@ -248,6 +289,10 @@ impl MinerNode {
     }
 
     /// Sends a request to partition to a Compute node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute`   - Socket address of recipient
     pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
         let _peer_span = info_span!("sending partition participation request");
 
@@ -297,6 +342,13 @@ impl MinerNode {
         Ok((pow, mining_tx))
     }
 
+    /// Generates and returns the nonce of a block.active_raft
+    /// Validates the POW using the block, hash and nonce
+    ///
+    /// ### Arguments
+    ///
+    /// * `mining_block`   - block being mined that is used to check the validity of the ProofOfWork
+    /// * `mining_tx_hash`   - block transation hash that is used to check the validity of the ProofOfWork
     async fn generate_pow_for_block(
         mut mining_block: Vec<u8>,
         mining_tx_hash: String,
@@ -319,6 +371,12 @@ impl MinerNode {
         Self::generate_pow_for_address(address_proof, Some(self.rand_num.clone())).await
     }
 
+    /// Generates a ProofOfWork for a given address
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`   - Given address to generate the ProofOfWork
+    /// * `rand_num`   - A random number used to generate the ProofOfWork in an Option<Vec<u8>>
     async fn generate_pow_for_address(
         address: String,
         rand_num: Option<Vec<u8>>,
@@ -371,6 +429,11 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
+    /// recieves a pre_block and sets it as current block
+    ///
+    /// ### Arguments
+    ///
+    /// * `pre_block`   - Vec<u8> representing the pre_block to become the current block
     fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response {
         self.current_block = deserialize::<Block>(&pre_block).unwrap();
 
