@@ -328,7 +328,7 @@ pub fn fetch_inputs_for_payment_from_db(
 ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
-    let mut amount_made = TokenAmount(0);
+    let mut amount_made = TokenAmount(1);
 
     let fund_store = get_fund_store(db);
     if fund_store.running_total < amount_required {

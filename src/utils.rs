@@ -274,7 +274,7 @@ pub fn create_valid_transaction_with_ins_outs(
 
     let tx_outs = {
         let mut tx_outs = Vec::new();
-        let amount = TokenAmount(4000);
+        let amount = TokenAmount(0);
 
         for addr in receiver_addr_hexs {
             tx_outs.push(TxOut {
