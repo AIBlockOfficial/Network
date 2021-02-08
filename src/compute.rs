@@ -741,7 +741,7 @@ impl ComputeInterface for ComputeNode {
     ///
     /// * `address`    - Address of miner
     /// * `nonce`          - Sequenc number of the block held in a Vec<u8>
-    /// * 'coinbase' - The transaction object  of the mining 
+    /// * 'coinbase' - The transaction object  of the mining
     fn receive_pow(
         &mut self,
         address: SocketAddr,
@@ -784,7 +784,7 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    /// Returns the internal unicorn table in a Vector of the UnicornShards from unicorn_list. 
+    /// Returns the internal unicorn table in a Vector of the UnicornShards from unicorn_list.
     /// The unicorn_list is a HashMap of the socketAddress and the UnicornShard
     fn get_unicorn_table(&self) -> Vec<UnicornShard> {
         let mut unicorn_table = Vec::with_capacity(self.unicorn_list.len());

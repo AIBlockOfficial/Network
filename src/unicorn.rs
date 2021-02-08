@@ -29,7 +29,7 @@ impl UnicornShard {
     }
 
     /// Checks for UnicornShard validity
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `commit` - ProofOfWork being checked for validity.

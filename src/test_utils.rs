@@ -71,9 +71,9 @@ pub struct NetworkInstanceInfo {
 
 impl Network {
     ///Creates a Network instance using a config object
-    /// 
+    ///
     /// ###Arguments
-    /// 
+    ///
     /// * `config` - Holds the values to instanciate a Network object
     pub async fn create_from_config(config: &NetworkConfig) -> Self {
         let info = Self::init_instance_info(config);
@@ -169,10 +169,10 @@ impl Network {
     }
 
     ///Creates a NetworkInstanceInfo object with config object values.
-    /// 
+    ///
     /// ### Arguments
     ///
-    /// * `config` - &NetworkConfig object containing parameters for the NetworkInstanceInfo object creation. 
+    /// * `config` - &NetworkConfig object containing parameters for the NetworkInstanceInfo object creation.
     fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let next_port = config.initial_port;
@@ -205,7 +205,7 @@ impl Network {
     }
 
     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The miner nodes are initialised and a map is returned.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `config` - &NetworkConfig holding configuration Infomation.
@@ -242,7 +242,7 @@ impl Network {
     }
 
     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The storage nodes are initialised and a map is returned.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `config` - &NetworkConfig holding configuration Infomation.
@@ -282,8 +282,8 @@ impl Network {
         map
     }
 
-     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The compute nodes are initialised and a map is returned.
-    /// 
+    ///Clones storage nodes, compute nodes, miner nodes and user nodes. The compute nodes are initialised and a map is returned.
+    ///
     /// ### Arguments
     ///
     /// * `config` - &NetworkConfig holding configuration Infomation.
@@ -322,7 +322,7 @@ impl Network {
         map
     }
     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The user nodes are initialised and a map is returned.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `config` - &NetworkConfig holding configuration Infomation.
@@ -363,7 +363,7 @@ impl Network {
     }
 
     ///Returns a mutable reference to the miner node with the matching name
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the miner node's name to be found.
@@ -377,7 +377,7 @@ impl Network {
     }
 
     ///returns a mutable reference to the compute node with the matching name.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the compute node's name to be found.
@@ -386,7 +386,7 @@ impl Network {
     }
 
     ///returns a mutable reference to the storage node with the matching name.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the storage node's name to be found.
@@ -395,7 +395,7 @@ impl Network {
     }
 
     ///returns a mutable reference to the user node with the matching name.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the user node's name to be found.
@@ -404,7 +404,7 @@ impl Network {
     }
 
     ///Searches all node types and returns an address to the node with the matching name.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the name of the node found.
@@ -425,7 +425,7 @@ impl Network {
     }
 
     ///Searches all node types and returns the position of the node with the matching name.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `name` - &str of the name of the node found.
@@ -446,7 +446,7 @@ impl Network {
         None
     }
 
-    ///Returns a list of initial transactions 
+    ///Returns a list of initial transactions
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(&self.config.compute_seed_utxo)
     }

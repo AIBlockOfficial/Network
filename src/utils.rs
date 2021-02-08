@@ -27,9 +27,9 @@ use tokio::time::{self, Instant};
 use tracing::{trace, warn};
 
 /// Blocks & waits for timeout.
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `timeout` - Instant instance to mark the end point of the timeout
 pub async fn timeout_at(timeout: Instant) {
     if let Ok(()) = time::timeout_at(timeout, future::pending::<()>()).await {
@@ -80,9 +80,9 @@ impl<T> MpscTracingSender<T> {
 }
 
 /// Attempts to connect to all peers
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `node` - Node attempting to connect to peers.
 /// * `peers` - Vec of socket ddresses of peers
 pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>) {
@@ -128,7 +128,7 @@ pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
 ///
 /// NOTE: This is a test util function
 /// ### Arguments
-/// 
+///
 /// * `wallet_db`    - &WalletDb object. Reference to a wallet database
 pub async fn create_and_save_fake_to_wallet(
     wallet_db: &WalletDb,
@@ -164,9 +164,9 @@ pub fn is_valid_amount(_value: &u64) -> bool {
 }
 
 /// Returns a socket address from command input
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `comand_input` - command line input to find the socket address
 pub fn command_input_to_socket(command_input: String) -> SocketAddr {
     let ip_and_port: Vec<&str> = command_input.split(':').collect();
@@ -181,9 +181,9 @@ pub fn command_input_to_socket(command_input: String) -> SocketAddr {
 }
 
 /// Computes a key that will be shared from a vector of PoWs
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `p_list` - Vectoor of PoWs
 pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
     let key_sha_seed: Vec<u8> = p_list
@@ -199,18 +199,18 @@ pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
 }
 
 /// Address to be used in Proof of Work
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `addr`    - Socket address of used in the proof of work
 pub fn format_parition_pow_address(addr: SocketAddr) -> String {
     format!("{}", addr)
 }
 
 /// Block to be used in Proof of Work
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `block`    - &Block reference to be used in proof of work
 pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
     serialize(block).unwrap()
@@ -227,9 +227,9 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
 
 /// Validate Proof of Work for a block with a mining transaction
 /// Note: serialized_block is also manipulated as a buffer and restored before return.
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `serialized_block`  - The block whose proof of work is being validated.
 /// * `mining_tx`  - mining transactions of the block.
 /// * `nonce`    - &u8 block sequence number.
@@ -244,9 +244,9 @@ pub fn validate_pow_block(serialized_block: &mut Vec<u8>, mining_tx: &str, nonce
 }
 
 /// Check the hash of given data reach MINING_DIFFICULTY
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `pow`    - &u8 proof of work
 fn validate_pow(pow: &[u8]) -> bool {
     let pow_hash = Sha3_256::digest(pow).to_vec();
@@ -270,9 +270,9 @@ pub fn create_valid_transaction(
 }
 
 /// Create a valid transaction from givent info
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `tx`    - &InititialTxSpecs. An object containing the intialisation values
 pub fn create_valid_transaction_with_info(tx: &InititalTxSpec) -> (String, Transaction) {
     let tx_out_p = decode_wallet_out_point(&tx.out_point);
@@ -338,9 +338,9 @@ pub fn create_valid_transaction_with_ins_outs(
 }
 
 /// Generate utxo_set transactions from seed info
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
 pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
     seed.iter()
@@ -364,9 +364,9 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
 }
 
 /// Generate wallet transactions from seed info
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `seed`    - &WalletTxSpec object containing parameters to generate wallet transactions
 pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
@@ -378,9 +378,9 @@ pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretK
 }
 
 /// Decodes a wallet's Outpoint
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `out_point`    - String to be split and decode the wallet OutPoint
 pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
     let mut it = out_point.split('-');
@@ -390,9 +390,9 @@ pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
 }
 
 /// Decodes the public key
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `key`    - key to be decoded to give the public key
 pub fn decode_pub_key(key: &str) -> PublicKey {
     let key_slice = hex::decode(key).unwrap();
@@ -400,9 +400,9 @@ pub fn decode_pub_key(key: &str) -> PublicKey {
 }
 
 /// Decodes a secret key from a given key
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `key`    - key to decoded to give the secret key
 pub fn decode_secret_key(key: &str) -> SecretKey {
     let key_slice = hex::decode(key).unwrap();

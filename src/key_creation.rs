@@ -107,7 +107,7 @@ impl KeyAgreement {
     }
 
     /// Convenience method to run the first key agreement round of computation
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `address` - payment address value as Vec<u8>
@@ -125,7 +125,7 @@ impl KeyAgreement {
     }
 
     /// Convenience method to run the second key agreement round of computation
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer_value_left` - Vec<u8> value held by peer to the left

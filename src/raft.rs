@@ -125,7 +125,7 @@ pub struct RaftNode {
 
 impl RaftNode {
     /// RaftNode constructor.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `raft_Config` - RaftConfig object containing tick_timeout_duration and cfg
@@ -165,10 +165,10 @@ impl RaftNode {
     }
 
     /// Create the RaftConfig and needed channels to run the loop.
-    /// 
+    ///
     /// ### Arguments
     ///
-    /// * `node_cfg` - Config object 
+    /// * `node_cfg` - Config object
     /// * `tick_timeout_duration` - Duration object holding the tick timeout duration
     pub fn init_config(
         node_cfg: Config,
@@ -266,7 +266,7 @@ impl RaftNode {
     }
 
     ///If current node has_ready is true then it returns. Otherwise, it sends messages to peers and updates ready.
-    /// 
+    ///
     /// Advance notifies the node that the application has applied and saved progress in the last Ready results.
     async fn process_ready(&mut self) {
         if !self.node.has_ready() {
@@ -289,10 +289,10 @@ impl RaftNode {
     }
 
     /// Sends all messages to peers
-    /// 
+    ///
     /// ### Arguments
     ///
-    /// * `ready` - Ready object that contains the messages to be sent. 
+    /// * `ready` - Ready object that contains the messages to be sent.
     async fn send_messages_to_peers(&mut self, ready: &mut Ready) {
         self.outgoing_msgs_and_groups_count.1 += if ready.messages.is_empty() { 0 } else { 1 };
         for msg in ready.messages.drain(..) {
@@ -302,7 +302,7 @@ impl RaftNode {
         }
     }
 
-    ///Updates the node object of this class with values from the Ready object input. 
+    ///Updates the node object of this class with values from the Ready object input.
     /// ### Arguments
     ///
     /// * `ready` - Ready object. Values from this object are used to update the node object in this class.

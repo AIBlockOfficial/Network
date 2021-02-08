@@ -351,14 +351,14 @@ pub trait ComputeInterface {
     ) -> Response;
 
     /// Receives transactions to be bundled into blocks
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `transactions` - BTreeMap of transactions to be bundled into blocks.
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;
 
     /// Executes a received and approved contract
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `contract` - Contract struct containing the contract to be executed.

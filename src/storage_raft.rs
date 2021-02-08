@@ -92,10 +92,10 @@ impl fmt::Debug for StorageRaft {
 
 impl StorageRaft {
     /// Create a StorageRaft, need to spawn the raft loop to use raft.
-    /// 
+    ///
     /// ### Arguments
     ///
-    /// * `config` - &StorageNodeConfig containing the parameters for the new StorageRaft 
+    /// * `config` - &StorageNodeConfig containing the parameters for the new StorageRaft
     pub fn new(config: &StorageNodeConfig) -> Self {
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
@@ -149,7 +149,7 @@ impl StorageRaft {
 
     /// Process result from next_commit.
     /// Return Some if block to mine is ready to generate.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `raft_commit` - RaftCommit object holding the data from the commit
@@ -214,9 +214,9 @@ impl StorageRaft {
     }
 
     /// Process a raft message: send to spawned raft loop.
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `msg` - RaftMessageWrapper object. Contains the recieved message to be sent to the raft.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
         self.raft_active.received_message(msg).await
@@ -252,9 +252,9 @@ impl StorageRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     ///  * `item` - &StorageRaftItem. The item to be proposed to a radt.
     async fn propose_item(&mut self, item: &StorageRaftItem) {
         self.proposed_last_id += 1;
@@ -271,9 +271,9 @@ impl StorageRaft {
 
     /// Append block to our local pool from which to propose
     /// consensused blocks.
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `peer` - socket address of the sending peer
     /// * `common` - CommonBlockInfo holding all block infomation to be stored
     /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
@@ -320,7 +320,7 @@ impl StorageRaft {
 
 impl StorageConsensused {
     ///Returns a bool variable of whether or not the input value matches the current block number
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `block_num` - u64 object to be compared to the current block number
@@ -330,7 +330,7 @@ impl StorageConsensused {
 
     ///Returns false is current block timeout peer ids length of this class is less than the sufficient_majority object of this class.
     /// Returns true if a calculated completed block length of this class is greater or equal to the sufficient_majority object of this class.
-    /// 
+    ///
     pub fn has_block_ready_to_store(&self) -> bool {
         if self.current_block_complete_timeout_peer_ids.len() < self.sufficient_majority {
             return false;
@@ -348,7 +348,7 @@ impl StorageConsensused {
 
     ///Inserts a prosper_id into the current_block_complete_timeout_peer_ids.
     /// proposer_id is take from key
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key` - StorageRaftKey containing the proposer_id to be appended.
@@ -358,7 +358,7 @@ impl StorageConsensused {
     }
 
     ///Appends a RecievedBlock into the current_block_completed_parts
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key` - StorageRaftKey containing the proposer_id to be appended.

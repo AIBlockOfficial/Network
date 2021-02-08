@@ -364,7 +364,7 @@ impl ComputeRaft {
         &self.consensused.tx_pool
     }
 
-    /// Whether adding these will grow our pool within the limit. Returns a bool. 
+    /// Whether adding these will grow our pool within the limit. Returns a bool.
     pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
         self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
     }
@@ -668,7 +668,7 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for first block info
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key`   - ComputerRaftKey object of the first block
@@ -685,7 +685,7 @@ impl ComputeConsensused {
     }
 
     /// Append a vote for a non first block info
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key`   - ComputerRaftKey object of the block to append

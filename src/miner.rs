@@ -124,7 +124,7 @@ impl MinerNode {
     }
 
     /// Connect to a peer on the network.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer`   - Address of the peer to connect to.
@@ -140,8 +140,8 @@ impl MinerNode {
         self.handle_event(event).await.into()
     }
 
-    /// Handles an event using handle_new_frame 
-    /// 
+    /// Handles an event using handle_new_frame
+    ///
     /// ### Arguments
     ///
     /// * `event`   - Event object to be handled.
@@ -152,7 +152,7 @@ impl MinerNode {
     }
 
     /// Hanldes a new incoming message from a peer.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer`   - Socket address of the peer sending the message.
@@ -174,9 +174,9 @@ impl MinerNode {
     }
 
     /// Handles a compute request.
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
     fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
@@ -192,7 +192,7 @@ impl MinerNode {
     }
 
     /// Handles the receipt of a block found
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
@@ -212,7 +212,7 @@ impl MinerNode {
     }
 
     /// Handles the receipt of the random number of partitioning
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `rand_num`   - random num to be recieved in Vec<u8>
@@ -227,7 +227,7 @@ impl MinerNode {
     }
 
     /// Handles the receipt of the filled partition list
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
@@ -253,7 +253,7 @@ impl MinerNode {
     }
 
     /// Sends PoW to a compute node.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer`   - Socket address of recipient
@@ -272,11 +272,11 @@ impl MinerNode {
     }
 
     /// Sends the light partition PoW to a compute node
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer`   - Socket address of recipient/peer
-    /// * `partition_entry`   - partition ProofOfWork being sent 
+    /// * `partition_entry`   - partition ProofOfWork being sent
     pub async fn send_partition_pow(
         &mut self,
         peer: SocketAddr,
@@ -289,7 +289,7 @@ impl MinerNode {
     }
 
     /// Sends a request to partition to a Compute node
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `compute`   - Socket address of recipient
@@ -344,7 +344,7 @@ impl MinerNode {
 
     /// Generates and returns the nonce of a block.active_raft
     /// Validates the POW using the block, hash and nonce
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `mining_block`   - block being mined that is used to check the validity of the ProofOfWork
@@ -372,7 +372,7 @@ impl MinerNode {
     }
 
     /// Generates a ProofOfWork for a given address
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `address`   - Given address to generate the ProofOfWork
@@ -430,7 +430,7 @@ impl MinerNode {
 
 impl MinerInterface for MinerNode {
     /// recieves a pre_block and sets it as current block
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `pre_block`   - Vec<u8> representing the pre_block to become the current block

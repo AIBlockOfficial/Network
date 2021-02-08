@@ -62,7 +62,7 @@ impl SimpleDb {
     }
 
     /// Add entry to database
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key` - reference to the value in database to when the entry is added
@@ -80,7 +80,7 @@ impl SimpleDb {
     }
 
     /// Remove entry from database
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key` - position in database to be deleted
@@ -97,7 +97,7 @@ impl SimpleDb {
     }
 
     /// Get entry from database
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `key` - used to find position in database

@@ -94,7 +94,7 @@ pub struct UserNode {
 
 impl UserNode {
     ///Constructor to create a new UserNode
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `config` - UserNodeConfig object containing UserNode parameters.
@@ -126,9 +126,9 @@ impl UserNode {
     }
 
     /// Connect to a peer on the network.
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `peer` - Socket Address of the peer to connect to.
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
@@ -143,7 +143,7 @@ impl UserNode {
     }
 
     ///Passes a frame from an event to the handle_new_frame method
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `event` - Event object holding the frame to be passed.
@@ -154,7 +154,7 @@ impl UserNode {
     }
 
     /// Hanldes a new incoming message from a peer.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer` - Socket Address of the sending peer node.
@@ -173,7 +173,7 @@ impl UserNode {
     }
 
     /// Handles a compute request.
-    /// 
+    ///
     /// ### Arguments
     ///
     /// * `peer` - SocketAddress holding the address of the peer sending the request.
