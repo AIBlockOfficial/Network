@@ -20,6 +20,7 @@ use naom::primitives::transaction_utils::{
     construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
     get_tx_with_out_point,
 };
+use naom::script::StackEntry;
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
@@ -38,6 +39,7 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
 const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
 const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
+const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
@@ -981,8 +983,6 @@ async fn receive_payment_tx_user() {
 
     //
     // Assert
-    // Left over from source transaction is burnt as there are no
-    // return payment executed.
     //
     assert_eq!(
         before
@@ -995,6 +995,59 @@ async fn receive_payment_tx_user() {
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
         vec![TokenAmount(6), TokenAmount(5)]
     );
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn reject_payment_txs() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config(10410);
+    network_config.user_nodes.push("user2".to_string());
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.compute_nodes;
+
+    let valid_txs = valid_transactions(true);
+    let invalid_txs = vec![
+        // New keys not matching utxo_set
+        valid_transactions(false),
+        // Too much output amount for given inputs
+        valid_transactions_with(true, DEFAULT_SEED_AMOUNT + TokenAmount(1)),
+        // Too little output amount for given inputs
+        valid_transactions_with(true, DEFAULT_SEED_AMOUNT - TokenAmount(1)),
+        // Invalid script
+        {
+            let (k, v) = valid_txs.iter().next().unwrap();
+            let (k, mut v) = (k.clone(), v.clone());
+            v.inputs[0].script_signature.stack.push(StackEntry::Num(0));
+            Some((k, v)).into_iter().collect()
+        },
+    ];
+
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act/Assert
+    //
+    node_connect_to(&mut network, "user2", "compute1").await;
+    for tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
+        user_send_transaction_to_compute(&mut network, "user2", "compute1", tx).await;
+    }
+    for _tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
+        compute_handle_error(&mut network, "compute1", "No valid transactions provided").await;
+    }
+    add_transactions_act(&mut network, &valid_txs).await;
+
+    //
+    // Assert
+    //
+    let actual = compute_all_committed_tx_pool(&mut network, compute_nodes).await;
+    assert_eq!(actual[0], valid_txs);
+    assert_eq!(equal_first(&actual), node_all(compute_nodes, true));
 
     test_step_complete(network).await;
 }
@@ -1735,6 +1788,10 @@ async fn test_step_complete(network: Network) {
 }
 
 fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
+    valid_transactions_with(fixed, DEFAULT_SEED_AMOUNT)
+}
+
+fn valid_transactions_with(fixed: bool, amount: TokenAmount) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
         println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
@@ -1754,7 +1811,8 @@ fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
 
     let mut transactions = BTreeMap::new();
     for (ins, outs) in &txs {
-        let (t_hash, payment_tx) = create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk);
+        let (t_hash, payment_tx) =
+            create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk, amount);
         transactions.insert(t_hash, payment_tx);
     }
 
@@ -1911,7 +1969,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_nodes: vec!["compute1".to_string()],
         storage_nodes: vec!["storage1".to_string()],
         user_nodes: vec!["user1".to_string()],
-        compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, TokenAmount(1)),
+        compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
         user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()
