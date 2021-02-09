@@ -1,3 +1,4 @@
+use naom::primitives::asset::TokenAmount;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -15,6 +16,8 @@ pub struct NodeSpec {
 pub struct TxOutSpec {
     /// Hex encoded public key to seed script_public_key
     pub public_key: String,
+    /// Amount that this TxOut can spend
+    pub amount: TokenAmount,
 }
 
 /// Configuration info for a TxOut

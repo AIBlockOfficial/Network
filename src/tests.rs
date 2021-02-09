@@ -942,7 +942,7 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
-// #[tokio::test(basic_scheduler)]
+#[tokio::test(basic_scheduler)]
 async fn receive_payment_tx_user() {
     test_step_start();
 
@@ -951,10 +951,10 @@ async fn receive_payment_tx_user() {
     //
     let mut network_config = complete_network_config(10400);
     network_config.user_nodes.push("user2".to_string());
-    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(0))]];
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(1))]];
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.user_nodes;
-    let amount = TokenAmount(5);
+    let amount = TokenAmount(1);
 
     create_first_block_act(&mut network).await;
 
@@ -988,11 +988,11 @@ async fn receive_payment_tx_user() {
             .iter()
             .map(|(total, _, _)| *total)
             .collect::<Vec<_>>(),
-        vec![TokenAmount(0), TokenAmount(0)]
+        vec![TokenAmount(1), TokenAmount(0)]
     );
     assert_eq!(
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
-        vec![TokenAmount(0), TokenAmount(0)]
+        vec![TokenAmount(0), TokenAmount(1)]
     );
 
     test_step_complete(network).await;
@@ -1635,6 +1635,7 @@ async fn user_send_next_payment_to_destinations(
     from_user: &str,
     to_compute: &str,
 ) {
+    println!("Sending next payment");
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
     u.send_next_payment_to_destinations(compute_node_addr)
@@ -1768,6 +1769,7 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)]) -> UtxoSetSpec {
                 (0..*n)
                     .map(|_| TxOutSpec {
                         public_key: COMMON_PUB_KEY.to_owned(),
+                        amount: TokenAmount(1),
                     })
                     .collect(),
             )
