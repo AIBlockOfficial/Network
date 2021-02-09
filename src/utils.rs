@@ -145,8 +145,6 @@ pub async fn create_and_save_fake_to_wallet(
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
     let payment_to_save = TokenAmount(4000);
-
-    println!("TX STORE: {:?}", (&tx_out_p, &final_address));
     wallet_db
         .save_payment_to_wallet(tx_out_p.clone(), payment_to_save, final_address)
         .await
@@ -316,7 +314,7 @@ pub fn create_valid_transaction_with_ins_outs(
 
     let tx_outs = {
         let mut tx_outs = Vec::new();
-        let amount = TokenAmount(0);
+        let amount = TokenAmount(1);
 
         for addr in receiver_addr_hexs {
             tx_outs.push(TxOut {
@@ -344,16 +342,16 @@ pub fn create_valid_transaction_with_ins_outs(
 /// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
 pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
     seed.iter()
-        .map(|(tx_hash, public_keys)| {
+        .map(|(tx_hash, tx_out)| {
             let tx = Transaction {
-                outputs: public_keys
+                outputs: tx_out
                     .iter()
-                    .map(|tx_out| {
-                        let pk_slice = hex::decode(&tx_out.public_key).unwrap();
+                    .map(|out| {
+                        let pk_slice = hex::decode(&out.public_key).unwrap();
                         let pk = PublicKey::from_slice(&pk_slice).unwrap();
                         let script_public_key = construct_address(pk);
 
-                        TxOut::new_amount(script_public_key, TokenAmount::default())
+                        TxOut::new_amount(script_public_key, out.amount)
                     })
                     .collect(),
                 ..Transaction::default()

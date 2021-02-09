@@ -763,6 +763,7 @@ mod test {
     use super::*;
     use crate::configurations::{NodeSpec, TxOutSpec};
     use crate::utils::create_valid_transaction;
+    use naom::primitives::asset::TokenAmount;
     use sodiumoxide::crypto::sign;
     use std::collections::BTreeSet;
 
@@ -1043,6 +1044,7 @@ mod test {
         let tx_out = TxOutSpec {
             public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
                 .to_owned(),
+            amount: TokenAmount(1),
         };
         let compute_config = ComputeNodeConfig {
             compute_raft: 0,
