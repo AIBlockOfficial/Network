@@ -264,6 +264,7 @@ pub fn create_valid_transaction(
         &[receiver_addr_hex],
         pub_key,
         secret_key,
+        TokenAmount(1),
     )
 }
 
@@ -284,6 +285,7 @@ pub fn create_valid_transaction_with_info(tx: &InititalTxSpec) -> (String, Trans
         &[&receiver_address],
         &pk,
         &sk,
+        TokenAmount(1),
     )
 }
 
@@ -293,6 +295,7 @@ pub fn create_valid_transaction_with_ins_outs(
     receiver_addr_hexs: &[&str],
     pub_key: &PublicKey,
     secret_key: &SecretKey,
+    amount: TokenAmount,
 ) -> (String, Transaction) {
     let tx_ins = {
         let mut tx_in_cons = Vec::new();
@@ -314,7 +317,6 @@ pub fn create_valid_transaction_with_ins_outs(
 
     let tx_outs = {
         let mut tx_outs = Vec::new();
-        let amount = TokenAmount(1);
 
         for addr in receiver_addr_hexs {
             tx_outs.push(TxOut {
