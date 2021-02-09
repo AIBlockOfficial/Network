@@ -123,6 +123,30 @@ async fn disconnect_connection() {
     );
 }
 
+/// Check a node cannot connect to a node that stopped listening.
+#[tokio::test(basic_scheduler)]
+async fn listen_stopped() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut nodes = create_compute_nodes(2, 1).await;
+    let mut n1 = nodes.remove(0);
+    let mut n2 = nodes.remove(0);
+
+    //
+    // Act
+    //
+    join_all(n1.stop_listening().await).await;
+    let actual = n2.connect_to(n1.address()).await;
+
+    //
+    // Assert
+    //
+    assert!(matches!(actual, Err(CommsError::Io(_)),), "{:?}", actual);
+}
+
 #[tokio::test(basic_scheduler)]
 async fn connect_full_from() {
     connect_full(true).await;

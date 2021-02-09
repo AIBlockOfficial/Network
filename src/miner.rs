@@ -133,6 +133,11 @@ impl MinerNode {
         Ok(())
     }
 
+    /// Signal to the node listening loop to complete
+    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.node.stop_listening().await
+    }
+
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {

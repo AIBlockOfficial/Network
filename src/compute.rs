@@ -217,6 +217,11 @@ impl ComputeNode {
         self.node_raft.close_raft_loop().await
     }
 
+    /// Signal to the node listening loop to complete
+    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.node.stop_listening().await
+    }
+
     /// Processes a dual double entry transaction
     /// ### Arguments
     /// * `transaction` - Transaction to process

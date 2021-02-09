@@ -150,7 +150,7 @@ impl Network {
     }
 
     ///Completes and ends raft loops.
-    pub async fn close_raft_loops_and_drop(self) {
+    pub async fn close_raft_loops_and_drop(mut self) {
         if self.config.compute_raft {
             info!("Close compute raft");
             for node in self.compute_nodes.values() {
@@ -165,7 +165,8 @@ impl Network {
             }
         }
 
-        join_all(self.raft_loop_handles).await;
+        join_all(self.raft_loop_handles.drain(..)).await;
+        self.stop_listening_and_drop().await;
     }
 
     ///Creates a NetworkInstanceInfo object with config object values.
@@ -202,6 +203,28 @@ impl Network {
                 })
                 .collect(),
         )
+    }
+
+    pub async fn stop_listening_and_drop(self) {
+        info!("Stop listening user_nodes");
+        for node in self.user_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening storage_nodes");
+        for node in self.storage_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening compute_nodes");
+        for node in self.compute_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening miner_nodes");
+        for node in self.miner_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
     }
 
     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The miner nodes are initialised and a map is returned.
