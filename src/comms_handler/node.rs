@@ -331,18 +331,23 @@ impl Node {
         }
     }
 
+    /// Return collection of unconnected peers.
+    pub async fn unconnected_peers(&self, peers: &[SocketAddr]) -> Vec<SocketAddr> {
+        let connected = self.peers.read().await;
+        let unconnected = peers.iter().filter(|p| !connected.contains_key(p));
+        unconnected.copied().collect()
+    }
+
     /// Establishes a connection to a remote peer.
     /// Compared to `connect_to`, this function will not send the handshake message and won't wait for a response.
     async fn connect_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let stream = TcpStream::connect(peer).await?;
-        let peer_addr = stream.peer_addr()?;
-        self.add_peer(
-            stream,
-            false,
-            info_span!(parent: &self.span, "connect_to", ?peer_addr),
-            false,
-        )
-        .await?;
+        if !self.peers.read().await.contains_key(&peer) {
+            let stream = TcpStream::connect(peer).await?;
+            let peer_addr = stream.peer_addr()?;
+
+            let span = info_span!(parent: &self.span, "connect_to", ?peer_addr);
+            self.add_peer(stream, false, span, false).await?;
+        }
         Ok(())
     }
 

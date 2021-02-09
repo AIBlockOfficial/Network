@@ -10,7 +10,9 @@ use crate::configurations::{
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
-use crate::utils::make_utxo_set_from_seed;
+use crate::utils::{
+    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
+};
 use futures::future::join_all;
 use naom::primitives::transaction::Transaction;
 use std::collections::BTreeMap;
@@ -101,10 +103,17 @@ impl Network {
             info!("Start connect to peers");
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
-                node.connect_to_raft_peers().await;
+                let (node_conn, addrs, _) = node.connect_to_raft_peers();
+                loop_connnect_to_peers_async(node_conn, addrs, None).await;
                 info!(?name, "Peer connect complete");
             }
             info!("Peers connect complete");
+            for node in self.compute_nodes.values() {
+                let node = node.lock().await;
+                let (node_conn, _, expected_connected_addrs) = node.connect_to_raft_peers();
+                loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+            }
+            info!("Peers connect complete: all connected");
 
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
@@ -126,10 +135,17 @@ impl Network {
             info!("Start connect to peers");
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
-                node.connect_to_raft_peers().await;
+                let (node_conn, addrs, _) = node.connect_to_raft_peers();
+                loop_connnect_to_peers_async(node_conn, addrs, None).await;
                 info!(?name, "Peer connect complete");
             }
             info!("Peers connect complete");
+            for node in self.storage_nodes.values() {
+                let node = node.lock().await;
+                let (node_conn, _, expected_connected_addrs) = node.connect_to_raft_peers();
+                loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+            }
+            info!("Peers connect complete: all connected");
 
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;

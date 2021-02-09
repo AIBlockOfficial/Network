@@ -8,8 +8,8 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
-    serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
+    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
+    validate_pow_block, validate_pow_for_address,
 };
 
 use crate::Node;
@@ -185,10 +185,11 @@ impl ComputeNode {
     }
 
     /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> impl Future<Output = ()> {
-        loop_connnect_to_peers_async(
+    pub fn connect_to_raft_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        (
             self.node.clone(),
             self.node_raft.raft_peer_to_connect().cloned().collect(),
+            self.node_raft.raft_peer_addrs().cloned().collect(),
         )
     }
 

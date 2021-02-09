@@ -18,24 +18,12 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::future;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::{self, Instant};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tracing::{trace, warn};
-
-/// Blocks & waits for timeout.
-///
-/// ### Arguments
-///
-/// * `timeout` - Instant instance to mark the end point of the timeout
-pub async fn timeout_at(timeout: Instant) {
-    if let Ok(()) = time::timeout_at(timeout, future::pending::<()>()).await {
-        panic!("pending completed");
-    }
-}
 
 pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
@@ -83,16 +71,48 @@ impl<T> MpscTracingSender<T> {
 ///
 /// ### Arguments
 ///
-/// * `node` - Node attempting to connect to peers.
-/// * `peers` - Vec of socket ddresses of peers
-pub async fn loop_connnect_to_peers_async(mut node: Node, peers: Vec<SocketAddr>) {
-    for peer in peers {
-        trace!(?peer, "Try to connect to");
-        while let Err(e) = node.connect_to(peer).await {
-            trace!(?peer, ?e, "Try to connect to failed");
-            tokio::time::delay_for(Duration::from_millis(500)).await;
+/// * `node`     - Node attempting to connect to peers.
+/// * `peers`    - Vec of socket addresses of peers
+/// * `close_rx` - Receiver for close event or None to finish when all connected
+pub async fn loop_connnect_to_peers_async(
+    mut node: Node,
+    peers: Vec<SocketAddr>,
+    mut close_rx: Option<oneshot::Receiver<()>>,
+) {
+    loop {
+        for peer in node.unconnected_peers(&peers).await {
+            trace!(?peer, "Try to connect to");
+            if let Err(e) = node.connect_to(peer).await {
+                trace!(?peer, ?e, "Try to connect to failed");
+            } else {
+                trace!(?peer, "Try to connect to succeeded");
+            }
         }
-        trace!(?peer, "Try to connect to succeeded");
+
+        let delay_retry = tokio::time::delay_for(Duration::from_millis(500));
+        if let Some(close_rx) = &mut close_rx {
+            tokio::select! {
+                _ = delay_retry => (),
+                _ = close_rx => return,
+            };
+        } else {
+            if node.unconnected_peers(&peers).await.is_empty() {
+                return;
+            }
+            delay_retry.await;
+        }
+    }
+}
+
+/// check connected to all peers
+///
+/// ### Arguments
+///
+/// * `node`     - Node attempting to connect to peers.
+/// * `peers`    - Vec of socket addresses of peers
+pub async fn loop_wait_connnect_to_peers_async(node: Node, peers: Vec<SocketAddr>) {
+    while !node.unconnected_peers(&peers).await.is_empty() {
+        tokio::time::delay_for(Duration::from_millis(10)).await;
     }
 }
 

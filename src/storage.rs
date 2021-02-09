@@ -7,7 +7,6 @@ use crate::interfaces::{
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CompleteBlock, StorageRaft};
-use crate::utils::loop_connnect_to_peers_async;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::{block::Block, transaction::Transaction};
@@ -147,10 +146,11 @@ impl StorageNode {
     }
 
     /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> impl Future<Output = ()> {
-        loop_connnect_to_peers_async(
+    pub fn connect_to_raft_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        (
             self.node.clone(),
             self.node_raft.raft_peer_to_connect().cloned().collect(),
+            self.node_raft.raft_peer_addrs().cloned().collect(),
         )
     }
 

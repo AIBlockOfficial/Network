@@ -27,27 +27,34 @@ echo " "
 # > sudo groups $USER
 if [ "$1" = "use_test_groups" ]
 then
-    TEST_S2="test_s2"
-    TEST_C2="test_c2"
-else
-    TEST_S2=$USER
-    TEST_C2=$USER
+    sg test_s2 "echo use test_s2 group for storage 2"
+    sg test_c2 "echo use test_c2 group for storage 2"
 fi
-sg $TEST_S2 "echo use $TEST_S2 group for storage 2"
-sg $TEST_C2 "echo use $TEST_C2 group for compute 2"
 
-RUST_LOG="debug,raft=warn" sg $TEST_S2 "target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
-s2=$!
+if [ "$1" = "use_test_groups" ]
+then
+    RUST_LOG="debug,raft=warn" sg test_s2 "target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
+else
+    RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2 > storage_2.log 2>&1 &
+    s2=$!
+fi
 RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=1 > storage_1.log 2>&1 &
 s1=$!
 RUST_LOG="debug,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="warn" sg $TEST_C2 "target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
-c2=$!
+
+if [ "$1" = "use_test_groups" ]
+then
+    RUST_LOG="warn" sg test_c2 "target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
+else
+    RUST_LOG="warn" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2 > compute_2.log 2>&1 &
+    c2=$!
+fi
 RUST_LOG="warn" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=1 > compute_1.log 2>&1 &
 c1=$!
 RUST_LOG="warn" target/release/compute --config=src/bin/node_settings_local_raft_3.toml > compute_0.log 2>&1 &
 c0=$!
+
 RUST_LOG="warn" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=8 --compute_index=2 --compute_connect > miner_8.log 2>&1 &
 m8=$!
 RUST_LOG="warn" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=7 --compute_index=2 --compute_connect > miner_7.log 2>&1 &
@@ -66,6 +73,7 @@ RUST_LOG="warn" target/release/miner --config=src/bin/node_settings_local_raft_3
 m1=$!
 RUST_LOG="warn" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --compute_connect > miner_0.log 2>&1 &
 m0=$!
+
 RUST_LOG="debug" target/release/user  --config=src/bin/node_settings_local_raft_3.toml --compute_connect > user_0.log 2>&1 &
 u0=$!
 

@@ -30,6 +30,8 @@ pub struct ActiveRaft {
     peer_addr: HashMap<u64, SocketAddr>,
     /// Collection of the peer this node is responsible to connect to.
     raft_peers_to_connect: Vec<SocketAddr>,
+    /// Collection of the peer expected to be connected.
+    raft_peer_addrs: Vec<SocketAddr>,
 }
 
 impl ActiveRaft {
@@ -69,6 +71,12 @@ impl ActiveRaft {
             .map(|(_, addr)| *addr)
             .collect();
 
+        let raft_peer_addrs = peer_addr_vec
+            .iter()
+            .filter(|(idx, _)| *idx != peer_id)
+            .map(|(_, addr)| *addr)
+            .collect();
+
         Self {
             use_raft,
             peer_id,
@@ -78,6 +86,7 @@ impl ActiveRaft {
             committed_rx: Arc::new(Mutex::new((raft_channels.committed_rx, VecDeque::new()))),
             peer_addr,
             raft_peers_to_connect,
+            raft_peer_addrs,
         }
     }
 
@@ -100,6 +109,11 @@ impl ActiveRaft {
     /// Returns an iterator that iterates over the addresses of the peers
     pub fn raft_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
         self.raft_peers_to_connect.iter()
+    }
+
+    /// All the peers expected to be connected when raft is running.
+    pub fn raft_peer_addrs(&self) -> impl Iterator<Item = &SocketAddr> {
+        self.raft_peer_addrs.iter()
     }
 
     /// Blocks & waits for a next event from a peer.
