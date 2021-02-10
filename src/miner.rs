@@ -10,6 +10,7 @@ use crate::utils::{
 };
 use crate::wallet::WalletDb;
 use crate::Node;
+
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
@@ -27,6 +28,8 @@ use std::{
 };
 use tokio::task;
 use tracing::{debug, info_span, warn};
+
+use crate::hash_block;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -86,7 +89,7 @@ pub struct MinerNode {
     pub compute_addr: SocketAddr,
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
-    pub current_block: Block,
+    pub current_block: hashBlock,
     last_pow: Option<ProofOfWork>,
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
@@ -117,7 +120,7 @@ impl MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             partition_key: None,
-            current_block: Block::new(),
+            current_block: hashBlock::new(),
             last_pow: None,
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,

@@ -2,7 +2,10 @@
 use naom::constants::MAX_BLOCK_SIZE;
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use crate::sha3::Digest;
+use naom::primitives::block::Block;
+use naom::primitives::block::BlockHeader;
+use sha3::Digest;
+use crypto_hash::{Algorithm, hex_digest};
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -14,7 +17,7 @@ use std::convert::TryInto;
 /// Block header, which contains a smaller footprint view of the block.
 /// Hash records are assumed to be 256 bit
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BlockHeader {
+pub struct HashBlockHeader {
     pub version: u32,
     pub time: u32,
     pub bits: usize,
@@ -25,16 +28,16 @@ pub struct BlockHeader {
     pub merkle_root_hash: Vec<u8>,
 }
 
-impl Default for BlockHeader {
+impl Default for HashBlockHeader {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BlockHeader {
+impl HashBlockHeader {
     /// Creates a new BlockHeader
-    pub fn new() -> BlockHeader {
-        BlockHeader {
+    pub fn new() -> HashBlockHeader {
+        HashBlockHeader {
             version: 0,
             previous_hash: None,
             merkle_root_hash: Vec::with_capacity(32),
@@ -55,8 +58,8 @@ impl BlockHeader {
 /// A block, a collection of transactions for processing
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HashBlock {
-    pub header: BlockHeader,
-    pub transactions: u64,
+    pub header: HashBlockHeader,
+    pub transactions: String,
 }
 
 
@@ -67,15 +70,33 @@ impl Default for HashBlock {
 }
 
 
-impl Block {
+impl HashBlock {
     /// Creates a new instance of a block
-    pub fn new() -> Block {
-        Block {
-            header: BlockHeader::new(),
-            transactions: u64::MAX,
+    pub fn new() -> HashBlock {
+        HashBlock {
+            header: HashBlockHeader::new(),
+            transactions: String::from(""),
         }
     }
 
+    pub fn setHeader(&mut self, headerBlock: BlockHeader)
+    {
+        self.header.version = headerBlock.version;
+        self.header.time = headerBlock.time;
+        self.header.bits = headerBlock.bits;
+        self.header.nonce = headerBlock.nonce;
+        self.header.b_num = headerBlock.b_num;
+        self.header.seed_value = headerBlock.seed_value;
+        self.header.previous_hash = headerBlock.previous_hash;
+        self.header.merkle_root_hash = headerBlock.merkle_root_hash;
+
+    }
+
+    pub fn hashBlock(&mut self, block:Block)
+    {
+        self.setHeader(block.header);
+        self.transactions = hex_digest(Algorithm::SHA256, block.transactions);
+    }
     /// Sets the internal number of bits based on length
     pub fn set_bits(&mut self) {
         let bytes = Bytes::from(serialize(&self).unwrap());
@@ -145,9 +166,9 @@ pub fn create_raw_genesis_block(
     version: &u32,
     genesis_reward: &u64,
     genesis_output: String,
-) -> Block {
+) -> HashBlock {
     let unicorn_val = String::from("Belgien hat pro Kopf nun am meisten Todesfälle");
-    let mut genesis = Block::new();
+    let mut genesis = HashBlock::new();
 
     let mut gen_transaction = Transaction::new();
     let mut tx_in = TxIn::new();
@@ -175,7 +196,7 @@ pub fn create_raw_genesis_block(
 
     // Add genesis transaction
     transPreHash.push(hash_key);
-    genisis.transactions = Sha3_256::digest(transPreHash);
+    genesis.transactions = hex_digest(Algorithm::SHA256, transPreHash);
     // Other stuff accepts defaults, so just return the block
     genesis
 }
@@ -195,7 +216,7 @@ pub fn create_genesis_block(
     bits: usize,
     version: u32,
     genesis_reward: u64,
-) -> Block {
+) -> HashBlock {
     // Using straight constant in this case, but will need to incorporate some kind of scripting situation
     create_raw_genesis_block(
         &time,
