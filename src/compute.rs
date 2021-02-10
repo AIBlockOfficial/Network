@@ -8,8 +8,8 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, loop_connnect_to_peers_async,
-    serialize_block_for_pow, validate_pow_block, validate_pow_for_address,
+    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
+    validate_pow_block, validate_pow_for_address,
 };
 
 use crate::Node;
@@ -170,12 +170,6 @@ impl ComputeNode {
         self.current_mined_block.is_some()
     }
 
-    /// Connect to a storage peer on the network.
-    pub async fn connect_to_storage(&mut self) -> Result<()> {
-        self.node.connect_to(self.storage_addr).await?;
-        Ok(())
-    }
-
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -184,11 +178,15 @@ impl ComputeNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
-    /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> impl Future<Output = ()> {
-        loop_connnect_to_peers_async(
+    /// Connect info for peers on the network.
+    pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        let storage = Some(self.storage_addr);
+        let to_connect = self.node_raft.raft_peer_to_connect().chain(storage.iter());
+        let expect_connect = self.node_raft.raft_peer_addrs().chain(storage.iter());
+        (
             self.node.clone(),
-            self.node_raft.raft_peer_to_connect().cloned().collect(),
+            to_connect.copied().collect(),
+            expect_connect.copied().collect(),
         )
     }
 
@@ -215,6 +213,11 @@ impl ComputeNode {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.node_raft.close_raft_loop().await
+    }
+
+    /// Signal to the node listening loop to complete
+    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.node.stop_listening().await
     }
 
     /// Processes a dual double entry transaction
@@ -352,6 +355,7 @@ impl ComputeNode {
         info!("send_bf_notification {:?}", last_winer);
 
         if let Some((peer, win_coinbase, true)) = last_winer {
+            // TODO: Allow resend winner notification if error.
             self.node
                 .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
                 .await?;

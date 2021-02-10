@@ -85,6 +85,8 @@ pub struct ReturnPayment {
 #[derive(Debug)]
 pub struct UserNode {
     pub node: Node,
+    pub compute_addr: SocketAddr,
+    pub api_addr: SocketAddr,
     pub assets: Vec<Asset>,
     pub trading_peer: Option<(SocketAddr, TokenAmount)>,
     pub next_payment: Option<(SocketAddr, Transaction)>,
@@ -104,6 +106,12 @@ impl UserNode {
             .get(config.user_node_idx)
             .ok_or(UserError::ConfigError("Invalid user index"))?
             .address;
+        let compute_addr = config
+            .compute_nodes
+            .get(config.user_compute_node_idx)
+            .ok_or(UserError::ConfigError("Invalid compute index"))?
+            .address;
+        let api_addr = SocketAddr::new(addr.ip(), config.api_port);
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
         let wallet_db = WalletDb::new(config.user_db_mode)
@@ -112,6 +120,8 @@ impl UserNode {
 
         Ok(UserNode {
             node,
+            compute_addr,
+            api_addr,
             assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
@@ -120,9 +130,14 @@ impl UserNode {
         })
     }
 
-    /// Returns the miner node's public endpoint.
+    /// Returns the node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Returns the node's compute endpoint.
+    pub fn compute_address(&self) -> SocketAddr {
+        self.compute_addr
     }
 
     /// Connect to a peer on the network.
@@ -133,6 +148,28 @@ impl UserNode {
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
         Ok(())
+    }
+
+    /// Connect info for peers on the network.
+    pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        let compute = Some(self.compute_addr);
+        let to_connect = compute.iter();
+        let expect_connect = compute.iter();
+        (
+            self.node.clone(),
+            to_connect.copied().collect(),
+            expect_connect.copied().collect(),
+        )
+    }
+
+    /// Info needed to run the API point.
+    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr) {
+        (self.wallet_db.clone(), self.node.clone(), self.api_addr)
+    }
+
+    /// Signal to the node listening loop to complete
+    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.node.stop_listening().await
     }
 
     /// Listens for new events from peers and handles them.

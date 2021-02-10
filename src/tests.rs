@@ -282,7 +282,6 @@ async fn create_first_block_act(network: &mut Network) {
     let first_request_size = config.compute_minimum_miner_pool_len;
 
     info!("Test Step Connect nodes");
-    compute_all_connect_to_storage(network, compute_nodes).await;
     for (compute, miners) in &config.compute_to_miner_mapping {
         for (idx, miner) in miners.iter().enumerate() {
             node_connect_to(network, miner, compute).await;
@@ -1385,17 +1384,6 @@ async fn compute_inject_next_event(
     let c = network.compute(to_compute).unwrap().lock().await;
 
     c.inject_next_event(from_addr, request).unwrap();
-}
-
-async fn compute_connect_to_storage(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.connect_to_storage().await.unwrap();
-}
-
-async fn compute_all_connect_to_storage(network: &mut Network, compute_group: &[String]) {
-    for compute in compute_group {
-        compute_connect_to_storage(network, compute).await;
-    }
 }
 
 async fn compute_propose_initial_uxto_set(network: &mut Network, compute: &str) {

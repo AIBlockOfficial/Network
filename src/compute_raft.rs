@@ -174,6 +174,11 @@ impl ComputeRaft {
         self.raft_active.raft_peer_to_connect()
     }
 
+    /// All the peers expected to be connected when raft is running.
+    pub fn raft_peer_addrs(&self) -> impl Iterator<Item = &SocketAddr> {
+        self.raft_active.raft_peer_addrs()
+    }
+
     /// Blocks & waits for a next event from a peer.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.raft_active.raft_loop()

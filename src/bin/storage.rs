@@ -2,6 +2,7 @@
 
 use clap::{App, Arg};
 use system::configurations::StorageNodeConfig;
+use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{Response, StorageNode};
 use tracing::error;
 
@@ -59,14 +60,26 @@ async fn main() {
 
     println!("Started node at {}", node.address());
 
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+
+    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
+        let (re_connect, disconnect_test) =
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
+
+        (
+            (tokio::spawn(re_connect.0), re_connect.1),
+            (tokio::spawn(disconnect_test.0), disconnect_test.1),
+        )
+    };
+
+    // Need to connect first so Raft messages can be sent.
+    loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+
     // RAFT HANDLING
     let raft_loop_handle = {
-        let connect_all = node.connect_to_raft_peers();
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
-            // Need to connect first so Raft messages can be sent.
-            println!("Start connect to compute peers");
-            connect_all.await;
             println!("Peer connect complete, start Raft");
             raft_loop.await;
             println!("Raft complete");
@@ -113,10 +126,19 @@ async fn main() {
                 }
             }
             node.close_raft_loop().await;
+            stop_re_connect_tx.send(()).unwrap();
+            stop_disconnect_tx.send(()).unwrap();
         }
     });
 
-    let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
+    let (main, raft, conn, disconn) = tokio::join!(
+        main_loop_handle,
+        raft_loop_handle,
+        conn_loop_handle,
+        disconn_loop_handle
+    );
     main.unwrap();
     raft.unwrap();
+    conn.unwrap();
+    disconn.unwrap();
 }

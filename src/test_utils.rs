@@ -10,7 +10,9 @@ use crate::configurations::{
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
-use crate::utils::make_utxo_set_from_seed;
+use crate::utils::{
+    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
+};
 use futures::future::join_all;
 use naom::primitives::transaction::Transaction;
 use std::collections::BTreeMap;
@@ -96,16 +98,23 @@ impl Network {
 
     ///Creates and tests rafts
     async fn spawn_raft_loops(mut self) -> Self {
-        if self.config.compute_raft {
-            // Need to connect first so Raft messages can be sent.
-            info!("Start connect to peers");
-            for (name, node) in &self.compute_nodes {
-                let node = node.lock().await;
-                node.connect_to_raft_peers().await;
-                info!(?name, "Peer connect complete");
-            }
-            info!("Peers connect complete");
+        // Need to connect first so Raft messages can be sent.
+        info!("Start connect to peers");
+        for (name, node) in &self.compute_nodes {
+            let node = node.lock().await;
+            let (node_conn, addrs, _) = node.connect_info_peers();
+            loop_connnect_to_peers_async(node_conn, addrs, None).await;
+            info!(?name, "Peer connect complete");
+        }
+        info!("Peers connect complete");
+        for node in self.compute_nodes.values() {
+            let node = node.lock().await;
+            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
+            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+        }
+        info!("Peers connect complete: all connected");
 
+        if self.config.compute_raft {
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
                 let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
@@ -121,16 +130,23 @@ impl Network {
             }
         }
 
-        if self.config.storage_raft {
-            // Need to connect first so Raft messages can be sent.
-            info!("Start connect to peers");
-            for (name, node) in &self.storage_nodes {
-                let node = node.lock().await;
-                node.connect_to_raft_peers().await;
-                info!(?name, "Peer connect complete");
-            }
-            info!("Peers connect complete");
+        // Need to connect first so Raft messages can be sent.
+        info!("Start connect to peers");
+        for (name, node) in &self.storage_nodes {
+            let node = node.lock().await;
+            let (node_conn, addrs, _) = node.connect_info_peers();
+            loop_connnect_to_peers_async(node_conn, addrs, None).await;
+            info!(?name, "Peer connect complete");
+        }
+        info!("Peers connect complete");
+        for node in self.storage_nodes.values() {
+            let node = node.lock().await;
+            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
+            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+        }
+        info!("Peers connect complete: all connected");
 
+        if self.config.storage_raft {
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
                 let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
@@ -150,7 +166,7 @@ impl Network {
     }
 
     ///Completes and ends raft loops.
-    pub async fn close_raft_loops_and_drop(self) {
+    pub async fn close_raft_loops_and_drop(mut self) {
         if self.config.compute_raft {
             info!("Close compute raft");
             for node in self.compute_nodes.values() {
@@ -165,7 +181,8 @@ impl Network {
             }
         }
 
-        join_all(self.raft_loop_handles).await;
+        join_all(self.raft_loop_handles.drain(..)).await;
+        self.stop_listening_and_drop().await;
     }
 
     ///Creates a NetworkInstanceInfo object with config object values.
@@ -202,6 +219,28 @@ impl Network {
                 })
                 .collect(),
         )
+    }
+
+    pub async fn stop_listening_and_drop(self) {
+        info!("Stop listening user_nodes");
+        for node in self.user_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening storage_nodes");
+        for node in self.storage_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening compute_nodes");
+        for node in self.compute_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
+
+        info!("Stop listening miner_nodes");
+        for node in self.miner_nodes.values() {
+            join_all(node.lock().await.stop_listening_loop().await).await;
+        }
     }
 
     ///Clones storage nodes, compute nodes, miner nodes and user nodes. The miner nodes are initialised and a map is returned.

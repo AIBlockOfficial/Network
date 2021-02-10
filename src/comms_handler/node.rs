@@ -97,7 +97,8 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::{Stream, StreamExt},
-    sync::{mpsc, Mutex, Notify, RwLock},
+    sync::{mpsc, oneshot, Mutex, RwLock},
+    task::JoinHandle,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
@@ -114,11 +115,18 @@ const GOSSIP_MAX_TTL: u8 = 4;
 /// Contains a shared list of connected peers.
 type PeerList = HashMap<SocketAddr, Peer>;
 
+/// Closing listener info
+type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
+
 /// An abstract communication interface in the network.
 #[derive(Debug, Clone)]
 pub struct Node {
     /// This node's listener address.
     listener_address: SocketAddr,
+    /// Stop channel tx and joining handle for this node listener loop.
+    listener_stop_and_join_handles: Arc<Mutex<CloseListener>>,
+    /// Pause accepting and starting connections.
+    listener_and_connect_paused: Arc<RwLock<bool>>,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
     /// Node type.
@@ -153,7 +161,11 @@ pub(crate) struct Peer {
     public_address: Option<SocketAddr>,
     /// Notification to trigger a task waiting for a handshake response.
     // TODO: move it to a separate state enum, manage state transitions in a better way
-    notify_handshake_response: Option<Arc<Notify>>,
+    notify_handshake_response: (Option<oneshot::Sender<()>>, Option<oneshot::Receiver<()>>),
+    /// Stop receiving when message sent or Sender dropped.
+    close_receiver_tx: oneshot::Sender<()>,
+    /// Joining handles for this connection tasks.
+    sock_in_out_join_handles: (Option<JoinHandle<()>>, Option<JoinHandle<()>>),
 }
 
 impl fmt::Debug for Peer {
@@ -187,8 +199,10 @@ impl Node {
         let listener_address = listener.local_addr()?;
         let span = info_span!("node", ?listener_address);
 
-        let mut node = Self {
+        Ok(Self {
             listener_address,
+            listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
+            listener_and_connect_paused: Arc::new(RwLock::new(false)),
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
@@ -197,10 +211,9 @@ impl Node {
             event_rx: Arc::new(Mutex::new(event_rx)),
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
-        };
-        node.listen(listener)?;
-
-        Ok(node)
+        }
+        .listen(listener)
+        .await?)
     }
 
     pub fn set_connect_to_handshake_contacts(&mut self, value: bool) {
@@ -208,15 +221,25 @@ impl Node {
     }
 
     /// Handles the listener.
-    fn listen(&mut self, mut listener: TcpListener) -> Result<()> {
+    async fn listen(self, listener: TcpListener) -> Result<Self> {
         let node = self.clone();
-        tokio::spawn(
+        let (close_tx, close_rx) = oneshot::channel();
+        let handle = tokio::spawn(
             async move {
                 trace!("listen");
 
-                while let Some(new_conn) = listener.next().await {
+                use super::stream_cancel::StreamCancel;
+                use futures::TryFutureExt;
+                let mut cancellable_listener = listener.take_until(close_rx.unwrap_or_else(|_| ()));
+
+                while let Some(new_conn) = cancellable_listener.next().await {
                     match new_conn {
                         Ok(conn) => {
+                            if *node.listener_and_connect_paused.read().await {
+                                // Ignore new connections
+                                continue;
+                            }
+
                             // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
@@ -238,7 +261,8 @@ impl Node {
             .instrument(self.span.clone()),
         );
 
-        Ok(())
+        *self.listener_stop_and_join_handles.lock().await = Some((close_tx, handle));
+        Ok(self)
     }
 
     /// Adds a new peer to a list of peers.
@@ -285,18 +309,27 @@ impl Node {
         }
     }
 
+    /// Return collection of unconnected peers.
+    pub async fn unconnected_peers(&self, peers: &[SocketAddr]) -> Vec<SocketAddr> {
+        let connected = self.peers.read().await;
+        let unconnected = peers.iter().filter(|p| !connected.contains_key(p));
+        unconnected.copied().collect()
+    }
+
     /// Establishes a connection to a remote peer.
     /// Compared to `connect_to`, this function will not send the handshake message and won't wait for a response.
     async fn connect_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
-        let stream = TcpStream::connect(peer).await?;
-        let peer_addr = stream.peer_addr()?;
-        self.add_peer(
-            stream,
-            false,
-            info_span!(parent: &self.span, "connect_to", ?peer_addr),
-            false,
-        )
-        .await?;
+        if !self.peers.read().await.contains_key(&peer) {
+            if *self.listener_and_connect_paused.read().await {
+                return Err(CommsError::PeerNotFound);
+            }
+
+            let stream = TcpStream::connect(peer).await?;
+            let peer_addr = stream.peer_addr()?;
+
+            let span = info_span!(parent: &self.span, "connect_to", ?peer_addr);
+            self.add_peer(stream, false, span, false).await?;
+        }
         Ok(())
     }
 
@@ -317,17 +350,59 @@ impl Node {
 
         // Wait for a handshake response
         let handshake_response = {
-            let peers = self.peers.read().await;
-            let peer = peers.get(&peer).ok_or(CommsError::PeerNotFound)?;
+            let mut peers = self.peers.write().await;
+            let peer = peers.get_mut(&peer).ok_or(CommsError::PeerNotFound)?;
             peer.notify_handshake_response
-                .as_ref()
+                .1
+                .take()
                 .ok_or(CommsError::PeerInvalidState)?
-                .clone()
         };
+
         // TODO: make sure we have a timeout here in case if a peer is unresponsive.
-        handshake_response.notified().await;
+        // If timeout, should drop the Peer.
+        match handshake_response.await {
+            Ok(()) => trace!("complete connection to {:?}", peer),
+            Err(_) => {
+                trace!("complete failed connection to {:?}", peer);
+                return Err(CommsError::PeerNotFound);
+            }
+        }
 
         Ok(())
+    }
+
+    /// Pause/Resume accepting new connections
+    pub async fn set_pause_listening(&mut self, pause: bool) {
+        *self.listener_and_connect_paused.write().await = pause;
+    }
+
+    /// Stop accepting new connections
+    pub async fn stop_listening(&mut self) -> Vec<JoinHandle<()>> {
+        trace!("stop_listening {:?}", self.listener_address);
+        if let Some((stop_tx, handle)) = self.listener_stop_and_join_handles.lock().await.take() {
+            stop_tx.send(()).unwrap();
+            vec![handle]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Disconnect all remote peers and provide JoinHandles.
+    pub async fn disconnect_all(&mut self) -> Vec<JoinHandle<()>> {
+        let mut all_peers = {
+            let mut all_peers = self.peers.write().await;
+            let all_peers: &mut PeerList = &mut all_peers;
+            std::mem::take(all_peers)
+        };
+
+        trace!("disconnect_all {:?}", all_peers);
+        take_join_handles(all_peers.iter_mut().map(|(_, p)| p))
+    }
+
+    /// Take the specified join handle to wait on externally.
+    pub async fn take_join_handle(&mut self, addr: SocketAddr) -> Vec<JoinHandle<()>> {
+        let mut all_peers = self.peers.write().await;
+        take_join_handles(all_peers.get_mut(&addr).into_iter())
     }
 
     /// Sends a multicast message to a group of peers in our ring.
@@ -683,13 +758,15 @@ impl Node {
         peer_addr: SocketAddr,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
-        let all_peers = self.peers.write().await;
+        let mut all_peers = self.peers.write().await;
 
         // Notify the peer about the handshake response if someone's waiting for it.
         {
-            let peer = all_peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
-            if let Some(ref notify) = peer.notify_handshake_response {
-                notify.notify();
+            let peer = all_peers
+                .get_mut(&peer_addr)
+                .ok_or(CommsError::PeerNotFound)?;
+            if let Some(notify) = peer.notify_handshake_response.0.take() {
+                notify.send(()).unwrap();
             }
         }
 
@@ -750,19 +827,20 @@ impl Node {
 
         // Spawn the sender task.
         // Redirect messages from the mpsc channel into the TCP socket
-        tokio::spawn(
+        let sock_out_h = tokio::spawn(
             async move {
                 if let Err(error) = sock_out.send_all(&mut send_rx).await {
                     error!(?error, "Error while redirecting messages");
                 }
+                trace!("sock_out dropped for {:?}", peer_addr);
             }
             .instrument(span.clone()),
         );
 
         // Spawn the receiver task which will redirect the incoming messages into the MPSC channel
         // and manage the peer state transitions.
-        let messages = get_messages_stream(sock_in);
-        tokio::spawn({
+        let (messages, close_receiver_tx) = get_messages_stream(sock_in);
+        let sock_in_h = tokio::spawn({
             let node = self.clone();
             let send_tx = send_tx.clone().into();
             let peers = self.peers.clone();
@@ -787,6 +865,7 @@ impl Node {
                                     public_address
                                 } else {
                                     // Peer not present
+                                    trace!("sock_in dropped for {:?}", peer_addr);
                                     return;
                                 }
                             }
@@ -796,6 +875,7 @@ impl Node {
                             warn!("Remove peer: {}, err: {:?}", peer_addr, err);
                             let mut peers_list = peers.write().await;
                             let _ = peers_list.remove(&peer_addr);
+                            trace!("sock_in dropped for {:?}", peer_addr);
                             return;
                         }
                     }
@@ -808,6 +888,7 @@ impl Node {
                 warn!("Remove peer: {}", public_address);
                 let mut peers_list = peers.write().await;
                 let _ = peers_list.remove(&public_address);
+                trace!("sock_in dropped for {:?}", peer_addr);
             }
             .instrument(span)
         });
@@ -818,10 +899,13 @@ impl Node {
             peer_type: None,
             public_address: if !is_initiator { Some(peer_addr) } else { None },
             notify_handshake_response: if is_initiator {
-                None
+                (None, None)
             } else {
-                Some(Arc::new(Notify::new()))
+                let (tx, rx) = oneshot::channel::<()>();
+                (Some(tx), Some(rx))
             },
+            close_receiver_tx,
+            sock_in_out_join_handles: (Some(sock_in_h), Some(sock_out_h)),
         }
     }
 }
@@ -829,8 +913,8 @@ impl Node {
 /// Transforms a stream of incoming TCP frames into a stream of deserialized messages.
 fn get_messages_stream(
     sock_in: FramedRead<tokio::io::ReadHalf<TcpStream>, LengthDelimitedCodec>,
-) -> impl Stream<Item = CommMessage> {
-    sock_in.filter_map(|frame| {
+) -> (impl Stream<Item = CommMessage>, oneshot::Sender<()>) {
+    let messages = sock_in.filter_map(|frame| {
         trace!(?frame, "recv_frame");
 
         let frame = match frame {
@@ -848,5 +932,19 @@ fn get_messages_stream(
                 None
             }
         }
-    })
+    });
+
+    use super::stream_cancel::StreamCancel;
+    use futures::TryFutureExt;
+    let (close_tx, close_rx) = oneshot::channel::<()>();
+    let cancellable_messages = messages.take_until(close_rx.unwrap_or_else(|_| ()));
+
+    (cancellable_messages, close_tx)
+}
+
+fn take_join_handles<'a>(peers: impl Iterator<Item = &'a mut Peer>) -> Vec<JoinHandle<()>> {
+    peers
+        .map(|p| &mut p.sock_in_out_join_handles)
+        .flat_map(|hs| hs.0.take().into_iter().chain(hs.1.take()))
+        .collect()
 }

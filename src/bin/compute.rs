@@ -1,10 +1,13 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use std::time::Duration;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
-use system::{create_valid_transaction_with_info, get_sanction_addresses, SANC_LIST_PROD};
+use system::{
+    create_valid_transaction_with_info, get_sanction_addresses, loop_wait_connnect_to_peers_async,
+    loops_re_connect_disconnect, SANC_LIST_PROD,
+};
 use system::{ComputeNode, ComputeRequest, Response};
+use tracing::error;
 
 #[tokio::main]
 async fn main() {
@@ -79,14 +82,27 @@ async fn main() {
 
     println!("Started node at {}", node.address());
 
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+
+    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
+        let (re_connect, disconnect_test) =
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
+
+        (
+            (tokio::spawn(re_connect.0), re_connect.1),
+            (tokio::spawn(disconnect_test.0), disconnect_test.1),
+        )
+    };
+
+    // Need to connect first so Raft messages can be sent.
+    loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+    println!("Raft and Storage connection complete");
+
     // RAFT HANDLING
     let raft_loop_handle = {
-        let connect_all = node.connect_to_raft_peers();
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
-            // Need to connect first so Raft messages can be sent.
-            println!("Start connect to compute peers");
-            connect_all.await;
             println!("Peer connect complete, start Raft");
             raft_loop.await;
             println!("Raft complete");
@@ -109,12 +125,6 @@ async fn main() {
 
                 ComputeRequest::SendTransactions { transactions }
             });
-
-        while let Err(e) = node.connect_to_storage().await {
-            println!("Storage connection error: {:?}", e);
-            tokio::time::delay_for(Duration::from_millis(500)).await;
-        }
-        println!("Storage connection complete");
 
         async move {
             while let Some(response) = node.handle_next_event().await {
@@ -144,7 +154,9 @@ async fn main() {
                     }) => {
                         println!("Send Block to storage");
                         println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
-                        node.send_block_to_storage().await.unwrap();
+                        if let Err(e) = node.send_block_to_storage().await {
+                            error!("Block not sent to storage {:?}", e);
+                        }
                     }
                     Ok(Response {
                         success: true,
@@ -171,7 +183,9 @@ async fn main() {
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to mine: {:?}", node.get_mining_block());
-                        node.send_bf_notification().await.unwrap();
+                        if let Err(e) = node.send_bf_notification().await {
+                            error!("Could not send block found notification to winner {:?}", e);
+                        }
                         node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
@@ -204,10 +218,19 @@ async fn main() {
                 }
             }
             node.close_raft_loop().await;
+            stop_re_connect_tx.send(()).unwrap();
+            stop_disconnect_tx.send(()).unwrap();
         }
     });
 
-    let (main, raft) = tokio::join!(main_loop_handle, raft_loop_handle);
+    let (main, raft, conn, disconn) = tokio::join!(
+        main_loop_handle,
+        raft_loop_handle,
+        conn_loop_handle,
+        disconn_loop_handle
+    );
     main.unwrap();
     raft.unwrap();
+    conn.unwrap();
+    disconn.unwrap();
 }

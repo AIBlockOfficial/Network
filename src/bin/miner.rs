@@ -1,9 +1,9 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
-use std::time::Duration;
 use std::time::SystemTime;
 use system::configurations::MinerNodeConfig;
+use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{MinerNode, Response};
 
 #[tokio::main]
@@ -31,11 +31,6 @@ async fn main() {
                 .long("compute_index")
                 .help("Endpoint index of a compute node that the miner should connect to")
                 .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("compute_connect")
-                .long("compute_connect")
-                .help("connect to the compute node"),
         )
         .get_matches();
 
@@ -67,31 +62,31 @@ async fn main() {
     };
     println!("Start node with config {:?}", config);
 
-    let compute_node_connected = if matches.is_present("compute_connect") {
-        let compute_idx = config.miner_compute_node_idx;
-        Some(config.compute_nodes.get(compute_idx).unwrap().address)
-    } else {
-        None
-    };
-
     let mut node = MinerNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
-    if let Some(compute_node) = compute_node_connected {
-        // Connect to a compute node.
-        while let Err(e) = node.connect_to(compute_node).await {
-            println!("Compute connection error: {:?}", e);
-            tokio::time::delay_for(Duration::from_millis(500)).await;
-        }
-        println!("Compute connection complete");
-    }
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+
+    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
+        let (re_connect, disconnect_test) =
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
+
+        (
+            (tokio::spawn(re_connect.0), re_connect.1),
+            (tokio::spawn(disconnect_test.0), disconnect_test.1),
+        )
+    };
+
+    // Need to connect first so Raft messages can be sent.
+    loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
 
     // Send any requests to the compute node here
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());
     let _result = node
-        .send_partition_request(compute_node_connected.unwrap())
+        .send_partition_request(node.compute_address())
         .await
         .unwrap();
 
@@ -110,7 +105,7 @@ async fn main() {
                     }) => {
                         println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
                         let pow = node.generate_partition_pow().await.unwrap();
-                        node.send_partition_pow(compute_node_connected.unwrap(), pow)
+                        node.send_partition_pow(node.compute_address(), pow)
                             .await
                             .unwrap();
                     }
@@ -138,7 +133,7 @@ async fn main() {
                             }
                         }
 
-                        node.send_pow(compute_node_connected.unwrap(), nonce, current_coinbase)
+                        node.send_pow(node.compute_address(), nonce, current_coinbase)
                             .await
                             .unwrap();
                     }
@@ -170,9 +165,14 @@ async fn main() {
                     }
                 }
             }
+            stop_re_connect_tx.send(()).unwrap();
+            stop_disconnect_tx.send(()).unwrap();
         }
     });
 
-    let (result,) = tokio::join!(main_loop_handle);
+    let (result, conn, disconn) =
+        tokio::join!(main_loop_handle, conn_loop_handle, disconn_loop_handle);
     result.unwrap();
+    conn.unwrap();
+    disconn.unwrap();
 }
