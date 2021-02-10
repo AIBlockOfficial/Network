@@ -358,6 +358,7 @@ impl ComputeNode {
         info!("send_bf_notification {:?}", last_winer);
 
         if let Some((peer, win_coinbase, true)) = last_winer {
+            // TODO: Allow resend winner notification if error.
             self.node
                 .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
                 .await?;

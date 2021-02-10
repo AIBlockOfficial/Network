@@ -1,12 +1,10 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use futures::future::join_all;
-use std::time::Duration;
 use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
 use system::{
-    create_valid_transaction_with_info, get_sanction_addresses, loop_connnect_to_peers_async,
-    loop_wait_connnect_to_peers_async, SANC_LIST_PROD,
+    create_valid_transaction_with_info, get_sanction_addresses, loop_wait_connnect_to_peers_async,
+    loops_re_connect_disconnect, SANC_LIST_PROD,
 };
 use system::{ComputeNode, ComputeRequest, Response};
 use tracing::error;
@@ -92,42 +90,14 @@ async fn main() {
         (node_conn, addrs_to_connect, expected_connected_addrs)
     };
 
-    // PERMANENT CONNEXION HANDLING
-    let (conn_loop_handle, stop_re_connect_tx) = {
-        let (stop_re_connect_tx, stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
-        let node_conn = node_conn.clone();
-        (
-            tokio::spawn(async move {
-                println!("Start connect to compute peers");
-                loop_connnect_to_peers_async(node_conn, addrs_to_connect, Some(stop_re_connect_rx))
-                    .await;
-                println!("Reconnect complete");
-            }),
-            stop_re_connect_tx,
-        )
-    };
+    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
+        let (re_connect, disconnect_test) =
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
 
-    // TEST DIS-CONNECTION HANDLING
-    let (disconn_loop_handle, stop_disconnect_tx) = {
-        let (stop_re_connect_tx, mut stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
-        let disconnect = format!("disconnect_{}", node.address().port());
-        let mut node_conn = node_conn.clone();
         (
-            tokio::spawn(async move {
-                println!("Start mode input check");
-                loop {
-                    tokio::select! {
-                        _ = tokio::time::delay_for(Duration::from_millis(500)) => {
-                            if std::path::Path::new(&disconnect).exists() {
-                                join_all(node_conn.disconnect_all().await).await;
-                            }
-                        },
-                        _ = &mut stop_re_connect_rx => break,
-                    };
-                }
-                println!("Complete mode input check");
-            }),
-            stop_re_connect_tx,
+            (tokio::spawn(re_connect.0), re_connect.1),
+            (tokio::spawn(disconnect_test.0), disconnect_test.1),
         )
     };
 
@@ -219,7 +189,9 @@ async fn main() {
                         reason: "Block committed",
                     }) => {
                         println!("Block ready to mine: {:?}", node.get_mining_block());
-                        node.send_bf_notification().await.unwrap();
+                        if let Err(e) = node.send_bf_notification().await {
+                            error!("Could not send block found notification to winner {:?}", e);
+                        }
                         node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {

@@ -37,7 +37,7 @@ pub use user::UserNode;
 pub use utils::{
     command_input_to_socket, create_and_save_fake_to_wallet, create_valid_transaction,
     create_valid_transaction_with_info, get_sanction_addresses, loop_connnect_to_peers_async,
-    loop_wait_connnect_to_peers_async,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
 };
 
 #[cfg(not(features = "mock"))]

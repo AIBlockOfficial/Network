@@ -320,6 +320,10 @@ impl Node {
     /// Compared to `connect_to`, this function will not send the handshake message and won't wait for a response.
     async fn connect_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         if !self.peers.read().await.contains_key(&peer) {
+            if *self.listener_and_connect_paused.read().await {
+                return Err(CommsError::PeerNotFound);
+            }
+
             let stream = TcpStream::connect(peer).await?;
             let peer_addr = stream.peer_addr()?;
 

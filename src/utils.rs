@@ -4,6 +4,7 @@ use crate::constants::MINING_DIFFICULTY;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
 use bincode::serialize;
+use futures::future::join_all;
 use naom::primitives::transaction_utils::{
     construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
 };
@@ -18,6 +19,7 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::future::Future;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -427,4 +429,68 @@ pub fn decode_pub_key(key: &str) -> PublicKey {
 pub fn decode_secret_key(key: &str) -> SecretKey {
     let key_slice = hex::decode(key).unwrap();
     SecretKey::from_slice(&key_slice).unwrap()
+}
+
+/// Loop reconnect and test disconnect
+///
+/// ### Arguments
+///
+/// * `node_conn`         - Node to use for connections
+/// * `addrs_to_connect`  - Addresses to establish connections to
+pub fn loops_re_connect_disconnect(
+    node_conn: Node,
+    addrs_to_connect: Vec<SocketAddr>,
+) -> (
+    (impl Future<Output = ()>, oneshot::Sender<()>),
+    (impl Future<Output = ()>, oneshot::Sender<()>),
+) {
+    // PERMANENT CONNEXION HANDLING
+    let re_connect = {
+        let (stop_re_connect_tx, stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
+        let node_conn = node_conn.clone();
+        (
+            async move {
+                println!("Start connect to requested peers");
+                loop_connnect_to_peers_async(node_conn, addrs_to_connect, Some(stop_re_connect_rx))
+                    .await;
+                println!("Reconnect complete");
+            },
+            stop_re_connect_tx,
+        )
+    };
+
+    // TEST DIS-CONNECTION HANDLING
+    let disconnect_test = {
+        let (stop_re_connect_tx, mut stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
+        let disconnect = format!("disconnect_{}", node_conn.address().port());
+        let mut node_conn = node_conn;
+        let mut paused = true;
+        (
+            async move {
+                println!("Start mode input check");
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::delay_for(Duration::from_millis(500)) => (),
+                        _ = &mut stop_re_connect_rx => break,
+                    };
+
+                    match (paused, std::path::Path::new(&disconnect).exists()) {
+                        (false, true) => {
+                            node_conn.set_pause_listening(true).await;
+                            join_all(node_conn.disconnect_all().await).await;
+                            paused = true;
+                        }
+                        (true, false) => {
+                            node_conn.set_pause_listening(false).await;
+                            paused = false;
+                        }
+                        _ => (),
+                    };
+                }
+                println!("Complete mode input check");
+            },
+            stop_re_connect_tx,
+        )
+    };
+    (re_connect, disconnect_test)
 }

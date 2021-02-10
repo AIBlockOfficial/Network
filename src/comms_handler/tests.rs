@@ -146,7 +146,8 @@ async fn listen_paused_resumed_stopped() {
     // Act
     //
     n1.set_pause_listening(true).await;
-    let actual_paused = n2.connect_to(n1.address()).await;
+    let actual_paused_to = n2.connect_to(n1.address()).await;
+    let actual_paused_from = n1.connect_to(n2.address()).await;
     n1.set_pause_listening(false).await;
     let actual_resumed = n2.connect_to(n1.address()).await;
 
@@ -156,11 +157,21 @@ async fn listen_paused_resumed_stopped() {
     //
     // Assert
     //
-    let actual = (actual_paused, actual_resumed, actual_stopped);
+    let actual = (
+        actual_paused_to,
+        actual_paused_from,
+        actual_resumed,
+        actual_stopped,
+    );
     assert!(
         matches!(
             actual,
-            (Err(CommsError::PeerNotFound), Ok(_), Err(CommsError::Io(_)))
+            (
+                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound),
+                Ok(_),
+                Err(CommsError::Io(_))
+            )
         ),
         "{:?}",
         actual
