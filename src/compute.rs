@@ -35,6 +35,8 @@ use tokio::task;
 use tracing::{debug, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
+use crate::hash_block;
+
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
 
@@ -612,12 +614,13 @@ impl ComputeNode {
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         info!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let block = serialize(block).unwrap();
-
+        let mut hashblock = HashBlock::new();
+        hashblock.hashBlock(block);
+        let hashblock = serialize(hashblock).unwrap();
         self.node
             .send_to_all(
                 self.partition_list.1.iter().copied(),
-                MineRequest::SendBlock { block },
+                MineRequest::SendBlock { hashblock },
             )
             .await
             .unwrap();

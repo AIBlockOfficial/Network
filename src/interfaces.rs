@@ -11,6 +11,8 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
+use crate::hash_block;
+
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 
 /// A placeholder struct for sensible feedback
@@ -243,7 +245,7 @@ pub trait StorageInterface {
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
-    SendBlock { block: Vec<u8> },
+    SendBlock { lock: Vec<u8> },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
     NotifyBlockFound { win_coinbase: String },

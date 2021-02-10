@@ -9,6 +9,7 @@ mod comms_handler;
 mod compute;
 mod compute_raft;
 pub mod configurations;
+mod hash_block;
 mod constants;
 mod db_utils;
 mod interfaces;
