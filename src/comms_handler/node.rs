@@ -97,7 +97,7 @@ use tokio::{
     self,
     net::{TcpListener, TcpStream},
     stream::{Stream, StreamExt},
-    sync::{mpsc, oneshot, Mutex, Notify, RwLock},
+    sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -115,17 +115,18 @@ const GOSSIP_MAX_TTL: u8 = 4;
 /// Contains a shared list of connected peers.
 type PeerList = HashMap<SocketAddr, Peer>;
 
+/// Closing listener info
+type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
+
 /// An abstract communication interface in the network.
 #[derive(Debug, Clone)]
 pub struct Node {
     /// This node's listener address.
     listener_address: SocketAddr,
-    /// Command channel for the listener.
-    listener_cmd_tx: mpsc::Sender<ListenerCmd>,
-    /// Joining handle for this node tasks.
-    listener_join_handles: Arc<Mutex<Option<JoinHandle<()>>>>,
-    /// Notify listener event
-    listener_cmd_notified: Arc<Notify>,
+    /// Stop channel tx and joining handle for this node listener loop.
+    listener_stop_and_join_handles: Arc<Mutex<CloseListener>>,
+    /// Pause accepting and starting connections.
+    listener_and_connect_paused: Arc<RwLock<bool>>,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
     /// Node type.
@@ -183,12 +184,6 @@ enum PeerState {
     Ready,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum ListenerCmd {
-    Stop,
-    SetPause(bool),
-}
-
 impl Node {
     /// Creates a new node.
     ///
@@ -198,7 +193,6 @@ impl Node {
     /// * `node_type`  - the node type that will be broadcasted on the network.
     pub async fn new(address: SocketAddr, peer_limit: usize, node_type: NodeType) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (listener_cmd_tx, listener_cmd_rx) = mpsc::channel(128);
 
         // TODO: wrap this socket with TLS 1.3 - https://github.com/tokio-rs/tls
         let listener = TcpListener::bind(address).await?;
@@ -207,9 +201,8 @@ impl Node {
 
         Ok(Self {
             listener_address,
-            listener_cmd_tx,
-            listener_join_handles: Arc::new(Mutex::new(None)),
-            listener_cmd_notified: Arc::new(Notify::new()),
+            listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
+            listener_and_connect_paused: Arc::new(RwLock::new(false)),
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
@@ -219,7 +212,7 @@ impl Node {
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
         }
-        .listen(listener, listener_cmd_rx)
+        .listen(listener)
         .await?)
     }
 
@@ -228,30 +221,25 @@ impl Node {
     }
 
     /// Handles the listener.
-    async fn listen(
-        self,
-        listener: TcpListener,
-        listener_cmd_rx: mpsc::Receiver<ListenerCmd>,
-    ) -> Result<Self> {
+    async fn listen(self, listener: TcpListener) -> Result<Self> {
         let node = self.clone();
+        let (close_tx, close_rx) = oneshot::channel();
         let handle = tokio::spawn(
             async move {
                 trace!("listen");
-                enum Cmd {
-                    Cmd(ListenerCmd),
-                    Event(std::result::Result<TcpStream, std::io::Error>),
-                }
-                let mut listener = listener
-                    .map(Cmd::Event)
-                    .merge(listener_cmd_rx.map(Cmd::Cmd));
-                let mut paused = false;
 
-                while let Some(new_conn) = listener.next().await {
+                use super::stream_cancel::StreamCancel;
+                use futures::TryFutureExt;
+                let mut cancellable_listener = listener.take_until(close_rx.unwrap_or_else(|_| ()));
+
+                while let Some(new_conn) = cancellable_listener.next().await {
                     match new_conn {
-                        Cmd::Event(Ok(conn)) => {
-                            if paused {
+                        Ok(conn) => {
+                            if *node.listener_and_connect_paused.read().await {
+                                // Ignore new connections
                                 continue;
                             }
+
                             // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
@@ -264,18 +252,8 @@ impl Node {
                                 Err(error) => warn!(?error, "Could not add a new peer"),
                             }
                         }
-                        Cmd::Event(Err(error)) => {
+                        Err(error) => {
                             warn!(?error, "Connection failure");
-                        }
-                        Cmd::Cmd(ListenerCmd::SetPause(pause)) => {
-                            warn!("listen paused={}", pause);
-                            paused = pause;
-                            node.listener_cmd_notified.notify();
-                        }
-                        Cmd::Cmd(ListenerCmd::Stop) => {
-                            warn!("listen stopped");
-                            node.listener_cmd_notified.notify();
-                            return;
                         }
                     }
                 }
@@ -283,7 +261,7 @@ impl Node {
             .instrument(self.span.clone()),
         );
 
-        *self.listener_join_handles.lock().await = Some(handle);
+        *self.listener_stop_and_join_handles.lock().await = Some((close_tx, handle));
         Ok(self)
     }
 
@@ -391,16 +369,14 @@ impl Node {
 
     /// Pause/Resume accepting new connections
     pub async fn set_pause_listening(&mut self, pause: bool) {
-        let cmd = ListenerCmd::SetPause(pause);
-        self.listener_cmd_tx.send(cmd).await.unwrap();
-        self.listener_cmd_notified.notified().await;
+        *self.listener_and_connect_paused.write().await = pause;
     }
 
     /// Stop accepting new connections
     pub async fn stop_listening(&mut self) -> Vec<JoinHandle<()>> {
         trace!("stop_listening {:?}", self.listener_address);
-        if let Some(handle) = self.listener_join_handles.lock().await.take() {
-            self.listener_cmd_tx.send(ListenerCmd::Stop).await.unwrap();
+        if let Some((stop_tx, handle)) = self.listener_stop_and_join_handles.lock().await.take() {
+            stop_tx.send(()).unwrap();
             vec![handle]
         } else {
             Vec::new()
