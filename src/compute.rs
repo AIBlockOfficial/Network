@@ -170,12 +170,6 @@ impl ComputeNode {
         self.current_mined_block.is_some()
     }
 
-    /// Connect to a storage peer on the network.
-    pub async fn connect_to_storage(&mut self) -> Result<()> {
-        self.node.connect_to(self.storage_addr).await?;
-        Ok(())
-    }
-
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -184,12 +178,15 @@ impl ComputeNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
-    /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+    /// Connect info for peers on the network.
+    pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        let storage = Some(self.storage_addr);
+        let to_connect = self.node_raft.raft_peer_to_connect().chain(storage.iter());
+        let expect_connect = self.node_raft.raft_peer_addrs().chain(storage.iter());
         (
             self.node.clone(),
-            self.node_raft.raft_peer_to_connect().cloned().collect(),
-            self.node_raft.raft_peer_addrs().cloned().collect(),
+            to_connect.copied().collect(),
+            expect_connect.copied().collect(),
         )
     }
 

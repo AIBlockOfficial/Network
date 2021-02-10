@@ -98,23 +98,23 @@ impl Network {
 
     ///Creates and tests rafts
     async fn spawn_raft_loops(mut self) -> Self {
-        if self.config.compute_raft {
-            // Need to connect first so Raft messages can be sent.
-            info!("Start connect to peers");
-            for (name, node) in &self.compute_nodes {
-                let node = node.lock().await;
-                let (node_conn, addrs, _) = node.connect_to_raft_peers();
-                loop_connnect_to_peers_async(node_conn, addrs, None).await;
-                info!(?name, "Peer connect complete");
-            }
-            info!("Peers connect complete");
-            for node in self.compute_nodes.values() {
-                let node = node.lock().await;
-                let (node_conn, _, expected_connected_addrs) = node.connect_to_raft_peers();
-                loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
-            }
-            info!("Peers connect complete: all connected");
+        // Need to connect first so Raft messages can be sent.
+        info!("Start connect to peers");
+        for (name, node) in &self.compute_nodes {
+            let node = node.lock().await;
+            let (node_conn, addrs, _) = node.connect_info_peers();
+            loop_connnect_to_peers_async(node_conn, addrs, None).await;
+            info!(?name, "Peer connect complete");
+        }
+        info!("Peers connect complete");
+        for node in self.compute_nodes.values() {
+            let node = node.lock().await;
+            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
+            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+        }
+        info!("Peers connect complete: all connected");
 
+        if self.config.compute_raft {
             for (name, node) in &self.compute_nodes {
                 let node = node.lock().await;
                 let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
@@ -130,23 +130,23 @@ impl Network {
             }
         }
 
-        if self.config.storage_raft {
-            // Need to connect first so Raft messages can be sent.
-            info!("Start connect to peers");
-            for (name, node) in &self.storage_nodes {
-                let node = node.lock().await;
-                let (node_conn, addrs, _) = node.connect_to_raft_peers();
-                loop_connnect_to_peers_async(node_conn, addrs, None).await;
-                info!(?name, "Peer connect complete");
-            }
-            info!("Peers connect complete");
-            for node in self.storage_nodes.values() {
-                let node = node.lock().await;
-                let (node_conn, _, expected_connected_addrs) = node.connect_to_raft_peers();
-                loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
-            }
-            info!("Peers connect complete: all connected");
+        // Need to connect first so Raft messages can be sent.
+        info!("Start connect to peers");
+        for (name, node) in &self.storage_nodes {
+            let node = node.lock().await;
+            let (node_conn, addrs, _) = node.connect_info_peers();
+            loop_connnect_to_peers_async(node_conn, addrs, None).await;
+            info!(?name, "Peer connect complete");
+        }
+        info!("Peers connect complete");
+        for node in self.storage_nodes.values() {
+            let node = node.lock().await;
+            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
+            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+        }
+        info!("Peers connect complete: all connected");
 
+        if self.config.storage_raft {
             for (name, node) in &self.storage_nodes {
                 let node = node.lock().await;
                 let peer_span = error_span!("storage_node", ?name, addr = ?node.address());

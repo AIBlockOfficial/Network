@@ -2,8 +2,8 @@
 
 use clap::{App, Arg};
 use naom::primitives::asset::TokenAmount;
-use std::time::Duration;
 use system::configurations::UserNodeConfig;
+use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{routes, Response, UserNode};
 
 #[tokio::main]
@@ -50,11 +50,6 @@ async fn main() {
                 .long("compute_index")
                 .help("Endpoint index of a compute node that the user should connect to")
                 .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("compute_connect")
-                .long("compute_connect")
-                .help("connect to the compute node"),
         )
         .arg(
             Arg::with_name("peer_user_index")
@@ -121,18 +116,6 @@ async fn main() {
     println!("Starting node with config: {:?}", config);
     println!();
 
-    let compute_node_connected = if matches.is_present("compute_connect") {
-        Some(
-            config
-                .compute_nodes
-                .get(config.user_compute_node_idx)
-                .unwrap()
-                .address,
-        )
-    } else {
-        None
-    };
-
     let peer_user_node_connected = if matches.is_present("peer_user_connect") {
         Some(
             config
@@ -152,18 +135,27 @@ async fn main() {
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
-    let api_port = config.api_port;
     let mut node = UserNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
-    if let Some(compute_node) = compute_node_connected {
-        // Connect to a compute node.
-        while let Err(e) = node.connect_to(compute_node).await {
-            println!("Compute connection error: {:?}", e);
-            tokio::time::delay_for(Duration::from_millis(500)).await;
-        }
-        println!("Compute connection complete");
-    }
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+    let api_inputs = node.api_inputs();
+
+    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
+        let (re_connect, disconnect_test) =
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
+
+        (
+            (tokio::spawn(re_connect.0), re_connect.1),
+            (tokio::spawn(disconnect_test.0), disconnect_test.1),
+        )
+    };
+
+    // Need to connect first so Raft messages can be sent.
+    loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+
+    // Send any requests here
 
     if let Some(peer_user_node) = peer_user_node_connected {
         println!("ADDRESS: {:?}", peer_user_node);
@@ -175,8 +167,6 @@ async fn main() {
             .await
             .unwrap();
     }
-
-    let api_inputs = (node.wallet_db.clone(), node.node.clone());
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -200,7 +190,7 @@ async fn main() {
                         success: true,
                         reason: "Next payment transaction ready",
                     }) => {
-                        node.send_next_payment_to_destinations(compute_node_connected.unwrap())
+                        node.send_next_payment_to_destinations(node.compute_address())
                             .await
                             .unwrap();
                     }
@@ -221,6 +211,8 @@ async fn main() {
                     }
                 }
             }
+            stop_re_connect_tx.send(()).unwrap();
+            stop_disconnect_tx.send(()).unwrap();
         }
     });
 
@@ -229,18 +221,24 @@ async fn main() {
         println!("Warp API starting at port 3000");
         println!();
 
-        let api_port: u16 = api_port;
-        let (db, node) = api_inputs;
+        let (db, node, api_addr) = api_inputs;
 
         async move {
             use warp::Filter;
             warp::serve(routes::wallet_info(db).or(routes::make_payment(node)))
-                .run(([127, 0, 0, 1], api_port))
+                .run(api_addr)
                 .await;
         }
     });
 
-    let (main_result, warp_result) = tokio::join!(main_loop_handle, warp_handle);
+    let (main_result, warp_result, conn, disconn) = tokio::join!(
+        main_loop_handle,
+        warp_handle,
+        conn_loop_handle,
+        disconn_loop_handle
+    );
     main_result.unwrap();
     warp_result.unwrap();
+    conn.unwrap();
+    disconn.unwrap();
 }

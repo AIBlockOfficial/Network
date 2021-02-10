@@ -145,12 +145,14 @@ impl StorageNode {
         Ok(self.node.inject_next_event(from_peer_addr, data)?)
     }
 
-    /// Connect to a raft peer on the network.
-    pub fn connect_to_raft_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+    /// Connect info for peers on the network.
+    pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        let to_connect = self.node_raft.raft_peer_to_connect();
+        let expect_connect = self.node_raft.raft_peer_addrs();
         (
             self.node.clone(),
-            self.node_raft.raft_peer_to_connect().cloned().collect(),
-            self.node_raft.raft_peer_addrs().cloned().collect(),
+            to_connect.copied().collect(),
+            expect_connect.copied().collect(),
         )
     }
 

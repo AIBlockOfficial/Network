@@ -82,13 +82,7 @@ async fn main() {
 
     println!("Started node at {}", node.address());
 
-    let (node_conn, addrs_to_connect, expected_connected_addrs) = {
-        let (node_conn, mut addrs_to_connect, all_addr_raft) = node.connect_to_raft_peers();
-        let mut expected_connected_addrs = all_addr_raft;
-        addrs_to_connect.push(node.storage_addr);
-        expected_connected_addrs.push(node.storage_addr);
-        (node_conn, addrs_to_connect, expected_connected_addrs)
-    };
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {

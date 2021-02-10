@@ -60,11 +60,7 @@ async fn main() {
 
     println!("Started node at {}", node.address());
 
-    let (node_conn, addrs_to_connect, expected_connected_addrs) = {
-        let (node_conn, addrs_to_connect, all_addr_raft) = node.connect_to_raft_peers();
-        let expected_connected_addrs = all_addr_raft;
-        (node_conn, addrs_to_connect, expected_connected_addrs)
-    };
+    let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {

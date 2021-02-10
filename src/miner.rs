@@ -83,6 +83,7 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug)]
 pub struct MinerNode {
     node: Node,
+    pub compute_addr: SocketAddr,
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
     pub current_block: Block,
@@ -105,8 +106,14 @@ impl MinerNode {
             .get(config.miner_node_idx)
             .ok_or(MinerError::ConfigError("Invalid miner index"))?
             .address;
+        let compute_addr = config
+            .compute_nodes
+            .get(config.miner_compute_node_idx)
+            .ok_or(MinerError::ConfigError("Invalid compute index"))?
+            .address;
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
+            compute_addr,
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             partition_key: None,
@@ -118,9 +125,14 @@ impl MinerNode {
         })
     }
 
-    /// Returns the miner node's public endpoint.
+    /// Returns the node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Returns the node's compute endpoint.
+    pub fn compute_address(&self) -> SocketAddr {
+        self.compute_addr
     }
 
     /// Connect to a peer on the network.
@@ -131,6 +143,18 @@ impl MinerNode {
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         self.node.connect_to(peer).await?;
         Ok(())
+    }
+
+    /// Connect info for peers on the network.
+    pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+        let compute = Some(self.compute_addr);
+        let to_connect = compute.iter();
+        let expect_connect = compute.iter();
+        (
+            self.node.clone(),
+            to_connect.copied().collect(),
+            expect_connect.copied().collect(),
+        )
     }
 
     /// Signal to the node listening loop to complete
