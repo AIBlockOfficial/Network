@@ -130,20 +130,16 @@ impl RaftNode {
     ///
     /// * `raft_Config` - RaftConfig object containing tick_timeout_duration and cfg
     pub fn new(raft_config: RaftConfig) -> Self {
-        let storage = MemStorage::new();
         let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
 
         let node = {
-            let mut node = RawNode::new(&raft_config.cfg, storage, vec![]).unwrap();
-            if raft_config.cfg.id == 1 {
+            let (storage, cfg) = Self::storage_and_config(raft_config.cfg);
+            let mut node = RawNode::new(&cfg, storage, vec![]).unwrap();
+
+            if cfg.id == 1 {
                 // Make first peer start election immediatly on start up to avoid unecessary wait.
                 node.raft.election_elapsed = node.raft.get_randomized_election_timeout();
             }
-
-            // Set snapshot initial info
-            let mut cs = ConfState::new();
-            cs.set_nodes(node.raft.prs().voter_ids().iter().cloned().collect());
-            node.mut_store().wl().set_conf_state(cs, None);
 
             node
         };
@@ -363,6 +359,17 @@ impl RaftNode {
             self.committed_entries_and_groups_count.0 += committed.len();
             let _ok_or_closed = self.committed_tx.send(committed, "committed").await;
         }
+    }
+
+    /// Create storage and config to use for new node
+    fn storage_and_config(mut cfg: Config) -> (MemStorage, Config) {
+        let mut cs = ConfState::new();
+        cs.set_nodes(std::mem::take(&mut cfg.peers));
+
+        let storage = MemStorage::new();
+        storage.wl().set_conf_state(cs, None);
+
+        (storage, cfg)
     }
 }
 
