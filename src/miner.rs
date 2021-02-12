@@ -137,10 +137,6 @@ impl MinerNode {
     pub fn compute_address(&self) -> SocketAddr {
         self.compute_addr
     }
-<<<<<<< HEAD
-
-=======
->>>>>>> Fixed open file error. disabled 4 tests to commit and rebase but not push
     /// Connect to a peer on the network.
     ///
     /// ### Arguments

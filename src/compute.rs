@@ -8,11 +8,7 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
-<<<<<<< HEAD
-    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
-=======
     format_parition_pow_address, get_partition_entry_key, serialize_hashblock_for_pow,
->>>>>>> Fixed open file error. disabled 4 tests to commit and rebase but not push
     validate_pow_block, validate_pow_for_address,
 };
 
@@ -214,11 +210,6 @@ impl ComputeNode {
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.node_raft.raft_loop()
-    }
-
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
     }
 
     /// Signal to the raft loop to complete
