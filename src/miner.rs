@@ -358,8 +358,8 @@ impl MinerNode {
         }
 
         let mining_tx = construct_coinbase_tx(
+            block.header.b_num,
             TokenAmount(12000),
-            block.header.time,
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);

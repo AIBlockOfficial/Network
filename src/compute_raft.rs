@@ -445,8 +445,8 @@ impl ComputeRaft {
 
     /// Processes the next batch of transactions from the floating tx pool
     /// to create the next block
-    pub fn generate_block(&mut self) {
-        self.consensused.generate_block()
+    pub async fn generate_block(&mut self) {
+        self.consensused.generate_block().await
     }
 
     /// Find transactions for the current block.
@@ -513,13 +513,13 @@ impl ComputeConsensused {
     /// to create the next block
     ///
     /// TODO: Label previous block time
-    pub fn generate_block(&mut self) {
+    pub async fn generate_block(&mut self) {
         let mut next_block = Block::new();
         let mut next_block_tx = BTreeMap::new();
 
         self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
         self.update_current_block_tx(&mut next_block, &mut next_block_tx);
-        self.update_block_header(&mut next_block);
+        self.update_block_header(&mut next_block).await;
 
         self.set_committed_mining_block(next_block, next_block_tx)
     }
@@ -572,13 +572,13 @@ impl ComputeConsensused {
     /// ### Arguments
     ///
     /// * `block`   - Block to be set to be updated
-    fn update_block_header(&mut self, block: &mut Block) {
+    async fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_current_block_previous_hash).unwrap();
         let b_num = self.tx_current_block_num.unwrap();
 
-        block.header.time = b_num as u32;
         block.header.previous_hash = Some(previous_hash);
         block.header.b_num = b_num;
+        block.set_merkle_root().await;
     }
 
     /// Apply set of valid transactions to the block.
@@ -849,6 +849,8 @@ mod test {
         let previous_block = BlockStoredInfo {
             block_hash: "0123".to_string(),
             block_num: 0,
+            nonce: vec![0],
+            merkle_hash: "0123".to_string(),
             mining_transactions: BTreeMap::new(),
         };
 
@@ -922,7 +924,7 @@ mod test {
             let commit = node.next_commit().await.unwrap();
             commits.push(node.received_commit(commit).await.unwrap());
         }
-        node.generate_block();
+        node.generate_block().await;
 
         //
         // Assert

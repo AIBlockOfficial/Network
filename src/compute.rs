@@ -432,7 +432,7 @@ impl ComputeNode {
                         }
                         Some(CommittedItem::Block) => {
                             self.validate_wining_miner_tx();
-                            self.node_raft.generate_block();
+                            self.node_raft.generate_block().await;
                             self.node_raft.event_processed_generate_snapshot();
                             return Some(Ok(Response{
                                 success: true,
@@ -643,8 +643,8 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `nonce` - Sequence number in a Vec<u8>
-    /// * 'miner' - address of the miner who won the block
-    /// * 'mining_transaction' - String and transaction to be put into a BTreeMap    
+    /// * `miner` - address of the miner who won the block
+    /// * `mining_transaction` - String and transaction to be put into a BTreeMap    
     pub fn mining_block_mined(
         &mut self,
         nonce: Vec<u8>,

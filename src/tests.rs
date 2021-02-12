@@ -201,6 +201,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
         1 + initial_utxo_txs.len() + stored0.as_ref().unwrap().mining_transactions.len();
     let expected_block1_db_count =
         1 + transactions.len() + stored1.as_ref().unwrap().mining_transactions.len();
+
     assert_eq!(
         actual0_db_count,
         node_all(
@@ -1899,13 +1900,12 @@ fn complete_block(
 ) -> ((String, String), CompleteBlock) {
     let mut block = Block::new();
     block.header.b_num = block_num;
-    block.header.time = block_num as u32;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
         let amount = TokenAmount(12000);
-        let tx = construct_coinbase_tx(amount, block.header.time, addr.clone());
+        let tx = construct_coinbase_tx(block_num, amount, addr.clone());
         let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
             nonce: addr.as_bytes().to_vec(),
