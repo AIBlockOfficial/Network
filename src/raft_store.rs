@@ -30,6 +30,11 @@ impl RaftStore {
         }
     }
 
+    /// Consume store and return peristent storage
+    pub fn take_persistent(&mut self) -> SimpleDb {
+        std::mem::replace(&mut self.presistent, SimpleDb::new_in_memory())
+    }
+
     /// Saves the current HardState.
     pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
         let bytes = hs.write_to_bytes()?;
@@ -116,28 +121,36 @@ impl RaftStore {
             in_memory.wl().set_hardstate(hs);
         }
 
-        let is_snap = if let Some(snapshot) = get_persistent_snapshot(presistent)? {
+        if let Some(snapshot) = get_persistent_snapshot(presistent)? {
             let snap_index = snapshot.get_metadata().get_index();
             in_memory.wl().apply_snapshot(snapshot)?;
             self.persistent_first_entry = snap_index;
-            true
-        } else {
-            false
-        };
+        }
 
         if let Some(last_index) = get_last_persistent_entry(presistent)? {
+            // If no snapshot, entry 0 does not existd.
+            // If snapshot, skip snapshot entry as already applied.
             let end_index = last_index + 1;
-            let start_index = if is_snap {
-                std::cmp::min(self.persistent_first_entry + 1, end_index)
-            } else {
-                std::cmp::min(self.persistent_first_entry, end_index)
-            };
+            let start_index = std::cmp::min(self.persistent_first_entry + 1, end_index);
 
             let mut entries = Vec::new();
-            for index in start_index..=end_index {
-                entries.push(
-                    get_persistent_entry(presistent, index)?.ok_or(StorageError::Unavailable)?,
-                );
+            let mut missing_entries = false;
+            for index in start_index..end_index {
+                let entry = match get_persistent_entry(presistent, index)? {
+                    Some(e) => e,
+                    None => {
+                        error!(
+                            "Entry unabailable {} in [{}..{}]",
+                            index, start_index, end_index
+                        );
+                        missing_entries = true;
+                        continue;
+                    }
+                };
+                entries.push(entry);
+            }
+            if missing_entries {
+                return Err(StorageError::Unavailable.into());
             }
             in_memory.wl().append(&entries)?;
         }
