@@ -27,6 +27,11 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+<<<<<<< HEAD
+=======
+use crate::hash_block::*;
+
+>>>>>>> Fixed open file error. disabled 4 tests to commit and rebase but not push
 pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
 }
@@ -89,6 +94,7 @@ pub async fn loop_connnect_to_peers_async(
             } else {
                 trace!(?peer, "Try to connect to succeeded");
             }
+<<<<<<< HEAD
         }
 
         let delay_retry = tokio::time::delay_for(Duration::from_millis(500));
@@ -103,6 +109,22 @@ pub async fn loop_connnect_to_peers_async(
             }
             delay_retry.await;
         }
+=======
+        }
+
+        let delay_retry = tokio::time::delay_for(Duration::from_millis(500));
+        if let Some(close_rx) = &mut close_rx {
+            tokio::select! {
+                _ = delay_retry => (),
+                _ = close_rx => return,
+            };
+        } else {
+            if node.unconnected_peers(&peers).await.is_empty() {
+                return;
+            }
+            delay_retry.await;
+        }
+>>>>>>> Fixed open file error. disabled 4 tests to commit and rebase but not push
     }
 }
 
@@ -233,6 +255,15 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 ///
 /// * `block`    - &Block reference to be used in proof of work
 pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
+    serialize(block).unwrap()
+}
+
+/// HashBlock to be used in Proof of Work
+///
+/// ### Arguments
+///
+/// * `block`    - &HashBlock reference to be used in proof of work
+pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
     serialize(block).unwrap()
 }
 

@@ -245,7 +245,7 @@ pub trait StorageInterface {
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
-    SendBlock { lock: Vec<u8> },
+    SendBlock { block: Vec<u8> },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
     NotifyBlockFound { win_coinbase: String },

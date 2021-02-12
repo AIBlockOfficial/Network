@@ -1,11 +1,10 @@
 #![allow(unused)]
 use naom::constants::MAX_BLOCK_SIZE;
 use naom::primitives::asset::Asset;
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::primitives::block::Block;
 use naom::primitives::block::BlockHeader;
+use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use sha3::Digest;
-use crypto_hash::{Algorithm, hex_digest};
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -14,18 +13,20 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::convert::TryInto;
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 /// Block header, which contains a smaller footprint view of the block.
 /// Hash records are assumed to be 256 bit
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HashBlockHeader {
     pub version: u32,
-    pub time: u32,
     pub bits: usize,
     pub nonce: Vec<u8>,
     pub b_num: u64,
     pub seed_value: Vec<u8>, // for commercial
     pub previous_hash: Option<String>,
-    pub merkle_root_hash: Vec<u8>,
+    pub merkle_root_hash: String,
 }
 
 impl Default for HashBlockHeader {
@@ -40,9 +41,8 @@ impl HashBlockHeader {
         HashBlockHeader {
             version: 0,
             previous_hash: None,
-            merkle_root_hash: Vec::with_capacity(32),
+            merkle_root_hash: String::default(),
             seed_value: Vec::new(),
-            time: 0,
             bits: 0,
             b_num: 0,
             nonce: Vec::new(),
@@ -59,9 +59,8 @@ impl HashBlockHeader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HashBlock {
     pub header: HashBlockHeader,
-    pub transactions: String,
+    pub transactions: u64,
 }
-
 
 impl Default for HashBlock {
     fn default() -> Self {
@@ -69,33 +68,30 @@ impl Default for HashBlock {
     }
 }
 
-
 impl HashBlock {
     /// Creates a new instance of a block
     pub fn new() -> HashBlock {
         HashBlock {
             header: HashBlockHeader::new(),
-            transactions: String::from(""),
+            transactions: u64::MIN,
         }
     }
 
-    pub fn setHeader(&mut self, headerBlock: BlockHeader)
-    {
-        self.header.version = headerBlock.version;
-        self.header.time = headerBlock.time;
-        self.header.bits = headerBlock.bits;
-        self.header.nonce = headerBlock.nonce;
-        self.header.b_num = headerBlock.b_num;
-        self.header.seed_value = headerBlock.seed_value;
-        self.header.previous_hash = headerBlock.previous_hash;
-        self.header.merkle_root_hash = headerBlock.merkle_root_hash;
-
+    pub fn set_header(&mut self, header_block: &BlockHeader) {
+        self.header.version = header_block.version;
+        self.header.bits = header_block.bits;
+        self.header.nonce = header_block.nonce.clone();
+        self.header.b_num = header_block.b_num;
+        self.header.seed_value = header_block.seed_value.clone();
+        self.header.previous_hash = header_block.previous_hash.clone();
+        self.header.merkle_root_hash = header_block.merkle_root_hash.clone();
     }
 
-    pub fn hashBlock(&mut self, block:Block)
-    {
-        self.setHeader(block.header);
-        self.transactions = hex_digest(Algorithm::SHA256, block.transactions);
+    pub fn hash_blocking(&mut self, block: &Block) {
+        self.set_header(&block.header);
+        let mut hasher = DefaultHasher::new();
+        (block.transactions).hash(&mut hasher);
+        self.transactions = hasher.finish();
     }
     /// Sets the internal number of bits based on length
     pub fn set_bits(&mut self) {
@@ -110,10 +106,10 @@ impl HashBlock {
     }
 
     /// Get the merkle root for the current set of transactions
-    pub fn get_merkle_root(&mut self) -> Vec<u8> {
+    pub fn get_merkle_root(&mut self) -> String {
         //let merkle = self.build_merkle_tree();
         //let root_hash = merkle.root().to_vec();
-        let root_hash = Vec::new();
+        let root_hash = String::from(" ");
 
         self.header.merkle_root_hash = root_hash.clone();
         root_hash
@@ -153,14 +149,13 @@ fn from_slice(bytes: &[u8]) -> [u8; 32] {
 ///
 /// ### Arguments
 ///
-/// * `time`            - Time value of block
 /// * `nonce`           - Block nonce
 /// * `bits`            - Bit length of block
 /// * `version`         - Network version to keep track of
 /// * `genesis_reward`  - Token reward for the block output
 /// * `genesis_output`  - Output script for the genesis output (STILL TODO)
 pub fn create_raw_genesis_block(
-    time: &u32,
+    //time: &u32,
     nonce: Vec<u8>,
     bits: &usize,
     version: &u32,
@@ -173,7 +168,7 @@ pub fn create_raw_genesis_block(
     let mut gen_transaction = Transaction::new();
     let mut tx_in = TxIn::new();
     let mut tx_out = TxOut::new();
-    let mut transPreHash = Vec::new();
+    let mut trans_pre_hash = Vec::new();
 
     // Handle genesis transaction
     let hashed_key = Sha3_256::digest(&unicorn_val.as_bytes()).to_vec();
@@ -189,14 +184,16 @@ pub fn create_raw_genesis_block(
     genesis.header.version = *version;
     genesis.header.bits = *bits;
     genesis.header.nonce = nonce;
-    genesis.header.time = *time;
+    //genesis.header.time = *time;
 
     let hash_input = Bytes::from(serialize(&gen_transaction).unwrap());
     let hash_key = hex::encode(Sha3_256::digest(&hash_input));
 
     // Add genesis transaction
-    transPreHash.push(hash_key);
-    genesis.transactions = hex_digest(Algorithm::SHA256, transPreHash);
+    trans_pre_hash.push(hash_key);
+    let mut hasher = DefaultHasher::new();
+    trans_pre_hash.hash(&mut hasher);
+    genesis.transactions = hasher.finish();
     // Other stuff accepts defaults, so just return the block
     genesis
 }
@@ -205,25 +202,16 @@ pub fn create_raw_genesis_block(
 ///
 /// ### Arguments
 ///
-/// * `time`            - Time of the genesis block
 /// * `nonce`           - Nonce of the genesis block
 /// * `bits`            - Bit length of the block
 /// * `version`         - Version of the block
 /// * `genesis_reward`  - Coinbase reward from the initial block
 pub fn create_genesis_block(
-    time: u32,
     nonce: Vec<u8>,
     bits: usize,
     version: u32,
     genesis_reward: u64,
 ) -> HashBlock {
     // Using straight constant in this case, but will need to incorporate some kind of scripting situation
-    create_raw_genesis_block(
-        &time,
-        nonce,
-        &bits,
-        &version,
-        &genesis_reward,
-        "".to_string(),
-    )
+    create_raw_genesis_block(nonce, &bits, &version, &genesis_reward, "".to_string())
 }

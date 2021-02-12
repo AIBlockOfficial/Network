@@ -8,12 +8,16 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
+<<<<<<< HEAD
     format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
+=======
+    format_parition_pow_address, get_partition_entry_key, serialize_hashblock_for_pow,
+>>>>>>> Fixed open file error. disabled 4 tests to commit and rebase but not push
     validate_pow_block, validate_pow_for_address,
 };
 
 use crate::Node;
-use bincode::{deserialize, serialize};
+use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -35,7 +39,7 @@ use tokio::task;
 use tracing::{debug, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
-use crate::hash_block;
+use crate::hash_block::HashBlock;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -210,6 +214,11 @@ impl ComputeNode {
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.node_raft.raft_loop()
+    }
+
+    /// Signal to the node listening loop to complete
+    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.node.stop_listening().await
     }
 
     /// Signal to the raft loop to complete
@@ -614,13 +623,13 @@ impl ComputeNode {
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         info!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let mut hashblock = HashBlock::new();
-        hashblock.hashBlock(block);
-        let hashblock = serialize(hashblock).unwrap();
+        let hashblock = &mut HashBlock::new();
+        hashblock.hash_blocking(block);
+        let block = serialize_hashblock_for_pow(hashblock);
         self.node
             .send_to_all(
                 self.partition_list.1.iter().copied(),
-                MineRequest::SendBlock { hashblock },
+                MineRequest::SendBlock { block },
             )
             .await
             .unwrap();
@@ -757,9 +766,10 @@ impl ComputeInterface for ComputeNode {
     ) -> Response {
         info!(?address, "Received PoW");
         let coinbase_hash = construct_tx_hash(&coinbase);
-
-        let mut mining_block = if let Some(mining_block) = self.node_raft.get_mining_block() {
-            serialize_block_for_pow(mining_block)
+        let mut hashed_mining_block = HashBlock::new();
+        if let Some(mining_block) = self.node_raft.get_mining_block() {
+            hashed_mining_block.hash_blocking(mining_block);
+            serialize_hashblock_for_pow(&hashed_mining_block)
         } else {
             // TODO: Verify the pow block is expected block.
             return Response {
@@ -776,7 +786,11 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
+        if !validate_pow_block(
+            &mut serialize_hashblock_for_pow(&hashed_mining_block),
+            &coinbase_hash,
+            &nonce,
+        ) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
