@@ -39,6 +39,8 @@ pub struct MinedBlockExtraInfo {
 pub struct BlockStoredInfo {
     pub block_hash: String,
     pub block_num: u64,
+    pub nonce: Vec<u8>,
+    pub merkle_hash: String,
     pub mining_transactions: BTreeMap<String, Transaction>,
 }
 
