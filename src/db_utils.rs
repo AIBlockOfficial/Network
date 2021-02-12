@@ -1,3 +1,5 @@
+use crate::configurations::DbMode;
+use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST};
 pub use rocksdb::Error as DBError;
 use rocksdb::{DBCompressionType, IteratorMode, Options, DB};
 use std::collections::HashMap;
@@ -140,4 +142,23 @@ pub fn get_db_options() -> Options {
     opts.set_compression_type(DBCompressionType::Snappy);
 
     opts
+}
+
+///Creates a new database(db) object in selected mode
+///
+/// ### Arguments
+///
+/// * `db_moode` - Mode for the database.
+/// * `db_path`  - Database folder path.
+/// * `suffix`   - Database name suffix.
+pub fn new_db(db_mode: DbMode, db_path: &str, suffix: &str) -> SimpleDb {
+    let save_path = match db_mode {
+        DbMode::Live => format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix),
+        DbMode::Test(idx) => format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx),
+        DbMode::InMemory => {
+            return SimpleDb::new_in_memory();
+        }
+    };
+
+    SimpleDb::new_file(save_path).unwrap()
 }

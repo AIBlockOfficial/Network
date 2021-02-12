@@ -1,3 +1,4 @@
+compute_db_mode = {Test = 0}
 storage_db_mode = {Test = 0}
 miner_db_mode = {Test = 0}
 user_db_mode = {Test = 1000}

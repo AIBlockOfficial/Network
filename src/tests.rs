@@ -83,8 +83,10 @@ async fn full_flow_no_raft() {
 async fn full_flow_no_raft_real_db() {
     let mut cfg = complete_network_config(10505);
     let db_paths = vec![
-        format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, 10507),
         format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10505),
+        format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, 10506),
+        format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, 10506),
+        format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, 10507),
         format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10508),
     ];
     for to_remove in db_paths {

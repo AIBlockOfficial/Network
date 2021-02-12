@@ -1,6 +1,7 @@
+use crate::db_utils::SimpleDb;
+use crate::raft_store::RaftStore;
 use crate::utils::MpscTracingSender;
 use raft::prelude::*;
-use raft::storage::MemStorage;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -56,6 +57,8 @@ pub struct RaftNodeChannels {
 pub struct RaftConfig {
     /// Raft RawNode config.
     cfg: Config,
+    /// Raft persistent database to load/store.
+    raft_db: SimpleDb,
     /// Input command and messages.
     cmd_rx: RaftCmdReceiver,
     /// Output commited data.
@@ -98,7 +101,7 @@ pub enum RaftCmd {
 
 pub struct RaftNode {
     /// Runing raft node.
-    node: RawNode<MemStorage>,
+    node: RawNode<RaftStore>,
     /// Backlog of raft proposal while leader unavailable.
     propose_data_backlog: Vec<RaftData>,
     /// Input command and messages.
@@ -133,7 +136,7 @@ impl RaftNode {
         let tick_timeout_at = Instant::now() + raft_config.tick_timeout_duration;
 
         let node = {
-            let (storage, cfg) = Self::storage_and_config(raft_config.cfg);
+            let (storage, cfg) = Self::storage_and_config(raft_config.cfg, raft_config.raft_db);
             let mut node = RawNode::new(&cfg, storage, vec![]).unwrap();
 
             if cfg.id == 1 {
@@ -168,6 +171,7 @@ impl RaftNode {
     /// * `tick_timeout_duration` - Duration object holding the tick timeout duration
     pub fn init_config(
         node_cfg: Config,
+        raft_db: SimpleDb,
         tick_timeout_duration: Duration,
     ) -> (RaftConfig, RaftNodeChannels) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -181,6 +185,7 @@ impl RaftNode {
                 committed_tx: committed_tx.into(),
                 msg_out_tx: msg_out_tx.into(),
                 tick_timeout_duration,
+                raft_db,
             },
             RaftNodeChannels {
                 cmd_tx,
@@ -212,13 +217,13 @@ impl RaftNode {
             }
             Ok(Some(RaftCmd::Snapshot { idx, data })) => {
                 trace!("next_event snapshot({}, idx: {})", self.node.raft.id, idx);
-                let mut wl = self.node.mut_store().wl();
+                let store = self.node.mut_store();
                 let (prev_idx, need_compact) = self.previous_snapshot_idx;
                 if idx != prev_idx {
-                    wl.create_snapshot(idx, None, None, data).unwrap();
+                    store.create_snapshot(idx, None, None, data).unwrap();
                 }
                 if need_compact {
-                    wl.compact(prev_idx).unwrap();
+                    store.compact(prev_idx).unwrap();
                 }
                 self.previous_snapshot_idx = (idx, idx != prev_idx);
             }
@@ -306,7 +311,6 @@ impl RaftNode {
         if !raft::is_empty_snap(ready.snapshot()) {
             self.node
                 .mut_store()
-                .wl()
                 .apply_snapshot(ready.snapshot().clone())
                 .unwrap();
 
@@ -315,11 +319,11 @@ impl RaftNode {
         }
 
         if !ready.entries().is_empty() {
-            self.node.mut_store().wl().append(ready.entries()).unwrap();
+            self.node.mut_store().append(ready.entries()).unwrap();
         }
 
         if let Some(hs) = ready.hs() {
-            self.node.mut_store().wl().set_hardstate(hs.clone());
+            self.node.mut_store().set_hardstate(hs.clone()).unwrap();
         }
     }
 
@@ -362,12 +366,11 @@ impl RaftNode {
     }
 
     /// Create storage and config to use for new node
-    fn storage_and_config(mut cfg: Config) -> (MemStorage, Config) {
+    fn storage_and_config(mut cfg: Config, db: SimpleDb) -> (RaftStore, Config) {
         let mut cs = ConfState::new();
         cs.set_nodes(std::mem::take(&mut cfg.peers));
 
-        let storage = MemStorage::new();
-        storage.wl().set_conf_state(cs, None);
+        let storage = RaftStore::new(db).load_in_memory_or_default(cs).unwrap();
 
         (storage, cfg)
     }
@@ -720,6 +723,7 @@ mod tests {
                 peers: peers.to_owned(),
                 ..Default::default()
             },
+            SimpleDb::new_in_memory(),
             Duration::from_millis(1),
         );
 

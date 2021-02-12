@@ -1,5 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
+use crate::constants::DB_PATH;
+use crate::db_utils;
 use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use bincode::{deserialize, serialize};
@@ -102,6 +104,7 @@ impl StorageRaft {
             &config.storage_nodes,
             config.storage_raft != 0,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
+            db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage_raft"),
         );
 
         let propose_block_timeout_duration =

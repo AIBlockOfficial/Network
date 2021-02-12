@@ -34,7 +34,7 @@ pub struct WalletTxSpec {
 }
 
 /// Configuration info for a database
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Copy, Clone, Deserialize)]
 pub enum DbMode {
     Live,
     Test(usize),
@@ -46,6 +46,8 @@ pub enum DbMode {
 pub struct ComputeNodeConfig {
     /// Index of the current node in compute_nodes
     pub compute_node_idx: usize,
+    /// Use specific database
+    pub compute_db_mode: DbMode,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first

@@ -1,6 +1,6 @@
 use crate::configurations::{DbMode, WalletTxSpec};
-use crate::constants::{ADDRESS_KEY, DB_PATH_LIVE, DB_PATH_TEST, FUND_KEY, WALLET_PATH};
-use crate::db_utils::{DBError, SimpleDb};
+use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
+use crate::db_utils::{self, DBError, SimpleDb};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -36,26 +36,8 @@ pub struct WalletDb {
 impl WalletDb {
     pub fn new(db_mode: DbMode) -> Self {
         Self {
-            db: Arc::new(Mutex::new(Self::new_db(db_mode))),
+            db: Arc::new(Mutex::new(db_utils::new_db(db_mode, WALLET_PATH, ""))),
         }
-    }
-
-    /// Creates a new DB instance for a given environment, including construction and
-    /// teardown
-    ///
-    /// ### Arguments
-    ///
-    /// * `db_mode` - The environment to set the DB up in
-    fn new_db(db_mode: DbMode) -> SimpleDb {
-        let save_path = match db_mode {
-            DbMode::Live => format!("{}/{}", WALLET_PATH, DB_PATH_LIVE),
-            DbMode::Test(idx) => format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, idx),
-            DbMode::InMemory => {
-                return SimpleDb::new_in_memory();
-            }
-        };
-
-        SimpleDb::new_file(save_path).unwrap()
     }
 
     pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {

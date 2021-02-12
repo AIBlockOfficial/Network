@@ -1,6 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{BLOCK_SIZE_IN_TX, TX_POOL_LIMIT};
+use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
+use crate::db_utils;
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::utils::make_utxo_set_from_seed;
@@ -133,6 +134,7 @@ impl ComputeRaft {
             &config.compute_nodes,
             config.compute_raft != 0,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
+            db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute_raft"),
         );
 
         let propose_transactions_timeout_duration =
@@ -766,7 +768,7 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::configurations::{NodeSpec, TxOutSpec};
+    use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::create_valid_transaction;
     use naom::primitives::asset::TokenAmount;
     use sodiumoxide::crypto::sign;
@@ -1054,11 +1056,12 @@ mod test {
             amount: TokenAmount(1),
         };
         let compute_config = ComputeNodeConfig {
-            compute_raft: 0,
             compute_node_idx: 0,
+            compute_db_mode: DbMode::InMemory,
             compute_nodes: vec![compute_node],
             storage_nodes: vec![],
             user_nodes: vec![],
+            compute_raft: 0,
             compute_raft_tick_timeout: 10,
             compute_transaction_timeout: 50,
             compute_seed_utxo: seed_utxo

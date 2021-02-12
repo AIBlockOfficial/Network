@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::{DbMode, StorageNodeConfig};
-use crate::constants::{DB_PATH, DB_PATH_LIVE, DB_PATH_TEST, PEER_LIMIT};
-use crate::db_utils::{DbIteratorItem, SimpleDb};
+use crate::configurations::StorageNodeConfig;
+use crate::constants::{DB_PATH, PEER_LIMIT};
+use crate::db_utils::{self, DbIteratorItem, SimpleDb};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
@@ -104,26 +104,9 @@ impl StorageNode {
             node_raft: StorageRaft::new(&config),
             compute_addr,
             whitelisted: HashMap::new(),
-            db: Self::new_db(config.storage_db_mode),
+            db: db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"),
             last_block_stored: None,
         })
-    }
-
-    ///Creates a new database(db) object in selected mode
-    ///
-    /// ### Arguments
-    ///
-    /// * `db_moode` - DbMode object containing the mode with which to create the database.
-    fn new_db(db_mode: DbMode) -> SimpleDb {
-        let save_path = match db_mode {
-            DbMode::Live => format!("{}/{}", DB_PATH, DB_PATH_LIVE),
-            DbMode::Test(idx) => format!("{}/{}.{}", DB_PATH, DB_PATH_TEST, idx),
-            DbMode::InMemory => {
-                return SimpleDb::new_in_memory();
-            }
-        };
-
-        SimpleDb::new_file(save_path).unwrap()
     }
 
     /// Returns the compute node's public endpoint.
