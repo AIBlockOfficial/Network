@@ -36,7 +36,7 @@ where
 
     /// Complete If `until` ready, otherwise process inner stream.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Poll::Ready(_) = Pin::new(&mut self.until).poll(cx) {
+        if Pin::new(&mut self.until).poll(cx).is_ready() {
             Poll::Ready(None)
         } else {
             Pin::new(&mut self.stream).poll_next(cx)
