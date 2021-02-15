@@ -67,6 +67,11 @@ async fn main() {
             .unwrap();
         if let Some(index) = matches.value_of("index") {
             settings.set("compute_node_idx", index).unwrap();
+            let mut db_mode = settings.get_table("compute_db_mode").unwrap();
+            if let Some(test_idx) = db_mode.get_mut("Test") {
+                *test_idx = config::Value::new(None, index);
+                settings.set("compute_db_mode", db_mode).unwrap();
+            }
         }
 
         let setup: ComputeNodeSetup = settings.clone().try_into().unwrap();

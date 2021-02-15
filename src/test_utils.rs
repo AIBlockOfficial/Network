@@ -335,8 +335,14 @@ impl Network {
 
         for (idx, name) in config.compute_nodes.iter().enumerate() {
             let compute_raft = if config.compute_raft { 1 } else { 0 };
+            let compute_db_mode = if config.in_memory_db {
+                DbMode::InMemory
+            } else {
+                DbMode::Test(info.compute_nodes[idx].address.port() as usize)
+            };
             let compute_config = ComputeNodeConfig {
                 compute_raft,
+                compute_db_mode,
                 compute_node_idx: idx,
                 compute_nodes: info.compute_nodes.clone(),
                 storage_nodes: info.storage_nodes.clone(),

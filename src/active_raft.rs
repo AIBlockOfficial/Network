@@ -1,4 +1,5 @@
 use crate::configurations::NodeSpec;
+use crate::db_utils::SimpleDb;
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
     RaftMessageWrapper, RaftMsgReceiver, RaftNode,
@@ -41,6 +42,7 @@ impl ActiveRaft {
         node_specs: &[NodeSpec],
         use_raft: bool,
         tick_timeout_duration: Duration,
+        raft_db: SimpleDb,
     ) -> Self {
         let peers: Vec<u64> = (0..node_specs.len()).map(|idx| idx as u64 + 1).collect();
         let peer_id = peers[node_idx];
@@ -59,6 +61,7 @@ impl ActiveRaft {
                 tag: format!("[id={}]", peer_id),
                 ..Default::default()
             },
+            raft_db,
             tick_timeout_duration,
         );
 

@@ -15,6 +15,7 @@ mod interfaces;
 pub mod key_creation;
 mod miner;
 mod raft;
+mod raft_store;
 mod storage;
 mod storage_raft;
 #[cfg(test)]
