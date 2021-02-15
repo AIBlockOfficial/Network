@@ -130,7 +130,3 @@ impl HashBlock {
     //     MerkleTree::try_from_iter(tx_hashes.clone().into_iter().map(Ok)).unwrap()
     // }
 }
-
-
-
-
