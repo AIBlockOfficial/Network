@@ -713,7 +713,7 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         for miner in c_miners {
             miner_send_pow_for_current(network, miner, compute).await;
-            compute_handle_error(network, compute, "Not mining given block").await;
+            compute_handle_error(network, compute, "No block to mine currently").await;
         }
     }
 }

@@ -27,6 +27,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+use crate::hash_block::*;
+
 pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
 }
@@ -236,6 +238,28 @@ pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
     serialize(block).unwrap()
 }
 
+/// HashBlock to be used in Proof of Work
+///
+/// ### Arguments
+///
+/// * `block`    - &HashBlock reference to be used in proof of work
+pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
+    serialize(block).unwrap()
+}
+
+/// Concatenates a merkle hash and a coinbase hash to produce a single hash output
+///
+/// ### Arguments
+///
+/// * `merkle_hash` - Merkle hash to concatenate onto
+/// * `cb_tx_hash`  - Coinbase transaction hash
+pub fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> String {
+    let mut concat = merkle_hash.to_string();
+    concat.push_str(&cb_tx_hash.to_string());
+
+    concat
+}
+
 /// Validate Proof of Work an address with a random number
 pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) -> bool {
     let mut pow_body = pow.address.as_bytes().to_vec();
@@ -246,21 +270,18 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
 }
 
 /// Validate Proof of Work for a block with a mining transaction
-/// Note: serialized_block is also manipulated as a buffer and restored before return.
 ///
 /// ### Arguments
 ///
-/// * `serialized_block`  - The block whose proof of work is being validated.
-/// * `mining_tx`  - mining transactions of the block.
-/// * `nonce`    - &u8 block sequence number.
-pub fn validate_pow_block(serialized_block: &mut Vec<u8>, mining_tx: &str, nonce: &[u8]) -> bool {
-    let serialized_block_len = serialized_block.len();
-    serialized_block.extend(mining_tx.as_bytes());
-    serialized_block.extend(nonce);
+/// * `prev_hash`   - The hash of the previous block
+/// * `merkle_hash` - The merkle hash (+ coinbase)
+/// * `nonce`       - Nonce
+pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> bool {
+    let mut pow = nonce.to_owned().to_vec();
+    pow.extend_from_slice(merkle_hash.as_bytes());
+    pow.extend_from_slice(prev_hash.as_bytes());
 
-    let result = validate_pow(&serialized_block);
-    serialized_block.truncate(serialized_block_len);
-    result
+    validate_pow(&pow)
 }
 
 /// Check the hash of given data reach MINING_DIFFICULTY

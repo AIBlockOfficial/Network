@@ -8,12 +8,12 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
-    validate_pow_block, validate_pow_for_address,
+    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
+    serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address,
 };
 
 use crate::Node;
-use bincode::{deserialize, serialize};
+use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -34,6 +34,8 @@ use std::{
 use tokio::task;
 use tracing::{debug, error_span, info, trace, warn};
 use tracing_futures::Instrument;
+
+use crate::hash_block::HashBlock;
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -612,7 +614,15 @@ impl ComputeNode {
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
         info!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let block = serialize(block).unwrap();
+        let header = block.header.clone();
+
+        let unicorn = if let Some(h) = header.previous_hash {
+            h
+        } else {
+            "".to_string()
+        };
+        let hashblock = HashBlock::new_for_mining(unicorn, header.merkle_root_hash, header.b_num);
+        let block = serialize_hashblock_for_pow(&hashblock);
 
         self.node
             .send_to_all(
@@ -754,17 +764,28 @@ impl ComputeInterface for ComputeNode {
     ) -> Response {
         info!(?address, "Received PoW");
         let coinbase_hash = construct_tx_hash(&coinbase);
+        let mut block_to_check = HashBlock::new();
 
-        let mut mining_block = if let Some(mining_block) = self.node_raft.get_mining_block() {
-            serialize_block_for_pow(mining_block)
+        if let Some(mining_block) = self.node_raft.get_mining_block() {
+            let prev_hash = if let Some(h) = &mining_block.header.previous_hash {
+                h.clone()
+            } else {
+                "".to_string()
+            };
+
+            // Update block to check
+            block_to_check.merkle_hash = mining_block.header.merkle_root_hash.clone();
+            block_to_check.unicorn = prev_hash;
+            block_to_check.nonce = nonce.clone();
+            block_to_check.b_num = mining_block.header.b_num;
         } else {
-            // TODO: Verify the pow block is expected block.
             return Response {
                 success: false,
-                reason: "Not mining given block",
+                reason: "No block to mine currently",
             };
         };
 
+        // Check coinbase amount and structure
         let coinbase_amount = TokenAmount(12000);
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != coinbase_amount {
             return Response {
@@ -773,7 +794,9 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if !validate_pow_block(&mut mining_block, &coinbase_hash, &nonce) {
+        // Perform validation
+        let merkle_for_pow = concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash);
+        if !validate_pow_block(&block_to_check.unicorn, &merkle_for_pow, &nonce) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",

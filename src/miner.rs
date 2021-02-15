@@ -5,15 +5,16 @@ use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, serialize_block_for_pow,
+    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     validate_pow_block, validate_pow_for_address,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
+
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
+
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
@@ -27,6 +28,8 @@ use std::{
 };
 use tokio::task;
 use tracing::{debug, info_span, warn};
+
+use crate::hash_block::HashBlock;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -86,7 +89,7 @@ pub struct MinerNode {
     pub compute_addr: SocketAddr,
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
-    pub current_block: Block,
+    pub current_block: HashBlock,
     last_pow: Option<ProofOfWork>,
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
@@ -117,7 +120,7 @@ impl MinerNode {
             partition_list: Vec::new(),
             rand_num: Vec::new(),
             partition_key: None,
-            current_block: Block::new(),
+            current_block: HashBlock::new(),
             last_pow: None,
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
@@ -134,7 +137,6 @@ impl MinerNode {
     pub fn compute_address(&self) -> SocketAddr {
         self.compute_addr
     }
-
     /// Connect to a peer on the network.
     ///
     /// ### Arguments
@@ -348,7 +350,6 @@ impl MinerNode {
 
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
-    /// TODO: Save pk/sk to temp storage
     pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
         let block = &self.current_block;
 
@@ -356,16 +357,13 @@ impl MinerNode {
             let (address, _) = self.wallet_db.generate_payment_address().await;
             self.current_payment_address = Some(address);
         }
-
         let mining_tx = construct_coinbase_tx(
-            block.header.b_num,
+            block.b_num,
             TokenAmount(12000),
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
-
-        let mining_block = serialize_block_for_pow(block);
-        let pow = Self::generate_pow_for_block(mining_block, mining_tx_hash.clone()).await?;
+        let pow = self.generate_pow_for_block(mining_tx_hash.clone()).await?;
 
         self.current_coinbase = Some((mining_tx_hash, mining_tx.clone()));
         Ok((pow, mining_tx))
@@ -376,16 +374,16 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
-    /// * `mining_block`   - block being mined that is used to check the validity of the ProofOfWork
     /// * `mining_tx_hash`   - block transation hash that is used to check the validity of the ProofOfWork
-    async fn generate_pow_for_block(
-        mut mining_block: Vec<u8>,
-        mining_tx_hash: String,
-    ) -> Result<Vec<u8>> {
+    async fn generate_pow_for_block(&mut self, mining_tx_hash: String) -> Result<Vec<u8>> {
+        let block = self.current_block.clone();
+        let hash_to_mine = concat_merkle_coinbase(&block.merkle_hash, &mining_tx_hash);
+
         Ok(task::spawn_blocking(move || {
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();
-            while !validate_pow_block(&mut mining_block, &mining_tx_hash, &nonce) {
+
+            while !validate_pow_block(&block.unicorn, &hash_to_mine, &nonce) {
                 nonce = Self::generate_nonce();
             }
 
@@ -464,7 +462,7 @@ impl MinerInterface for MinerNode {
     ///
     /// * `pre_block`   - Vec<u8> representing the pre_block to become the current block
     fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response {
-        self.current_block = deserialize::<Block>(&pre_block).unwrap();
+        self.current_block = deserialize::<HashBlock>(&pre_block).unwrap();
 
         Response {
             success: true,

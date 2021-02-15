@@ -11,6 +11,8 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
+use crate::hash_block;
+
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 
 /// A placeholder struct for sensible feedback
