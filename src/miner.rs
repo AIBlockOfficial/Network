@@ -5,7 +5,7 @@ use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::utils::{
-    format_parition_pow_address, get_partition_entry_key, serialize_hashblock_for_pow,
+    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     validate_pow_block, validate_pow_for_address,
 };
 use crate::wallet::WalletDb;
@@ -350,7 +350,6 @@ impl MinerNode {
 
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
-    /// TODO: Save pk/sk to temp storage
     pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
         let block = &self.current_block;
 
@@ -359,14 +358,13 @@ impl MinerNode {
             self.current_payment_address = Some(address);
         }
         let mining_tx = construct_coinbase_tx(
-            block.header.b_num,
+            block.b_num,
             TokenAmount(12000),
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
+        let pow = self.generate_pow_for_block(mining_tx_hash.clone()).await?;
 
-        let mining_block = serialize_hashblock_for_pow(block);
-        let pow = Self::generate_pow_for_block(mining_block, mining_tx_hash.clone()).await?;
         self.current_coinbase = Some((mining_tx_hash, mining_tx.clone()));
         Ok((pow, mining_tx))
     }
@@ -376,16 +374,16 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
-    /// * `mining_block`   - block being mined that is used to check the validity of the ProofOfWork
     /// * `mining_tx_hash`   - block transation hash that is used to check the validity of the ProofOfWork
-    async fn generate_pow_for_block(
-        mut mining_block: Vec<u8>,
-        mining_tx_hash: String,
-    ) -> Result<Vec<u8>> {
+    async fn generate_pow_for_block(&mut self, mining_tx_hash: String) -> Result<Vec<u8>> {
+        let block = self.current_block.clone();
+        let hash_to_mine = concat_merkle_coinbase(&block.merkle_hash, &mining_tx_hash);
+
         Ok(task::spawn_blocking(move || {
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();
-            while !validate_pow_block(&mut mining_block, &mining_tx_hash, &nonce) {
+
+            while !validate_pow_block(&block.unicorn, &hash_to_mine, &nonce) {
                 nonce = Self::generate_nonce();
             }
 
