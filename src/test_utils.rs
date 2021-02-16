@@ -142,7 +142,7 @@ impl Network {
             arc_nodes.insert(name.to_owned(), arc_node);
         }
 
-        let raft_loop_handles = Self::spawn_raft_loops(config, &arc_nodes).await;
+        let raft_loop_handles = Self::spawn_raft_loops(&arc_nodes).await;
 
         Self {
             config: config.clone(),
@@ -154,7 +154,6 @@ impl Network {
 
     ///Creates and tests rafts
     async fn spawn_raft_loops(
-        config: &NetworkConfig,
         arc_nodes: &BTreeMap<String, ArcNode>,
     ) -> BTreeMap<String, JoinHandle<()>> {
         let mut raft_loop_handles = BTreeMap::new();
@@ -183,23 +182,21 @@ impl Network {
         }
         info!("Peers connect complete: all connected");
 
-        if config.compute_raft {
-            for (name, node) in &compute_nodes {
-                let node = node.lock().await;
-                let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
-                let raft_loop = node.raft_loop();
-                raft_loop_handles.insert(
-                    name.clone(),
-                    tokio::spawn(
-                        async move {
-                            info!("Start raft");
-                            raft_loop.await;
-                            info!("raft complete");
-                        }
-                        .instrument(peer_span),
-                    ),
-                );
-            }
+        for (name, node) in &compute_nodes {
+            let node = node.lock().await;
+            let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
+            let raft_loop = node.raft_loop();
+            raft_loop_handles.insert(
+                name.clone(),
+                tokio::spawn(
+                    async move {
+                        info!("Start raft");
+                        raft_loop.await;
+                        info!("raft complete");
+                    }
+                    .instrument(peer_span),
+                ),
+            );
         }
 
         // Need to connect first so Raft messages can be sent.
@@ -218,23 +215,21 @@ impl Network {
         }
         info!("Peers connect complete: all connected");
 
-        if config.storage_raft {
-            for (name, node) in &storage_nodes {
-                let node = node.lock().await;
-                let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
-                let raft_loop = node.raft_loop();
-                raft_loop_handles.insert(
-                    name.clone(),
-                    tokio::spawn(
-                        async move {
-                            info!("Start raft");
-                            raft_loop.await;
-                            info!("raft complete");
-                        }
-                        .instrument(peer_span),
-                    ),
-                );
-            }
+        for (name, node) in &storage_nodes {
+            let node = node.lock().await;
+            let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
+            let raft_loop = node.raft_loop();
+            raft_loop_handles.insert(
+                name.clone(),
+                tokio::spawn(
+                    async move {
+                        info!("Start raft");
+                        raft_loop.await;
+                        info!("raft complete");
+                    }
+                    .instrument(peer_span),
+                ),
+            );
         }
 
         raft_loop_handles
@@ -242,7 +237,7 @@ impl Network {
 
     /// Completes and ends raft loops.
     pub async fn close_raft_loops_and_drop(mut self) {
-        Self::close_raft_loops(&self.config, &self.arc_nodes, &mut self.raft_loop_handles).await;
+        Self::close_raft_loops(&self.arc_nodes, &mut self.raft_loop_handles).await;
         Self::stop_listening(&self.arc_nodes).await;
     }
 
@@ -260,12 +255,11 @@ impl Network {
             }
         }
 
-        Self::close_raft_loops(&self.config, &arc_nodes, &mut raft_loop_handles).await;
+        Self::close_raft_loops(&arc_nodes, &mut raft_loop_handles).await;
         Self::stop_listening(&arc_nodes).await;
     }
 
     async fn close_raft_loops(
-        config: &NetworkConfig,
         arc_nodes: &BTreeMap<String, ArcNode>,
         raft_loop_handles: &mut BTreeMap<String, JoinHandle<()>>,
     ) {
@@ -277,18 +271,15 @@ impl Network {
             .iter()
             .filter_map(|(n, v)| v.storage().map(|v| (n, v)))
             .collect();
-        if config.compute_raft {
-            info!("Close compute raft");
-            for node in compute_nodes.values() {
-                node.lock().await.close_raft_loop().await;
-            }
+
+        info!("Close compute raft");
+        for node in compute_nodes.values() {
+            node.lock().await.close_raft_loop().await;
         }
 
-        if config.storage_raft {
-            info!("Close storage raft");
-            for node in storage_nodes.values() {
-                node.lock().await.close_raft_loop().await;
-            }
+        info!("Close storage raft");
+        for node in storage_nodes.values() {
+            node.lock().await.close_raft_loop().await;
         }
 
         join_all(
