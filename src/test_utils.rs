@@ -2,6 +2,7 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
+use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
@@ -16,6 +17,7 @@ use crate::utils::{
 use futures::future::join_all;
 use naom::primitives::transaction::Transaction;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -117,6 +119,10 @@ impl ArcNode {
             None
         }
     }
+
+    fn has_raft(&self) -> bool {
+        matches!(self, Self::Storage(_) | Self::Compute(_))
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -157,68 +163,29 @@ impl Network {
         arc_nodes: &BTreeMap<String, ArcNode>,
     ) -> BTreeMap<String, JoinHandle<()>> {
         let mut raft_loop_handles = BTreeMap::new();
-        let compute_nodes: BTreeMap<_, _> = arc_nodes
-            .iter()
-            .filter_map(|(n, v)| v.compute().map(|v| (n.clone(), v)))
-            .collect();
-        let storage_nodes: BTreeMap<_, _> = arc_nodes
-            .iter()
-            .filter_map(|(n, v)| v.storage().map(|v| (n.clone(), v)))
+        let raft_nodes: BTreeMap<_, _> = arc_nodes
+            .clone()
+            .into_iter()
+            .filter(|(_, v)| v.has_raft())
             .collect();
 
         // Need to connect first so Raft messages can be sent.
         info!("Start connect to peers");
-        for (name, node) in &compute_nodes {
-            let node = node.lock().await;
-            let (node_conn, addrs, _) = node.connect_info_peers();
+        for (name, node) in &raft_nodes {
+            let (node_conn, addrs, _) = connect_info_peers(node).await;
             loop_connnect_to_peers_async(node_conn, addrs, None).await;
             info!(?name, "Peer connect complete");
         }
         info!("Peers connect complete");
-        for node in compute_nodes.values() {
-            let node = node.lock().await;
-            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
+        for node in raft_nodes.values() {
+            let (node_conn, _, expected_connected_addrs) = connect_info_peers(node).await;
             loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
         }
         info!("Peers connect complete: all connected");
 
-        for (name, node) in &compute_nodes {
-            let node = node.lock().await;
-            let peer_span = error_span!("compute_node", ?name, addr = ?node.address());
-            let raft_loop = node.raft_loop();
-            raft_loop_handles.insert(
-                name.clone(),
-                tokio::spawn(
-                    async move {
-                        info!("Start raft");
-                        raft_loop.await;
-                        info!("raft complete");
-                    }
-                    .instrument(peer_span),
-                ),
-            );
-        }
-
-        // Need to connect first so Raft messages can be sent.
-        info!("Start connect to peers");
-        for (name, node) in &storage_nodes {
-            let node = node.lock().await;
-            let (node_conn, addrs, _) = node.connect_info_peers();
-            loop_connnect_to_peers_async(node_conn, addrs, None).await;
-            info!(?name, "Peer connect complete");
-        }
-        info!("Peers connect complete");
-        for node in storage_nodes.values() {
-            let node = node.lock().await;
-            let (node_conn, _, expected_connected_addrs) = node.connect_info_peers();
-            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
-        }
-        info!("Peers connect complete: all connected");
-
-        for (name, node) in &storage_nodes {
-            let node = node.lock().await;
-            let peer_span = error_span!("storage_node", ?name, addr = ?node.address());
-            let raft_loop = node.raft_loop();
+        for (name, node) in &raft_nodes {
+            let (t, addr, raft_loop) = raft_loop(node).await;
+            let peer_span = error_span!("", ?t, ?name, ?addr);
             raft_loop_handles.insert(
                 name.clone(),
                 tokio::spawn(
@@ -263,23 +230,9 @@ impl Network {
         arc_nodes: &BTreeMap<String, ArcNode>,
         raft_loop_handles: &mut BTreeMap<String, JoinHandle<()>>,
     ) {
-        let compute_nodes: BTreeMap<_, _> = arc_nodes
-            .iter()
-            .filter_map(|(n, v)| v.compute().map(|v| (n, v)))
-            .collect();
-        let storage_nodes: BTreeMap<_, _> = arc_nodes
-            .iter()
-            .filter_map(|(n, v)| v.storage().map(|v| (n, v)))
-            .collect();
-
-        info!("Close compute raft");
-        for node in compute_nodes.values() {
-            node.lock().await.close_raft_loop().await;
-        }
-
-        info!("Close storage raft");
-        for node in storage_nodes.values() {
-            node.lock().await.close_raft_loop().await;
+        info!("Close raft");
+        for node in arc_nodes.values().filter(|v| v.has_raft()) {
+            close_raft_loop(node).await
         }
 
         join_all(
@@ -294,13 +247,7 @@ impl Network {
     async fn stop_listening(arc_nodes: &BTreeMap<String, ArcNode>) {
         info!("Stop listening arc_nodes");
         for node in arc_nodes.values() {
-            let handles = match node {
-                ArcNode::Miner(n) => n.lock().await.stop_listening_loop().await,
-                ArcNode::Compute(n) => n.lock().await.stop_listening_loop().await,
-                ArcNode::Storage(n) => n.lock().await.stop_listening_loop().await,
-                ArcNode::User(n) => n.lock().await.stop_listening_loop().await,
-            };
-            join_all(handles).await;
+            join_all(stop_listening(node).await).await;
         }
     }
 
@@ -347,12 +294,7 @@ impl Network {
     /// * `name` - &str of the name of the node found.
     pub async fn get_address(&self, name: &str) -> Option<SocketAddr> {
         if let Some(node) = self.arc_nodes.get(name) {
-            Some(match node {
-                ArcNode::Miner(v) => v.lock().await.address(),
-                ArcNode::Compute(v) => v.lock().await.address(),
-                ArcNode::Storage(v) => v.lock().await.address(),
-                ArcNode::User(v) => v.lock().await.address(),
-            })
+            Some(address(node).await)
         } else {
             None
         }
@@ -370,6 +312,69 @@ impl Network {
     ///Returns a list of initial transactions
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(&self.config.compute_seed_utxo)
+    }
+}
+
+/// Dispatch to address
+async fn address(node: &ArcNode) -> SocketAddr {
+    match node {
+        ArcNode::Miner(v) => v.lock().await.address(),
+        ArcNode::Compute(v) => v.lock().await.address(),
+        ArcNode::Storage(v) => v.lock().await.address(),
+        ArcNode::User(v) => v.lock().await.address(),
+    }
+}
+
+/// Dispatch to connect_info_peers
+async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
+    match node {
+        ArcNode::Miner(n) => n.lock().await.connect_info_peers(),
+        ArcNode::Compute(n) => n.lock().await.connect_info_peers(),
+        ArcNode::Storage(n) => n.lock().await.connect_info_peers(),
+        ArcNode::User(n) => n.lock().await.connect_info_peers(),
+    }
+}
+
+/// Dispatch to stop_listening_loop
+async fn stop_listening(node: &ArcNode) -> Vec<JoinHandle<()>> {
+    match node {
+        ArcNode::Miner(n) => n.lock().await.stop_listening_loop().await,
+        ArcNode::Compute(n) => n.lock().await.stop_listening_loop().await,
+        ArcNode::Storage(n) => n.lock().await.stop_listening_loop().await,
+        ArcNode::User(n) => n.lock().await.stop_listening_loop().await,
+    }
+}
+
+/// Dispatch to close_raft_loop
+async fn close_raft_loop(node: &ArcNode) {
+    match node {
+        ArcNode::Compute(n) => n.lock().await.close_raft_loop().await,
+        ArcNode::Storage(n) => n.lock().await.close_raft_loop().await,
+        ArcNode::Miner(_) | ArcNode::User(_) => panic!("No raft loop"),
+    }
+}
+
+/// Dispatch to raft_loop, providing also the address and a tag.
+async fn raft_loop(node: &ArcNode) -> (String, SocketAddr, impl Future<Output = ()>) {
+    use futures::future::FutureExt;
+    match node {
+        ArcNode::Compute(n) => {
+            let node = n.lock().await;
+            (
+                "compute_node".to_owned(),
+                node.address(),
+                node.raft_loop().left_future(),
+            )
+        }
+        ArcNode::Storage(n) => {
+            let node = n.lock().await;
+            (
+                "storage_node".to_owned(),
+                node.address(),
+                node.raft_loop().right_future(),
+            )
+        }
+        ArcNode::Miner(_) | ArcNode::User(_) => panic!("No raft loop"),
     }
 }
 
