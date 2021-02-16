@@ -16,7 +16,7 @@ use crate::utils::{
 };
 use futures::future::join_all;
 use naom::primitives::transaction::Transaction;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -48,6 +48,8 @@ pub struct Network {
     raft_loop_handles: BTreeMap<String, JoinHandle<()>>,
     /// Currently active miner nodes
     active_nodes: BTreeMap<NodeType, Vec<String>>,
+    /// Currently dead nodes
+    dead_nodes: BTreeSet<String>,
 }
 
 /// Represents a virtual network configuration.
@@ -130,6 +132,7 @@ impl Network {
             instance_info: info,
             arc_nodes,
             raft_loop_handles,
+            dead_nodes: BTreeSet::new(),
         }
     }
 
@@ -183,11 +186,33 @@ impl Network {
         Self::stop_listening(&self.arc_nodes).await;
     }
 
+    /// Re-spawn specified nodes.
+    pub async fn re_spawn_nodes_named(&mut self, names: &[&str]) {
+        // Re-spawn specified nodes
+        let mut arc_nodes = BTreeMap::new();
+        for name in names {
+            let arc_node = init_arc_node(name, &self.config, &self.instance_info).await;
+            arc_nodes.insert(name.to_string(), arc_node);
+        }
+
+        let mut raft_loop_handles = Self::spawn_raft_loops(&arc_nodes).await;
+
+        self.arc_nodes.append(&mut arc_nodes);
+        self.raft_loop_handles.append(&mut raft_loop_handles);
+
+        // Re-add to active nodes
+        for name in names {
+            self.dead_nodes.remove(*name);
+        }
+        self.update_active_nodes();
+    }
+
     /// Kill specified nodes.
     pub async fn close_raft_loops_and_drop_named(&mut self, names: &[&str]) {
         let mut arc_nodes = BTreeMap::new();
         let mut raft_loop_handles = BTreeMap::new();
 
+        // Kill nodes
         for name in names {
             if let Some((k, v)) = self.arc_nodes.remove_entry(*name) {
                 arc_nodes.insert(k, v);
@@ -196,9 +221,22 @@ impl Network {
                 raft_loop_handles.insert(k, v);
             }
         }
-
         Self::close_raft_loops(&arc_nodes, &mut raft_loop_handles).await;
         Self::stop_listening(&arc_nodes).await;
+
+        // Remove from active nodes
+        self.dead_nodes.extend(names.iter().map(|v| v.to_string()));
+        self.update_active_nodes();
+    }
+
+    /// Restore from config and Remove all dead nodes
+    fn update_active_nodes(&mut self) {
+        let mut active_nodes = self.config.nodes.clone();
+        for nodes in active_nodes.values_mut() {
+            nodes.retain(|n| !self.dead_nodes.contains(n));
+        }
+
+        self.active_nodes = active_nodes;
     }
 
     /// Completes and ends raft loops.
