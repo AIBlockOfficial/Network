@@ -87,44 +87,6 @@ pub enum ArcNode {
     User(ArcUserNode),
 }
 
-impl ArcNode {
-    fn miner(&self) -> Option<&ArcMinerNode> {
-        if let Self::Miner(s) = self {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    fn compute(&self) -> Option<&ArcComputeNode> {
-        if let Self::Compute(c) = self {
-            Some(c)
-        } else {
-            None
-        }
-    }
-
-    fn storage(&self) -> Option<&ArcStorageNode> {
-        if let Self::Storage(s) = self {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    fn user(&self) -> Option<&ArcUserNode> {
-        if let Self::User(s) = self {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    fn has_raft(&self) -> bool {
-        matches!(self, Self::Storage(_) | Self::Compute(_))
-    }
-}
-
 #[derive(Copy, Clone)]
 pub enum NodeType {
     Miner,
@@ -166,7 +128,7 @@ impl Network {
         let raft_nodes: BTreeMap<_, _> = arc_nodes
             .clone()
             .into_iter()
-            .filter(|(_, v)| v.has_raft())
+            .filter(|(_, v)| has_raft(v))
             .collect();
 
         // Need to connect first so Raft messages can be sent.
@@ -202,7 +164,7 @@ impl Network {
         raft_loop_handles
     }
 
-    /// Completes and ends raft loops.
+    /// Kill all nodes.
     pub async fn close_raft_loops_and_drop(mut self) {
         Self::close_raft_loops(&self.arc_nodes, &mut self.raft_loop_handles).await;
         Self::stop_listening(&self.arc_nodes).await;
@@ -226,12 +188,13 @@ impl Network {
         Self::stop_listening(&arc_nodes).await;
     }
 
+    /// Completes and ends raft loops.
     async fn close_raft_loops(
         arc_nodes: &BTreeMap<String, ArcNode>,
         raft_loop_handles: &mut BTreeMap<String, JoinHandle<()>>,
     ) {
         info!("Close raft");
-        for node in arc_nodes.values().filter(|v| v.has_raft()) {
+        for node in arc_nodes.values().filter(|v| has_raft(v)) {
             close_raft_loop(node).await
         }
 
@@ -257,7 +220,13 @@ impl Network {
     ///
     /// * `name` - &str of the miner node's name to be found.
     pub fn miner(&self, name: &str) -> Option<&ArcMinerNode> {
-        self.arc_nodes.get(name).and_then(|v| v.miner())
+        self.arc_nodes.get(name).and_then(|v| {
+            if let ArcNode::Miner(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        })
     }
 
     ///returns a mutable reference to the compute node with the matching name.
@@ -266,7 +235,13 @@ impl Network {
     ///
     /// * `name` - &str of the compute node's name to be found.
     pub fn compute(&self, name: &str) -> Option<&ArcComputeNode> {
-        self.arc_nodes.get(name).and_then(|v| v.compute())
+        self.arc_nodes.get(name).and_then(|v| {
+            if let ArcNode::Compute(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        })
     }
 
     ///returns a mutable reference to the storage node with the matching name.
@@ -275,7 +250,13 @@ impl Network {
     ///
     /// * `name` - &str of the storage node's name to be found.
     pub fn storage(&self, name: &str) -> Option<&ArcStorageNode> {
-        self.arc_nodes.get(name).and_then(|v| v.storage())
+        self.arc_nodes.get(name).and_then(|v| {
+            if let ArcNode::Storage(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        })
     }
 
     ///returns a mutable reference to the user node with the matching name.
@@ -284,7 +265,13 @@ impl Network {
     ///
     /// * `name` - &str of the user node's name to be found.
     pub fn user(&self, name: &str) -> Option<&ArcUserNode> {
-        self.arc_nodes.get(name).and_then(|v| v.user())
+        self.arc_nodes.get(name).and_then(|v| {
+            if let ArcNode::User(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        })
     }
 
     ///Searches all node types and returns an address to the node with the matching name.
@@ -315,7 +302,7 @@ impl Network {
     }
 }
 
-/// Dispatch to address
+///Dispatch to address
 async fn address(node: &ArcNode) -> SocketAddr {
     match node {
         ArcNode::Miner(v) => v.lock().await.address(),
@@ -325,7 +312,7 @@ async fn address(node: &ArcNode) -> SocketAddr {
     }
 }
 
-/// Dispatch to connect_info_peers
+///Dispatch to connect_info_peers
 async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
     match node {
         ArcNode::Miner(n) => n.lock().await.connect_info_peers(),
@@ -335,7 +322,7 @@ async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<Socke
     }
 }
 
-/// Dispatch to stop_listening_loop
+///Dispatch to stop_listening_loop
 async fn stop_listening(node: &ArcNode) -> Vec<JoinHandle<()>> {
     match node {
         ArcNode::Miner(n) => n.lock().await.stop_listening_loop().await,
@@ -345,7 +332,12 @@ async fn stop_listening(node: &ArcNode) -> Vec<JoinHandle<()>> {
     }
 }
 
-/// Dispatch to close_raft_loop
+///Check if raft function exists
+fn has_raft(node: &ArcNode) -> bool {
+    matches!(node, ArcNode::Storage(_) | ArcNode::Compute(_))
+}
+
+///Dispatch to close_raft_loop
 async fn close_raft_loop(node: &ArcNode) {
     match node {
         ArcNode::Compute(n) => n.lock().await.close_raft_loop().await,
@@ -354,7 +346,7 @@ async fn close_raft_loop(node: &ArcNode) {
     }
 }
 
-/// Dispatch to raft_loop, providing also the address and a tag.
+///Dispatch to raft_loop, providing also the address and a tag.
 async fn raft_loop(node: &ArcNode) -> (String, SocketAddr, impl Future<Output = ()>) {
     use futures::future::FutureExt;
     match node {
