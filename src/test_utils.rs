@@ -125,6 +125,7 @@ impl Network {
             arc_nodes.insert(name.to_owned(), arc_node);
         }
 
+        Self::connect_all_nodes(&arc_nodes, &BTreeSet::new()).await;
         let raft_loop_handles = Self::spawn_raft_loops(&arc_nodes).await;
 
         Self {
@@ -137,25 +138,44 @@ impl Network {
         }
     }
 
+    ///Disconnect all required nodes
+    async fn disconnect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>) {
+        // Need to connect first so Raft messages can be sent.
+        info!("Start disconnect to peers");
+        for node in arc_nodes.values() {
+            let (mut node_conn, _, _) = connect_info_peers(node).await;
+            join_all(node_conn.disconnect_all().await).await;
+        }
+    }
+
+    ///Connect all required nodes
+    async fn connect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>, dead: &BTreeSet<SocketAddr>) {
+        // Need to connect first so Raft messages can be sent.
+        info!("Start connect to peers");
+        for (name, node) in arc_nodes {
+            let (node_conn, mut addrs, _) = connect_info_peers(node).await;
+            addrs.retain(|a| !dead.contains(a));
+
+            loop_connnect_to_peers_async(node_conn, addrs, None).await;
+            info!(?name, "Peer connect complete");
+        }
+
+        info!("Peers connect complete");
+
+        for node in arc_nodes.values() {
+            let (node_conn, _, mut expected_connected_addrs) = connect_info_peers(node).await;
+            expected_connected_addrs.retain(|a| !dead.contains(a));
+
+            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+        }
+        info!("Peers connect complete: all connected");
+    }
+
     ///Creates and tests rafts
     async fn spawn_raft_loops(
         arc_nodes: &BTreeMap<String, ArcNode>,
     ) -> BTreeMap<String, JoinHandle<()>> {
         let mut raft_loop_handles = BTreeMap::new();
-
-        // Need to connect first so Raft messages can be sent.
-        info!("Start connect to peers");
-        for (name, node) in arc_nodes {
-            let (node_conn, addrs, _) = connect_info_peers(node).await;
-            loop_connnect_to_peers_async(node_conn, addrs, None).await;
-            info!(?name, "Peer connect complete");
-        }
-        info!("Peers connect complete");
-        for node in arc_nodes.values() {
-            let (node_conn, _, expected_connected_addrs) = connect_info_peers(node).await;
-            loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
-        }
-        info!("Peers connect complete: all connected");
 
         for (name, node) in arc_nodes {
             if let Some((t, addr, raft_loop)) = raft_loop(node).await {
@@ -181,6 +201,7 @@ impl Network {
     pub async fn close_raft_loops_and_drop(mut self) {
         Self::close_raft_loops(&self.arc_nodes, &mut self.raft_loop_handles).await;
         Self::stop_listening(&self.arc_nodes).await;
+        Self::disconnect_all_nodes(&self.arc_nodes).await;
     }
 
     /// Re-spawn specified nodes.
@@ -190,18 +211,22 @@ impl Network {
         for name in names {
             let arc_node = init_arc_node(name, &self.config, &self.instance_info).await;
             arc_nodes.insert(name.to_string(), arc_node);
-        }
-
-        let mut raft_loop_handles = Self::spawn_raft_loops(&arc_nodes).await;
-
-        self.arc_nodes.append(&mut arc_nodes);
-        self.raft_loop_handles.append(&mut raft_loop_handles);
-
-        // Re-add to active nodes
-        for name in names {
             self.dead_nodes.remove(*name);
         }
+        self.arc_nodes.append(&mut arc_nodes.clone());
         self.update_active_nodes();
+
+        // Re-establish all missing connections
+        let dead_addr: BTreeSet<_> = self
+            .dead_nodes
+            .iter()
+            .map(|n| self.instance_info.node_infos[n].node_spec.address)
+            .collect();
+        Self::connect_all_nodes(&self.arc_nodes, &dead_addr).await;
+
+        // Spawn new nodes raft loops
+        let mut raft_loop_handles = Self::spawn_raft_loops(&arc_nodes).await;
+        self.raft_loop_handles.append(&mut raft_loop_handles);
     }
 
     /// Kill specified nodes.
@@ -220,6 +245,7 @@ impl Network {
         }
         Self::close_raft_loops(&arc_nodes, &mut raft_loop_handles).await;
         Self::stop_listening(&arc_nodes).await;
+        Self::disconnect_all_nodes(&arc_nodes).await;
 
         // Remove from active nodes
         self.dead_nodes.extend(names.iter().map(|v| v.to_string()));

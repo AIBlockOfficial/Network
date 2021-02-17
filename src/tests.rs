@@ -66,6 +66,12 @@ enum CfgNum {
     Majority,
 }
 
+#[derive(Clone, Debug)]
+enum CfgModif {
+    Drop(&'static str),
+    Respawn(&'static str),
+}
+
 #[test]
 fn will_get_sanctioned_addresses() {
     let addresses = get_sanction_addresses(SANC_LIST_TEST.to_string(), &"US".to_string());
@@ -93,6 +99,20 @@ async fn full_flow_no_raft_real_db() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn full_flow_raft_real_db_kill_node_3_nodes() {
+    let mut cfg = complete_network_config_with_n_compute_raft(11000, 3);
+    cfg.in_memory_db = false;
+
+    let modify_cfg = vec![
+        ("Before create block 0", CfgModif::Drop("compute2")),
+        ("Before create block 0", CfgModif::Respawn("compute2")),
+    ];
+
+    remove_all_node_dbs(&cfg);
+    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn full_flow_raft_1_node() {
     full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
 }
@@ -112,6 +132,7 @@ async fn full_flow_raft_majority_3_nodes() {
     full_flow_common(
         complete_network_config_with_n_compute_raft(10540, 3),
         CfgNum::Majority,
+        Vec::new(),
     )
     .await;
 }
@@ -152,10 +173,14 @@ async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
 }
 
 async fn full_flow(network_config: NetworkConfig) {
-    full_flow_common(network_config, CfgNum::All).await;
+    full_flow_common(network_config, CfgNum::All, Vec::new()).await;
 }
 
-async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
+async fn full_flow_common(
+    network_config: NetworkConfig,
+    cfg_num: CfgNum,
+    modify_cfg: Vec<(&str, CfgModif)>,
+) {
     test_step_start();
 
     //
@@ -171,6 +196,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     // Act
     //
+    modify_network(&mut network, "Before create block 0", &modify_cfg).await;
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
@@ -220,6 +246,15 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     );
 
     test_step_complete(network).await;
+}
+
+async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str, CfgModif)]) {
+    for (_tag, modif) in modif_config.iter().filter(|(t, _)| tag == *t) {
+        match modif {
+            CfgModif::Drop(v) => network.close_raft_loops_and_drop_named(&[v]).await,
+            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v]).await,
+        }
+    }
 }
 
 #[tokio::test(basic_scheduler)]
