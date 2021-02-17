@@ -142,40 +142,36 @@ impl Network {
         arc_nodes: &BTreeMap<String, ArcNode>,
     ) -> BTreeMap<String, JoinHandle<()>> {
         let mut raft_loop_handles = BTreeMap::new();
-        let raft_nodes: BTreeMap<_, _> = arc_nodes
-            .clone()
-            .into_iter()
-            .filter(|(_, v)| has_raft(v))
-            .collect();
 
         // Need to connect first so Raft messages can be sent.
         info!("Start connect to peers");
-        for (name, node) in &raft_nodes {
+        for (name, node) in arc_nodes {
             let (node_conn, addrs, _) = connect_info_peers(node).await;
             loop_connnect_to_peers_async(node_conn, addrs, None).await;
             info!(?name, "Peer connect complete");
         }
         info!("Peers connect complete");
-        for node in raft_nodes.values() {
+        for node in arc_nodes.values() {
             let (node_conn, _, expected_connected_addrs) = connect_info_peers(node).await;
             loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
         }
         info!("Peers connect complete: all connected");
 
-        for (name, node) in &raft_nodes {
-            let (t, addr, raft_loop) = raft_loop(node).await;
-            let peer_span = error_span!("", ?t, ?name, ?addr);
-            raft_loop_handles.insert(
-                name.clone(),
-                tokio::spawn(
-                    async move {
-                        info!("Start raft");
-                        raft_loop.await;
-                        info!("raft complete");
-                    }
-                    .instrument(peer_span),
-                ),
-            );
+        for (name, node) in arc_nodes {
+            if let Some((t, addr, raft_loop)) = raft_loop(node).await {
+                let peer_span = error_span!("", ?t, ?name, ?addr);
+                raft_loop_handles.insert(
+                    name.clone(),
+                    tokio::spawn(
+                        async move {
+                            info!("Start raft");
+                            raft_loop.await;
+                            info!("raft complete");
+                        }
+                        .instrument(peer_span),
+                    ),
+                );
+            }
         }
 
         raft_loop_handles
@@ -246,7 +242,7 @@ impl Network {
         raft_loop_handles: &mut BTreeMap<String, JoinHandle<()>>,
     ) {
         info!("Close raft");
-        for node in arc_nodes.values().filter(|v| has_raft(v)) {
+        for node in arc_nodes.values() {
             close_raft_loop(node).await
         }
 
@@ -399,41 +395,36 @@ async fn stop_listening(node: &ArcNode) -> Vec<JoinHandle<()>> {
     }
 }
 
-///Check if raft function exists
-fn has_raft(node: &ArcNode) -> bool {
-    matches!(node, ArcNode::Storage(_) | ArcNode::Compute(_))
-}
-
 ///Dispatch to close_raft_loop
 async fn close_raft_loop(node: &ArcNode) {
     match node {
         ArcNode::Compute(n) => n.lock().await.close_raft_loop().await,
         ArcNode::Storage(n) => n.lock().await.close_raft_loop().await,
-        ArcNode::Miner(_) | ArcNode::User(_) => panic!("No raft loop"),
+        ArcNode::Miner(_) | ArcNode::User(_) => (),
     }
 }
 
 ///Dispatch to raft_loop, providing also the address and a tag.
-async fn raft_loop(node: &ArcNode) -> (String, SocketAddr, impl Future<Output = ()>) {
+async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Output = ()>)> {
     use futures::future::FutureExt;
     match node {
         ArcNode::Compute(n) => {
             let node = n.lock().await;
-            (
+            Some((
                 "compute_node".to_owned(),
                 node.address(),
                 node.raft_loop().left_future(),
-            )
+            ))
         }
         ArcNode::Storage(n) => {
             let node = n.lock().await;
-            (
+            Some((
                 "storage_node".to_owned(),
                 node.address(),
                 node.raft_loop().right_future(),
-            )
+            ))
         }
-        ArcNode::Miner(_) | ArcNode::User(_) => panic!("No raft loop"),
+        ArcNode::Miner(_) | ArcNode::User(_) => None,
     }
 }
 
@@ -518,7 +509,7 @@ fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeS
 async fn init_arc_node(name: &str, config: &NetworkConfig, info: &NetworkInstanceInfo) -> ArcNode {
     let node_info = &info.node_infos[name];
     match node_info.node_type {
-        NodeType::Miner => ArcNode::Miner(init_miner(name, &info).await),
+        NodeType::Miner => ArcNode::Miner(init_miner(name, &config, &info).await),
         NodeType::Compute => ArcNode::Compute(init_compute(name, &config, &info).await),
         NodeType::Storage => ArcNode::Storage(init_storage(name, &config, &info).await),
         NodeType::User => ArcNode::User(init_user(name, &config, &info).await),
@@ -530,21 +521,44 @@ async fn init_arc_node(name: &str, config: &NetworkConfig, info: &NetworkInstanc
 /// ### Arguments
 ///
 /// * `name`   - Name of the node to initialize.
+/// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
-async fn init_miner(name: &str, info: &NetworkInstanceInfo) -> ArcMinerNode {
+async fn init_miner(
+    name: &str,
+    config: &NetworkConfig,
+    info: &NetworkInstanceInfo,
+) -> ArcMinerNode {
+    // Handle the single miner multi compute node in test only
+    let (miner_compute_node_idx, extra_connect_addr) = {
+        let name = name.to_owned();
+        let mut miner_compute_infos = config
+            .compute_to_miner_mapping
+            .iter()
+            .filter(|(_, ms)| ms.contains(&name))
+            .map(|(c, _)| &info.node_infos[c]);
+
+        let miner_compute_node_idx = miner_compute_infos.next().unwrap().index;
+        let extra_connect_addr = miner_compute_infos.map(|i| i.node_spec.address).collect();
+        (miner_compute_node_idx, extra_connect_addr)
+    };
+
+    // Create node
     let node_info = &info.node_infos[name];
     let miner_config = MinerNodeConfig {
         miner_node_idx: node_info.index,
         miner_db_mode: node_info.db_mode,
-        miner_compute_node_idx: 0,
+        miner_compute_node_idx,
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         miner_nodes: info.miner_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
     };
-    let info = format!("{} -> {}", name, node_info.node_spec.address);
-    info!("New Miner {}", info);
-    Arc::new(Mutex::new(MinerNode::new(miner_config).await.expect(&info)))
+    let info_str = format!("{} -> {}", name, node_info.node_spec.address);
+    info!("New Miner {}", info_str);
+
+    let mut miner = MinerNode::new(miner_config).await.expect(&info_str);
+    miner.extra_connect_addr = extra_connect_addr;
+    Arc::new(Mutex::new(miner))
 }
 
 ///Initialize Storage node of given name based on network info.

@@ -278,9 +278,9 @@ async fn create_first_block_act(network: &mut Network) {
     let first_request_size = config.compute_minimum_miner_pool_len;
 
     info!("Test Step Connect nodes");
-    for (compute, miners) in &config.compute_to_miner_mapping {
+    for compute in compute_nodes {
+        let miners = &config.compute_to_miner_mapping[compute];
         for (idx, miner) in miners.iter().enumerate() {
-            node_connect_to(network, miner, compute).await;
             miner_send_partition_request(network, miner, compute).await;
             let evt = if idx == first_request_size - 1 {
                 "Received first full partition request"
@@ -439,7 +439,6 @@ async fn add_transactions_act(network: &mut Network, txs: &BTreeMap<String, Tran
     let compute_nodes = &active_nodes[&NodeType::Compute];
 
     info!("Test Step Add Transactions");
-    node_connect_to(network, "user1", "compute1").await;
     for tx in txs.values() {
         user_send_transaction_to_compute(network, "user1", "compute1", tx).await;
     }
@@ -968,7 +967,6 @@ async fn receive_payment_tx_user() {
     let before = node_all_get_wallet_info(&mut network, user_nodes).await;
 
     node_connect_to(&mut network, "user1", "user2").await;
-    node_connect_to(&mut network, "user1", "compute1").await;
 
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
@@ -1036,7 +1034,6 @@ async fn reject_payment_txs() {
     //
     // Act/Assert
     //
-    node_connect_to(&mut network, "user2", "compute1").await;
     for tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
         user_send_transaction_to_compute(&mut network, "user2", "compute1", tx).await;
     }
@@ -1100,12 +1097,6 @@ async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
         m.lock().await.connect_to(to_addr).await.unwrap();
     } else {
         panic!("node not found");
-    }
-}
-
-async fn node_connect_to_all(network: &mut Network, from: &str, tos: &[String]) {
-    for to in tos {
-        node_connect_to(network, from, to).await;
     }
 }
 
