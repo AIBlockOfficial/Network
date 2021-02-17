@@ -280,7 +280,6 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
     let mut pow = nonce.to_owned().to_vec();
     pow.extend_from_slice(merkle_hash.as_bytes());
     pow.extend_from_slice(prev_hash.as_bytes());
-
     validate_pow(&pow)
 }
 /// Check the hash of given data reach MINING_DIFFICULTY

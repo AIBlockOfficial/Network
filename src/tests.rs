@@ -10,7 +10,10 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::{create_valid_transaction_with_ins_outs, get_sanction_addresses};
+use crate::utils::{
+    concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
+    validate_pow_block,
+};
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -21,6 +24,7 @@ use naom::primitives::transaction_utils::{
     get_tx_with_out_point,
 };
 use naom::script::StackEntry;
+use rand::{self, Rng};
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
@@ -878,9 +882,19 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
-    let miner_nodes = &network_config.miner_nodes;
-    let initial_utxo_txs = network.collect_initial_uxto_txs();
+    let c_mined = &node_select(compute_nodes, cfg_num);
+
     let transactions = valid_transactions(true);
+    let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
+    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
+    let block1_mining_tx = complete_block_mining_txs(&block_info1);
+
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
+    compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info1).await;
 
     let initial_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -888,37 +902,37 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     //
     // Act
     //
-    create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
-    send_block_to_storage_act(&mut network, cfg_num).await;
-    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
+    storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
+    storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
 
-    add_transactions_act(&mut network, &transactions).await;
-    create_block_act(&mut network, Cfg::All, cfg_num).await;
-    proof_winner_act(&mut network).await;
-    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
-
-    let (expected1, block_info1) = complete_block(
-        stored0.clone().unwrap().block_num,
-        Some(""),
-        &transactions,
-        miner_nodes.len(),
-    );
-    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
-    let block1_mining_tx = complete_block_mining_txs(&block_info1);
-    let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     //
     // Assert
     //
-
     let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
-
+    assert_eq!(
+        actual1[0],
+        (
+            Some(expected1.1),
+            Some((
+                expected1.0,
+                1,             /*b_num*/
+                c_mined.len(), /*mining txs*/
+            ))
+        )
+    );
     assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    assert_eq!(
+        substract_vec(&actual0_db_count, &initial_db_count),
+        node_all(
+            storage_nodes,
+            1 + transactions.len() + block1_mining_tx.len()
+        )
+    );
 
     test_step_complete(network).await;
 }
@@ -1906,7 +1920,7 @@ fn complete_block(
         let tx = construct_coinbase_tx(block_num, amount, addr.clone());
         let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
-            nonce: addr.as_bytes().to_vec(),
+            nonce: generate_pow_for_block(&block.clone(), hash.clone()),
             mining_tx: (hash, tx),
         }
     };
@@ -1941,6 +1955,27 @@ fn complete_block(
     let complete_str = format!("{:?}", complete);
 
     ((hash_key, complete_str), complete)
+}
+
+fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
+    let hash_to_mine = concat_merkle_coinbase(&block.header.merkle_root_hash, &mining_tx_hash);
+    let mut nonce: Vec<u8> = generate_nonce();
+    let prev_hash: String;
+    let temp_option = block.header.previous_hash.clone();
+    match temp_option {
+        None => prev_hash = String::from(""),
+        _ => prev_hash = temp_option.unwrap(),
+    }
+
+    while !validate_pow_block(&prev_hash, &hash_to_mine, &nonce) {
+        nonce = generate_nonce();
+    }
+    nonce
+}
+/// Generates a random sequence of values for a nonce
+fn generate_nonce() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..10).map(|_| rng.gen_range(1, 200)).collect()
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
