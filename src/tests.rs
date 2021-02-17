@@ -878,19 +878,9 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.compute_nodes;
     let storage_nodes = &network_config.storage_nodes;
-    let c_mined = &node_select(compute_nodes, cfg_num);
-
+    let miner_nodes = &network_config.miner_nodes;
+    let initial_utxo_txs = network.collect_initial_uxto_txs();
     let transactions = valid_transactions(true);
-    let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
-    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
-    let block1_mining_tx = complete_block_mining_txs(&block_info1);
-
-    create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
-    send_block_to_storage_act(&mut network, CfgNum::All).await;
-
-    compute_all_set_mining_block(&mut network, c_mined, &block_info1).await;
-    compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info1).await;
 
     let initial_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -898,37 +888,37 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     //
     // Act
     //
-    storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
-    storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
-
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
+    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
+
+    add_transactions_act(&mut network, &transactions).await;
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
+    proof_winner_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
+
+    let (expected1, block_info1) = complete_block(
+        stored0.clone().unwrap().block_num,
+        Some(""),
+        &transactions,
+        miner_nodes.len(),
+    );
+    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
+    let block1_mining_tx = complete_block_mining_txs(&block_info1);
+    let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     //
     // Assert
     //
+
     let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
-    assert_eq!(
-        actual1[0],
-        (
-            Some(expected1.1),
-            Some((
-                expected1.0,
-                1,             /*b_num*/
-                c_mined.len(), /*mining txs*/
-            ))
-        )
-    );
+
     assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
-    assert_eq!(
-        substract_vec(&actual0_db_count, &initial_db_count),
-        node_all(
-            storage_nodes,
-            1 + transactions.len() + block1_mining_tx.len()
-        )
-    );
 
     test_step_complete(network).await;
 }
@@ -1478,7 +1468,12 @@ async fn storage_inject_send_block_to_storage(
     storage: &str,
     block_info: &CompleteBlock,
 ) {
-    let id = network.get_position(compute).unwrap() as u64 + 1;
+    let id: u64;
+    if network.get_position(compute) == None {
+        id = 1;
+    } else {
+        id = network.get_position(compute).unwrap() as u64 + 1;
+    }
 
     let mined = block_info.per_node.get(&id).unwrap();
     let block = block_info.common.block.clone();
@@ -1904,6 +1899,7 @@ fn complete_block(
     block.header.b_num = block_num;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
+    //block.header.merkle_root_hash
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
         let amount = TokenAmount(12000);

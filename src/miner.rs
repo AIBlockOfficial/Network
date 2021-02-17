@@ -382,7 +382,6 @@ impl MinerNode {
         Ok(task::spawn_blocking(move || {
             // Mine Block with mining transaction
             let mut nonce = Self::generate_nonce();
-
             while !validate_pow_block(&block.unicorn, &hash_to_mine, &nonce) {
                 nonce = Self::generate_nonce();
             }

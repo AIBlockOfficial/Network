@@ -7,6 +7,8 @@ use crate::interfaces::{
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CompleteBlock, StorageRaft};
+use crate::utils::concat_merkle_coinbase;
+use crate::utils::validate_pow_block;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::{block::Block, transaction::Transaction};
@@ -434,12 +436,37 @@ impl StorageInterface for StorageNode {
         common: CommonBlockInfo,
         mined_info: MinedBlockExtraInfo,
     ) -> Response {
-        self.node_raft
-            .append_to_our_blocks(peer, common, mined_info);
+        let unicorn = common.block.header.previous_hash.clone();
+        let unicorn_unwrap;
+        let not_empty;
+        let valid;
+        match unicorn {
+            None => not_empty = false,
+            _ => not_empty = true,
+        }
+        if not_empty {
+            unicorn_unwrap = unicorn.unwrap();
+            let merk = common.block.header.merkle_root_hash.clone();
+            let nonce = mined_info.nonce.clone();
+            let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0.clone());
+            valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
+        } else {
+            valid = true;
+        }
 
-        Response {
-            success: true,
-            reason: "Block received to be added",
+        if valid {
+            self.node_raft
+                .append_to_our_blocks(peer, common, mined_info);
+
+            Response {
+                success: true,
+                reason: "Block received to be added",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Block received not added. PoW invalid",
+            }
         }
     }
 

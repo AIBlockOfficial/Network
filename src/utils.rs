@@ -283,7 +283,6 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
 
     validate_pow(&pow)
 }
-
 /// Check the hash of given data reach MINING_DIFFICULTY
 ///
 /// ### Arguments
