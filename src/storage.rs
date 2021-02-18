@@ -446,13 +446,14 @@ impl StorageInterface for StorageNode {
         }
         if not_empty {
             unicorn_unwrap = unicorn.unwrap();
-            let merk = common.block.header.merkle_root_hash.clone();
-            let nonce = mined_info.nonce.clone();
-            let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0);
-            valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
         } else {
-            valid = true;
+            unicorn_unwrap = String::from("");
         }
+
+        let merk = common.block.header.merkle_root_hash.clone();
+        let nonce = mined_info.nonce.clone();
+        let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0);
+        valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
 
         if valid {
             self.node_raft
