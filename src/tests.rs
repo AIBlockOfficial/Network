@@ -221,7 +221,7 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(12000 * mining_txs.len() as u64);
+        let total = TokenAmount(12000 * mining_txs.len() as u128);
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
