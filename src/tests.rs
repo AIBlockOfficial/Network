@@ -10,7 +10,10 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{Network, NetworkConfig};
-use crate::utils::{create_valid_transaction_with_ins_outs, get_sanction_addresses};
+use crate::utils::{
+    concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
+    validate_pow_block,
+};
 use bincode::serialize;
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -21,6 +24,7 @@ use naom::primitives::transaction_utils::{
     get_tx_with_out_point,
 };
 use naom::script::StackEntry;
+use rand::{self, Rng};
 use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
@@ -1478,7 +1482,12 @@ async fn storage_inject_send_block_to_storage(
     storage: &str,
     block_info: &CompleteBlock,
 ) {
-    let id = network.get_position(compute).unwrap() as u64 + 1;
+    let id: u64;
+    if network.get_position(compute) == None {
+        id = 1;
+    } else {
+        id = network.get_position(compute).unwrap() as u64 + 1;
+    }
 
     let mined = block_info.per_node.get(&id).unwrap();
     let block = block_info.common.block.clone();
@@ -1904,13 +1913,14 @@ fn complete_block(
     block.header.b_num = block_num;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
+    //block.header.merkle_root_hash
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
         let amount = TokenAmount(12000);
-        let tx = construct_coinbase_tx(block_num, amount, addr.clone());
+        let tx = construct_coinbase_tx(block_num, amount, addr);
         let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
-            nonce: addr.as_bytes().to_vec(),
+            nonce: generate_pow_for_block(&block.clone(), hash.clone()),
             mining_tx: (hash, tx),
         }
     };
@@ -1945,6 +1955,27 @@ fn complete_block(
     let complete_str = format!("{:?}", complete);
 
     ((hash_key, complete_str), complete)
+}
+
+fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
+    let hash_to_mine = concat_merkle_coinbase(&block.header.merkle_root_hash, &mining_tx_hash);
+    let mut nonce: Vec<u8> = generate_nonce();
+    let prev_hash: String;
+    let temp_option = block.header.previous_hash.clone();
+    match temp_option {
+        None => prev_hash = String::from(""),
+        _ => prev_hash = temp_option.unwrap(),
+    }
+
+    while !validate_pow_block(&prev_hash, &hash_to_mine, &nonce) {
+        nonce = generate_nonce();
+    }
+    nonce
+}
+/// Generates a random sequence of values for a nonce
+fn generate_nonce() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..10).map(|_| rng.gen_range(1, 200)).collect()
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
