@@ -110,6 +110,12 @@ async fn main() {
                     }
                     Ok(Response {
                         success: true,
+                        reason: "Snapshot applied",
+                    }) => {
+                        println!("Snapshot applied");
+                    }
+                    Ok(Response {
+                        success: true,
                         reason: &_,
                     }) => {
                         println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);

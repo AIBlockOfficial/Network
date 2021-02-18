@@ -29,13 +29,13 @@ use sha3::Digest;
 use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tokio::time;
-use tracing::{debug, error_span, info};
+use tracing::{debug, error_span, info, warn};
 use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
@@ -70,6 +70,7 @@ enum CfgNum {
 enum CfgModif {
     Drop(&'static str),
     Respawn(&'static str),
+    HandleEvents(&'static str, &'static [&'static str]),
 }
 
 #[test]
@@ -96,20 +97,6 @@ async fn full_flow_no_raft_real_db() {
 
     remove_all_node_dbs(&cfg);
     full_flow(cfg).await;
-}
-
-#[tokio::test(basic_scheduler)]
-async fn full_flow_raft_real_db_kill_node_3_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_raft(11000, 3);
-    cfg.in_memory_db = false;
-
-    let modify_cfg = vec![
-        ("Before create block 0", CfgModif::Drop("compute2")),
-        ("Before create block 0", CfgModif::Respawn("compute2")),
-    ];
-
-    remove_all_node_dbs(&cfg);
-    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -166,6 +153,38 @@ async fn full_flow_multi_miners_raft_2_nodes() {
     .await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_real_db_kill_storage_node_3_nodes() {
+    let mut cfg = complete_network_config_with_n_compute_raft(11000, 3);
+    cfg.in_memory_db = false;
+
+    let modify_cfg = vec![
+        ("Before create block 0", CfgModif::Drop("storage2")),
+        ("After create block 1", CfgModif::Respawn("storage2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
+        ),
+    ];
+
+    remove_all_node_dbs(&cfg);
+    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_real_db_kill_compute_node_3_nodes() {
+    let mut cfg = complete_network_config_with_n_compute_raft(11010, 3);
+    cfg.in_memory_db = false;
+
+    let modify_cfg = vec![
+        ("Before create block 0", CfgModif::Drop("compute2")),
+        ("Before create block 0", CfgModif::Respawn("compute2")),
+    ];
+
+    remove_all_node_dbs(&cfg);
+    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
+}
+
 async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
     network_config.compute_partition_full_size = 2;
     network_config.compute_minimum_miner_pool_len = 3;
@@ -204,6 +223,7 @@ async fn full_flow_common(
 
     add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
+    modify_network(&mut network, "After create block 1", &modify_cfg).await;
     proof_winner_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
@@ -253,6 +273,14 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
         match modif {
             CfgModif::Drop(v) => network.close_raft_loops_and_drop_named(&[v]).await,
             CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v]).await,
+            CfgModif::HandleEvents(n, es) => {
+                let computes = network.active_nodes(NodeType::Compute);
+                let storage = network.active_nodes(NodeType::Storage);
+                let node_group: Vec<String> = computes.iter().chain(storage).cloned().collect();
+                let raisons: Vec<String> = es.iter().map(|e| e.to_string()).collect();
+                let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
+                node_all_handle_different_event(network, &node_group, &all_raisons).await
+            }
         }
     }
 }
@@ -575,18 +603,22 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
-    let storage_nodes = &active_nodes[&NodeType::Storage];
-    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
-    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
+    let (msg_c_nodes, msg_s_nodes) = node_combined_select(
+        &network.config().nodes[&NodeType::Compute],
+        &network.config().nodes[&NodeType::Storage],
+        &network.dead_nodes(),
+        cfg_num,
+    );
 
     info!("Test Step Storage signal new block");
+
     if cfg == Cfg::IgnoreStorage {
         let req = ComputeRequest::SendBlockStored(Default::default());
-        compute_all_inject_next_event(network, msg_s_nodes, msg_c_nodes, req).await;
+        compute_all_inject_next_event(network, &msg_s_nodes, &msg_c_nodes, req).await;
     } else {
-        storage_all_send_stored_block(network, msg_s_nodes).await;
+        storage_all_send_stored_block(network, &msg_s_nodes).await;
     }
-    compute_all_handle_event(network, msg_c_nodes, "Received block stored").await;
+    compute_all_handle_event(network, &msg_c_nodes, "Received block stored").await;
 
     info!("Test Step Generate Block");
     node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
@@ -856,9 +888,10 @@ async fn proof_winner_act(network: &mut Network) {
         let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
         let win_miner: &String = &c_miners[0];
 
-        compute_send_bf_found(network, compute).await;
-        miner_handle_event(network, win_miner, "Block found").await;
-        miner_commit_block_found(network, win_miner).await;
+        if compute_send_bf_found(network, compute).await {
+            miner_handle_event(network, win_miner, "Block found").await;
+            miner_commit_block_found(network, win_miner).await;
+        }
     }
 }
 
@@ -1115,6 +1148,23 @@ fn node_select(nodes: &[String], cfg_num: CfgNum) -> Vec<String> {
     nodes.iter().cloned().take(len).collect()
 }
 
+fn node_combined_select(
+    nodes1: &[String],
+    nodes2: &[String],
+    ignore: &BTreeSet<String>,
+    cfg_num: CfgNum,
+) -> (Vec<String>, Vec<String>) {
+    let len = node_select_len(nodes1, cfg_num);
+    nodes1
+        .iter()
+        .cloned()
+        .zip(nodes2.iter().cloned())
+        .filter(|(n1, _)| !ignore.contains(n1))
+        .filter(|(_, n2)| !ignore.contains(n2))
+        .take(len)
+        .unzip()
+}
+
 fn node_select_len(nodes: &[String], cfg_num: CfgNum) -> usize {
     let len = nodes.len();
     if cfg_num == CfgNum::Majority {
@@ -1136,11 +1186,24 @@ async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
 }
 
 async fn node_all_handle_event(network: &mut Network, node_group: &[String], reason_str: &[&str]) {
+    let reason_str: Vec<_> = reason_str.iter().map(|s| s.to_string()).collect();
+    let all_raisons = node_group
+        .iter()
+        .map(|n| (n.clone(), reason_str.clone()))
+        .collect();
+    node_all_handle_different_event(network, node_group, &all_raisons).await
+}
+
+async fn node_all_handle_different_event<'a>(
+    network: &mut Network,
+    node_group: &[String],
+    all_raisons: &BTreeMap<String, Vec<String>>,
+) {
     let mut join_handles = Vec::new();
     let barrier = Arc::new(Barrier::new(node_group.len()));
     for node_name in node_group {
         let barrier = barrier.clone();
-        let reason_str: Vec<_> = reason_str.iter().map(|s| s.to_string()).collect();
+        let reason_str = all_raisons.get(node_name).cloned().unwrap_or_default();
         let node_name = node_name.clone();
         let compute = network.compute(&node_name).cloned();
         let storage = network.storage(&node_name).cloned();
@@ -1159,7 +1222,17 @@ async fn node_all_handle_event(network: &mut Network, node_group: &[String], rea
             .instrument(peer_span),
         ));
     }
-    let _ = join_all(join_handles).await;
+
+    let failed_join: Vec<_> = join_all(join_handles)
+        .await
+        .into_iter()
+        .zip(node_group)
+        .filter(|(r,_)| r.is_err())
+        .map(|(_, name)| name)
+        .collect();
+    if !failed_join.is_empty() {
+        panic!("Failed joined {:?}", failed_join);
+    }
 }
 
 async fn node_get_wallet_info(
@@ -1291,7 +1364,6 @@ async fn compute_one_handle_event(
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
-       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);
@@ -1439,7 +1511,9 @@ async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) 
 
 async fn compute_send_block_to_storage(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.send_block_to_storage().await.unwrap();
+    if let Err(e) = c.send_block_to_storage().await {
+        warn!("Block not sent to storage {:?}", e);
+    }
 }
 
 async fn compute_all_send_block_to_storage(network: &mut Network, compute_group: &[String]) {
@@ -1448,9 +1522,9 @@ async fn compute_all_send_block_to_storage(network: &mut Network, compute_group:
     }
 }
 
-async fn compute_send_bf_found(network: &mut Network, compute: &str) {
+async fn compute_send_bf_found(network: &mut Network, compute: &str) -> bool {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.send_bf_notification().await.unwrap();
+    c.send_bf_notification().await.unwrap()
 }
 
 async fn compute_mining_block_mined(
@@ -1673,7 +1747,6 @@ async fn storage_one_handle_event(
     let result = tokio::select!(
        _ = barrier.wait() => (),
        _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
-       _ = time::delay_for(TIMEOUT_TEST_WAIT_DURATION) => panic!("Timeout {:?}", reason_str),
     );
 
     debug!("Stop wait for event: {:?}", result);

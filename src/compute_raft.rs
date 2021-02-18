@@ -43,6 +43,7 @@ pub enum CommittedItem {
     Transactions,
     FirstBlock,
     Block,
+    Snapshot,
 }
 
 /// Accumulated previous block info
@@ -212,7 +213,7 @@ impl ComputeRaft {
     fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
         warn!("apply_snapshot called self.consensused updated");
         self.consensused = deserialize(&consensused_ser).unwrap();
-        None
+        Some(CommittedItem::Snapshot)
     }
 
     /// Process data in RaftData.

@@ -29,6 +29,13 @@ pub struct StorageRaftKey {
     pub proposal_id: u64,
 }
 
+/// Commited item to process.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CommittedItem {
+    Block,
+    Snapshot,
+}
+
 /// Mined block received.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReceivedBlock {
@@ -161,7 +168,7 @@ impl StorageRaft {
     /// ### Arguments
     ///
     /// * `raft_commit` - RaftCommit object holding the data from the commit
-    pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<()> {
+    pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
@@ -170,10 +177,10 @@ impl StorageRaft {
     }
 
     /// Apply snapshot
-    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<()> {
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
         warn!("apply_snapshot called self.consensused updated");
         self.consensused = deserialize(&consensused_ser).unwrap();
-        None
+        Some(CommittedItem::Snapshot)
     }
 
     /// Checks a commit of the RaftData for validity
@@ -181,7 +188,7 @@ impl StorageRaft {
     /// ### Arguments
     ///
     /// * `raft_commit` - RaftCommit object holding the data for the commit
-    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<()> {
+    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
         let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
             Ok((key, item)) => (key, item),
             Err(error) => {
@@ -209,7 +216,7 @@ impl StorageRaft {
         }
 
         if self.consensused.has_block_ready_to_store() {
-            Some(())
+            Some(CommittedItem::Block)
         } else {
             None
         }

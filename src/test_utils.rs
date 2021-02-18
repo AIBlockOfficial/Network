@@ -389,6 +389,11 @@ impl Network {
     pub fn config(&self) -> &NetworkConfig {
         &self.config
     }
+
+    ///Dead nodes not currently active
+    pub fn dead_nodes(&self) -> &BTreeSet<String> {
+        &self.dead_nodes
+    }
 }
 
 ///Dispatch to address

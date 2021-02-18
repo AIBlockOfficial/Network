@@ -352,7 +352,7 @@ impl ComputeNode {
     }
 
     /// Sends notification of a block found and stored to the winner.
-    pub async fn send_bf_notification(&mut self) -> Result<()> {
+    pub async fn send_bf_notification(&mut self) -> Result<bool> {
         let last_winer = self.last_coinbase_hash.take();
         info!("send_bf_notification {:?}", last_winer);
 
@@ -361,8 +361,10 @@ impl ComputeNode {
             self.node
                 .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
                 .await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 
     /// Sends the latest block to storage
@@ -439,6 +441,12 @@ impl ComputeNode {
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block committed",
+                            }));
+                        }
+                        Some(CommittedItem::Snapshot) => {
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Snapshot applied",
                             }));
                         }
                         Some(CommittedItem::Transactions) => {
