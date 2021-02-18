@@ -9,7 +9,7 @@ use crate::interfaces::{
 };
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
-use crate::test_utils::{Network, NetworkConfig};
+use crate::test_utils::{Network, NetworkConfig, NodeType};
 use crate::utils::{
     concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
     validate_pow_block,
@@ -174,9 +174,9 @@ async fn full_flow_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
-    let storage_nodes = &network_config.storage_nodes;
-    let miner_nodes = &network_config.miner_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
+    let miner_nodes = &network_config.nodes[&NodeType::Miner];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let transactions = valid_transactions(true);
 
@@ -266,7 +266,7 @@ async fn create_first_block(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let expected_utxo = to_utxo_set(&network.collect_initial_uxto_txs());
 
     //
@@ -284,8 +284,9 @@ async fn create_first_block(network_config: NetworkConfig) {
 }
 
 async fn create_first_block_act(network: &mut Network) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
+    let config = network.config().clone();
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
     let first_request_size = config.compute_minimum_miner_pool_len;
 
     info!("Test Step Connect nodes");
@@ -352,8 +353,8 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
-    let storage_nodes = &network_config.storage_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let c_mined = &node_select(compute_nodes, cfg_num);
     let (expected0, block_info0) = complete_first_block(&initial_utxo_txs, c_mined.len());
@@ -425,7 +426,7 @@ async fn add_transactions(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let transactions = valid_transactions(true);
 
     create_first_block_act(&mut network).await;
@@ -446,8 +447,8 @@ async fn add_transactions(network_config: NetworkConfig) {
 }
 
 async fn add_transactions_act(network: &mut Network, txs: &BTreeMap<String, Transaction>) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
 
     info!("Test Step Add Transactions");
     node_connect_to(network, "user1", "compute1").await;
@@ -505,7 +506,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let transactions = valid_transactions(true);
     let transactions_h = transactions.keys().cloned().collect::<Vec<_>>();
     let transactions_utxo = to_utxo_set(&transactions);
@@ -550,9 +551,9 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 }
 
 async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
-    let storage_nodes = &config.storage_nodes;
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let storage_nodes = &active_nodes[&NodeType::Storage];
     let msg_c_nodes = &node_select(compute_nodes, cfg_num);
     let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
@@ -633,7 +634,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
 
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
@@ -661,8 +662,9 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 }
 
 async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
+    let config = network.config().clone();
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
     let partition_size = config.compute_partition_full_size;
     let c_mined = &node_select(compute_nodes, cfg_num);
 
@@ -708,8 +710,9 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 }
 
 async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
+    let config = network.config().clone();
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
     let c_mined = &node_select(compute_nodes, cfg_num);
 
     info!("Test Step Miner block Proof of Work to late");
@@ -816,10 +819,12 @@ async fn proof_winner(network_config: NetworkConfig) {
 }
 
 async fn proof_winner_act(network: &mut Network) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
+    let config = network.config().clone();
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let miner_nodes = &active_nodes[&NodeType::Miner];
 
-    if config.miner_nodes.len() < compute_nodes.len() {
+    if miner_nodes.len() < compute_nodes.len() {
         info!("Test Step Miner winner: Ignored/Miner re-use");
         return;
     }
@@ -880,8 +885,8 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
-    let storage_nodes = &network_config.storage_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let c_mined = &node_select(compute_nodes, cfg_num);
 
     let transactions = valid_transactions(true);
@@ -938,9 +943,9 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
 }
 
 async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
-    let config = network.config.clone();
-    let compute_nodes = &config.compute_nodes;
-    let storage_nodes = &config.storage_nodes;
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let storage_nodes = &active_nodes[&NodeType::Storage];
     let msg_c_nodes = &node_select(compute_nodes, cfg_num);
     let msg_s_nodes = &node_select(storage_nodes, cfg_num);
 
@@ -958,11 +963,13 @@ async fn receive_payment_tx_user() {
     // Arrange
     //
     let mut network_config = complete_network_config(10400);
-    network_config.user_nodes.push("user2".to_string());
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
     network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
-    let user_nodes = &network_config.user_nodes;
+    let user_nodes = &network_config.nodes[&NodeType::User];
     let amount = TokenAmount(5);
 
     create_first_block_act(&mut network).await;
@@ -1013,9 +1020,11 @@ async fn reject_payment_txs() {
     // Arrange
     //
     let mut network_config = complete_network_config(10410);
-    network_config.user_nodes.push("user2".to_string());
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.compute_nodes;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
 
     let valid_txs = valid_transactions(true);
     let invalid_txs = vec![
@@ -1986,10 +1995,14 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         in_memory_db: true,
         compute_partition_full_size: 1,
         compute_minimum_miner_pool_len: 1,
-        miner_nodes: vec!["miner1".to_string()],
-        compute_nodes: vec!["compute1".to_string()],
-        storage_nodes: vec!["storage1".to_string()],
-        user_nodes: vec!["user1".to_string()],
+        nodes: vec![
+            (NodeType::Miner, vec!["miner1".to_string()]),
+            (NodeType::Compute, vec!["compute1".to_string()]),
+            (NodeType::Storage, vec!["storage1".to_string()]),
+            (NodeType::User, vec!["user1".to_string()]),
+        ]
+        .into_iter()
+        .collect(),
         compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
         user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
@@ -2014,19 +2027,21 @@ fn complete_network_config_with_n_compute_miner(
     let mut cfg = complete_network_config(initial_port);
     cfg.compute_raft = use_raft;
     cfg.storage_raft = use_raft;
-    cfg.compute_nodes = (0..compute_count)
+    *cfg.nodes_mut(NodeType::Compute) = (0..compute_count)
         .map(|idx| format!("compute{}", idx + 1))
         .collect();
-    cfg.storage_nodes = (0..compute_count)
+    *cfg.nodes_mut(NodeType::Storage) = (0..compute_count)
         .map(|idx| format!("storage{}", idx + 1))
         .collect();
-    cfg.miner_nodes = (0..miner_count)
+    *cfg.nodes_mut(NodeType::Miner) = (0..miner_count)
         .map(|idx| format!("miner{}", idx + 1))
         .collect();
     cfg.compute_to_miner_mapping = {
-        let miners = cfg.miner_nodes.iter().cloned().cycle();
-        let computes = cfg.compute_nodes.iter().cloned().cycle();
-        let connections = std::cmp::max(cfg.miner_nodes.len(), cfg.compute_nodes.len());
+        let miner_nodes = &cfg.nodes[&NodeType::Miner];
+        let compute_nodes = &cfg.nodes[&NodeType::Compute];
+        let miners = miner_nodes.iter().cloned().cycle();
+        let computes = compute_nodes.iter().cloned().cycle();
+        let connections = std::cmp::max(miner_nodes.len(), compute_nodes.len());
         let mut mapping = BTreeMap::new();
         for (miner, compute) in miners.zip(computes).take(connections) {
             mapping.entry(compute).or_insert_with(Vec::new).push(miner);

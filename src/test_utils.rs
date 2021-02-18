@@ -39,10 +39,15 @@ pub type ArcUserNode = Arc<Mutex<UserNode>>;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
-    pub config: NetworkConfig,
+    config: NetworkConfig,
+    /// The info needed to create network nodes
     instance_info: NetworkInstanceInfo,
+    /// All networked nodes
     arc_nodes: BTreeMap<String, ArcNode>,
+    /// Handles for raft loop tasks
     raft_loop_handles: BTreeMap<String, JoinHandle<()>>,
+    /// Currently active miner nodes
+    active_nodes: BTreeMap<NodeType, Vec<String>>,
 }
 
 /// Represents a virtual network configuration.
@@ -57,13 +62,17 @@ pub struct NetworkConfig {
     pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: UtxoSetSpec,
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
-    pub miner_nodes: Vec<String>,
-    pub compute_nodes: Vec<String>,
-    pub storage_nodes: Vec<String>,
-    pub user_nodes: Vec<String>,
+    pub nodes: BTreeMap<NodeType, Vec<String>>,
     pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
 }
 
+impl NetworkConfig {
+    pub fn nodes_mut(&mut self, node_type: NodeType) -> &mut Vec<String> {
+        self.nodes.get_mut(&node_type).unwrap()
+    }
+}
+
+/// Node info to create node
 pub struct NetworkNodeInfo {
     pub node_spec: NodeSpec,
     pub node_type: NodeType,
@@ -71,6 +80,7 @@ pub struct NetworkNodeInfo {
     pub index: usize,
 }
 
+/// Info needed to create all nodes in network
 pub struct NetworkInstanceInfo {
     pub node_infos: BTreeMap<String, NetworkNodeInfo>,
     pub miner_nodes: Vec<NodeSpec>,
@@ -79,6 +89,7 @@ pub struct NetworkInstanceInfo {
     pub user_nodes: Vec<NodeSpec>,
 }
 
+/// Nodes of any type
 #[derive(Clone)]
 pub enum ArcNode {
     Miner(ArcMinerNode),
@@ -87,7 +98,8 @@ pub enum ArcNode {
     User(ArcUserNode),
 }
 
-#[derive(Copy, Clone)]
+/// Types of nodes to create
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NodeType {
     Miner,
     Compute,
@@ -114,6 +126,7 @@ impl Network {
 
         Self {
             config: config.clone(),
+            active_nodes: config.nodes.clone(),
             instance_info: info,
             arc_nodes,
             raft_loop_handles,
@@ -300,6 +313,20 @@ impl Network {
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(&self.config.compute_seed_utxo)
     }
+
+    ///Returns active nodes of given type
+    pub fn active_nodes(&self, node_type: NodeType) -> &[String] {
+        &self.active_nodes[&node_type]
+    }
+
+    ///Returns all active nodes
+    pub fn all_active_nodes(&self) -> &BTreeMap<NodeType, Vec<String>> {
+        &self.active_nodes
+    }
+
+    pub fn config(&self) -> &NetworkConfig {
+        &self.config
+    }
 }
 
 ///Dispatch to address
@@ -377,41 +404,34 @@ async fn raft_loop(node: &ArcNode) -> (String, SocketAddr, impl Future<Output = 
 /// * `config` - &NetworkConfig object containing parameters for the NetworkInstanceInfo object creation.
 fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
     let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-    let next_port = config.initial_port;
-    let miner_names = &config.miner_nodes;
-    let compute_names = &config.compute_nodes;
-    let storage_names = &config.storage_nodes;
-    let user_names = &config.user_nodes;
+    let mut first_port = config.initial_port;
 
-    let (next_port, miner_nodes) = node_specs(ip, next_port, miner_names.len());
-    let (next_port, compute_nodes) = node_specs(ip, next_port, compute_names.len());
-    let (next_port, storage_nodes) = node_specs(ip, next_port, storage_names.len());
-    let (_next_port, user_nodes) = node_specs(ip, next_port, user_names.len());
+    let mut nodes = BTreeMap::new();
+    for (node_type, names) in &config.nodes {
+        let (next_port, specs) = node_specs(ip, first_port, names.len());
+        nodes.insert(*node_type, (names, specs));
+        first_port = next_port;
+    }
 
     let mem_db = config.in_memory_db;
-    use NodeType::*;
-    let node_infos = None
-        .into_iter()
-        .chain(node_infos(miner_names, &miner_nodes, Miner, mem_db))
-        .chain(node_infos(compute_names, &compute_nodes, Compute, mem_db))
-        .chain(node_infos(storage_names, &storage_nodes, Storage, mem_db))
-        .chain(node_infos(user_names, &user_nodes, User, mem_db))
+    let node_infos = nodes
+        .iter()
+        .flat_map(|(node_type, infos)| node_infos(*node_type, infos, mem_db))
         .collect();
 
     NetworkInstanceInfo {
         node_infos,
-        miner_nodes,
-        compute_nodes,
-        storage_nodes,
-        user_nodes,
+        miner_nodes: nodes.remove(&NodeType::Miner).unwrap().1,
+        compute_nodes: nodes.remove(&NodeType::Compute).unwrap().1,
+        storage_nodes: nodes.remove(&NodeType::Storage).unwrap().1,
+        user_nodes: nodes.remove(&NodeType::User).unwrap().1,
     }
 }
 
 ///Return the infos necessary to initialize the node.
 fn node_infos(
-    node_names: &[String],
-    node_specs: &[NodeSpec],
     node_type: NodeType,
+    (node_names, node_specs): &(&Vec<String>, Vec<NodeSpec>),
     in_memory_db: bool,
 ) -> BTreeMap<String, NetworkNodeInfo> {
     node_names
