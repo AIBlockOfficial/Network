@@ -30,7 +30,7 @@ pub struct WalletTxSpec {
     /// Hex encoded public key
     pub public_key: String,
     /// Amount for the transaction
-    pub amount: u64,
+    pub amount: u128,
 }
 
 /// Configuration info for a database
