@@ -6,7 +6,7 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
-use crate::storage_raft::{CompleteBlock, StorageRaft};
+use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::concat_merkle_coinbase;
 use crate::utils::validate_pow_block;
 use bincode::{deserialize, serialize};
@@ -175,14 +175,23 @@ impl StorageNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    if self.node_raft.received_commit(commit_data).await.is_some() {
-                        let block = self.node_raft.generate_complete_block();
-                        self.store_complete_block(block);
-                        self.node_raft.event_processed_generate_snapshot();
-                        return Some(Ok(Response{
-                            success: true,
-                            reason: "Block complete stored",
-                        }));
+                    match self.node_raft.received_commit(commit_data).await {
+                        Some(CommittedItem::Block) => {
+                            let block = self.node_raft.generate_complete_block();
+                            self.store_complete_block(block);
+                            self.node_raft.event_processed_generate_snapshot();
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Block complete stored",
+                            }));
+                        }
+                        Some(CommittedItem::Snapshot) => {
+                            return Some(Ok(Response{
+                                success: true,
+                                reason: "Snapshot applied",
+                            }));
+                        }
+                        None => (),
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
