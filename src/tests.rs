@@ -1917,7 +1917,7 @@ fn complete_block(
 
     let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
         let amount = TokenAmount(12000);
-        let tx = construct_coinbase_tx(block_num, amount, addr.clone());
+        let tx = construct_coinbase_tx(block_num, amount, addr);
         let hash = construct_tx_hash(&tx);
         MinedBlockExtraInfo {
             nonce: generate_pow_for_block(&block.clone(), hash.clone()),
