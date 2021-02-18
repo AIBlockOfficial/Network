@@ -17,6 +17,7 @@ pub struct TxOutSpec {
     /// Hex encoded public key to seed script_public_key
     pub public_key: String,
     /// Amount that this TxOut can spend
+    #[serde(deserialize_with = "deserialize_token_amount")]
     pub amount: TokenAmount,
 }
 
@@ -154,4 +155,12 @@ pub struct InititalTxSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
     pub compute_initial_transactions: Vec<Vec<InititalTxSpec>>,
+}
+
+/// Hacky deserializer to work around deserializatio error with u128
+fn deserialize_token_amount<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<TokenAmount, D::Error> {
+    let value: u64 = serde::Deserialize::deserialize(deserializer)?;
+    Ok(TokenAmount(value as u128))
 }
