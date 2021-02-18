@@ -8,6 +8,7 @@ use crate::configurations::{
     ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
     UtxoSetSpec, WalletTxSpec,
 };
+use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
@@ -362,6 +363,7 @@ impl Network {
         &self.active_nodes
     }
 
+    ///Config that launched the network
     pub fn config(&self) -> &NetworkConfig {
         &self.config
     }
@@ -638,4 +640,34 @@ async fn init_user(name: &str, config: &NetworkConfig, info: &NetworkInstanceInf
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New User {}", info);
     Arc::new(Mutex::new(UserNode::new(user_config).await.expect(&info)))
+}
+
+/// Remove all db for the given config
+pub fn remove_all_node_dbs(config: &NetworkConfig) {
+    let info = init_instance_info(config);
+
+    for (_name, node) in info.node_infos {
+        let port = node.node_spec.address.port();
+        use NodeType::*;
+        let db_paths = match node.node_type {
+            Miner | User => {
+                let v = format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, port);
+                vec![v]
+            }
+            Compute => {
+                let v = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
+                vec![v]
+            }
+            Storage => {
+                let v1 = format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, port);
+                let v2 = format!("{}/{}.storage_raft.{}", DB_PATH, DB_PATH_TEST, port);
+                vec![v1, v2]
+            }
+        };
+        for to_remove in db_paths {
+            if let Err(e) = std::fs::remove_dir_all(to_remove.clone()) {
+                info!("Not removed local db: {}, {:?}", to_remove, e);
+            }
+        }
+    }
 }

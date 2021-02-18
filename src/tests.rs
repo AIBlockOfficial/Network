@@ -2,14 +2,14 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{DB_PATH, DB_PATH_TEST, SANC_LIST_TEST, WALLET_PATH};
+use crate::constants::SANC_LIST_TEST;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, UtxoSet,
 };
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
-use crate::test_utils::{Network, NetworkConfig, NodeType};
+use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
 use crate::utils::{
     concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
     validate_pow_block,
@@ -86,21 +86,9 @@ async fn full_flow_no_raft() {
 #[tokio::test(basic_scheduler)]
 async fn full_flow_no_raft_real_db() {
     let mut cfg = complete_network_config(10505);
-    let db_paths = vec![
-        format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10505),
-        format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, 10506),
-        format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, 10506),
-        format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, 10507),
-        format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, 10508),
-    ];
-    for to_remove in db_paths {
-        if let Err(e) = std::fs::remove_dir_all(to_remove.clone()) {
-            info!("Not removed local db: {}, {:?}", to_remove, e);
-        }
-    }
-
     cfg.in_memory_db = false;
 
+    remove_all_node_dbs(&cfg);
     full_flow(cfg).await;
 }
 
