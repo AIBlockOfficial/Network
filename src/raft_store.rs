@@ -4,7 +4,7 @@ use protobuf::Message;
 use raft::prelude::*;
 use raft::storage::MemStorage;
 use raft::{Result as RaftResult, StorageError};
-use tracing::error;
+use tracing::{error, info};
 
 const HARDSTATE_KEY: &str = "HardStateKey";
 const SNAPSHOT_KEY: &str = "SnaphotKey";
@@ -72,7 +72,6 @@ impl RaftStore {
             .write_to_bytes()?;
 
         set_persistent_snapshot(&mut self.presistent, &bytes)?;
-        set_last_persistent_entry(&mut self.presistent, idx)?;
         self.discard_persistent_entries_before_snapshot(idx);
         Ok(())
     }
@@ -117,17 +116,16 @@ impl RaftStore {
         let presistent = &self.presistent;
         in_memory.wl().set_conf_state(init_cs, None);
 
-        if let Some(hs) = get_persistent_hardstate(presistent)? {
-            in_memory.wl().set_hardstate(hs);
-        }
-
         if let Some(snapshot) = get_persistent_snapshot(presistent)? {
             let snap_index = snapshot.get_metadata().get_index();
+            info!("load snapshot idx={}", snap_index);
+
             in_memory.wl().apply_snapshot(snapshot)?;
             self.persistent_first_entry = snap_index;
         }
 
         if let Some(last_index) = get_last_persistent_entry(presistent)? {
+            info!("load entries last entry={}", last_index);
             // If no snapshot, entry 0 does not existd.
             // If snapshot, skip snapshot entry as already applied.
             let end_index = last_index + 1;
@@ -153,6 +151,11 @@ impl RaftStore {
                 return Err(StorageError::Unavailable.into());
             }
             in_memory.wl().append(&entries)?;
+        }
+
+        if let Some(hs) = get_persistent_hardstate(presistent)? {
+            info!("load hard_state commit={}", hs.get_commit());
+            in_memory.wl().set_hardstate(hs);
         }
 
         Ok(self)
