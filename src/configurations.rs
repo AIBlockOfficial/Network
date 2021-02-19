@@ -32,7 +32,7 @@ pub struct WalletTxSpec {
     /// Hex encoded public key
     pub public_key: String,
     /// Amount for the transaction
-    pub amount: u128,
+    pub amount: u64,
 }
 
 /// Configuration info for a database
@@ -165,10 +165,10 @@ pub struct ExtraNodeParams {
     pub raft_db: Option<SimpleDb>,
 }
 
-/// Hacky deserializer to work around deserializatio error with u128
+///Hacky deserializer to work around deserializatio error with u128
 fn deserialize_token_amount<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<TokenAmount, D::Error> {
     let value: u64 = serde::Deserialize::deserialize(deserializer)?;
-    Ok(TokenAmount(value as u128))
+    Ok(TokenAmount(value as u64))
 }

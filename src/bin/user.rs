@@ -131,7 +131,7 @@ async fn main() {
     // Handle a payment amount
     let amount_to_send = match matches.value_of("amount").map(|a| a.parse::<u64>()) {
         None => TokenAmount(0),
-        Some(Ok(v)) => TokenAmount(v as u128),
+        Some(Ok(v)) => TokenAmount(v as u64),
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
