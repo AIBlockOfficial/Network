@@ -1,7 +1,9 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::ComputeNodeConfig;
-use crate::constants::{PEER_LIMIT, UNICORN_LIMIT};
+use crate::constants::{DB_PATH, PEER_LIMIT, UNICORN_LIMIT};
+use crate::db_utils::{self, SimpleDb};
+use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UtxoSet,
@@ -11,9 +13,8 @@ use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address,
 };
-
 use crate::Node;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -35,7 +36,8 @@ use tokio::task;
 use tracing::{debug, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
-use crate::hash_block::HashBlock;
+/// Key for local miner list
+pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -108,6 +110,7 @@ pub struct DruidDroplet {
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
+    db: SimpleDb,
     pub jurisdiction: String,
     pub current_mined_block: Option<MinedBlock>,
     pub druid_pool: BTreeMap<String, DruidDroplet>,
@@ -128,7 +131,7 @@ impl ComputeNode {
     /// Generates a new compute node instance
     /// ### Arguments
     /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
-    pub async fn new(config: ComputeNodeConfig) -> Result<ComputeNode> {
+    pub async fn new(config: ComputeNodeConfig) -> Result<Self> {
         let addr = config
             .compute_nodes
             .get(config.compute_node_idx)
@@ -142,16 +145,18 @@ impl ComputeNode {
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
         let node_raft = ComputeRaft::new(&config).await;
+
         Ok(ComputeNode {
             node,
             node_raft,
+            db: db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute"),
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
             druid_pool: BTreeMap::new(),
             current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
-            request_list: BTreeSet::new(),
+            request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
@@ -159,7 +164,8 @@ impl ComputeNode {
             partition_list: (Vec::new(), Vec::new()),
             partition_key: None,
             storage_addr,
-        })
+        }
+        .load_local_db()?)
     }
 
     /// Returns the compute node's public endpoint.
@@ -544,6 +550,9 @@ impl ComputeNode {
     /// * `peer` - Sending peer's socket address
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
+        self.db
+            .put(REQUEST_LIST_KEY, &serialize(&self.request_list).unwrap())
+            .unwrap();
         if self.request_list_first_flood == Some(self.request_list.len()) {
             self.request_list_first_flood = None;
             Response {
@@ -725,6 +734,25 @@ impl ComputeNode {
         }
 
         lock_expiry
+    }
+
+    /// Load and apply the local database to our state
+    fn load_local_db(mut self) -> Result<Self> {
+        self.request_list = match self.db.get(REQUEST_LIST_KEY) {
+            Ok(Some(list)) => {
+                let list = deserialize::<BTreeSet<SocketAddr>>(&list).unwrap();
+                debug!("load_local_db: request_list {:?}", list);
+                list
+            }
+            Ok(None) => self.request_list,
+            Err(e) => panic!("Error accessing db: {:?}", e),
+        };
+        if let Some(first) = self.request_list_first_flood {
+            if first < self.request_list.len() {
+                self.request_list_first_flood = None;
+            }
+        }
+        Ok(self)
     }
 }
 

@@ -77,9 +77,9 @@ pub struct StoredSerializingBlock {
 pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
+    db: SimpleDb,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
-    db: SimpleDb,
     last_block_stored: Option<BlockStoredInfo>,
 }
 
@@ -104,9 +104,9 @@ impl StorageNode {
         Ok(StorageNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
             node_raft: StorageRaft::new(&config),
+            db: db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"),
             compute_addr,
             whitelisted: HashMap::new(),
-            db: db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"),
             last_block_stored: None,
         })
     }

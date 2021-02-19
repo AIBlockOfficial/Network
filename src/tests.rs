@@ -159,7 +159,7 @@ async fn full_flow_raft_real_db_kill_storage_node_3_nodes() {
     cfg.in_memory_db = false;
 
     let modify_cfg = vec![
-        ("Before create block 0", CfgModif::Drop("storage2")),
+        ("After create block 0", CfgModif::Drop("storage2")),
         ("After create block 1", CfgModif::Respawn("storage2")),
         (
             "After create block 1",
@@ -177,8 +177,19 @@ async fn full_flow_raft_real_db_kill_compute_node_3_nodes() {
     cfg.in_memory_db = false;
 
     let modify_cfg = vec![
-        ("Before create block 0", CfgModif::Drop("compute2")),
-        ("Before create block 0", CfgModif::Respawn("compute2")),
+        ("After create block 0", CfgModif::Drop("compute2")),
+        ("After create block 1", CfgModif::Respawn("compute2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents(
+                "compute2",
+                &[
+                    "Snapshot applied",
+                    "Transactions committed",
+                    "Block committed",
+                ],
+            ),
+        ),
     ];
 
     remove_all_node_dbs(&cfg);
@@ -215,8 +226,8 @@ async fn full_flow_common(
     //
     // Act
     //
-    modify_network(&mut network, "Before create block 0", &modify_cfg).await;
     create_first_block_act(&mut network).await;
+    modify_network(&mut network, "After create block 0", &modify_cfg).await;
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
@@ -999,14 +1010,17 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
 
 async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
     let storage_nodes = &active_nodes[&NodeType::Storage];
-    let msg_c_nodes = &node_select(compute_nodes, cfg_num);
-    let msg_s_nodes = &node_select(storage_nodes, cfg_num);
+    let (msg_c_nodes, msg_s_nodes) = node_combined_select(
+        &network.config().nodes[&NodeType::Compute],
+        &network.config().nodes[&NodeType::Storage],
+        &network.dead_nodes(),
+        cfg_num,
+    );
 
     info!("Test Step Compute Send block to Storage");
-    compute_all_send_block_to_storage(network, msg_c_nodes).await;
-    storage_all_handle_event(network, msg_s_nodes, BLOCK_RECEIVED).await;
+    compute_all_send_block_to_storage(network, &msg_c_nodes).await;
+    storage_all_handle_event(network, &msg_s_nodes, BLOCK_RECEIVED).await;
     node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
@@ -1227,7 +1241,7 @@ async fn node_all_handle_different_event<'a>(
         .await
         .into_iter()
         .zip(node_group)
-        .filter(|(r,_)| r.is_err())
+        .filter(|(r, _)| r.is_err())
         .map(|(_, name)| name)
         .collect();
     if !failed_join.is_empty() {

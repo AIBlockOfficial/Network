@@ -700,8 +700,9 @@ pub fn remove_all_node_dbs(config: &NetworkConfig) {
                 vec![v]
             }
             Compute => {
-                let v = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                vec![v]
+                let v1 = format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, port);
+                let v2 = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
+                vec![v1, v2]
             }
             Storage => {
                 let v1 = format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, port);
