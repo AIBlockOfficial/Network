@@ -2,7 +2,7 @@ use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::interfaces::UserRequest;
 use crate::wallet::WalletDb;
-use naom::constants::D_DISPLAY_PLACES_F64;
+use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use tracing::error;
@@ -28,7 +28,7 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
     };
 
     let send_val = WalletInfo {
-        running_total: fund_store.running_total.0 as f64 / D_DISPLAY_PLACES_F64,
+        running_total: fund_store.running_total.0 as f64 / D_DISPLAY_PLACES,
     };
 
     Ok(warp::reply::json(&send_val))

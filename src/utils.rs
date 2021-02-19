@@ -411,7 +411,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
 /// * `seed`    - &WalletTxSpec object containing parameters to generate wallet transactions
 pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
-    let amount = TokenAmount(seed.amount as u128);
+    let amount = TokenAmount(seed.amount as u64);
     let sk = decode_secret_key(&seed.secret_key);
     let pk = decode_pub_key(&seed.public_key);
 
