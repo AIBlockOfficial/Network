@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
-use crate::db_utils;
+use crate::db_utils::{self, SimpleDb};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::utils::make_utxo_set_from_seed;
@@ -127,15 +127,20 @@ impl fmt::Debug for ComputeRaft {
 
 impl ComputeRaft {
     /// Create a ComputeRaft, need to spawn the raft loop to use raft.
+    ///
     /// ### Arguments
-    /// * '&ComputerNodeConfig' - Holds the configuration option for a computer node.
-    pub async fn new(config: &ComputeNodeConfig) -> Self {
+    ///
+    /// * `config`  - Configuration option for a computer node.
+    /// * `raft_db` - Override raft db to use.
+    pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
             config.compute_raft != 0,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute_raft"),
+            raft_db.unwrap_or_else(|| {
+                db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute_raft")
+            }),
         );
 
         let propose_transactions_timeout_duration =
@@ -190,6 +195,11 @@ impl ComputeRaft {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.raft_active.close_raft_loop().await
+    }
+
+    /// Extract persistent storage of a closed raft
+    pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
+        self.raft_active.take_closed_persistent_store().await
     }
 
     /// Blocks & waits for a next commit from a peer.
@@ -1074,7 +1084,7 @@ mod test {
             jurisdiction: "US".to_string(),
             sanction_list: Vec::new(),
         };
-        ComputeRaft::new(&compute_config).await
+        ComputeRaft::new(&compute_config, Default::default()).await
     }
 
     fn valid_transaction(

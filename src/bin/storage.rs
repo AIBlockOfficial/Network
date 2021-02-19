@@ -56,7 +56,7 @@ async fn main() {
         config
     };
     println!("Start node with config {:?}", config);
-    let node = StorageNode::new(config).await.unwrap();
+    let node = StorageNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
 

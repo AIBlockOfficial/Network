@@ -83,7 +83,7 @@ async fn main() {
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let compute_node_idx = config.compute_node_idx;
-    let node = ComputeNode::new(config).await.unwrap();
+    let node = ComputeNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
 
