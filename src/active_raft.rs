@@ -140,6 +140,11 @@ impl ActiveRaft {
         self.cmd_tx.send(RaftCmd::Close).unwrap();
     }
 
+    /// Extract persistent storage of a closed raft
+    pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
+        self.raft_node.lock().await.take_closed_persistent_store()
+    }
+
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<RaftCommit> {
         let mut committed_rx = self.committed_rx.lock().await;

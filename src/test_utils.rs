@@ -5,8 +5,8 @@
 use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{
-    ComputeNodeConfig, DbMode, MinerNodeConfig, NodeSpec, StorageNodeConfig, UserNodeConfig,
-    UtxoSetSpec, WalletTxSpec,
+    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, StorageNodeConfig,
+    UserNodeConfig, UtxoSetSpec, WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::miner::MinerNode;
@@ -51,6 +51,8 @@ pub struct Network {
     active_nodes: BTreeMap<NodeType, Vec<String>>,
     /// Currently dead nodes
     dead_nodes: BTreeSet<String>,
+    /// Extra params to use for node construction
+    extra_params: BTreeMap<String, ExtraNodeParams>,
 }
 
 /// Represents a virtual network configuration.
@@ -121,7 +123,8 @@ impl Network {
 
         let mut arc_nodes = BTreeMap::new();
         for name in info.node_infos.keys() {
-            let arc_node = init_arc_node(name, &config, &info).await;
+            let extra = Default::default();
+            let arc_node = init_arc_node(name, &config, &info, extra).await;
             arc_nodes.insert(name.to_owned(), arc_node);
         }
 
@@ -135,6 +138,7 @@ impl Network {
             arc_nodes,
             raft_loop_handles,
             dead_nodes: BTreeSet::new(),
+            extra_params: BTreeMap::new(),
         }
     }
 
@@ -209,7 +213,8 @@ impl Network {
         // Re-spawn specified nodes
         let mut arc_nodes = BTreeMap::new();
         for name in names {
-            let arc_node = init_arc_node(name, &self.config, &self.instance_info).await;
+            let extra = self.extra_params.remove(*name).unwrap_or_default();
+            let arc_node = init_arc_node(name, &self.config, &self.instance_info, extra).await;
             arc_nodes.insert(name.to_string(), arc_node);
             self.dead_nodes.remove(*name);
         }
@@ -246,6 +251,13 @@ impl Network {
         Self::close_raft_loops(&arc_nodes, &mut raft_loop_handles).await;
         Self::stop_listening(&arc_nodes).await;
         Self::disconnect_all_nodes(&arc_nodes).await;
+
+        // Store extra params for re-spawn
+        for (name, node) in &arc_nodes {
+            if let Some(extra) = take_closed_extra_params(node).await {
+                self.extra_params.insert(name.clone(), extra);
+            }
+        }
 
         // Remove from active nodes
         self.dead_nodes.extend(names.iter().map(|v| v.to_string()));
@@ -459,6 +471,15 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
     }
 }
 
+///Dispatch to take_closed_extra_params
+async fn take_closed_extra_params(node: &ArcNode) -> Option<ExtraNodeParams> {
+    match node {
+        ArcNode::Compute(n) => Some(n.lock().await.take_closed_extra_params().await),
+        ArcNode::Storage(n) => Some(n.lock().await.take_closed_extra_params().await),
+        ArcNode::Miner(_) | ArcNode::User(_) => None,
+    }
+}
+
 ///Creates a NetworkInstanceInfo object with config object values.
 ///
 /// ### Arguments
@@ -537,12 +558,18 @@ fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeS
 /// * `name`   - Name of the node to initialize.
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
-async fn init_arc_node(name: &str, config: &NetworkConfig, info: &NetworkInstanceInfo) -> ArcNode {
+/// * `extra`  - additional parameter for construction
+async fn init_arc_node(
+    name: &str,
+    config: &NetworkConfig,
+    info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
+) -> ArcNode {
     let node_info = &info.node_infos[name];
     match node_info.node_type {
         NodeType::Miner => ArcNode::Miner(init_miner(name, &config, &info).await),
-        NodeType::Compute => ArcNode::Compute(init_compute(name, &config, &info).await),
-        NodeType::Storage => ArcNode::Storage(init_storage(name, &config, &info).await),
+        NodeType::Compute => ArcNode::Compute(init_compute(name, &config, &info, extra).await),
+        NodeType::Storage => ArcNode::Storage(init_storage(name, &config, &info, extra).await),
         NodeType::User => ArcNode::User(init_user(name, &config, &info).await),
     }
 }
@@ -599,10 +626,12 @@ async fn init_miner(
 /// * `name`   - Name of the node to initialize.
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
 async fn init_storage(
     name: &str,
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
 ) -> ArcStorageNode {
     let node_info = &info.node_infos[name];
     let storage_raft = if config.storage_raft { 1 } else { 0 };
@@ -620,7 +649,7 @@ async fn init_storage(
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
     Arc::new(Mutex::new(
-        StorageNode::new(storage_config).await.expect(&info),
+        StorageNode::new(storage_config, extra).await.expect(&info),
     ))
 }
 
@@ -631,10 +660,12 @@ async fn init_storage(
 /// * `name`   - Name of the node to initialize.
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
 async fn init_compute(
     name: &str,
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
 ) -> ArcComputeNode {
     let node_info = &info.node_infos[name];
     let compute_raft = if config.compute_raft { 1 } else { 0 };
@@ -657,7 +688,7 @@ async fn init_compute(
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
     Arc::new(Mutex::new(
-        ComputeNode::new(compute_config).await.expect(&info),
+        ComputeNode::new(compute_config, extra).await.expect(&info),
     ))
 }
 

@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::constants::DB_PATH;
-use crate::db_utils;
+use crate::db_utils::{self, SimpleDb};
 use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use bincode::{deserialize, serialize};
@@ -104,14 +104,17 @@ impl StorageRaft {
     ///
     /// ### Arguments
     ///
-    /// * `config` - &StorageNodeConfig containing the parameters for the new StorageRaft
-    pub fn new(config: &StorageNodeConfig) -> Self {
+    /// * `config`  - Configuration option for a storage node.
+    /// * `raft_db` - Override raft db to use.
+    pub fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
             &config.storage_nodes,
             config.storage_raft != 0,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
-            db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage_raft"),
+            raft_db.unwrap_or_else(|| {
+                db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage_raft")
+            }),
         );
 
         let propose_block_timeout_duration =
@@ -155,6 +158,11 @@ impl StorageRaft {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.raft_active.close_raft_loop().await
+    }
+
+    /// Extract persistent storage of a closed raft
+    pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
+        self.raft_active.take_closed_persistent_store().await
     }
 
     /// Blocks & waits for a next commit from a peer.

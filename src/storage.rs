@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::StorageNodeConfig;
+use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, DbIteratorItem, SimpleDb};
 use crate::interfaces::{
@@ -89,7 +89,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
-    pub async fn new(config: StorageNodeConfig) -> Result<StorageNode> {
+    pub async fn new(config: StorageNodeConfig, mut extra: ExtraNodeParams) -> Result<StorageNode> {
         let addr = config
             .storage_nodes
             .get(config.storage_node_idx)
@@ -101,10 +101,17 @@ impl StorageNode {
             .ok_or(StorageError::ConfigError("Invalid compute index"))?
             .address;
 
+        let node = Node::new(addr, PEER_LIMIT, NodeType::Storage).await?;
+        let node_raft = StorageRaft::new(&config, extra.raft_db.take());
+        let db = extra
+            .db
+            .take()
+            .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"));
+
         Ok(StorageNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::Storage).await?,
-            node_raft: StorageRaft::new(&config),
-            db: db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"),
+            node,
+            node_raft,
+            db,
             compute_addr,
             whitelisted: HashMap::new(),
             last_block_stored: None,
@@ -154,6 +161,14 @@ impl StorageNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
+            raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+        }
     }
 
     /// Listens for new events from peers and handles them.

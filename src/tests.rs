@@ -91,8 +91,8 @@ async fn full_flow_no_raft() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_no_raft_real_db() {
-    let mut cfg = complete_network_config(10505);
+async fn full_flow_raft_real_db_1_node() {
+    let mut cfg = complete_network_config_with_n_compute_raft(10505, 1);
     cfg.in_memory_db = false;
 
     remove_all_node_dbs(&cfg);
@@ -154,10 +154,7 @@ async fn full_flow_multi_miners_raft_2_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_raft_real_db_kill_storage_node_3_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_raft(11000, 3);
-    cfg.in_memory_db = false;
-
+async fn full_flow_raft_kill_storage_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("storage2")),
         ("After create block 1", CfgModif::Respawn("storage2")),
@@ -167,15 +164,16 @@ async fn full_flow_raft_real_db_kill_storage_node_3_nodes() {
         ),
     ];
 
-    remove_all_node_dbs(&cfg);
-    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
+    full_flow_common(
+        complete_network_config_with_n_compute_raft(11000, 3),
+        CfgNum::All,
+        modify_cfg,
+    )
+    .await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_raft_real_db_kill_compute_node_3_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_raft(11010, 3);
-    cfg.in_memory_db = false;
-
+async fn full_flow_raft_kill_compute_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("compute2")),
         ("After create block 1", CfgModif::Respawn("compute2")),
@@ -192,8 +190,12 @@ async fn full_flow_raft_real_db_kill_compute_node_3_nodes() {
         ),
     ];
 
-    remove_all_node_dbs(&cfg);
-    full_flow_common(cfg, CfgNum::All, modify_cfg).await;
+    full_flow_common(
+        complete_network_config_with_n_compute_raft(11010, 3),
+        CfgNum::All,
+        modify_cfg,
+    )
+    .await;
 }
 
 async fn full_flow_multi_miners(mut network_config: NetworkConfig) {

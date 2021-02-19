@@ -1,3 +1,4 @@
+use crate::db_utils::SimpleDb;
 use naom::primitives::asset::TokenAmount;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -155,6 +156,13 @@ pub struct InititalTxSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComputeNodeSetup {
     pub compute_initial_transactions: Vec<Vec<InititalTxSpec>>,
+}
+
+/// Extra params for Node construction
+#[derive(Default)]
+pub struct ExtraNodeParams {
+    pub db: Option<SimpleDb>,
+    pub raft_db: Option<SimpleDb>,
 }
 
 /// Hacky deserializer to work around deserializatio error with u128

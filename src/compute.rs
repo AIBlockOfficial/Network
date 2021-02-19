@@ -1,6 +1,6 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
-use crate::configurations::ComputeNodeConfig;
+use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
 use crate::constants::{DB_PATH, PEER_LIMIT, UNICORN_LIMIT};
 use crate::db_utils::{self, SimpleDb};
 use crate::hash_block::HashBlock;
@@ -131,7 +131,7 @@ impl ComputeNode {
     /// Generates a new compute node instance
     /// ### Arguments
     /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
-    pub async fn new(config: ComputeNodeConfig) -> Result<Self> {
+    pub async fn new(config: ComputeNodeConfig, mut extra: ExtraNodeParams) -> Result<Self> {
         let addr = config
             .compute_nodes
             .get(config.compute_node_idx)
@@ -144,12 +144,17 @@ impl ComputeNode {
             .address;
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
-        let node_raft = ComputeRaft::new(&config).await;
+        let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
+
+        let db = extra
+            .db
+            .take()
+            .unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute"));
 
         Ok(ComputeNode {
             node,
             node_raft,
-            db: db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute"),
+            db,
             unicorn_list: HashMap::new(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
@@ -226,6 +231,14 @@ impl ComputeNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
+            raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+        }
     }
 
     /// Processes a dual double entry transaction
