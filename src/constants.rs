@@ -8,6 +8,9 @@ pub const NETWORK_VERSION: u8 = 0;
 // Maximum number of bytes that a block can contain
 pub const MAX_BLOCK_SIZE: usize = 1000;
 
+// Bit shifting value for reward issuance
+pub const REWARD_ISSUANCE_VAL: u8 = 18;
+
 /*------- SCRIPT CONSTANTS -------*/
 
 // Maximum number of bytes pushable to the stack

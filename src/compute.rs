@@ -10,17 +10,19 @@ use crate::interfaces::{
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
+    calculate_reward, concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_is_valid;
+
 use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
@@ -126,6 +128,7 @@ pub struct ComputeNode {
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub sanction_list: Vec<String>,
     pub user_notification_list: BTreeSet<SocketAddr>,
+    pub current_reward: u64,
 }
 
 impl ComputeNode {
@@ -171,6 +174,7 @@ impl ComputeNode {
             partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
+            current_reward: 0,
         }
         .load_local_db()?)
     }
@@ -783,10 +787,17 @@ impl ComputeNode {
         let hashblock = HashBlock::new_for_mining(unicorn, header.merkle_root_hash, header.b_num);
         let block = serialize_hashblock_for_pow(&hashblock);
 
+        // Calculate next reward
+        let circulation = self.node_raft.get_current_circulation();
+        self.current_reward = calculate_reward(*circulation);
+
         self.node
             .send_to_all(
                 self.partition_list.1.iter().copied(),
-                MineRequest::SendBlock { block },
+                MineRequest::SendBlock {
+                    block,
+                    reward: self.current_reward,
+                },
             )
             .await
             .unwrap();
@@ -949,7 +960,7 @@ impl ComputeNode {
         };
 
         // Check coinbase amount and structure
-        let coinbase_amount = TokenAmount(12000);
+        let coinbase_amount = TokenAmount(self.current_reward);
         if !coinbase.is_coinbase() || coinbase.outputs[0].amount != coinbase_amount {
             return Response {
                 success: false,

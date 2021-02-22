@@ -1,11 +1,12 @@
 use crate::comms_handler::Node;
-use crate::configurations::{UtxoSetSpec, WalletTxSpec};
-use crate::constants::MINING_DIFFICULTY;
 use crate::hash_block::*;
+use crate::configurations::{UtxoSetSpec, WalletTxSpec};
+use crate::constants::{MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
 use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
+use naom::constants::TOTAL_TOKENS;
 use naom::primitives::transaction_utils::{
     construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
 };
@@ -236,6 +237,32 @@ pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
 /// * `block`    - &HashBlock reference to be used in proof of work
 pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
     serialize(block).unwrap()
+}
+
+/// Calculates the reward for the next block, to be placed within the coinbase tx
+///
+/// ### Argeumtsn
+///
+/// * `current_circulation` - Current circulation of all tokens
+pub fn calculate_reward(current_circulation: u64) -> u64 {
+    (TOTAL_TOKENS - current_circulation) >> REWARD_ISSUANCE_VAL
+}
+
+/// Gets the total amount of tokens for all present coinbase transactions,
+/// assuming that they have all received the same amount of reward
+///
+/// ### Arguments
+///
+/// * `coinbase_tx` - Coinbase transactions
+pub fn get_total_coinbase_tokens(coinbase_tx: &BTreeMap<String, Transaction>) -> u64 {
+    let tx: Vec<Transaction> = coinbase_tx.values().cloned().collect();
+
+    if !tx.is_empty() {
+        let first_reward = tx[0].outputs.iter().fold(0, |acc, x| acc + x.amount.0);
+        return first_reward * coinbase_tx.len() as u64;
+    }
+
+    0
 }
 
 /// Concatenates a merkle hash and a coinbase hash to produce a single hash output

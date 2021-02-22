@@ -94,6 +94,7 @@ pub struct MinerNode {
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
+    current_reward: u64,
 }
 
 impl MinerNode {
@@ -125,6 +126,7 @@ impl MinerNode {
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
             current_payment_address: None,
+            current_reward: 0,
         })
     }
 
@@ -296,7 +298,7 @@ impl MinerNode {
 
         match req {
             NotifyBlockFound { win_coinbase } => self.receive_block_found(win_coinbase),
-            SendBlock { block } => self.receive_pre_block(block),
+            SendBlock { block, reward } => self.receive_pre_block(block, reward),
             SendPartitionList { p_list } => self.receive_partition_list(p_list),
             SendRandomNum { rnum } => self.receive_random_number(rnum),
         }
@@ -439,7 +441,7 @@ impl MinerNode {
         }
         let mining_tx = construct_coinbase_tx(
             block.b_num,
-            TokenAmount(12000),
+            TokenAmount(self.current_reward),
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
@@ -535,13 +537,9 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    /// recieves a pre_block and sets it as current block
-    ///
-    /// ### Arguments
-    ///
-    /// * `pre_block`   - Vec<u8> representing the pre_block to become the current block
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response {
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: u64) -> Response {
         self.current_block = deserialize::<HashBlock>(&pre_block).unwrap();
+        self.current_reward = reward;
 
         Response {
             success: true,

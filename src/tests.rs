@@ -274,7 +274,7 @@ async fn full_flow_common(
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(12000 * mining_txs.len() as u64);
+        let total = TokenAmount(961303710937 * mining_txs.len() as u64);
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
@@ -853,7 +853,7 @@ async fn proof_winner(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let wining_miners: Vec<String> = network_config
+    let winning_miners: Vec<String> = network_config
         .compute_to_miner_mapping
         .values()
         .map(|ms| ms.first().unwrap().clone())
@@ -869,9 +869,9 @@ async fn proof_winner(network_config: NetworkConfig) {
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
-    let info_before = node_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_before = node_all_get_wallet_info(&mut network, &winning_miners).await;
     proof_winner_act(&mut network).await;
-    let info_after = node_all_get_wallet_info(&mut network, &wining_miners).await;
+    let info_after = node_all_get_wallet_info(&mut network, &winning_miners).await;
 
     //
     // Assert
@@ -882,7 +882,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&wining_miners, (&TokenAmount(0), 1, 0)),
+        node_all(&winning_miners, (&TokenAmount(0), 1, 0)),
         "Info Before: {:?}",
         info_before
     );
@@ -891,7 +891,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&wining_miners, (&TokenAmount(12000), 1, 1)),
+        node_all(&winning_miners, (&TokenAmount(961303710937), 1, 1)),
         "Info After: {:?}",
         info_after
     );
@@ -2265,12 +2265,10 @@ async fn complete_block(
     block.header.b_num = block_num;
     block.header.previous_hash = previous_hash.map(|v| v.to_string());
     block.transactions = block_txs.keys().cloned().collect();
-    //block.header.merkle_root_hash
 
     let per_node_init: BTreeMap<u64, String> = (0..mining_txs)
         .map(|i| i as u64 + 1)
         .map(|idx| (idx, hex::encode(vec![block_num as u8, idx as u8])))
-        //.map(async |(idx, addr)| (idx, construct_mining_extra_info(block, block_num, addr).await) )
         .collect();
 
     let mut per_node: BTreeMap<u64, MinedBlockExtraInfo> = BTreeMap::new();
