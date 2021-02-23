@@ -427,7 +427,7 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let c_mined = &node_select(compute_nodes, cfg_num);
-    let (expected0, block_info0) = complete_first_block(&initial_utxo_txs, c_mined.len());
+    let (expected0, block_info0) = complete_first_block(&initial_utxo_txs, c_mined.len()).await;
 
     create_first_block_act(&mut network).await;
     compute_all_mining_block_mined(&mut network, "miner1", c_mined, &block_info0).await;
@@ -579,7 +579,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     let transactions = valid_transactions(true);
     let transactions_h = transactions.keys().cloned().collect::<Vec<_>>();
     let transactions_utxo = to_utxo_set(&transactions);
-    let (_, block_info0) = complete_first_block(&BTreeMap::new(), compute_nodes.len());
+    let (_, block_info0) = complete_first_block(&BTreeMap::new(), compute_nodes.len()).await;
     let block0_mining_tx = complete_block_mining_txs(&block_info0);
     let block0_mining_utxo = to_utxo_set(&block0_mining_tx);
 
@@ -751,7 +751,7 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg == Cfg::IgnoreMiner {
-        let (_, block_info) = complete_first_block(&BTreeMap::new(), c_mined.len());
+        let (_, block_info) = complete_first_block(&BTreeMap::new(), c_mined.len()).await;
         compute_all_mining_block_mined(network, "miner1", c_mined, &block_info).await;
         return;
     }
@@ -972,8 +972,8 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let c_mined = &node_select(compute_nodes, cfg_num);
 
     let transactions = valid_transactions(true);
-    let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len());
-    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1);
+    let (expected1, block_info1) = complete_block(1, Some("0"), &transactions, c_mined.len()).await;
+    let (_expected3, wrong_block3) = complete_block(3, Some("0"), &BTreeMap::new(), 1).await;
     let block1_mining_tx = complete_block_mining_txs(&block_info1);
 
     create_first_block_act(&mut network).await;
@@ -2233,14 +2233,29 @@ fn complete_block_mining_txs(block: &CompleteBlock) -> BTreeMap<String, Transact
         .collect()
 }
 
-fn complete_first_block(
+async fn complete_first_block(
     next_block_tx: &BTreeMap<String, Transaction>,
     mining_txs: usize,
 ) -> ((String, String), CompleteBlock) {
-    complete_block(0, None, &next_block_tx, mining_txs)
+    complete_block(0, None, &next_block_tx, mining_txs).await
 }
 
-fn complete_block(
+async fn construct_mining_extra_info(
+    block: Block,
+    block_num: u64,
+    addr: String,
+) -> MinedBlockExtraInfo {
+    let amount = TokenAmount(12000);
+    let tx = construct_coinbase_tx(block_num, amount, addr);
+    let hash = construct_tx_hash(&tx);
+
+    MinedBlockExtraInfo {
+        nonce: generate_pow_for_block(&block.clone(), hash.clone()).await,
+        mining_tx: (hash, tx),
+    }
+}
+
+async fn complete_block(
     block_num: u64,
     previous_hash: Option<&str>,
     block_txs: &BTreeMap<String, Transaction>,
@@ -2252,21 +2267,20 @@ fn complete_block(
     block.transactions = block_txs.keys().cloned().collect();
     //block.header.merkle_root_hash
 
-    let construct_mining_extra_info = |addr: String| -> MinedBlockExtraInfo {
-        let amount = TokenAmount(12000);
-        let tx = construct_coinbase_tx(block_num, amount, addr);
-        let hash = construct_tx_hash(&tx);
-        MinedBlockExtraInfo {
-            nonce: generate_pow_for_block(&block.clone(), hash.clone()),
-            mining_tx: (hash, tx),
-        }
-    };
-
-    let per_node = (0..mining_txs)
+    let per_node_init: BTreeMap<u64, String> = (0..mining_txs)
         .map(|i| i as u64 + 1)
         .map(|idx| (idx, hex::encode(vec![block_num as u8, idx as u8])))
-        .map(|(idx, addr)| (idx, construct_mining_extra_info(addr)))
+        //.map(async |(idx, addr)| (idx, construct_mining_extra_info(block, block_num, addr).await) )
         .collect();
+
+    let mut per_node: BTreeMap<u64, MinedBlockExtraInfo> = BTreeMap::new();
+    let init_keys: Vec<_> = per_node_init.keys().cloned().collect();
+    for idx in init_keys {
+        let addr = per_node_init.get(&idx).unwrap().clone();
+        let mined_block_info =
+            construct_mining_extra_info(block.clone(), block_num.clone(), addr).await;
+        per_node.insert(idx, mined_block_info);
+    }
 
     let complete = CompleteBlock {
         common: CommonBlockInfo {
@@ -2294,8 +2308,9 @@ fn complete_block(
     ((hash_key, complete_str), complete)
 }
 
-fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
-    let hash_to_mine = concat_merkle_coinbase(&block.header.merkle_root_hash, &mining_tx_hash);
+async fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8> {
+    let hash_to_mine =
+        concat_merkle_coinbase(&block.header.merkle_root_hash, &mining_tx_hash).await;
     let mut nonce: Vec<u8> = generate_nonce();
     let prev_hash: String;
     let temp_option = block.header.previous_hash.clone();

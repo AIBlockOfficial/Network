@@ -218,20 +218,6 @@ pub trait StorageInterface {
     /// * `pow` - Proof of Work to match
     fn receive_pow(&self, pow: ProofOfWork) -> Response;
 
-    /// Receives the new block from the miner with permissions to write
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`       - Peer that the block is received from
-    /// * `common`     - The block to be stored and checked
-    /// * `mined_info` - The mining info for the block
-    fn receive_block(
-        &mut self,
-        peer: SocketAddr,
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    ) -> Response;
-
     /// Receives agreed contracts for storage
     ///
     /// ### Arguments
@@ -317,16 +303,6 @@ impl fmt::Debug for ComputeRequest {
 }
 
 pub trait ComputeInterface {
-    /// Receives a PoW for block inclusion
-    /// TODO: Coinbase amount currently hardcoded to 12. Make dynamic
-    ///
-    /// ### Arguments
-    ///
-    /// * `address`         - address for the peer providing the PoW
-    /// * `nonce`           - PoW for potential inclusion
-    /// * `coinbase`        - Coinbase tx to validate
-    fn receive_pow(&mut self, peer: SocketAddr, nonce: Vec<u8>, coinbase: Transaction) -> Response;
-
     /// Receives a PoW commit for UnicornShard creation
     ///
     /// ### Arguments
