@@ -525,7 +525,7 @@ impl MinerNode {
     /// Generates a random sequence of values for a nonce
     fn generate_nonce() -> Vec<u8> {
         let mut rng = rand::thread_rng();
-        (0..10).map(|_| rng.gen_range(1, 200)).collect()
+        (0..15).map(|_| rng.gen_range(1, 200)).collect()
     }
 
     // Get the wallet db

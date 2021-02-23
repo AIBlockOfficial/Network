@@ -176,14 +176,6 @@ pub async fn create_and_save_fake_to_wallet(
     Ok(())
 }
 
-/// Determines whether the passed value is within bounds of
-/// available tokens in the supply.
-///
-/// TODO: Currently placeholder, needs to be filled in once requirements known
-pub fn is_valid_amount(_value: &u64) -> bool {
-    true
-}
-
 /// Returns a socket address from command input
 ///
 /// ### Arguments
