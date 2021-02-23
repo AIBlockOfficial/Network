@@ -427,6 +427,114 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
+    /// Listens for new events from peers and handles them, processing any errors.
+    pub async fn handle_next_event_response(&mut self, response: Result<Response>) {
+        debug!("Response: {:?}", response);
+
+        match response {
+            Ok(Response {
+                success: true,
+                reason: "Received partition request successfully",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Received first full partition request",
+            }) => {
+                self.propose_initial_uxto_set().await;
+            }
+            Ok(Response {
+                success: true,
+                reason: "Partition list is full",
+            }) => {
+                self.flood_list_to_partition().await.unwrap();
+                self.flood_block_to_partition().await.unwrap();
+                self.flood_block_to_users().await.unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received PoW successfully",
+            }) => {
+                info!("Send Block to storage");
+                debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
+                if let Err(e) = self.send_block_to_storage().await {
+                    error!("Block not sent to storage {:?}", e);
+                }
+            }
+            Ok(Response {
+                success: true,
+                reason: "Transactions added to tx pool",
+            }) => {
+                debug!("Transactions received and processed successfully");
+            }
+            Ok(Response {
+                success: true,
+                reason: "First Block committed",
+            }) => {
+                debug!("First Block ready to mine: {:?}", self.get_mining_block());
+                self.flood_rand_num_to_requesters().await.unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Block committed",
+            }) => {
+                debug!("Block ready to mine: {:?}", self.get_mining_block());
+                if let Err(e) = self.send_bf_notification().await {
+                    error!("Could not send block found notification to winner {:?}", e);
+                }
+                self.flood_rand_num_to_requesters().await.unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Transactions committed",
+            }) => {
+                debug!("Transactions ready to be used in next block");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received block stored",
+            }) => {
+                info!("Block info received from storage: ready to generate block");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            }) => {
+                warn!("Snapshot applied");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received block notification",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Partition PoW received successfully",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Partition list is already full",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "No block to mine currently",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason,
+            }) => {
+                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+            }
+            Ok(Response {
+                success: false,
+                reason,
+            }) => {
+                error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
+            }
+            Err(error) => {
+                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+            }
+        }
+    }
+
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
