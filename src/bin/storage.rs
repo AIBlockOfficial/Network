@@ -2,9 +2,8 @@
 
 use clap::{App, Arg};
 use system::configurations::StorageNodeConfig;
+use system::StorageNode;
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
-use system::{Response, StorageNode};
-use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -92,44 +91,7 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                debug!("Response: {:?}", response);
-
-                match response {
-                    Ok(Response {
-                        success: true,
-                        reason: "Block received to be added",
-                    }) => {}
-                    Ok(Response {
-                        success: true,
-                        reason: "Block complete stored",
-                    }) => {
-                        info!("Block stored: Send to compute");
-                        if let Err(e) = node.send_stored_block().await {
-                            error!("Block stored not sent {:?}", e);
-                        }
-                    }
-                    Ok(Response {
-                        success: true,
-                        reason: "Snapshot applied",
-                    }) => {
-                        warn!("Snapshot applied");
-                    }
-                    Ok(Response {
-                        success: true,
-                        reason,
-                    }) => {
-                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
-                    }
-                    Ok(Response {
-                        success: false,
-                        reason,
-                    }) => {
-                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
-                    }
-                    Err(error) => {
-                        panic!("ERROR HANDLING RESPONSE: {:?}", error);
-                    }
-                }
+                node.handle_next_event_response(response).await;
             }
             node.close_raft_loop().await;
             stop_re_connect_tx.send(()).unwrap();
