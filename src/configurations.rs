@@ -139,23 +139,17 @@ pub struct UserNodeConfig {
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
 }
 
-/// Configuration option for initial transactions for a compute node
+/// Configuration option for setup of user node
 #[derive(Debug, Clone, Deserialize)]
-pub struct InititalTxSpec {
-    /// OutPoint specification: "n-tx_hash"
-    pub out_point: String,
-    /// Hex encoded secret key
-    pub secret_key: String,
-    /// Hex encoded public key
-    pub public_key: String,
-    /// Hex encoded public key to send transaction to
-    pub receiver_public_key: String,
-}
-
-/// Configuration option for setup of compute node
-#[derive(Debug, Clone, Deserialize)]
-pub struct ComputeNodeSetup {
-    pub compute_initial_transactions: Vec<Vec<InititalTxSpec>>,
+pub struct UserNodeSetup {
+    /// Transaction seeds, for each users
+    pub user_initial_transactions: Vec<Vec<WalletTxSpec>>,
+    /// How many transaction to group in each requests
+    pub user_setup_tx_chunk_size: Option<usize>,
+    /// How many TxIn to have for each transactions
+    pub user_setup_tx_in_per_tx: Option<usize>,
+    /// How many Txin to have for that user at each round
+    pub user_setup_tx_in_max_count: usize,
 }
 
 /// Extra params for Node construction

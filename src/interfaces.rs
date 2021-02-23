@@ -291,6 +291,7 @@ pub enum ComputeRequest {
         transactions: BTreeMap<String, Transaction>,
     },
     SendPartitionRequest,
+    SendUserBlockNotificationRequest,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -308,6 +309,7 @@ impl fmt::Debug for ComputeRequest {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
+            SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
@@ -387,6 +389,9 @@ pub enum UserRequest {
     SendPaymentTransaction {
         transaction: Transaction,
     },
+    BlockMining {
+        block: Block,
+    },
 }
 
 impl fmt::Debug for UserRequest {
@@ -397,6 +402,7 @@ impl fmt::Debug for UserRequest {
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
+            BlockMining { .. } => write!(f, "BlockMining"),
         }
     }
 }

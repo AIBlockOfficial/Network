@@ -6,11 +6,11 @@ use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::block::Block;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::primitives::transaction_utils::{
     construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
 };
-use std::collections::BTreeMap;
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error_span, info_span, warn};
@@ -92,6 +92,7 @@ pub struct UserNode {
     pub next_payment: Option<(SocketAddr, Transaction)>,
     pub return_payment: Option<ReturnPayment>,
     pub wallet_db: WalletDb,
+    pub last_block_notified: Block,
 }
 
 impl UserNode {
@@ -127,6 +128,7 @@ impl UserNode {
             next_payment: None,
             return_payment: None,
             wallet_db,
+            last_block_notified: Default::default(),
         })
     }
 
@@ -227,6 +229,7 @@ impl UserNode {
             SendPaymentAddress { address, amount } => {
                 self.make_payment_transactions(peer, address, amount).await
             }
+            BlockMining { block } => self.notified_block_mining(peer, block),
         }
     }
 
@@ -243,7 +246,7 @@ impl UserNode {
     ) -> Result<()> {
         let (peer, tx) = self.next_payment.take().unwrap();
 
-        self.send_transaction_to_compute(compute_peer, tx.clone())
+        self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
         self.store_payment_transaction(tx.clone()).await;
@@ -259,25 +262,23 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `compute_peer`    - Compute peer to send the payment tx to
-    /// * `payment_tx`      - Transaction to send
-    pub async fn send_transaction_to_compute(
+    /// * `compute_peer` - Compute peer to send the payment tx to
+    /// * `transactions` - Transactions to send
+    pub async fn send_transactions_to_compute(
         &mut self,
         compute_peer: SocketAddr,
-        payment_tx: Transaction,
+        transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let _peer_span = info_span!("sending payment transaction to compute node for processing");
-        let mut tx_to_send: BTreeMap<String, Transaction> = BTreeMap::new();
-        let hash = construct_tx_hash(&payment_tx);
-
-        tx_to_send.insert(hash, payment_tx.clone());
+        let _peer_span = info_span!("sending transactions to compute node for processing");
+        let transactions = transactions
+            .into_iter()
+            .map(construct_tx_hash_pair)
+            .collect();
 
         self.node
             .send(
                 compute_peer,
-                ComputeRequest::SendTransactions {
-                    transactions: tx_to_send,
-                },
+                ComputeRequest::SendTransactions { transactions },
             )
             .await?;
 
@@ -404,6 +405,21 @@ impl UserNode {
         Ok(())
     }
 
+    /// Sends a block notification request to a Compute node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute`   - Socket address of recipient
+    pub async fn send_block_notification_request(&mut self, compute: SocketAddr) -> Result<()> {
+        let _peer_span = info_span!("sending block notification request");
+
+        self.node
+            .send(compute, ComputeRequest::SendUserBlockNotificationRequest)
+            .await?;
+
+        Ok(())
+    }
+
     /// Sends a payment address from a request
     ///
     /// ### Arguments
@@ -418,6 +434,28 @@ impl UserNode {
             .send(peer, UserRequest::SendPaymentAddress { address, amount })
             .await?;
         Ok(())
+    }
+
+    /// Received a mined block notification: allow to update pending transactions
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` -  SocketAdress of the peer notifying.
+    /// * `block` - Block that is being mined and will be stored.
+    pub fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
+        if peer == self.compute_addr {
+            self.last_block_notified = block;
+
+            Response {
+                success: true,
+                reason: "Block mining notified",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Invalid block mining notifier",
+            }
+        }
     }
 
     // Get the wallet db
@@ -439,4 +477,10 @@ impl UseInterface for UserNode {
             reason: "New address ready to be sent",
         }
     }
+}
+
+/// Create the pair needed for transactions ordered containers
+fn construct_tx_hash_pair(tx: Transaction) -> (String, Transaction) {
+    let hash = construct_tx_hash(&tx);
+    (hash, tx)
 }
