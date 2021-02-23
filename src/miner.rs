@@ -27,7 +27,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
 };
 use tokio::task;
-use tracing::{debug, info_span, warn};
+use tracing::{debug, info_span, trace, warn};
 
 use crate::hash_block::HashBlock;
 
@@ -214,7 +214,7 @@ impl MinerNode {
     /// TODO: Find something to do with win_coinbase. Allows to know winner
     fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
         use MineRequest::*;
-        println!("RECEIVED REQUEST: {:?}", req);
+        trace!("RECEIVED REQUEST: {:?}", req);
 
         match req {
             NotifyBlockFound { win_coinbase } => self.receive_block_found(win_coinbase),

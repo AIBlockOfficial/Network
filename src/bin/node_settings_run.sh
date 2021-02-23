@@ -6,6 +6,10 @@ echo "Building nodes"
 echo "//-----------------------------//"
 echo " "
 cargo build --bins --release
+if [ "$?" != "0" ]
+then
+    exit 1
+fi
 echo " "
 echo "//-----------------------------//"
 echo "Delete databases"
@@ -17,13 +21,28 @@ echo "//-----------------------------//"
 echo "Running nodes for node_settings_local_raft.toml"
 echo "//-----------------------------//"
 echo " "
-RUST_LOG="debug,raft=warn" target/release/storage > storage_0.log 2>&1 &
+
+if [ "$1" = "set_log" ]
+then
+    echo set log storage: $2, compute: $3, miner: $4, user: $5.
+    STORAGE_LOG=$2
+    COMPUTE_LOG=$3
+    MINER_LOG=$4
+    USER_LOG=$5
+else
+    STORAGE_LOG=debug
+    COMPUTE_LOG=warn
+    MINER_LOG=warn
+    USER_LOG=debug
+fi
+
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="warn" target/release/compute > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/compute > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="warn" target/release/miner > miner_1.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/miner > miner_1.log 2>&1 &
 m0=$!
-RUST_LOG="debug" target/release/user > user_0.log 2>&1 &
+RUST_LOG="$USER_LOG" target/release/user > user_0.log 2>&1 &
 u0=$!
 
 echo $s0 $c0 $m0 $u0

@@ -4,7 +4,7 @@ use clap::{App, Arg};
 use system::configurations::StorageNodeConfig;
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{Response, StorageNode};
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -92,7 +92,7 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
@@ -103,7 +103,7 @@ async fn main() {
                         success: true,
                         reason: "Block complete stored",
                     }) => {
-                        println!("Block stored: Send to compute");
+                        info!("Block stored: Send to compute");
                         if let Err(e) = node.send_stored_block().await {
                             error!("Block stored not sent {:?}", e);
                         }
@@ -112,19 +112,19 @@ async fn main() {
                         success: true,
                         reason: "Snapshot applied",
                     }) => {
-                        println!("Snapshot applied");
+                        warn!("Snapshot applied");
                     }
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);

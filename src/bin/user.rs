@@ -2,9 +2,10 @@
 
 use clap::{App, Arg};
 use naom::primitives::asset::TokenAmount;
-use system::configurations::UserNodeConfig;
+use system::configurations::{UserNodeConfig, UserNodeSetup};
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
-use system::{routes, Response, UserNode};
+use system::{routes, Response, TransactionGen, UserNode};
+use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() {
@@ -64,7 +65,7 @@ async fn main() {
         )
         .get_matches();
 
-    let config = {
+    let (setup, config) = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
@@ -77,6 +78,9 @@ async fn main() {
         settings.set_default("user_node_idx", 0).unwrap();
         settings.set_default("user_compute_node_idx", 0).unwrap();
         settings.set_default("peer_user_node_idx", 0).unwrap();
+        settings
+            .set_default("user_setup_tx_in_max_count", 0)
+            .unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
@@ -110,10 +114,12 @@ async fn main() {
             settings.set("peer_user_node_idx", index).unwrap();
         }
 
+        let setup: UserNodeSetup = settings.clone().try_into().unwrap();
         let config: UserNodeConfig = settings.try_into().unwrap();
-        config
+        (setup, config)
     };
     println!("Starting node with config: {:?}", config);
+    println!("Start node with setup {:?}", setup);
     println!();
 
     let peer_user_node_connected = if matches.is_present("peer_user_connect") {
@@ -135,6 +141,7 @@ async fn main() {
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
+    let user_node_idx = config.user_node_idx;
     let mut node = UserNode::new(config).await.unwrap();
     println!("Started node at {}", node.address());
 
@@ -158,7 +165,7 @@ async fn main() {
     // Send any requests here
 
     if let Some(peer_user_node) = peer_user_node_connected {
-        println!("ADDRESS: {:?}", peer_user_node);
+        println!("Connect to user address: {:?}", peer_user_node);
         // Connect to a peer user node for payment.
         node.connect_to(peer_user_node).await.unwrap();
 
@@ -168,22 +175,41 @@ async fn main() {
             .unwrap();
     }
 
+    // Generate automatic transactions
+    let (tx_generator_active, tx_generator) = {
+        let initial_transactions = setup
+            .user_initial_transactions
+            .get(user_node_idx)
+            .cloned()
+            .unwrap_or_default();
+        (
+            !initial_transactions.is_empty() && setup.user_setup_tx_in_max_count != 0,
+            TransactionGen::new(initial_transactions),
+        )
+    };
+
+    // send notification request
+    if tx_generator_active {
+        node.send_block_notification_request(node.compute_address())
+            .await
+            .unwrap();
+    }
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
+        let mut tx_generator = tx_generator;
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
                         success: true,
                         reason: "New address ready to be sent",
                     }) => {
-                        println!("Sending new payment address");
-                        println!();
-
+                        debug!("Sending new payment address");
                         node.send_address_to_trading_peer().await.unwrap();
                     }
                     Ok(Response {
@@ -196,15 +222,42 @@ async fn main() {
                     }
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason: "Block mining notified",
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
+                        // Process next transactions
+                        tx_generator.commit_transactions(&node.last_block_notified.transactions);
+                        let txs = tx_generator.make_all_transactions(
+                            setup.user_setup_tx_in_per_tx,
+                            setup.user_setup_tx_in_max_count,
+                        );
+                        if !txs.is_empty() {
+                            info!("New Generated txs:{}", txs.len());
+                        }
+                        let chunk_size = setup.user_setup_tx_chunk_size.unwrap_or(usize::MAX);
+                        for txs_chunk in txs.chunks(chunk_size) {
+                            let txs_chunk: Vec<_> =
+                                txs_chunk.iter().map(|(_, tx)| tx).cloned().collect();
+
+                            debug!("New Generated txs:{:?}", txs_chunk);
+                            if let Err(e) = node
+                                .send_transactions_to_compute(node.compute_address(), txs_chunk)
+                                .await
+                            {
+                                error!("Autogenerated tx not sent to {:?}", e);
+                            }
+                        }
+                    }
+                    Ok(Response {
+                        success: true,
+                        reason,
+                    }) => {
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);

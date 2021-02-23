@@ -10,6 +10,7 @@ use crate::interfaces::{
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
+use crate::transaction_gen::TransactionGen;
 use crate::utils::{
     concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
     validate_pow_block,
@@ -614,6 +615,10 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
 }
 
 async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
+    create_block_act_with(network, cfg, cfg_num, 0).await
+}
+
+async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum, block_num: u64) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
     let (msg_c_nodes, msg_s_nodes) = node_combined_select(
@@ -626,7 +631,11 @@ async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     info!("Test Step Storage signal new block");
 
     if cfg == Cfg::IgnoreStorage {
-        let req = ComputeRequest::SendBlockStored(Default::default());
+        let block = BlockStoredInfo {
+            block_num,
+            ..Default::default()
+        };
+        let req = ComputeRequest::SendBlockStored(block);
         compute_all_inject_next_event(network, &msg_s_nodes, &msg_c_nodes, req).await;
     } else {
         storage_all_send_stored_block(network, &msg_s_nodes).await;
@@ -1136,6 +1145,58 @@ async fn reject_payment_txs() {
     test_step_complete(network).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn gen_transactions() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config(10420);
+    let mut network = Network::create_from_config(&network_config).await;
+    let mut transaction_gen =
+        TransactionGen::new(vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]);
+
+    //
+    // Act
+    //
+    user_send_block_notification_request(&mut network, "user1").await;
+    compute_handle_event(&mut network, "compute1", "Received block notification").await;
+
+    let mut tx_expected = Vec::new();
+    let mut tx_committed = Vec::new();
+    for b_num in 0..3 {
+        if b_num == 0 {
+            create_first_block_act(&mut network).await;
+        } else {
+            create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num - 1).await;
+        }
+
+        let transactions = {
+            compute_flood_block_to_users(&mut network, "compute1").await;
+            user_handle_event(&mut network, "user1", "Block mining notified").await;
+            let committed = user_last_block_notified_txs(&mut network, "user1").await;
+
+            transaction_gen.commit_transactions(&committed);
+            let transactions = transaction_gen.make_all_transactions(Some(2), 4);
+            transactions.into_iter().collect()
+        };
+
+        add_transactions_act(&mut network, &transactions).await;
+        let committed = compute_committed_tx_pool(&mut network, "compute1").await;
+
+        tx_expected.push(transactions);
+        tx_committed.push(committed);
+    }
+
+    //
+    // Assert
+    //
+    assert_eq!(tx_committed, tx_expected);
+
+    test_step_complete(network).await;
+}
+
 //
 // Node helpers
 //
@@ -1525,6 +1586,11 @@ async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) 
     c.flood_block_to_partition().await.unwrap();
 }
 
+async fn compute_flood_block_to_users(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.flood_block_to_users().await.unwrap();
+}
+
 async fn compute_send_block_to_storage(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     if let Err(e) = c.send_block_to_storage().await {
@@ -1791,7 +1857,7 @@ async fn user_send_transaction_to_compute(
 ) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_transaction_to_compute(compute_node_addr, tx.clone())
+    u.send_transactions_to_compute(compute_node_addr, vec![tx.clone()])
         .await
         .unwrap();
 }
@@ -1824,6 +1890,17 @@ async fn user_send_address_request(
 async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     u.send_address_to_trading_peer().await.unwrap();
+}
+
+async fn user_send_block_notification_request(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    let address = u.compute_address();
+    u.send_block_notification_request(address).await.unwrap();
+}
+
+async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<String> {
+    let u = network.user(user).unwrap().lock().await;
+    u.last_block_notified.transactions.clone()
 }
 
 //

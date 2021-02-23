@@ -1,13 +1,13 @@
 //! App to run a compute node.
 
 use clap::{App, Arg};
-use system::configurations::{ComputeNodeConfig, ComputeNodeSetup};
+use system::configurations::ComputeNodeConfig;
 use system::{
-    create_valid_transaction_with_info, get_sanction_addresses, loop_wait_connnect_to_peers_async,
-    loops_re_connect_disconnect, SANC_LIST_PROD,
+    get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
+    SANC_LIST_PROD,
 };
-use system::{ComputeNode, ComputeRequest, Response};
-use tracing::error;
+use system::{ComputeNode, Response};
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -37,7 +37,7 @@ async fn main() {
         )
         .get_matches();
 
-    let (setup, mut config) = {
+    let mut config = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
@@ -74,15 +74,12 @@ async fn main() {
             }
         }
 
-        let setup: ComputeNodeSetup = settings.clone().try_into().unwrap();
         let config: ComputeNodeConfig = settings.try_into().unwrap();
-        (setup, config)
+        config
     };
     println!("Start node with config {:?}", config);
-    println!("Start node with setup {:?}", setup);
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
-    let compute_node_idx = config.compute_node_idx;
     let node = ComputeNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
@@ -118,22 +115,9 @@ async fn main() {
     let main_loop_handle = tokio::spawn({
         let mut node = node;
 
-        // Kick off with some transactions
-        let initial_send_transactions = setup
-            .compute_initial_transactions
-            .get(compute_node_idx)
-            .map(|tx_seeds| {
-                let transactions = tx_seeds
-                    .iter()
-                    .map(create_valid_transaction_with_info)
-                    .collect();
-
-                ComputeRequest::SendTransactions { transactions }
-            });
-
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
@@ -152,13 +136,14 @@ async fn main() {
                     }) => {
                         node.flood_list_to_partition().await.unwrap();
                         node.flood_block_to_partition().await.unwrap();
+                        node.flood_block_to_users().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        println!("Send Block to storage");
-                        println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
+                        info!("Send Block to storage");
+                        debug!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
                         if let Err(e) = node.send_block_to_storage().await {
                             error!("Block not sent to storage {:?}", e);
                         }
@@ -167,27 +152,20 @@ async fn main() {
                         success: true,
                         reason: "Transactions added to tx pool",
                     }) => {
-                        println!("Transactions received and processed successfully");
+                        debug!("Transactions received and processed successfully");
                     }
                     Ok(Response {
                         success: true,
                         reason: "First Block committed",
                     }) => {
-                        println!("First Block ready to mine: {:?}", node.get_mining_block());
+                        debug!("First Block ready to mine: {:?}", node.get_mining_block());
                         node.flood_rand_num_to_requesters().await.unwrap();
-
-                        if let Some(txs) = &initial_send_transactions {
-                            // Only add transactions when they can be accepted
-                            let resp = node
-                                .inject_next_event("0.0.0.0:6666".parse().unwrap(), txs.clone());
-                            println!("initial transactions inject Response: {:?}", resp);
-                        }
                     }
                     Ok(Response {
                         success: true,
                         reason: "Block committed",
                     }) => {
-                        println!("Block ready to mine: {:?}", node.get_mining_block());
+                        debug!("Block ready to mine: {:?}", node.get_mining_block());
                         if let Err(e) = node.send_bf_notification().await {
                             error!("Could not send block found notification to winner {:?}", e);
                         }
@@ -197,31 +175,47 @@ async fn main() {
                         success: true,
                         reason: "Transactions committed",
                     }) => {
-                        println!("Transactions ready to be used in next block");
+                        debug!("Transactions ready to be used in next block");
                     }
                     Ok(Response {
                         success: true,
                         reason: "Received block stored",
                     }) => {
-                        println!("Block info received from storage: ready to generate block");
+                        info!("Block info received from storage: ready to generate block");
                     }
                     Ok(Response {
                         success: true,
                         reason: "Snapshot applied",
                     }) => {
-                        println!("Snapshot applied");
+                        warn!("Snapshot applied");
                     }
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason: "Received block notification",
+                    }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason: "Partition PoW received successfully",
+                    }) => {}
+                    Ok(Response {
+                        success: false,
+                        reason: "Partition list is already full",
+                    }) => {}
+                    Ok(Response {
+                        success: false,
+                        reason: "No block to mine currently",
+                    }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);

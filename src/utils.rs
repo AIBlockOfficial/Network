@@ -1,6 +1,7 @@
 use crate::comms_handler::Node;
-use crate::configurations::{InititalTxSpec, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{UtxoSetSpec, WalletTxSpec};
 use crate::constants::MINING_DIFFICULTY;
+use crate::hash_block::*;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
 use bincode::serialize;
@@ -26,8 +27,6 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{trace, warn};
-
-use crate::hash_block::*;
 
 pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
@@ -305,27 +304,6 @@ pub fn create_valid_transaction(
         &[receiver_addr_hex],
         pub_key,
         secret_key,
-        TokenAmount(1),
-    )
-}
-
-/// Create a valid transaction from givent info
-///
-/// ### Arguments
-///
-/// * `tx`    - &InititialTxSpecs. An object containing the intialisation values
-pub fn create_valid_transaction_with_info(tx: &InititalTxSpec) -> (String, Transaction) {
-    let tx_out_p = decode_wallet_out_point(&tx.out_point);
-    let sk = decode_secret_key(&tx.secret_key);
-    let pk = decode_pub_key(&tx.public_key);
-    let receiver_public_key = decode_pub_key(&tx.receiver_public_key);
-    let receiver_address = construct_address(receiver_public_key);
-
-    create_valid_transaction_with_ins_outs(
-        &[(tx_out_p.n, &tx_out_p.t_hash)],
-        &[&receiver_address],
-        &pk,
-        &sk,
         TokenAmount(1),
     )
 }

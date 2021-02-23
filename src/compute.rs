@@ -6,7 +6,7 @@ use crate::db_utils::{self, SimpleDb};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UtxoSet,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest, UtxoSet,
 };
 use crate::unicorn::UnicornShard;
 use crate::utils::{
@@ -33,7 +33,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 use tokio::task;
-use tracing::{debug, error_span, info, trace, warn};
+use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
 /// Key for local miner list
@@ -125,6 +125,7 @@ pub struct ComputeNode {
     pub storage_addr: SocketAddr,
     pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
     pub sanction_list: Vec<String>,
+    pub user_notification_list: BTreeSet<SocketAddr>,
 }
 
 impl ComputeNode {
@@ -169,6 +170,7 @@ impl ComputeNode {
             partition_list: (Vec::new(), Vec::new()),
             partition_key: None,
             storage_addr,
+            user_notification_list: Default::default(),
         }
         .load_local_db()?)
     }
@@ -315,11 +317,11 @@ impl ComputeNode {
         if txs_valid {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
 
-            println!(
+            trace!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );
         } else {
-            println!("Transactions for dual double entry execution are invalid");
+            debug!("Transactions for dual double entry execution are invalid");
         }
     }
 
@@ -411,7 +413,7 @@ impl ComputeNode {
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
     pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &[u8]) {
-        println!("Flooding PoW to peers not implemented");
+        error!("Flooding PoW to peers not implemented");
     }
 
     /// Floods all peers with a PoW commit for UnicornShard creation
@@ -422,7 +424,7 @@ impl ComputeNode {
     /// * `address` - Address of the contributing node
     /// * `_commit` - POW reference (&ProofOfWork)
     pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
-        println!("Flooding commit to peers not implemented");
+        error!("Flooding commit to peers not implemented");
     }
 
     /// Listens for new events from peers and handles them.
@@ -548,11 +550,26 @@ impl ComputeNode {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            SendUserBlockNotificationRequest => {
+                Some(self.receive_block_user_notification_request(peer))
+            }
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
+        }
+    }
+
+    /// Receive a block notification request from a user node
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    fn receive_block_user_notification_request(&mut self, peer: SocketAddr) -> Response {
+        self.user_notification_list.insert(peer);
+        Response {
+            success: true,
+            reason: "Received block notification",
         }
     }
 
@@ -658,6 +675,21 @@ impl ComputeNode {
             .send_to_all(
                 self.partition_list.1.iter().copied(),
                 MineRequest::SendBlock { block },
+            )
+            .await
+            .unwrap();
+
+        Ok(())
+    }
+
+    /// Floods the current block to user listening for updates
+    pub async fn flood_block_to_users(&mut self) -> Result<()> {
+        let block: Block = self.node_raft.get_mining_block().clone().unwrap();
+
+        self.node
+            .send_to_all(
+                self.user_notification_list.iter().copied(),
+                UserRequest::BlockMining { block },
             )
             .await
             .unwrap();

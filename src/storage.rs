@@ -336,6 +336,14 @@ impl StorageNode {
             hex::encode(hash_digest)
         };
 
+        info!(
+            "Store complete block summary: b_num={}, txs={}, mining={}, hash={}",
+            block_num,
+            block_txs.len(),
+            mining_transactions.len(),
+            block_hash
+        );
+
         // Save Block
         self.db.put(&block_hash, &block_input).unwrap();
 
