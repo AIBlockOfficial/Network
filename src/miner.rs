@@ -1,6 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::configurations::MinerNodeConfig;
 use crate::constants::PEER_LIMIT;
+use crate::hash_block::HashBlock;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
@@ -10,16 +11,15 @@ use crate::utils::{
 };
 use crate::wallet::WalletDb;
 use crate::Node;
-
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
-
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
+use std::time::SystemTime;
 use std::{
     error::Error,
     fmt,
@@ -27,9 +27,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
 };
 use tokio::task;
-use tracing::{debug, info_span, trace, warn};
-
-use crate::hash_block::HashBlock;
+use tracing::{debug, error, info, info_span, trace, warn};
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -164,6 +162,82 @@ impl MinerNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Listens for new events from peers and handles them, processing any errors.
+    pub async fn handle_next_event_response(
+        &mut self,
+        now: SystemTime,
+        response: Result<Response>,
+    ) {
+        debug!("Response: {:?}", response);
+
+        match response {
+            Ok(Response {
+                success: true,
+                reason: "Received random number successfully",
+            }) => {
+                info!("RANDOM NUMBER RECEIVED: {:?}", self.rand_num.clone());
+                let pow = self.generate_partition_pow().await.unwrap();
+                self.send_partition_pow(self.compute_address(), pow)
+                    .await
+                    .unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received partition list successfully",
+            }) => {
+                debug!("RECEIVED PARTITION LIST");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Pre-block received successfully",
+            }) => {
+                info!("PRE-BLOCK RECEIVED");
+                let (nonce, current_coinbase) =
+                    self.generate_pow_for_current_block().await.unwrap();
+
+                match now.elapsed() {
+                    Ok(elapsed) => {
+                        debug!("{}", elapsed.as_millis());
+                    }
+                    Err(e) => {
+                        // an error occurred!
+                        error!("Error: {:?}", e);
+                    }
+                }
+
+                self.send_pow(self.compute_address(), nonce, current_coinbase)
+                    .await
+                    .unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Block found",
+            }) => {
+                info!("Block nonce has been successfully found");
+                self.commit_block_found().await;
+            }
+            Ok(Response {
+                success: false,
+                reason: "Block not found",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason,
+            }) => {
+                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+            }
+            Ok(Response {
+                success: false,
+                reason,
+            }) => {
+                error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
+            }
+            Err(error) => {
+                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+            }
+        }
     }
 
     /// Listens for new events from peers and handles them.
