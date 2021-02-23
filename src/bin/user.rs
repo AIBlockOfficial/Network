@@ -165,7 +165,7 @@ async fn main() {
     // Send any requests here
 
     if let Some(peer_user_node) = peer_user_node_connected {
-        println!("ADDRESS: {:?}", peer_user_node);
+        println!("Connect to user address: {:?}", peer_user_node);
         // Connect to a peer user node for payment.
         node.connect_to(peer_user_node).await.unwrap();
 
@@ -202,16 +202,14 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
                         success: true,
                         reason: "New address ready to be sent",
                     }) => {
-                        println!("Sending new payment address");
-                        println!();
-
+                        debug!("Sending new payment address");
                         node.send_address_to_trading_peer().await.unwrap();
                     }
                     Ok(Response {
@@ -251,15 +249,15 @@ async fn main() {
                     }
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);

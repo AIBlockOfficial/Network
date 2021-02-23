@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use system::configurations::MinerNodeConfig;
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{MinerNode, Response};
+use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() {
@@ -96,14 +97,14 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
                         success: true,
                         reason: "Received random number successfully",
                     }) => {
-                        println!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
+                        info!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
                         let pow = node.generate_partition_pow().await.unwrap();
                         node.send_partition_pow(node.compute_address(), pow)
                             .await
@@ -113,23 +114,23 @@ async fn main() {
                         success: true,
                         reason: "Received partition list successfully",
                     }) => {
-                        println!("RECEIVED PARTITION LIST");
+                        debug!("RECEIVED PARTITION LIST");
                     }
                     Ok(Response {
                         success: true,
                         reason: "Pre-block received successfully",
                     }) => {
-                        println!("PRE-BLOCK RECEIVED");
+                        info!("PRE-BLOCK RECEIVED");
                         let (nonce, current_coinbase) =
                             node.generate_pow_for_current_block().await.unwrap();
 
                         match now.elapsed() {
                             Ok(elapsed) => {
-                                println!("{}", elapsed.as_millis());
+                                debug!("{}", elapsed.as_millis());
                             }
                             Err(e) => {
                                 // an error occurred!
-                                println!("Error: {:?}", e);
+                                error!("Error: {:?}", e);
                             }
                         }
 
@@ -141,7 +142,7 @@ async fn main() {
                         success: true,
                         reason: "Block found",
                     }) => {
-                        println!("Block nonce has been successfully found");
+                        info!("Block nonce has been successfully found");
                         node.commit_block_found().await;
                     }
                     Ok(Response {
@@ -150,15 +151,15 @@ async fn main() {
                     }) => {}
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE");
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);

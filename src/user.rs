@@ -13,7 +13,7 @@ use naom::primitives::transaction_utils::{
 };
 use std::{error::Error, fmt, net::SocketAddr};
 use tokio::task;
-use tracing::{debug, error_span, info_span, warn};
+use tracing::{debug, error_span, info_span, trace, warn};
 use tracing_futures::Instrument;
 
 /// Result wrapper for miner errors
@@ -219,7 +219,7 @@ impl UserNode {
     /// * `req` - UserRequest object containing the compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
         use UserRequest::*;
-        println!("RECEIVED REQUEST: {:?}", req);
+        trace!("RECEIVED REQUEST: {:?}", req);
 
         match req {
             SendAddressRequest { amount } => self.receive_payment_address_request(peer, amount),
@@ -396,7 +396,7 @@ impl UserNode {
         amount: TokenAmount,
     ) -> Result<()> {
         let _peer_span = info_span!("sending payment address request");
-        println!("Sending request for payment address to peer: {:?}", peer);
+        debug!("Sending request for payment address to peer: {:?}", peer);
 
         self.node
             .send(peer, UserRequest::SendAddressRequest { amount })
@@ -428,7 +428,7 @@ impl UserNode {
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
         let (peer, amount) = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
-        println!("Address to send: {:?}", address);
+        debug!("Address to send: {:?}", address);
 
         self.node
             .send(peer, UserRequest::SendPaymentAddress { address, amount })

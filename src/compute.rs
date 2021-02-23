@@ -33,7 +33,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 use tokio::task;
-use tracing::{debug, error_span, info, trace, warn};
+use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
 /// Key for local miner list
@@ -317,11 +317,11 @@ impl ComputeNode {
         if txs_valid {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
 
-            println!(
+            trace!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
             );
         } else {
-            println!("Transactions for dual double entry execution are invalid");
+            debug!("Transactions for dual double entry execution are invalid");
         }
     }
 
@@ -413,7 +413,7 @@ impl ComputeNode {
     /// * `address` - Address of the contributing node
     /// * `pow`     - PoW to flood
     pub fn flood_pow_to_peers(&self, _address: SocketAddr, _pow: &[u8]) {
-        println!("Flooding PoW to peers not implemented");
+        error!("Flooding PoW to peers not implemented");
     }
 
     /// Floods all peers with a PoW commit for UnicornShard creation
@@ -424,7 +424,7 @@ impl ComputeNode {
     /// * `address` - Address of the contributing node
     /// * `_commit` - POW reference (&ProofOfWork)
     pub fn flood_commit_to_peers(&self, _address: SocketAddr, _commit: &ProofOfWork) {
-        println!("Flooding commit to peers not implemented");
+        error!("Flooding commit to peers not implemented");
     }
 
     /// Listens for new events from peers and handles them.

@@ -7,7 +7,7 @@ use system::{
     SANC_LIST_PROD,
 };
 use system::{ComputeNode, Response};
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -117,7 +117,7 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                println!("Response: {:?}", response);
+                debug!("Response: {:?}", response);
 
                 match response {
                     Ok(Response {
@@ -142,8 +142,8 @@ async fn main() {
                         success: true,
                         reason: "Received PoW successfully",
                     }) => {
-                        println!("Send Block to storage");
-                        println!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
+                        info!("Send Block to storage");
+                        debug!("CURRENT MINED BLOCK: {:?}", node.current_mined_block);
                         if let Err(e) = node.send_block_to_storage().await {
                             error!("Block not sent to storage {:?}", e);
                         }
@@ -152,20 +152,20 @@ async fn main() {
                         success: true,
                         reason: "Transactions added to tx pool",
                     }) => {
-                        println!("Transactions received and processed successfully");
+                        debug!("Transactions received and processed successfully");
                     }
                     Ok(Response {
                         success: true,
                         reason: "First Block committed",
                     }) => {
-                        println!("First Block ready to mine: {:?}", node.get_mining_block());
+                        debug!("First Block ready to mine: {:?}", node.get_mining_block());
                         node.flood_rand_num_to_requesters().await.unwrap();
                     }
                     Ok(Response {
                         success: true,
                         reason: "Block committed",
                     }) => {
-                        println!("Block ready to mine: {:?}", node.get_mining_block());
+                        debug!("Block ready to mine: {:?}", node.get_mining_block());
                         if let Err(e) = node.send_bf_notification().await {
                             error!("Could not send block found notification to winner {:?}", e);
                         }
@@ -175,31 +175,47 @@ async fn main() {
                         success: true,
                         reason: "Transactions committed",
                     }) => {
-                        println!("Transactions ready to be used in next block");
+                        debug!("Transactions ready to be used in next block");
                     }
                     Ok(Response {
                         success: true,
                         reason: "Received block stored",
                     }) => {
-                        println!("Block info received from storage: ready to generate block");
+                        info!("Block info received from storage: ready to generate block");
                     }
                     Ok(Response {
                         success: true,
                         reason: "Snapshot applied",
                     }) => {
-                        println!("Snapshot applied");
+                        warn!("Snapshot applied");
                     }
                     Ok(Response {
                         success: true,
-                        reason: &_,
+                        reason: "Received block notification",
+                    }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason: "Partition PoW received successfully",
+                    }) => {}
+                    Ok(Response {
+                        success: false,
+                        reason: "Partition list is already full",
+                    }) => {}
+                    Ok(Response {
+                        success: false,
+                        reason: "No block to mine currently",
+                    }) => {}
+                    Ok(Response {
+                        success: true,
+                        reason,
                     }) => {
-                        println!("UNHANDLED RESPONSE TYPE: {:?}", response.unwrap().reason);
+                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
                     }
                     Ok(Response {
                         success: false,
-                        reason: &_,
+                        reason,
                     }) => {
-                        println!("WARNING: UNHANDLED RESPONSE TYPE FAILURE");
+                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
                     }
                     Err(error) => {
                         panic!("ERROR HANDLING RESPONSE: {:?}", error);
