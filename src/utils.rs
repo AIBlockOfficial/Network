@@ -11,7 +11,7 @@ use naom::primitives::transaction_utils::{
 };
 use naom::primitives::{
     asset::{Asset, TokenAmount},
-    block::Block,
+    block::{build_merkle_tree, Block},
     transaction::{OutPoint, Transaction, TxConstructor, TxOut},
 };
 use sha3::{Digest, Sha3_256};
@@ -176,14 +176,6 @@ pub async fn create_and_save_fake_to_wallet(
     Ok(())
 }
 
-/// Determines whether the passed value is within bounds of
-/// available tokens in the supply.
-///
-/// TODO: Currently placeholder, needs to be filled in once requirements known
-pub fn is_valid_amount(_value: &u64) -> bool {
-    true
-}
-
 /// Returns a socket address from command input
 ///
 /// ### Arguments
@@ -252,11 +244,14 @@ pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
 ///
 /// * `merkle_hash` - Merkle hash to concatenate onto
 /// * `cb_tx_hash`  - Coinbase transaction hash
-pub fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> String {
-    let mut concat = merkle_hash.to_string();
-    concat.push_str(&cb_tx_hash.to_string());
+pub async fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> String {
+    let merkle_result = build_merkle_tree(&[merkle_hash.to_string(), cb_tx_hash.to_string()]).await;
 
-    concat
+    if let Some((merkle_tree, _)) = merkle_result {
+        hex::encode(merkle_tree.root())
+    } else {
+        "".to_string()
+    }
 }
 
 /// Validate Proof of Work an address with a random number

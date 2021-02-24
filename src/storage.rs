@@ -327,7 +327,9 @@ impl StorageNode {
             } => Some(self.get_history(&start_time, &end_time)),
             GetUnicornTable { n_last_items } => Some(self.get_unicorn_table(n_last_items)),
             SendPow { pow } => Some(self.receive_pow(pow)),
-            SendBlock { common, mined_info } => Some(self.receive_block(peer, common, mined_info)),
+            SendBlock { common, mined_info } => {
+                Some(self.receive_block(peer, common, mined_info).await)
+            }
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -475,6 +477,54 @@ impl StorageNode {
 
         Ok(())
     }
+
+    /// Receives the new block from the miner with permissions to write
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`       - Peer that the block is received from
+    /// * `common`     - The block to be stored and checked
+    /// * `mined_info` - The mining info for the block
+    async fn receive_block(
+        &mut self,
+        peer: SocketAddr,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
+    ) -> Response {
+        let unicorn = common.block.header.previous_hash.clone();
+        let unicorn_unwrap;
+        let not_empty;
+        let valid;
+        match unicorn {
+            None => not_empty = false,
+            _ => not_empty = true,
+        }
+        if not_empty {
+            unicorn_unwrap = unicorn.unwrap();
+        } else {
+            unicorn_unwrap = String::from("");
+        }
+
+        let merk = common.block.header.merkle_root_hash.clone();
+        let nonce = mined_info.nonce.clone();
+        let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0).await;
+        valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
+
+        if valid {
+            self.node_raft
+                .append_to_our_blocks(peer, common, mined_info);
+
+            Response {
+                success: true,
+                reason: "Block received to be added",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Block received not added. PoW invalid",
+            }
+        }
+    }
 }
 
 impl StorageInterface for StorageNode {
@@ -505,47 +555,6 @@ impl StorageInterface for StorageNode {
         Response {
             success: false,
             reason: "Not implemented yet",
-        }
-    }
-
-    fn receive_block(
-        &mut self,
-        peer: SocketAddr,
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    ) -> Response {
-        let unicorn = common.block.header.previous_hash.clone();
-        let unicorn_unwrap;
-        let not_empty;
-        let valid;
-        match unicorn {
-            None => not_empty = false,
-            _ => not_empty = true,
-        }
-        if not_empty {
-            unicorn_unwrap = unicorn.unwrap();
-        } else {
-            unicorn_unwrap = String::from("");
-        }
-
-        let merk = common.block.header.merkle_root_hash.clone();
-        let nonce = mined_info.nonce.clone();
-        let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0);
-        valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
-
-        if valid {
-            self.node_raft
-                .append_to_our_blocks(peer, common, mined_info);
-
-            Response {
-                success: true,
-                reason: "Block received to be added",
-            }
-        } else {
-            Response {
-                success: false,
-                reason: "Block received not added. PoW invalid",
-            }
         }
     }
 

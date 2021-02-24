@@ -457,7 +457,7 @@ impl MinerNode {
     /// * `mining_tx_hash`   - block transation hash that is used to check the validity of the ProofOfWork
     async fn generate_pow_for_block(&mut self, mining_tx_hash: String) -> Result<Vec<u8>> {
         let block = self.current_block.clone();
-        let hash_to_mine = concat_merkle_coinbase(&block.merkle_hash, &mining_tx_hash);
+        let hash_to_mine = concat_merkle_coinbase(&block.merkle_hash, &mining_tx_hash).await;
 
         Ok(task::spawn_blocking(move || {
             // Mine Block with mining transaction
@@ -525,7 +525,7 @@ impl MinerNode {
     /// Generates a random sequence of values for a nonce
     fn generate_nonce() -> Vec<u8> {
         let mut rng = rand::thread_rng();
-        (0..10).map(|_| rng.gen_range(1, 200)).collect()
+        (0..16).map(|_| rng.gen_range(0, 200)).collect()
     }
 
     // Get the wallet db

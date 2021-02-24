@@ -657,7 +657,7 @@ impl ComputeNode {
 
         match req {
             SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
-            SendPoW { nonce, coinbase } => Some(self.receive_pow(peer, nonce, coinbase)),
+            SendPoW { nonce, coinbase } => Some(self.receive_pow(peer, nonce, coinbase).await),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
@@ -911,36 +911,6 @@ impl ComputeNode {
         }
         Ok(self)
     }
-}
-
-impl ComputeInterface for ComputeNode {
-    /// recieves commit of ProofOfWork
-    ///
-    /// ### Arguments
-    ///
-    /// * `address`    - Address of the node commiting the proof of work
-    /// * `commit`     - ProofOfWork for a block coming from address address
-    fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
-        if let Some(entry) = self.unicorn_list.get_mut(&address) {
-            if entry.is_valid(commit.clone()) {
-                self.flood_commit_to_peers(address, &commit);
-                return Response {
-                    success: true,
-                    reason: "Commit received successfully",
-                };
-            }
-
-            return Response {
-                success: false,
-                reason: "Commit not valid. Rejecting...",
-            };
-        }
-
-        Response {
-            success: false,
-            reason: "The node submitting a commit never submitted a promise",
-        }
-    }
 
     /// Recieves a ProofOfWork from miner
     ///
@@ -949,7 +919,7 @@ impl ComputeInterface for ComputeNode {
     /// * `address`    - Address of miner
     /// * `nonce`          - Sequenc number of the block held in a Vec<u8>
     /// * 'coinbase' - The transaction object  of the mining
-    fn receive_pow(
+    async fn receive_pow(
         &mut self,
         address: SocketAddr,
         nonce: Vec<u8>,
@@ -988,7 +958,8 @@ impl ComputeInterface for ComputeNode {
         }
 
         // Perform validation
-        let merkle_for_pow = concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash);
+        let merkle_for_pow =
+            concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
         if !validate_pow_block(&block_to_check.unicorn, &merkle_for_pow, &nonce) {
             return Response {
                 success: false,
@@ -1001,6 +972,36 @@ impl ComputeInterface for ComputeNode {
         Response {
             success: true,
             reason: "Received PoW successfully",
+        }
+    }
+}
+
+impl ComputeInterface for ComputeNode {
+    /// recieves commit of ProofOfWork
+    ///
+    /// ### Arguments
+    ///
+    /// * `address`    - Address of the node commiting the proof of work
+    /// * `commit`     - ProofOfWork for a block coming from address address
+    fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
+        if let Some(entry) = self.unicorn_list.get_mut(&address) {
+            if entry.is_valid(commit.clone()) {
+                self.flood_commit_to_peers(address, &commit);
+                return Response {
+                    success: true,
+                    reason: "Commit received successfully",
+                };
+            }
+
+            return Response {
+                success: false,
+                reason: "Commit not valid. Rejecting...",
+            };
+        }
+
+        Response {
+            success: false,
+            reason: "The node submitting a commit never submitted a promise",
         }
     }
 
