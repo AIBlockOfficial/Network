@@ -85,8 +85,7 @@ async fn main() {
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());
-    let _result = node
-        .send_partition_request(node.compute_address())
+    node.send_partition_request(node.compute_address())
         .await
         .unwrap();
 

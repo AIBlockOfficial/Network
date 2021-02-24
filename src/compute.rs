@@ -428,7 +428,8 @@ impl ComputeNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) {
+    /// Return true when a block was stored.
+    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
         debug!("Response: {:?}", response);
 
         match response {
@@ -494,6 +495,7 @@ impl ComputeNode {
                 reason: "Received block stored",
             }) => {
                 info!("Block info received from storage: ready to generate block");
+                return true;
             }
             Ok(Response {
                 success: true,
@@ -532,7 +534,9 @@ impl ComputeNode {
             Err(error) => {
                 panic!("ERROR HANDLING RESPONSE: {:?}", error);
             }
-        }
+        };
+
+        false
     }
 
     /// Listens for new events from peers and handles them.
@@ -767,7 +771,7 @@ impl ComputeNode {
 
     /// Floods the current block to participants for mining
     pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        info!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
+        debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
 

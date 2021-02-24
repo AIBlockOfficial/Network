@@ -140,7 +140,7 @@ pub struct UserNodeConfig {
 }
 
 /// Configuration option for setup of user node
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 pub struct UserNodeSetup {
     /// Transaction seeds, for each users
     pub user_initial_transactions: Vec<Vec<WalletTxSpec>>,

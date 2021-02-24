@@ -172,7 +172,8 @@ impl StorageNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) {
+    /// Return true when a block was stored.
+    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
         debug!("Response: {:?}", response);
 
         match response {
@@ -188,6 +189,7 @@ impl StorageNode {
                 if let Err(e) = self.send_stored_block().await {
                     error!("Block stored not sent {:?}", e);
                 }
+                return true;
             }
             Ok(Response {
                 success: true,
@@ -210,7 +212,9 @@ impl StorageNode {
             Err(error) => {
                 panic!("ERROR HANDLING RESPONSE: {:?}", error);
             }
-        }
+        };
+
+        false
     }
 
     /// Listens for new events from peers and handles them.

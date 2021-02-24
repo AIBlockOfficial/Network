@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{TxOutSpec, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::SANC_LIST_TEST;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
@@ -32,7 +32,7 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tokio::time;
@@ -1193,6 +1193,124 @@ async fn gen_transactions() {
     // Assert
     //
     assert_eq!(tx_committed, tx_expected);
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    // initial_amount is split into TokenAmount(1) TxOuts for the next round.
+    //
+    let initial_amount = TokenAmount(17);
+    let mut network_config = complete_network_config_with_n_compute_raft(10420, 1);
+    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, initial_amount);
+    let mut network = Network::create_from_config(&network_config).await;
+    let mut tx_generator = TransactionGen::new(vec![wallet_seed(VALID_TXS_IN[0], &initial_amount)]);
+    let setup = UserNodeSetup {
+        user_setup_tx_chunk_size: Some(5),
+        user_setup_tx_in_per_tx: Some(3),
+        user_setup_tx_in_max_count: 10_000,
+        ..Default::default()
+    };
+    let expected_blocks = 4;
+    let expected_block_num = expected_blocks - 1;
+
+    //
+    // Act
+    //
+    user_send_block_notification_request(&mut network, "user1").await;
+
+    let mut handles = Vec::new();
+    handles.push(tokio::spawn({
+        let node = network.compute("compute1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let mut expected_blocks = expected_blocks;
+            while let Some(response) = node.handle_next_event().await {
+                if node.handle_next_event_response(response).await {
+                    expected_blocks -= 1;
+                    if expected_blocks == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let node = network.storage("storage1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let mut expected_blocks = expected_blocks;
+            while let Some(response) = node.handle_next_event().await {
+                if node.handle_next_event_response(response).await {
+                    expected_blocks -= 1;
+                    if expected_blocks == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let now = SystemTime::now();
+        let node = network.miner("miner1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let mut expected_blocks = expected_blocks;
+
+            let address = node.compute_address();
+            node.send_partition_request(address).await.unwrap();
+
+            while let Some(response) = node.handle_next_event().await {
+                if node.handle_next_event_response(now, response).await {
+                    expected_blocks -= 1;
+                    if expected_blocks == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let node = network.user("user1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let mut expected_blocks = expected_blocks;
+
+            let address = node.compute_address();
+            node.send_block_notification_request(address).await.unwrap();
+
+            while let Some(response) = node.handle_next_event().await {
+                if node
+                    .handle_next_event_response(&setup, &mut tx_generator, response)
+                    .await
+                {
+                    expected_blocks -= 1;
+                    if expected_blocks == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }));
+
+    join_all(handles).await;
+
+    //
+    // Assert
+    //
+    let last_stored_b_num = {
+        let block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
+        block_stored.map(|bs| bs.block_num)
+    };
+    assert_eq!(last_stored_b_num, Some(expected_block_num));
 
     test_step_complete(network).await;
 }

@@ -165,11 +165,12 @@ impl MinerNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
+    /// Return true when a block was mined.
     pub async fn handle_next_event_response(
         &mut self,
         now: SystemTime,
         response: Result<Response>,
-    ) {
+    ) -> bool {
         debug!("Response: {:?}", response);
 
         match response {
@@ -210,6 +211,7 @@ impl MinerNode {
                 self.send_pow(self.compute_address(), nonce, current_coinbase)
                     .await
                     .unwrap();
+                return true;
             }
             Ok(Response {
                 success: true,
@@ -237,7 +239,9 @@ impl MinerNode {
             Err(error) => {
                 panic!("ERROR HANDLING RESPONSE: {:?}", error);
             }
-        }
+        };
+
+        false
     }
 
     /// Listens for new events from peers and handles them.
