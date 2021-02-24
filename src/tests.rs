@@ -41,6 +41,11 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
+#[cfg(not(debug_assertions))] // Release
+const TEST_DURATION_DIVIDER: usize = 10;
+#[cfg(debug_assertions)] // Debug
+const TEST_DURATION_DIVIDER: usize = 1;
+
 const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
 const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
 const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
@@ -1198,25 +1203,50 @@ async fn gen_transactions() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn main_loops_raft_1_node() {
+async fn main_loops_few_txs_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(10430, 1);
+    main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1).await
+}
+
+// Slow: Only run when explicitely specified for performance and large tests
+// `RUST_LOG="info,raft=warn" cargo test --lib --release -- --ignored --nocapture main_loops_many_txs_threaded_raft_1_node`
+#[tokio::test(threaded_scheduler)]
+#[ignore]
+async fn main_loops_many_txs_threaded_raft_1_node() {
+    let mut network_config = complete_network_config_with_n_compute_raft(10440, 1);
+    network_config.test_duration_divider = 1;
+
+    main_loops_raft_1_node_common(network_config, TokenAmount(1), 1_000_000, 5_000).await
+}
+
+async fn main_loops_raft_1_node_common(
+    mut network_config: NetworkConfig,
+    initial_amount: TokenAmount,
+    seed_count: i32,
+    seed_wallet_count: i32,
+) {
     test_step_start();
 
     //
     // Arrange
     // initial_amount is split into TokenAmount(1) TxOuts for the next round.
     //
-    let initial_amount = TokenAmount(17);
-    let mut network_config = complete_network_config_with_n_compute_raft(10420, 1);
-    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, initial_amount);
+    network_config.compute_seed_utxo =
+        make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
     let mut network = Network::create_from_config(&network_config).await;
-    let mut tx_generator = TransactionGen::new(vec![wallet_seed(VALID_TXS_IN[0], &initial_amount)]);
+
+    let mut tx_generator = TransactionGen::new(
+        (0..seed_wallet_count)
+            .map(|i| wallet_seed((i, "000000"), &initial_amount))
+            .collect(),
+    );
     let setup = UserNodeSetup {
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_in_max_count: 10_000,
+        user_setup_tx_in_max_count: 1_000_000,
         ..Default::default()
     };
-    let expected_blocks = 4;
+    let expected_blocks = 6;
     let expected_block_num = expected_blocks - 1;
 
     //
@@ -2306,6 +2336,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()
             .collect(),
+        test_duration_divider: TEST_DURATION_DIVIDER,
     }
 }
 

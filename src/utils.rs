@@ -362,15 +362,23 @@ pub fn create_valid_transaction_with_ins_outs(
 ///
 /// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
 pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
+    let mut pk_to_address: BTreeMap<String, String> = BTreeMap::new();
     seed.iter()
         .map(|(tx_hash, tx_out)| {
             let tx = Transaction {
                 outputs: tx_out
                     .iter()
                     .map(|out| {
-                        let pk_slice = hex::decode(&out.public_key).unwrap();
-                        let pk = PublicKey::from_slice(&pk_slice).unwrap();
-                        let script_public_key = construct_address(pk);
+                        let script_public_key =
+                            if let Some(addr) = pk_to_address.get(&out.public_key) {
+                                addr.clone()
+                            } else {
+                                let pk_slice = hex::decode(&out.public_key).unwrap();
+                                let pk = PublicKey::from_slice(&pk_slice).unwrap();
+                                let addr = construct_address(pk);
+                                pk_to_address.insert(out.public_key.clone(), addr.clone());
+                                addr
+                            };
 
                         TxOut::new_amount(script_public_key, out.amount)
                     })
