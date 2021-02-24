@@ -231,7 +231,7 @@ pub trait StorageInterface {
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
-    SendBlock { block: Vec<u8> },
+    SendBlock { block: Vec<u8>, reward: TokenAmount },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
     NotifyBlockFound { win_coinbase: String },
@@ -242,7 +242,10 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
-            SendBlock { ref block } => write!(f, "SendBlock"),
+            SendBlock {
+                ref block,
+                ref reward,
+            } => write!(f, "SendBlock"),
             SendRandomNum { ref rnum } => write!(f, "SendRandomNum"),
             SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
             NotifyBlockFound { ref win_coinbase } => write!(f, "NotifyBlockFound"),
@@ -256,7 +259,8 @@ pub trait MinerInterface {
     /// ### Arguments
     ///
     /// * `pre_block` - New block to be mined
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>) -> Response;
+    /// * `reward`    - The block reward to be paid on successful PoW
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response;
 }
 
 ///============ COMPUTE NODE ============///

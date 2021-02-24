@@ -16,11 +16,12 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
+
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_is_valid;
+
 use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
@@ -782,11 +783,15 @@ impl ComputeNode {
         };
         let hashblock = HashBlock::new_for_mining(unicorn, header.merkle_root_hash, header.b_num);
         let block = serialize_hashblock_for_pow(&hashblock);
+        let reward = self.node_raft.get_current_reward();
 
         self.node
             .send_to_all(
                 self.partition_list.1.iter().copied(),
-                MineRequest::SendBlock { block },
+                MineRequest::SendBlock {
+                    block,
+                    reward: *reward,
+                },
             )
             .await
             .unwrap();
@@ -949,8 +954,8 @@ impl ComputeNode {
         };
 
         // Check coinbase amount and structure
-        let coinbase_amount = TokenAmount(12000);
-        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != coinbase_amount {
+        let coinbase_amount = self.node_raft.get_current_reward();
+        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != *coinbase_amount {
             return Response {
                 success: false,
                 reason: "Coinbase transaction invalid",

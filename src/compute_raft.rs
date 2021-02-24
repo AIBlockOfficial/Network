@@ -4,8 +4,9 @@ use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
 use crate::db_utils::{self, SimpleDb};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
-use crate::utils::make_utxo_set_from_seed;
+use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
 use bincode::{deserialize, serialize};
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{
@@ -85,6 +86,10 @@ pub struct ComputeConsensused {
     current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
+    /// The current circulation of tokens
+    current_circulation: TokenAmount,
+    /// The current reward for a given compute node
+    current_reward: TokenAmount,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -382,6 +387,16 @@ impl ComputeRaft {
         &self.consensused.tx_pool
     }
 
+    /// Gets the current number of tokens in circulation
+    pub fn get_current_circulation(&self) -> &TokenAmount {
+        &self.consensused.current_circulation
+    }
+
+    /// Gets the current reward for a given block
+    pub fn get_current_reward(&self) -> &TokenAmount {
+        &self.consensused.current_reward
+    }
+
     /// Whether adding these will grow our pool within the limit. Returns a bool.
     pub fn tx_pool_can_accept(&self, extra_len: usize) -> bool {
         self.combined_tx_pool_len() + extra_len <= TX_POOL_LIMIT
@@ -499,6 +514,11 @@ impl ComputeConsensused {
         &self.current_block
     }
 
+    /// Current number of tokens in circulation
+    pub fn get_current_circulation(&self) -> &TokenAmount {
+        &self.current_circulation
+    }
+
     /// Current utxo_set including block being mined
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.utxo_set
@@ -595,6 +615,7 @@ impl ComputeConsensused {
     }
 
     /// Apply set of valid transactions to the block.
+    ///
     /// ### Arguments
     ///
     /// * `txs`   - given valid BTreeMap of transactions to apply to block
@@ -737,10 +758,12 @@ impl ComputeConsensused {
     pub fn apply_ready_block_stored_info(&mut self) {
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
+                self.current_circulation = get_total_coinbase_tokens(&utxo_set);
                 self.tx_current_block_num = Some(0);
                 self.initial_utxo_txs = Some(utxo_set);
             }
             AccumulatingBlockStoredInfo::Block(info) => {
+                self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
                 self.utxo_set.extend(get_tx_out_with_out_point_cloned(
@@ -748,6 +771,7 @@ impl ComputeConsensused {
                 ));
             }
         }
+        self.current_reward = calculate_reward(self.current_circulation);
     }
 
     /// Take the block info with most vote and reset accumulator.
