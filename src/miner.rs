@@ -94,7 +94,7 @@ pub struct MinerNode {
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    current_reward: u64,
+    current_reward: TokenAmount,
 }
 
 impl MinerNode {
@@ -126,7 +126,7 @@ impl MinerNode {
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
             current_payment_address: None,
-            current_reward: 0,
+            current_reward: TokenAmount(0),
         })
     }
 
@@ -441,7 +441,7 @@ impl MinerNode {
         }
         let mining_tx = construct_coinbase_tx(
             block.b_num,
-            TokenAmount(self.current_reward),
+            self.current_reward,
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
@@ -537,7 +537,7 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: u64) -> Response {
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response {
         self.current_block = deserialize::<HashBlock>(&pre_block).unwrap();
         self.current_reward = reward;
 

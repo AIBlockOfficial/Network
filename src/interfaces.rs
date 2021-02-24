@@ -231,7 +231,7 @@ pub trait StorageInterface {
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
-    SendBlock { block: Vec<u8>, reward: u64 },
+    SendBlock { block: Vec<u8>, reward: TokenAmount },
     SendRandomNum { rnum: Vec<u8> },
     SendPartitionList { p_list: Vec<ProofOfWork> },
     NotifyBlockFound { win_coinbase: String },
@@ -260,7 +260,7 @@ pub trait MinerInterface {
     ///
     /// * `pre_block` - New block to be mined
     /// * `reward`    - The block reward to be paid on successful PoW
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: u64) -> Response;
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response;
 }
 
 ///============ COMPUTE NODE ============///
