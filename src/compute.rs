@@ -869,35 +869,6 @@ impl ComputeNode {
         }
     }
 
-    /// Checks whether a transaction's locktime has expired
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set`    - UTXO set
-    /// * `tx`          - Transaction to check
-    fn lock_expired(&self, utxo_set: &UtxoSet, tx: &OutPoint) -> bool {
-        let mut lock_expiry = false;
-
-        if let Some(txout) = utxo_set.get(tx) {
-            if txout.locktime == 0 {
-                lock_expiry = true;
-            } else if self.current_mined_block.is_some() {
-                let block_height = self
-                    .current_mined_block
-                    .as_ref()
-                    .unwrap()
-                    .block
-                    .header
-                    .b_num;
-                if block_height >= txout.locktime {
-                    lock_expiry = true;
-                }
-            }
-        }
-
-        lock_expiry
-    }
-
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
         self.request_list = match self.db.get(REQUEST_LIST_KEY) {
@@ -1065,6 +1036,10 @@ impl ComputeInterface for ComputeNode {
         }
 
         let utxo_set = self.node_raft.get_committed_utxo_set();
+        let lock_expired = self
+            .node_raft
+            .get_committed_current_block_num()
+            .unwrap_or_default();
         let valid_tx: BTreeMap<_, _> = transactions
             .iter()
             .filter(|(_, tx)| !tx.is_coinbase())
@@ -1073,7 +1048,7 @@ impl ComputeInterface for ComputeNode {
                     utxo_set
                         .get(&v)
                         .filter(|_| !self.sanction_list.contains(&v.t_hash))
-                        .filter(|_| self.lock_expired(&utxo_set, &v))
+                        .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
             })
             .map(|(hash, tx)| (hash.clone(), tx.clone()))
