@@ -2327,7 +2327,7 @@ async fn generate_pow_for_block(block: &Block, mining_tx_hash: String) -> Vec<u8
 /// Generates a random sequence of values for a nonce
 fn generate_nonce() -> Vec<u8> {
     let mut rng = rand::thread_rng();
-    (0..10).map(|_| rng.gen_range(1, 200)).collect()
+    (0..16).map(|_| rng.gen_range(0, 200)).collect()
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
