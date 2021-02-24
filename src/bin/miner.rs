@@ -3,9 +3,8 @@
 use clap::{App, Arg};
 use std::time::SystemTime;
 use system::configurations::MinerNodeConfig;
+use system::MinerNode;
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
-use system::{MinerNode, Response};
-use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() {
@@ -86,8 +85,7 @@ async fn main() {
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());
-    let _result = node
-        .send_partition_request(node.compute_address())
+    node.send_partition_request(node.compute_address())
         .await
         .unwrap();
 
@@ -97,74 +95,7 @@ async fn main() {
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                debug!("Response: {:?}", response);
-
-                match response {
-                    Ok(Response {
-                        success: true,
-                        reason: "Received random number successfully",
-                    }) => {
-                        info!("RANDOM NUMBER RECEIVED: {:?}", node.rand_num.clone());
-                        let pow = node.generate_partition_pow().await.unwrap();
-                        node.send_partition_pow(node.compute_address(), pow)
-                            .await
-                            .unwrap();
-                    }
-                    Ok(Response {
-                        success: true,
-                        reason: "Received partition list successfully",
-                    }) => {
-                        debug!("RECEIVED PARTITION LIST");
-                    }
-                    Ok(Response {
-                        success: true,
-                        reason: "Pre-block received successfully",
-                    }) => {
-                        info!("PRE-BLOCK RECEIVED");
-                        let (nonce, current_coinbase) =
-                            node.generate_pow_for_current_block().await.unwrap();
-
-                        match now.elapsed() {
-                            Ok(elapsed) => {
-                                debug!("{}", elapsed.as_millis());
-                            }
-                            Err(e) => {
-                                // an error occurred!
-                                error!("Error: {:?}", e);
-                            }
-                        }
-
-                        node.send_pow(node.compute_address(), nonce, current_coinbase)
-                            .await
-                            .unwrap();
-                    }
-                    Ok(Response {
-                        success: true,
-                        reason: "Block found",
-                    }) => {
-                        info!("Block nonce has been successfully found");
-                        node.commit_block_found().await;
-                    }
-                    Ok(Response {
-                        success: false,
-                        reason: "Block not found",
-                    }) => {}
-                    Ok(Response {
-                        success: true,
-                        reason,
-                    }) => {
-                        error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
-                    }
-                    Ok(Response {
-                        success: false,
-                        reason,
-                    }) => {
-                        error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
-                    }
-                    Err(error) => {
-                        panic!("ERROR HANDLING RESPONSE: {:?}", error);
-                    }
-                }
+                node.handle_next_event_response(now, response).await;
             }
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();

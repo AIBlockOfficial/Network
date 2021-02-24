@@ -27,12 +27,6 @@ use tracing::error_span;
 use tracing::info;
 use tracing_futures::Instrument;
 
-#[cfg(not(debug_assertions))] // Release
-const TEST_DURATION_DIVIDER: usize = 10;
-
-#[cfg(debug_assertions)] // Debug
-const TEST_DURATION_DIVIDER: usize = 1;
-
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
 pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
 pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
@@ -69,6 +63,7 @@ pub struct NetworkConfig {
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     pub nodes: BTreeMap<NodeType, Vec<String>>,
     pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
+    pub test_duration_divider: usize,
 }
 
 impl NetworkConfig {
@@ -643,8 +638,8 @@ async fn init_storage(
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         storage_raft,
-        storage_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
-        storage_block_timeout: 1000 / TEST_DURATION_DIVIDER,
+        storage_raft_tick_timeout: 200 / config.test_duration_divider,
+        storage_block_timeout: 1000 / config.test_duration_divider,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -677,8 +672,8 @@ async fn init_compute(
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
-        compute_raft_tick_timeout: 200 / TEST_DURATION_DIVIDER,
-        compute_transaction_timeout: 100 / TEST_DURATION_DIVIDER,
+        compute_raft_tick_timeout: 200 / config.test_duration_divider,
+        compute_transaction_timeout: 100 / config.test_duration_divider,
         compute_seed_utxo: config.compute_seed_utxo.clone(),
         compute_partition_full_size: config.compute_partition_full_size,
         compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,

@@ -100,7 +100,7 @@ use tokio::{
     sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
 
@@ -822,8 +822,12 @@ impl Node {
 
         // Wrap the peer socket into the tokio codec which handles length-delimited frames.
         let (sock_in, sock_out) = tokio::io::split(socket);
-        let sock_in = FramedRead::new(sock_in, LengthDelimitedCodec::new());
-        let mut sock_out = FramedWrite::new(sock_out, LengthDelimitedCodec::new());
+        let codec_builder = *length_delimited::Builder::new().max_frame_length(
+            // max frame length of 100MB
+            100 * 1_024 * 1_024,
+        );
+        let sock_in = FramedRead::new(sock_in, codec_builder.new_codec());
+        let mut sock_out = FramedWrite::new(sock_out, codec_builder.new_codec());
 
         // Spawn the sender task.
         // Redirect messages from the mpsc channel into the TCP socket

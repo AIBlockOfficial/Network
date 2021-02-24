@@ -21,7 +21,7 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use tokio::task;
-use tracing::{error_span, info, trace, warn};
+use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
 /// Result wrapper for compute errors
@@ -169,6 +169,52 @@ impl StorageNode {
             db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
             raft_db: Some(self.node_raft.take_closed_persistent_store().await),
         }
+    }
+
+    /// Listens for new events from peers and handles them, processing any errors.
+    /// Return true when a block was stored.
+    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+        debug!("Response: {:?}", response);
+
+        match response {
+            Ok(Response {
+                success: true,
+                reason: "Block received to be added",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Block complete stored",
+            }) => {
+                info!("Block stored: Send to compute");
+                if let Err(e) = self.send_stored_block().await {
+                    error!("Block stored not sent {:?}", e);
+                }
+                return true;
+            }
+            Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            }) => {
+                warn!("Snapshot applied");
+            }
+            Ok(Response {
+                success: true,
+                reason,
+            }) => {
+                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+            }
+            Ok(Response {
+                success: false,
+                reason,
+            }) => {
+                error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
+            }
+            Err(error) => {
+                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+            }
+        };
+
+        false
     }
 
     /// Listens for new events from peers and handles them.
