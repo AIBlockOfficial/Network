@@ -2277,8 +2277,7 @@ async fn complete_block(
     let init_keys: Vec<_> = per_node_init.keys().cloned().collect();
     for idx in init_keys {
         let addr = per_node_init.get(&idx).unwrap().clone();
-        let mined_block_info =
-            construct_mining_extra_info(block.clone(), block_num.clone(), addr).await;
+        let mined_block_info = construct_mining_extra_info(block.clone(), block_num, addr).await;
         per_node.insert(idx, mined_block_info);
     }
 
