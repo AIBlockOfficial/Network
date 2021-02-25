@@ -197,7 +197,7 @@ impl MinerNode {
                 reason: "Pre-block received successfully",
             }) => {
                 info!("PRE-BLOCK RECEIVED");
-                let (nonce, current_coinbase) =
+                let (block_num, nonce, current_coinbase) =
                     self.generate_pow_for_current_block().await.unwrap();
 
                 match now.elapsed() {
@@ -210,7 +210,7 @@ impl MinerNode {
                     }
                 }
 
-                self.send_pow(self.compute_address(), nonce, current_coinbase)
+                self.send_pow(self.compute_address(), block_num, nonce, current_coinbase)
                     .await
                     .unwrap();
                 return true;
@@ -375,11 +375,19 @@ impl MinerNode {
     pub async fn send_pow(
         &mut self,
         peer: SocketAddr,
+        block_num: u64,
         nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Result<()> {
         self.node
-            .send(peer, ComputeRequest::SendPoW { nonce, coinbase })
+            .send(
+                peer,
+                ComputeRequest::SendPoW {
+                    block_num,
+                    nonce,
+                    coinbase,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -432,15 +440,15 @@ impl MinerNode {
 
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
-    pub async fn generate_pow_for_current_block(&mut self) -> Result<(Vec<u8>, Transaction)> {
-        let block = &self.current_block;
+    pub async fn generate_pow_for_current_block(&mut self) -> Result<(u64, Vec<u8>, Transaction)> {
+        let b_num = self.current_block.b_num;
 
         if self.current_payment_address.is_none() {
             let (address, _) = self.wallet_db.generate_payment_address().await;
             self.current_payment_address = Some(address);
         }
         let mining_tx = construct_coinbase_tx(
-            block.b_num,
+            b_num,
             self.current_reward,
             self.current_payment_address.clone().unwrap(),
         );
@@ -448,7 +456,7 @@ impl MinerNode {
         let pow = self.generate_pow_for_block(mining_tx_hash.clone()).await?;
 
         self.current_coinbase = Some((mining_tx_hash, mining_tx.clone()));
-        Ok((pow, mining_tx))
+        Ok((b_num, pow, mining_tx))
     }
 
     /// Generates and returns the nonce of a block.active_raft

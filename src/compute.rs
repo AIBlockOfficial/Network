@@ -119,7 +119,7 @@ pub struct ComputeNode {
     pub current_random_num: Vec<u8>,
     pub last_coinbase_hash: Option<(SocketAddr, String, bool)>,
     pub partition_key: Option<Key>,
-    pub partition_list: (Vec<ProofOfWork>, Vec<SocketAddr>),
+    pub partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
     pub partition_full_size: usize,
     pub request_list: BTreeSet<SocketAddr>,
     pub request_list_first_flood: Option<usize>,
@@ -157,10 +157,10 @@ impl ComputeNode {
             node,
             node_raft,
             db,
-            unicorn_list: HashMap::new(),
+            unicorn_list: Default::default(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
-            druid_pool: BTreeMap::new(),
+            druid_pool: Default::default(),
             current_random_num: Self::generate_random_num(),
             last_coinbase_hash: None,
             request_list: Default::default(),
@@ -168,7 +168,7 @@ impl ComputeNode {
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
-            partition_list: (Vec::new(), Vec::new()),
+            partition_list: Default::default(),
             partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
@@ -519,7 +519,7 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "No block to mine currently",
+                reason: "Not block currently mined",
             }) => {}
             Ok(Response {
                 success: true,
@@ -659,7 +659,11 @@ impl ComputeNode {
 
         match req {
             SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
-            SendPoW { nonce, coinbase } => Some(self.receive_pow(peer, nonce, coinbase).await),
+            SendPoW {
+                block_num,
+                nonce,
+                coinbase,
+            } => Some(self.receive_pow(peer, block_num, nonce, coinbase).await),
             SendPartitionEntry { partition_entry } => {
                 Some(self.receive_partition_entry(peer, partition_entry))
             }
@@ -728,17 +732,17 @@ impl ComputeNode {
             };
         }
 
-        if format_parition_pow_address(peer) != partition_entry.address
-            || !validate_pow_for_address(&partition_entry, &Some(&self.current_random_num))
-        {
+        let valid_pow = format_parition_pow_address(peer) == partition_entry.address
+            && validate_pow_for_address(&partition_entry, &Some(&self.current_random_num));
+
+        if valid_pow && self.partition_list.1.insert(peer) {
+            self.partition_list.0.push(partition_entry);
+        } else {
             return Response {
                 success: false,
                 reason: "PoW received is invalid",
             };
         }
-
-        self.partition_list.0.push(partition_entry);
-        self.partition_list.1.push(peer);
 
         if self.partition_list.0.len() < self.partition_full_size {
             return Response {
@@ -748,7 +752,6 @@ impl ComputeNode {
         }
 
         self.partition_key = Some(get_partition_entry_key(&self.partition_list.0));
-
         Response {
             success: true,
             reason: "Partition list is full",
@@ -777,11 +780,7 @@ impl ComputeNode {
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
 
-        let unicorn = if let Some(h) = header.previous_hash {
-            h
-        } else {
-            "".to_string()
-        };
+        let unicorn = header.previous_hash.unwrap_or_default();
         let hashblock = HashBlock::new_for_mining(unicorn, header.merkle_root_hash, header.b_num);
         let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
@@ -844,7 +843,7 @@ impl ComputeNode {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
         self.current_random_num = Self::generate_random_num();
-        self.partition_list = (Vec::new(), Vec::new());
+        self.partition_list = Default::default();
         self.partition_key = None;
 
         // Update latest coinbase to notify winner
@@ -894,34 +893,38 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `address`    - Address of miner
-    /// * `nonce`          - Sequenc number of the block held in a Vec<u8>
-    /// * 'coinbase' - The transaction object  of the mining
+    /// * `block_num`  - Block number the PoW is for
+    /// * `nonce`      - Sequenc number of the block held in a Vec<u8>
+    /// * 'coinbase'   - The transaction object  of the mining
     async fn receive_pow(
         &mut self,
         address: SocketAddr,
+        block_num: u64,
         nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Response {
-        info!(?address, "Received PoW");
-        let coinbase_hash = construct_tx_hash(&coinbase);
-        let mut block_to_check = HashBlock::new();
+        let pow_mining_block = self
+            .node_raft
+            .get_mining_block()
+            .as_ref()
+            .filter(|b| block_num == b.header.b_num)
+            .filter(|_| self.partition_list.1.contains(&address));
 
-        if let Some(mining_block) = self.node_raft.get_mining_block() {
-            let prev_hash = if let Some(h) = &mining_block.header.previous_hash {
-                h.clone()
-            } else {
-                "".to_string()
-            };
-
-            // Update block to check
-            block_to_check.merkle_hash = mining_block.header.merkle_root_hash.clone();
-            block_to_check.unicorn = prev_hash;
-            block_to_check.nonce = nonce.clone();
-            block_to_check.b_num = mining_block.header.b_num;
+        // Check if expected block
+        let block_to_check = if let Some(mining_block) = pow_mining_block {
+            info!(?address, "Received expected PoW");
+            let header = &mining_block.header;
+            HashBlock {
+                merkle_hash: header.merkle_root_hash.clone(),
+                unicorn: header.previous_hash.clone().unwrap_or_default(),
+                nonce: nonce.clone(),
+                b_num: header.b_num,
+            }
         } else {
+            trace!(?address, "Received outdated PoW");
             return Response {
                 success: false,
-                reason: "No block to mine currently",
+                reason: "Not block currently mined",
             };
         };
 
@@ -935,6 +938,7 @@ impl ComputeNode {
         }
 
         // Perform validation
+        let coinbase_hash = construct_tx_hash(&coinbase);
         let merkle_for_pow =
             concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
         if !validate_pow_block(&block_to_check.unicorn, &merkle_for_pow, &nonce) {
