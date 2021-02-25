@@ -304,11 +304,10 @@ impl ComputeNode {
     /// ### Arguments
     /// * `droplet`  - DRUID droplet of transactions to execute
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
-        let utxo_set = self.node_raft.get_committed_utxo_set();
-        let txs_valid = droplet
-            .tx
-            .values()
-            .all(|tx| tx_is_valid(&tx, |v| utxo_set.get(&v)));
+        let txs_valid = {
+            let tx_validator = self.transactions_validator();
+            droplet.tx.values().all(|tx| tx_validator(&tx))
+        };
 
         if txs_valid {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
@@ -355,17 +354,24 @@ impl ComputeNode {
         storage_address
     }
 
-    /// Util function to get a socket address for PID table checks
-    /// ### Arguments
-    /// * `address`    - Peer's address
-    fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
-        let comparison_port = address.port() + 1;
-        let mut comparison_addr = address;
+    /// Return closure use to validate a transaction
+    fn transactions_validator(&self) -> impl Fn(&Transaction) -> bool + '_ {
+        let utxo_set = self.node_raft.get_committed_utxo_set();
+        let lock_expired = self
+            .node_raft
+            .get_committed_current_block_num()
+            .unwrap_or_default();
+        let sanction_list = &self.sanction_list;
 
-        comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-        comparison_addr.set_port(comparison_port);
-
-        comparison_addr
+        move |tx| {
+            !tx.is_coinbase()
+                && tx_is_valid(&tx, |v| {
+                    utxo_set
+                        .get(&v)
+                        .filter(|_| !sanction_list.contains(&v.t_hash))
+                        .filter(|tx_out| lock_expired >= tx_out.locktime)
+                })
+        }
     }
 
     /// Sends notification of a block found and stored to the winner.
@@ -1031,24 +1037,13 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        let utxo_set = self.node_raft.get_committed_utxo_set();
-        let lock_expired = self
-            .node_raft
-            .get_committed_current_block_num()
-            .unwrap_or_default();
-        let valid_tx: BTreeMap<_, _> = transactions
-            .into_iter()
-            .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| {
-                tx_is_valid(&tx, |v| {
-                    utxo_set
-                        .get(&v)
-                        .filter(|_| !self.sanction_list.contains(&v.t_hash))
-                        .filter(|tx_out| lock_expired >= tx_out.locktime)
-                })
-            })
-            .map(|(hash, tx)| (hash, tx))
-            .collect();
+        let valid_tx: BTreeMap<_, _> = {
+            let tx_validator = self.transactions_validator();
+            transactions
+                .into_iter()
+                .filter(|(_, tx)| tx_validator(&tx))
+                .collect()
+        };
 
         // At this point the tx's are considered valid
         let valid_tx_len = valid_tx.len();
