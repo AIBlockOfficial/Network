@@ -484,6 +484,11 @@ impl ComputeRaft {
     pub fn find_invalid_new_txs(&self, new_txs: &BTreeMap<String, Transaction>) -> Vec<String> {
         self.consensused.find_invalid_new_txs(new_txs)
     }
+
+    /// Get the current consensued block num.
+    pub fn get_committed_current_block_num(&self) -> Option<u64> {
+        self.consensused.tx_current_block_num
+    }
 }
 
 impl ComputeConsensused {

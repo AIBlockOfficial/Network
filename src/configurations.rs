@@ -149,7 +149,7 @@ pub struct UserNodeSetup {
     /// How many TxIn to have for each transactions
     pub user_setup_tx_in_per_tx: Option<usize>,
     /// How many Txin to have for that user at each round
-    pub user_setup_tx_in_max_count: usize,
+    pub user_setup_tx_max_count: usize,
 }
 
 /// Extra params for Node construction

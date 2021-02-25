@@ -75,10 +75,13 @@ impl TransactionGen {
         let mut all_txs = Vec::new();
 
         for (to, from) in to_addr.zip(&from_addr) {
-            if all_txs.len() >= total_tx {
+            let input_len = if all_txs.len() >= total_tx {
                 break;
-            }
-            while let Some(tx) = self.make_transaction(&from, &to, chunk_size) {
+            } else {
+                chunk_size.unwrap_or(total_tx - all_txs.len())
+            };
+
+            while let Some(tx) = self.make_transaction(&from, &to, input_len) {
                 all_txs.push(tx);
                 if all_txs.len() >= total_tx {
                     break;
@@ -93,10 +96,9 @@ impl TransactionGen {
         &mut self,
         from: &str,
         to: &str,
-        input_len: Option<usize>,
+        input_len: usize,
     ) -> Option<(String, Transaction)> {
         if let Some(inputs) = self.ready.get_mut(from) {
-            let input_len = input_len.unwrap_or(inputs.len());
             let input_len = std::cmp::min(inputs.len(), input_len);
             let inputs: Vec<_> = if input_len == 0 {
                 return None;

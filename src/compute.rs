@@ -304,16 +304,10 @@ impl ComputeNode {
     /// ### Arguments
     /// * `droplet`  - DRUID droplet of transactions to execute
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
-        let mut txs_valid = true;
-
-        for tx in droplet.tx.values() {
-            let utxo_set = self.node_raft.get_committed_utxo_set();
-
-            if !tx_is_valid(&tx, |v| utxo_set.get(&v)) {
-                txs_valid = false;
-                break;
-            }
-        }
+        let txs_valid = {
+            let tx_validator = self.transactions_validator();
+            droplet.tx.values().all(|tx| tx_validator(&tx))
+        };
 
         if txs_valid {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
@@ -360,17 +354,24 @@ impl ComputeNode {
         storage_address
     }
 
-    /// Util function to get a socket address for PID table checks
-    /// ### Arguments
-    /// * `address`    - Peer's address
-    fn get_comms_address(&self, address: SocketAddr) -> SocketAddr {
-        let comparison_port = address.port() + 1;
-        let mut comparison_addr = address;
+    /// Return closure use to validate a transaction
+    fn transactions_validator(&self) -> impl Fn(&Transaction) -> bool + '_ {
+        let utxo_set = self.node_raft.get_committed_utxo_set();
+        let lock_expired = self
+            .node_raft
+            .get_committed_current_block_num()
+            .unwrap_or_default();
+        let sanction_list = &self.sanction_list;
 
-        comparison_addr.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-        comparison_addr.set_port(comparison_port);
-
-        comparison_addr
+        move |tx| {
+            !tx.is_coinbase()
+                && tx_is_valid(&tx, |v| {
+                    utxo_set
+                        .get(&v)
+                        .filter(|_| !sanction_list.contains(&v.t_hash))
+                        .filter(|tx_out| lock_expired >= tx_out.locktime)
+                })
+        }
     }
 
     /// Sends notification of a block found and stored to the winner.
@@ -869,35 +870,6 @@ impl ComputeNode {
         }
     }
 
-    /// Checks whether a transaction's locktime has expired
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set`    - UTXO set
-    /// * `tx`          - Transaction to check
-    fn lock_expired(&self, utxo_set: &UtxoSet, tx: &OutPoint) -> bool {
-        let mut lock_expiry = false;
-
-        if let Some(txout) = utxo_set.get(tx) {
-            if txout.locktime == 0 {
-                lock_expiry = true;
-            } else if self.current_mined_block.is_some() {
-                let block_height = self
-                    .current_mined_block
-                    .as_ref()
-                    .unwrap()
-                    .block
-                    .header
-                    .b_num;
-                if block_height >= txout.locktime {
-                    lock_expiry = true;
-                }
-            }
-        }
-
-        lock_expiry
-    }
-
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
         self.request_list = match self.db.get(REQUEST_LIST_KEY) {
@@ -1057,27 +1029,21 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        if !self.node_raft.tx_pool_can_accept(transactions.len()) {
+        let transactions_len = transactions.len();
+        if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
                 success: false,
                 reason: "Transaction pool for this compute node is full",
             };
         }
 
-        let utxo_set = self.node_raft.get_committed_utxo_set();
-        let valid_tx: BTreeMap<_, _> = transactions
-            .iter()
-            .filter(|(_, tx)| !tx.is_coinbase())
-            .filter(|(_, tx)| {
-                tx_is_valid(&tx, |v| {
-                    utxo_set
-                        .get(&v)
-                        .filter(|_| !self.sanction_list.contains(&v.t_hash))
-                        .filter(|_| self.lock_expired(&utxo_set, &v))
-                })
-            })
-            .map(|(hash, tx)| (hash.clone(), tx.clone()))
-            .collect();
+        let valid_tx: BTreeMap<_, _> = {
+            let tx_validator = self.transactions_validator();
+            transactions
+                .into_iter()
+                .filter(|(_, tx)| tx_validator(&tx))
+                .collect()
+        };
 
         // At this point the tx's are considered valid
         let valid_tx_len = valid_tx.len();
@@ -1090,7 +1056,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if valid_tx_len < transactions.len() {
+        if valid_tx_len < transactions_len {
             return Response {
                 success: true,
                 reason: "Some transactions invalid. Adding valid transactions only",
