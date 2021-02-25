@@ -271,6 +271,7 @@ pub trait MinerInterface {
 pub enum ComputeRequest {
     SendBlockStored(BlockStoredInfo),
     SendPoW {
+        block_num: u64,
         nonce: Vec<u8>,
         coinbase: Transaction,
     },
@@ -292,9 +293,10 @@ impl fmt::Debug for ComputeRequest {
         match *self {
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
+                ref block_num,
                 ref nonce,
                 ref coinbase,
-            } => write!(f, "SendPoW"),
+            } => write!(f, "SendPoW({})", block_num),
             SendPartitionEntry {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),

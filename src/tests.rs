@@ -12,8 +12,8 @@ use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
-    concat_merkle_coinbase, create_valid_transaction_with_ins_outs, get_sanction_addresses,
-    validate_pow_block,
+    calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
+    get_sanction_addresses, validate_pow_block,
 };
 use bincode::serialize;
 use futures::future::join_all;
@@ -171,7 +171,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
     ];
 
     full_flow_common(
-        complete_network_config_with_n_compute_raft(11000, 3),
+        complete_network_config_with_n_compute_raft(11100, 3),
         CfgNum::All,
         modify_cfg,
     )
@@ -197,7 +197,7 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
     ];
 
     full_flow_common(
-        complete_network_config_with_n_compute_raft(11010, 3),
+        complete_network_config_with_n_compute_raft(11110, 3),
         CfgNum::All,
         modify_cfg,
     )
@@ -801,7 +801,7 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         for miner in c_miners {
             miner_send_pow_for_current(network, miner, compute).await;
-            compute_handle_error(network, compute, "No block to mine currently").await;
+            compute_handle_error(network, compute, "Not block currently mined").await;
         }
     }
 }
@@ -1203,8 +1203,71 @@ async fn gen_transactions() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn proof_of_work_reject() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config(10430);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    let compute = "compute1";
+    let miner = "miner1";
+    let block_num = 1;
+    create_first_block_act(&mut network).await;
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+    compute_flood_rand_num_to_requesters(&mut network, compute).await;
+    miner_handle_event(&mut network, miner, "Received random number successfully").await;
+    miner_send_partition_pow(&mut network, miner, compute).await;
+    compute_handle_event(&mut network, compute, "Partition list is full").await;
+
+    //
+    // Act
+    //
+    {
+        // From node not in partition (user1 is not a miner).
+        let request = ComputeRequest::SendPoW {
+            block_num,
+            nonce: Default::default(),
+            coinbase: Default::default(),
+        };
+        compute_inject_next_event(&mut network, "user1", compute, request).await;
+        compute_handle_error(&mut network, compute, "Not block currently mined").await;
+    }
+    {
+        // For not currently mined block number.
+        let request = ComputeRequest::SendPoW {
+            block_num: block_num + 1,
+            nonce: Default::default(),
+            coinbase: Default::default(),
+        };
+        compute_inject_next_event(&mut network, miner, compute, request).await;
+        compute_handle_error(&mut network, compute, "Not block currently mined").await;
+    }
+    {
+        // For miner in partition and correct block, but wrong nonce/coinbase
+        let request = ComputeRequest::SendPoW {
+            block_num,
+            nonce: Default::default(),
+            coinbase: Default::default(),
+        };
+        compute_inject_next_event(&mut network, miner, compute, request).await;
+        compute_handle_error(&mut network, compute, "Coinbase transaction invalid").await;
+    }
+
+    //
+    // Assert
+    //
+    let block = compute_current_mining_block(&mut network, compute).await;
+    assert!(block.is_some(), "Expect still mining");
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(10430, 1);
+    let network_config = complete_network_config_with_n_compute_raft(10440, 1);
     main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1, 1_000).await
 }
 
@@ -1213,7 +1276,7 @@ async fn main_loops_few_txs_raft_1_node() {
 #[tokio::test(threaded_scheduler)]
 #[ignore]
 async fn main_loops_many_txs_threaded_raft_1_node() {
-    let mut network_config = complete_network_config_with_n_compute_raft(10440, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(10450, 1);
     network_config.test_duration_divider = 1;
 
     // 5_000 TxIn in transactions of 3 TxIn.
@@ -1652,10 +1715,14 @@ async fn compute_current_block_transactions(
     network: &mut Network,
     compute: &str,
 ) -> Option<Vec<String>> {
+    compute_current_mining_block(network, compute)
+        .await
+        .map(|b| b.transactions)
+}
+
+async fn compute_current_mining_block(network: &mut Network, compute: &str) -> Option<Block> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.get_mining_block()
-        .as_ref()
-        .map(|b| b.transactions.clone())
+    c.get_mining_block().clone()
 }
 
 async fn compute_all_committed_utxo_set(
@@ -2094,8 +2161,8 @@ async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let (nonce, transaction) = m.generate_pow_for_current_block().await.unwrap();
-    m.send_pow(compute_node_addr, nonce, transaction)
+    let (b_num, nonce, transaction) = m.generate_pow_for_current_block().await.unwrap();
+    m.send_pow(compute_node_addr, b_num, nonce, transaction)
         .await
         .unwrap();
 }
@@ -2250,7 +2317,7 @@ async fn construct_mining_extra_info(
     block_num: u64,
     addr: String,
 ) -> MinedBlockExtraInfo {
-    let amount = TokenAmount(12000);
+    let amount = calculate_reward(TokenAmount(0));
     let tx = construct_coinbase_tx(block_num, amount, addr);
     let hash = construct_tx_hash(&tx);
 
