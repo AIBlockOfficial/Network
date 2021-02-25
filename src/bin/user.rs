@@ -77,9 +77,7 @@ async fn main() {
         settings.set_default("user_node_idx", 0).unwrap();
         settings.set_default("user_compute_node_idx", 0).unwrap();
         settings.set_default("peer_user_node_idx", 0).unwrap();
-        settings
-            .set_default("user_setup_tx_in_max_count", 0)
-            .unwrap();
+        settings.set_default("user_setup_tx_max_count", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
@@ -182,7 +180,7 @@ async fn main() {
             .cloned()
             .unwrap_or_default();
         (
-            !initial_transactions.is_empty() && setup.user_setup_tx_in_max_count != 0,
+            !initial_transactions.is_empty() && setup.user_setup_tx_max_count != 0,
             TransactionGen::new(initial_transactions),
         )
     };

@@ -1243,7 +1243,7 @@ async fn main_loops_raft_1_node_common(
     let setup = UserNodeSetup {
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_in_max_count: 1_000_000,
+        user_setup_tx_max_count: 1_000_000,
         ..Default::default()
     };
     let expected_blocks = 6;
