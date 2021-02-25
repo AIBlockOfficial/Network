@@ -1028,7 +1028,8 @@ impl ComputeInterface for ComputeNode {
     }
 
     fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
-        if !self.node_raft.tx_pool_can_accept(transactions.len()) {
+        let transactions_len = transactions.len();
+        if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
                 success: false,
                 reason: "Transaction pool for this compute node is full",
@@ -1041,7 +1042,7 @@ impl ComputeInterface for ComputeNode {
             .get_committed_current_block_num()
             .unwrap_or_default();
         let valid_tx: BTreeMap<_, _> = transactions
-            .iter()
+            .into_iter()
             .filter(|(_, tx)| !tx.is_coinbase())
             .filter(|(_, tx)| {
                 tx_is_valid(&tx, |v| {
@@ -1051,7 +1052,7 @@ impl ComputeInterface for ComputeNode {
                         .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
             })
-            .map(|(hash, tx)| (hash.clone(), tx.clone()))
+            .map(|(hash, tx)| (hash, tx))
             .collect();
 
         // At this point the tx's are considered valid
@@ -1065,7 +1066,7 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        if valid_tx_len < transactions.len() {
+        if valid_tx_len < transactions_len {
             return Response {
                 success: true,
                 reason: "Some transactions invalid. Adding valid transactions only",
