@@ -255,17 +255,11 @@ pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
 ///
 /// * `coinbase_tx` - Coinbase transactions
 pub fn get_total_coinbase_tokens(coinbase_tx: &BTreeMap<String, Transaction>) -> TokenAmount {
-    if coinbase_tx.values().len() > 0 {
-        let mut total = 0;
-
-        for tx_ind in coinbase_tx.values() {
-            total += tx_ind.outputs.iter().fold(0, |acc, x| acc + x.amount.0);
-        }
-
-        return TokenAmount(total);
+    let mut total = TokenAmount(0);
+    for tx_ind in coinbase_tx.values() {
+        total += tx_ind.outputs.iter().map(|x| x.amount).sum();
     }
-
-    TokenAmount(0)
+    total
 }
 
 /// Concatenates a merkle hash and a coinbase hash to produce a single hash output
