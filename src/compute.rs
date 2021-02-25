@@ -304,16 +304,11 @@ impl ComputeNode {
     /// ### Arguments
     /// * `droplet`  - DRUID droplet of transactions to execute
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
-        let mut txs_valid = true;
-
-        for tx in droplet.tx.values() {
-            let utxo_set = self.node_raft.get_committed_utxo_set();
-
-            if !tx_is_valid(&tx, |v| utxo_set.get(&v)) {
-                txs_valid = false;
-                break;
-            }
-        }
+        let utxo_set = self.node_raft.get_committed_utxo_set();
+        let txs_valid = droplet
+            .tx
+            .values()
+            .all(|tx| tx_is_valid(&tx, |v| utxo_set.get(&v)));
 
         if txs_valid {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
