@@ -1205,7 +1205,7 @@ async fn gen_transactions() {
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(10430, 1);
-    main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1).await
+    main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1, 1_000).await
 }
 
 // Slow: Only run when explicitely specified for performance and large tests
@@ -1216,7 +1216,11 @@ async fn main_loops_many_txs_threaded_raft_1_node() {
     let mut network_config = complete_network_config_with_n_compute_raft(10440, 1);
     network_config.test_duration_divider = 1;
 
-    main_loops_raft_1_node_common(network_config, TokenAmount(1), 1_000_000, 5_000).await
+    // 5_000 TxIn in transactions of 3 TxIn.
+    // 10_000 TxIn available so we can create full transaction batch even if previous block did
+    // not contain all transactions already created.
+    main_loops_raft_1_node_common(network_config, TokenAmount(1), 1_000_000, 10_000, 5_000 / 3)
+        .await
 }
 
 async fn main_loops_raft_1_node_common(
@@ -1224,6 +1228,7 @@ async fn main_loops_raft_1_node_common(
     initial_amount: TokenAmount,
     seed_count: i32,
     seed_wallet_count: i32,
+    tx_max_count: usize,
 ) {
     test_step_start();
 
@@ -1243,7 +1248,7 @@ async fn main_loops_raft_1_node_common(
     let setup = UserNodeSetup {
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_max_count: 1_000_000,
+        user_setup_tx_max_count: tx_max_count,
         ..Default::default()
     };
     let expected_blocks = 6;
