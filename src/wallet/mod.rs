@@ -46,7 +46,7 @@ impl WalletDb {
             let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
             let (address, _) = self.store_payment_address(pk, sk).await;
             let payments = vec![(tx_out_p, amount, address)];
-            self.save_payment_to_wallet(payments).await.unwrap();
+            self.save_usable_payments_to_wallet(payments).await.unwrap();
         }
         self
     }
@@ -130,22 +130,34 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `payments - Payments OutPoint, amount and receiver key address
-    pub async fn save_payment_to_wallet(
+    pub async fn save_usable_payments_to_wallet(
         &self,
         payments: Vec<(OutPoint, TokenAmount, String)>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<(OutPoint, TokenAmount, String)>, Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            for (out_p, _, key_address) in &payments {
+
+            let usable_payments: Vec<_> = {
+                let addresses = get_address_stores(&db);
+                payments
+                    .into_iter()
+                    .filter(|(_, _, address)| addresses.contains_key(address))
+                    .collect()
+            };
+
+            for (out_p, _, key_address) in &usable_payments {
                 save_transaction_to_wallet(&mut db, out_p, key_address);
             }
             save_payment_to_fund_store(
                 &mut db,
-                payments
+                usable_payments
+                    .clone()
                     .into_iter()
                     .map(|(out_p, amount, _)| (out_p, amount)),
             );
+
+            usable_payments
         })
         .await?)
     }
@@ -216,11 +228,6 @@ impl WalletDb {
         get_fund_store_err(&self.db.lock().unwrap())
     }
 
-    /// Get the wallet address store
-    pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
-        get_address_stores(&self.db.lock().unwrap())
-    }
-
     /// Get the wallet address
     pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> String {
         get_transaction_store(&self.db.lock().unwrap(), tx_hash)
@@ -228,7 +235,7 @@ impl WalletDb {
 
     /// Get the wallet addresses
     pub fn get_known_address(&self) -> Vec<String> {
-        self.get_address_stores()
+        get_address_stores(&self.db.lock().unwrap())
             .into_iter()
             .map(|(addr, _)| addr)
             .collect()
@@ -466,6 +473,9 @@ mod tests {
         let out_p3 = OutPoint::new(String::new(), 3);
         let amount3 = TokenAmount(5);
 
+        let out_p4 = OutPoint::new(String::new(), 3);
+        let amount4 = TokenAmount(6);
+
         let amount_out = TokenAmount(4);
 
         //
@@ -477,11 +487,12 @@ mod tests {
         // Store paiments
         let (key_addr1, _) = wallet.generate_payment_address().await;
         let (key_addr2, _) = wallet.generate_payment_address().await;
-        wallet
-            .save_payment_to_wallet(vec![
+        let stored_usable = wallet
+            .save_usable_payments_to_wallet(vec![
                 (out_p1.clone(), amount1, key_addr1.clone()),
                 (out_p2.clone(), amount1, key_addr2.clone()),
                 (out_p3, amount3, key_addr2),
+                (out_p4, amount4, "000000".to_owned()),
             ])
             .await
             .unwrap();
@@ -496,6 +507,7 @@ mod tests {
         //
         // Assert
         //
+        assert_eq!(stored_usable.len(), 3);
         assert_eq!(fetched_amount, amount1 + amount1);
         assert_eq!(tx_ins.len(), 2);
 

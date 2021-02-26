@@ -396,20 +396,18 @@ impl UserNode {
     /// * `transaction` - Transaction to be received and saved to wallet
     pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
-        let addresses = self.wallet_db.get_address_stores();
 
-        let our_payments: Vec<_> =
-            get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
-                .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
-                .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
-                .filter(|(_, _, address)| addresses.contains_key(address))
-                .collect();
+        let payments: Vec<_> = get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
+            .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
+            .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
+            .collect();
 
-        debug!("store_payment_transactions: {:?}", our_payments);
-        self.wallet_db
-            .save_payment_to_wallet(our_payments)
+        let our_payments = self
+            .wallet_db
+            .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
+        debug!("store_payment_transactions: {:?}", our_payments);
     }
 
     /// Creates a new payment transaction and assigns it as an internal attribute

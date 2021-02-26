@@ -434,7 +434,7 @@ impl MinerNode {
 
         let payments = vec![(tx_out_p, tx_amount, address)];
         self.wallet_db
-            .save_payment_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments)
             .await
             .unwrap();
     }
