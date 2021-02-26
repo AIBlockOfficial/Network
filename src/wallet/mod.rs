@@ -110,17 +110,17 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `tx_hash`  - Transaction hash
-    /// * `address`  - Transaction Address
+    /// * `out_p`   - Transaction hash/index
+    /// * `address` - Transaction Address
     pub async fn save_transaction_to_wallet(
         &self,
-        tx_hash: OutPoint,
+        out_p: OutPoint,
         address: String,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            save_transaction_to_wallet(&mut db, &tx_hash, &address);
+            save_transaction_to_wallet(&mut db, &out_p, &address);
         })
         .await?)
     }
@@ -229,8 +229,8 @@ impl WalletDb {
     }
 
     /// Get the wallet address
-    pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> String {
-        get_transaction_store(&self.db.lock().unwrap(), tx_hash)
+    pub fn get_transaction_store(&self, out_p: &OutPoint) -> String {
+        get_transaction_store(&self.db.lock().unwrap(), out_p)
     }
 
     /// Get the wallet addresses
@@ -242,8 +242,8 @@ impl WalletDb {
     }
 
     /// Get the wallet transaction address
-    pub fn get_transaction_address(&self, tx_hash: &OutPoint) -> String {
-        self.get_transaction_store(tx_hash)
+    pub fn get_transaction_address(&self, out_p: &OutPoint) -> String {
+        self.get_transaction_store(out_p)
     }
 }
 
@@ -333,10 +333,10 @@ pub fn fetch_inputs_for_payment_from_db(
         panic!("Not enough funds available for payment!");
     }
 
-    for (tx_hash, amount) in fund_store.into_transactions() {
+    for (out_p, amount) in fund_store.into_transactions() {
         amount_made += amount;
 
-        let (cons, used) = tx_constructor_from_prev_out(db, tx_hash);
+        let (cons, used) = tx_constructor_from_prev_out(db, out_p);
         tx_cons.push(cons);
         tx_used.push(used);
 
@@ -356,8 +356,8 @@ pub fn consume_inputs_for_payment_to_wallet(
     tx_used: Vec<(OutPoint, String)>,
 ) -> Vec<TxIn> {
     let mut fund_store = get_fund_store(db);
-    for (tx_hash, _) in tx_used {
-        fund_store.spend_tx(&tx_hash);
+    for (out_p, _) in tx_used {
+        fund_store.spend_tx(&out_p);
     }
     set_fund_store(db, fund_store);
 
@@ -413,24 +413,24 @@ pub fn destroy_spent_transactions_and_keys(
 /// Also return the used info for db cleanup
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
-    tx_hash: OutPoint,
+    out_p: OutPoint,
 ) -> (TxConstructor, (OutPoint, String)) {
     let address_store = get_address_stores(db);
-    let tx_store = get_transaction_store(db, &tx_hash);
+    let tx_store = get_transaction_store(db, &out_p);
 
     let needed_store: &AddressStore = address_store.get(&tx_store).unwrap();
 
-    let hash_to_sign = hex::encode(serialize(&tx_hash).unwrap());
+    let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
     let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
-        t_hash: tx_hash.t_hash.clone(),
-        prev_n: tx_hash.n,
+        t_hash: out_p.t_hash.clone(),
+        prev_n: out_p.n,
         signatures: vec![signature],
         pub_keys: vec![needed_store.public_key],
     };
 
-    (tx_const, (tx_hash, tx_store))
+    (tx_const, (out_p, tx_store))
 }
 
 #[cfg(test)]
