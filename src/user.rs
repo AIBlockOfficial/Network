@@ -398,22 +398,18 @@ impl UserNode {
         let hash = construct_tx_hash(&transaction);
         let addresses = self.wallet_db.get_address_stores();
 
-        for (tx_out_p, tx_out) in get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
-        {
-            let amount = tx_out.amount;
-            let address = tx_out.script_public_key.clone().unwrap();
+        let our_payments: Vec<_> =
+            get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
+                .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
+                .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
+                .filter(|(_, _, address)| addresses.contains_key(address))
+                .collect();
 
-            if !addresses.contains_key(&address) {
-                // That TxOut is not ours to use
-                continue;
-            }
-
-            debug!("store_payment_transaction: {} -> {:?}", amount, address);
-            self.wallet_db
-                .save_payment_to_wallet(tx_out_p, amount, address)
-                .await
-                .unwrap();
-        }
+        debug!("store_payment_transactions: {:?}", our_payments);
+        self.wallet_db
+            .save_payment_to_wallet(our_payments)
+            .await
+            .unwrap();
     }
 
     /// Creates a new payment transaction and assigns it as an internal attribute

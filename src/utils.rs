@@ -169,10 +169,8 @@ pub async fn create_and_save_fake_to_wallet(
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
     let payment_to_save = TokenAmount(4000);
-    wallet_db
-        .save_payment_to_wallet(tx_out_p.clone(), payment_to_save, final_address)
-        .await
-        .unwrap();
+    let payments = vec![(tx_out_p.clone(), payment_to_save, final_address)];
+    wallet_db.save_payment_to_wallet(payments).await.unwrap();
 
     Ok(())
 }

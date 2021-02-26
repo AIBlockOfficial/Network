@@ -432,8 +432,9 @@ impl MinerNode {
         let tx_out_p = OutPoint::new(tx_hash, 0);
         let tx_amount = tx.outputs.first().unwrap().amount;
 
+        let payments = vec![(tx_out_p, tx_amount, address)];
         self.wallet_db
-            .save_payment_to_wallet(tx_out_p, tx_amount, address)
+            .save_payment_to_wallet(payments)
             .await
             .unwrap();
     }

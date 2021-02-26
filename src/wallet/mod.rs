@@ -45,9 +45,8 @@ impl WalletDb {
         for seed in seeds {
             let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
             let (address, _) = self.store_payment_address(pk, sk).await;
-            self.save_payment_to_wallet(tx_out_p, amount, address)
-                .await
-                .unwrap();
+            let payments = vec![(tx_out_p, amount, address)];
+            self.save_payment_to_wallet(payments).await.unwrap();
         }
         self
     }
@@ -121,7 +120,7 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            save_transaction_to_wallet(&mut db, tx_hash, address);
+            save_transaction_to_wallet(&mut db, &tx_hash, &address);
         })
         .await?)
     }
@@ -130,20 +129,18 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `tx_hash  - Hash of the transaction
-    /// * `amount`  - Amount of tokens in the payment
-    /// * `address` - Transaction Address
+    /// * `payments - Payments OutPoint, amount and receiver key address
     pub async fn save_payment_to_wallet(
         &self,
-        tx_hash: OutPoint,
-        amount: TokenAmount,
-        address: String,
+        payments: Vec<(OutPoint, TokenAmount, String)>,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            save_transaction_to_wallet(&mut db, tx_hash.clone(), address);
-            save_payment_to_fund_store(&mut db, tx_hash, amount);
+            for (out_p, amount, key_address) in payments {
+                save_transaction_to_wallet(&mut db, &out_p, &key_address);
+                save_payment_to_fund_store(&mut db, out_p, amount);
+            }
         })
         .await?)
     }
@@ -261,9 +258,9 @@ pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
 }
 
 /// Save a payment to fund store
-pub fn save_payment_to_fund_store(db: &mut SimpleDb, hash: OutPoint, amount: TokenAmount) {
+pub fn save_payment_to_fund_store(db: &mut SimpleDb, out_p: OutPoint, amount: TokenAmount) {
     let mut fund_store = get_fund_store(db);
-    fund_store.store_tx(hash, amount);
+    fund_store.store_tx(out_p, amount);
     set_fund_store(db, fund_store);
 }
 
@@ -283,24 +280,24 @@ pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, Add
 }
 
 /// Get the wallet transaction store (address/tx combo)
-pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> String {
-    match db.get(&serialize(&tx_hash).unwrap()) {
+pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> String {
+    match db.get(&serialize(&out_p).unwrap()) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
-        Ok(None) => panic!("Transaction not present in wallet: {:?}", tx_hash),
+        Ok(None) => panic!("Transaction not present in wallet: {:?}", out_p),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }
 
 /// Delete transaction store
-pub fn delete_transaction_store(db: &mut SimpleDb, tx_hash: &OutPoint) {
-    let tx_hash_ser = serialize(&tx_hash).unwrap();
-    db.delete(&tx_hash_ser).unwrap();
+pub fn delete_transaction_store(db: &mut SimpleDb, out_p: &OutPoint) {
+    let key = serialize(&out_p).unwrap();
+    db.delete(&key).unwrap();
 }
 
 /// Save transaction
-pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: String) {
-    let key = serialize(&tx_hash).unwrap();
-    let input = serialize(&address).unwrap();
+pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, address: &str) {
+    let key = serialize(out_p).unwrap();
+    let input = serialize(address).unwrap();
     db.put(&key, &input).unwrap();
 }
 
@@ -471,15 +468,11 @@ mod tests {
         let (key_addr1, _) = wallet.generate_payment_address().await;
         let (key_addr2, _) = wallet.generate_payment_address().await;
         wallet
-            .save_payment_to_wallet(out_p1.clone(), amount1, key_addr1.clone())
-            .await
-            .unwrap();
-        wallet
-            .save_payment_to_wallet(out_p2.clone(), amount1, key_addr2.clone())
-            .await
-            .unwrap();
-        wallet
-            .save_payment_to_wallet(out_p3, amount3, key_addr2)
+            .save_payment_to_wallet(vec![
+                (out_p1.clone(), amount1, key_addr1.clone()),
+                (out_p2.clone(), amount1, key_addr2.clone()),
+                (out_p3, amount3, key_addr2),
+            ])
             .await
             .unwrap();
 
