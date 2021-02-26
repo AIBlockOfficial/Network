@@ -9,7 +9,7 @@ use naom::primitives::transaction_utils::{construct_address, construct_payment_t
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
@@ -172,7 +172,6 @@ impl WalletDb {
 
     /// Consume given used transaction and produce TxIns
     ///
-    ///
     /// ### Arguments
     ///
     /// * `tx_cons`         - TxIn TxConstructors
@@ -191,27 +190,41 @@ impl WalletDb {
         .unwrap()
     }
 
-    // Get the wallet fund store
+    /// Destroy the used transactions with keys purging them from the wallet
+    /// Handle the case where same address is reused for multiple transactions
+    pub async fn destroy_spent_transactions_and_keys(
+        &mut self,
+    ) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let mut db = db.lock().unwrap();
+            destroy_spent_transactions_and_keys(&mut db)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Get the wallet fund store
     pub fn get_fund_store(&self) -> FundStore {
         get_fund_store(&self.db.lock().unwrap())
     }
 
-    // Get the wallet fund store with errors
+    /// Get the wallet fund store with errors
     pub fn get_fund_store_err(&self) -> Result<FundStore, DBError> {
         get_fund_store_err(&self.db.lock().unwrap())
     }
 
-    // Get the wallet address store
+    /// Get the wallet address store
     pub fn get_address_stores(&self) -> BTreeMap<String, AddressStore> {
         get_address_stores(&self.db.lock().unwrap())
     }
 
-    // Get the wallet address
+    /// Get the wallet address
     pub fn get_transaction_store(&self, tx_hash: &OutPoint) -> String {
         get_transaction_store(&self.db.lock().unwrap(), tx_hash)
     }
 
-    // Get the wallet addresses
+    /// Get the wallet addresses
     pub fn get_known_address(&self) -> Vec<String> {
         self.get_address_stores()
             .into_iter()
@@ -219,13 +232,13 @@ impl WalletDb {
             .collect()
     }
 
-    // Get the wallet transaction address
+    /// Get the wallet transaction address
     pub fn get_transaction_address(&self, tx_hash: &OutPoint) -> String {
         self.get_transaction_store(tx_hash)
     }
 }
 
-// Get the wallet fund store
+/// Get the wallet fund store
 pub fn get_fund_store(db: &SimpleDb) -> FundStore {
     match get_fund_store_err(db) {
         Ok(v) => v,
@@ -233,7 +246,7 @@ pub fn get_fund_store(db: &SimpleDb) -> FundStore {
     }
 }
 
-// Get the wallet fund store
+/// Get the wallet fund store
 pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
     match db.get(FUND_KEY) {
         Ok(Some(list)) => Ok(deserialize(&list).unwrap()),
@@ -242,19 +255,19 @@ pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
     }
 }
 
-// Set the wallet fund store
+/// Set the wallet fund store
 pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
     db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
 }
 
-// Save a payment to fund store
+/// Save a payment to fund store
 pub fn save_payment_to_fund_store(db: &mut SimpleDb, hash: OutPoint, amount: TokenAmount) {
     let mut fund_store = get_fund_store(db);
     fund_store.store_tx(hash, amount);
     set_fund_store(db, fund_store);
 }
 
-// Get the wallet address store
+/// Get the wallet address store
 pub fn get_address_stores(db: &SimpleDb) -> BTreeMap<String, AddressStore> {
     match db.get(ADDRESS_KEY) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
@@ -263,13 +276,13 @@ pub fn get_address_stores(db: &SimpleDb) -> BTreeMap<String, AddressStore> {
     }
 }
 
-// Set the wallet address store
+/// Set the wallet address store
 pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, AddressStore>) {
     db.put(ADDRESS_KEY, &serialize(&address_store).unwrap())
         .unwrap();
 }
 
-// Get the wallet transaction store (address/tx combo)
+/// Get the wallet transaction store (address/tx combo)
 pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> String {
     match db.get(&serialize(&tx_hash).unwrap()) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
@@ -278,21 +291,21 @@ pub fn get_transaction_store(db: &SimpleDb, tx_hash: &OutPoint) -> String {
     }
 }
 
-// Delete transaction store
+/// Delete transaction store
 pub fn delete_transaction_store(db: &mut SimpleDb, tx_hash: &OutPoint) {
     let tx_hash_ser = serialize(&tx_hash).unwrap();
     db.delete(&tx_hash_ser).unwrap();
 }
 
-// Save transaction
+/// Save transaction
 pub fn save_transaction_to_wallet(db: &mut SimpleDb, tx_hash: OutPoint, address: String) {
     let key = serialize(&tx_hash).unwrap();
     let input = serialize(&address).unwrap();
     db.put(&key, &input).unwrap();
 }
 
-// Make TxConstructors from stored TxOut
-// Also return the used info for db cleanup
+/// Make TxConstructors from stored TxOut
+/// Also return the used info for db cleanup
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
@@ -321,29 +334,69 @@ pub fn fetch_inputs_for_payment_from_db(
     (tx_cons, amount_made, tx_used)
 }
 
-// Consume the used transactions updating the wallet and produce TxIn
+/// Consume the used transactions updating the wallet and produce TxIn
+/// Non destructive operation: key material and data will still be present in wallet
 pub fn consume_inputs_for_payment_to_wallet(
     db: &mut SimpleDb,
     tx_cons: Vec<TxConstructor>,
     tx_used: Vec<(OutPoint, String)>,
 ) -> Vec<TxIn> {
     let mut fund_store = get_fund_store(db);
-    let mut address_store = get_address_stores(db);
-
-    for (tx_hash, tx_store) in tx_used {
+    for (tx_hash, _) in tx_used {
         fund_store.spend_tx(&tx_hash);
-        address_store.remove(&tx_store).unwrap();
-        delete_transaction_store(db, &tx_hash);
     }
-
     set_fund_store(db, fund_store);
-    set_address_stores(db, address_store);
 
     construct_payment_tx_ins(tx_cons)
 }
 
-// Make TxConstructor from stored TxOut
-// Also return the used info for db cleanup
+/// Destroy the used transactions with keys purging them from the wallet
+/// Handle the case where same address is reused for multiple transactions
+pub fn destroy_spent_transactions_and_keys(
+    db: &mut SimpleDb,
+) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
+    let mut fund_store = get_fund_store(db);
+    let mut address_store = get_address_stores(db);
+
+    //
+    // Gather data for update
+    //
+
+    let spent_txs = fund_store.remove_spent_transactions();
+
+    let remove_key_addresses: BTreeSet<_> = {
+        let unspent_key_addresses: BTreeSet<_> = fund_store
+            .transactions()
+            .keys()
+            .map(|out_p| get_transaction_store(db, out_p))
+            .collect();
+
+        spent_txs
+            .keys()
+            .map(|out_p| get_transaction_store(db, out_p))
+            .filter(|addr| !unspent_key_addresses.contains(addr))
+            .collect()
+    };
+
+    for keys_address in &remove_key_addresses {
+        address_store.remove(keys_address).unwrap();
+    }
+
+    //
+    // Update database
+    //
+
+    for out_p in spent_txs.keys() {
+        delete_transaction_store(db, out_p);
+    }
+    set_fund_store(db, fund_store);
+    set_address_stores(db, address_store);
+
+    (remove_key_addresses, spent_txs)
+}
+
+/// Make TxConstructor from stored TxOut
+/// Also return the used info for db cleanup
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     tx_hash: OutPoint,
@@ -392,5 +445,63 @@ mod tests {
         let addr = construct_address(pk);
 
         assert_eq!(addr.len(), 32);
+    }
+
+    #[tokio::test(basic_scheduler)]
+    async fn wallet_life_cycle() {
+        //
+        // Arrange
+        //
+        let out_p1 = OutPoint::new(String::new(), 1);
+        let out_p2 = OutPoint::new(String::new(), 2);
+        let amount1 = TokenAmount(3);
+
+        let out_p3 = OutPoint::new(String::new(), 3);
+        let amount3 = TokenAmount(5);
+
+        let amount_out = TokenAmount(4);
+
+        //
+        // Act
+        //
+        let mut wallet = WalletDb::new(DbMode::InMemory);
+        let (_key_addr_unused, _) = wallet.generate_payment_address().await;
+
+        // Store paiments
+        let (key_addr1, _) = wallet.generate_payment_address().await;
+        let (key_addr2, _) = wallet.generate_payment_address().await;
+        wallet
+            .save_payment_to_wallet(out_p1.clone(), amount1, key_addr1.clone())
+            .await
+            .unwrap();
+        wallet
+            .save_payment_to_wallet(out_p2.clone(), amount1, key_addr2.clone())
+            .await
+            .unwrap();
+        wallet
+            .save_payment_to_wallet(out_p3, amount3, key_addr2)
+            .await
+            .unwrap();
+
+        // Pay out
+        let (tx_cons, fetched_amount, tx_used) = wallet.fetch_inputs_for_payment(amount_out).await;
+        let tx_ins = wallet.consume_inputs_for_payment(tx_cons, tx_used).await;
+
+        // clean up db
+        let (destroyed_keys, destroyed_txs) = wallet.destroy_spent_transactions_and_keys().await;
+
+        //
+        // Assert
+        //
+        assert_eq!(fetched_amount, amount1 + amount1);
+        assert_eq!(tx_ins.len(), 2);
+
+        let expected_destroyed_keys: BTreeSet<_> = vec![key_addr1].into_iter().collect();
+        assert_eq!(destroyed_keys, expected_destroyed_keys);
+
+        let expected_destroyedkeys: BTreeMap<_, _> = vec![(out_p1, amount1), (out_p2, amount1)]
+            .into_iter()
+            .collect();
+        assert_eq!(destroyed_txs, expected_destroyedkeys);
     }
 }

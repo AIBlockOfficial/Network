@@ -25,6 +25,10 @@ impl FundStore {
         self.transactions
     }
 
+    pub fn remove_spent_transactions(&mut self) -> BTreeMap<OutPoint, TokenAmount> {
+        std::mem::take(&mut self.spent_transactions)
+    }
+
     pub fn store_tx(&mut self, out_p: OutPoint, amount: TokenAmount) {
         if let Some(old_amount) = self.transactions.insert(out_p, amount) {
             if old_amount != amount {
