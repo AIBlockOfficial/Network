@@ -502,6 +502,10 @@ mod tests {
 
         let out_p4 = OutPoint::new(String::new(), 3);
         let amount4 = TokenAmount(6);
+        let key_addr_non_existent = "000000".to_owned();
+
+        let out_p_non_pay = OutPoint::new(String::new(), 4);
+        let key_addr_non_pay = "".to_owned();
 
         let amount_out = TokenAmount(4);
 
@@ -509,7 +513,13 @@ mod tests {
         // Act
         //
         let mut wallet = WalletDb::new(DbMode::InMemory);
+
+        // Unlinked keys and transactions
         let (_key_addr_unused, _) = wallet.generate_payment_address().await;
+        wallet
+            .save_transaction_to_wallet(out_p_non_pay, key_addr_non_pay)
+            .await
+            .unwrap();
 
         // Store paiments
         let (key_addr1, _) = wallet.generate_payment_address().await;
@@ -519,7 +529,7 @@ mod tests {
                 (out_p1.clone(), amount1, key_addr1.clone()),
                 (out_p2.clone(), amount1, key_addr2.clone()),
                 (out_p3, amount3, key_addr2),
-                (out_p4, amount4, "000000".to_owned()),
+                (out_p4, amount4, key_addr_non_existent),
             ])
             .await
             .unwrap();
