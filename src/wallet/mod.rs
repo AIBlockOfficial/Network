@@ -1,5 +1,5 @@
 use crate::configurations::{DbMode, WalletTxSpec};
-use crate::constants::{ADDRESS_KEY, FUND_KEY, WALLET_PATH};
+use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
 use crate::db_utils::{self, DBError, SimpleDb};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
@@ -95,13 +95,13 @@ impl WalletDb {
         Ok(task::spawn_blocking(move || {
             // Wallet DB handling
             let mut db = db.lock().unwrap();
-            let mut address_list = get_address_stores(&db);
 
-            // Assign the new address to the store
-            address_list.insert(address.clone(), keys);
+            let mut address_list = get_known_key_address(&db);
+            address_list.insert(address.clone());
 
             // Save to disk
-            set_address_stores(&mut db, address_list);
+            save_address_store_to_wallet(&mut db, &address, &keys);
+            set_known_key_address(&mut db, address_list);
         })
         .await?)
     }
@@ -139,10 +139,10 @@ impl WalletDb {
             let mut db = db.lock().unwrap();
 
             let usable_payments: Vec<_> = {
-                let addresses = get_address_stores(&db);
+                let addresses = get_known_key_address(&db);
                 payments
                     .into_iter()
-                    .filter(|(_, _, address)| addresses.contains_key(address))
+                    .filter(|(_, _, address)| addresses.contains(address))
                     .collect()
             };
 
@@ -235,9 +235,8 @@ impl WalletDb {
 
     /// Get the wallet addresses
     pub fn get_known_address(&self) -> Vec<String> {
-        get_address_stores(&self.db.lock().unwrap())
+        get_known_key_address(&self.db.lock().unwrap())
             .into_iter()
-            .map(|(addr, _)| addr)
             .collect()
     }
 
@@ -281,19 +280,39 @@ pub fn save_payment_to_fund_store(
     set_fund_store(db, fund_store);
 }
 
-/// Get the wallet address store
-pub fn get_address_stores(db: &SimpleDb) -> BTreeMap<String, AddressStore> {
-    match db.get(ADDRESS_KEY) {
+/// Get the wallet known address
+pub fn get_known_key_address(db: &SimpleDb) -> BTreeSet<String> {
+    match db.get(KNOWN_ADDRESS_KEY) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
-        Ok(None) => BTreeMap::new(),
+        Ok(None) => Default::default(),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }
 
-/// Set the wallet address store
-pub fn set_address_stores(db: &mut SimpleDb, address_store: BTreeMap<String, AddressStore>) {
-    db.put(ADDRESS_KEY, &serialize(&address_store).unwrap())
+/// Set the wallet known address
+pub fn set_known_key_address(db: &mut SimpleDb, address_store: BTreeSet<String>) {
+    db.put(KNOWN_ADDRESS_KEY, &serialize(&address_store).unwrap())
         .unwrap();
+}
+
+/// Get the wallet AddressStore
+pub fn get_address_store(db: &SimpleDb, key_addr: &str) -> AddressStore {
+    match db.get(key_addr) {
+        Ok(Some(store)) => deserialize(&store).unwrap(),
+        Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
+        Err(e) => panic!("Error accessing wallet: {:?}", e),
+    }
+}
+
+/// Delete AddressStore
+pub fn delete_address_store(db: &mut SimpleDb, key_addr: &str) {
+    db.delete(key_addr).unwrap();
+}
+
+/// Save AddressStore
+pub fn save_address_store_to_wallet(db: &mut SimpleDb, key_addr: &str, store: &AddressStore) {
+    let input = serialize(store).unwrap();
+    db.put(key_addr, &input).unwrap();
 }
 
 /// Get the wallet transaction store (address/tx combo)
@@ -370,7 +389,7 @@ pub fn destroy_spent_transactions_and_keys(
     db: &mut SimpleDb,
 ) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
     let mut fund_store = get_fund_store(db);
-    let mut address_store = get_address_stores(db);
+    let mut address_store = get_known_key_address(db);
 
     //
     // Gather data for update
@@ -393,18 +412,20 @@ pub fn destroy_spent_transactions_and_keys(
     };
 
     for keys_address in &remove_key_addresses {
-        address_store.remove(keys_address).unwrap();
+        address_store.remove(keys_address);
     }
 
     //
     // Update database
     //
-
+    set_fund_store(db, fund_store);
+    set_known_key_address(db, address_store);
+    for keys_address in &remove_key_addresses {
+        delete_address_store(db, keys_address);
+    }
     for out_p in spent_txs.keys() {
         delete_transaction_store(db, out_p);
     }
-    set_fund_store(db, fund_store);
-    set_address_stores(db, address_store);
 
     (remove_key_addresses, spent_txs)
 }
@@ -415,10 +436,8 @@ pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     out_p: OutPoint,
 ) -> (TxConstructor, (OutPoint, String)) {
-    let address_store = get_address_stores(db);
     let tx_store = get_transaction_store(db, &out_p);
-
-    let needed_store: &AddressStore = address_store.get(&tx_store).unwrap();
+    let needed_store = get_address_store(db, &tx_store);
 
     let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
     let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
