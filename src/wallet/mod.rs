@@ -23,6 +23,11 @@ pub struct AddressStore {
     pub secret_key: SecretKey,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionStore {
+    pub key_address: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct WalletDb {
     db: Arc<Mutex<SimpleDb>>,
@@ -110,17 +115,18 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `out_p`   - Transaction hash/index
-    /// * `address` - Transaction Address
+    /// * `out_p`        - Transaction hash/index
+    /// * `key_address`  - Transaction Address
     pub async fn save_transaction_to_wallet(
         &self,
         out_p: OutPoint,
-        address: String,
+        key_address: String,
     ) -> Result<(), Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            save_transaction_to_wallet(&mut db, &out_p, &address);
+            let store = TransactionStore { key_address };
+            save_transaction_to_wallet(&mut db, &out_p, &store);
         })
         .await?)
     }
@@ -147,7 +153,9 @@ impl WalletDb {
             };
 
             for (out_p, _, key_address) in &usable_payments {
-                save_transaction_to_wallet(&mut db, out_p, key_address);
+                let key_address = key_address.clone();
+                let store = TransactionStore { key_address };
+                save_transaction_to_wallet(&mut db, out_p, &store);
             }
             save_payment_to_fund_store(
                 &mut db,
@@ -229,7 +237,7 @@ impl WalletDb {
     }
 
     /// Get the wallet address
-    pub fn get_transaction_store(&self, out_p: &OutPoint) -> String {
+    pub fn get_transaction_store(&self, out_p: &OutPoint) -> TransactionStore {
         get_transaction_store(&self.db.lock().unwrap(), out_p)
     }
 
@@ -242,7 +250,7 @@ impl WalletDb {
 
     /// Get the wallet transaction address
     pub fn get_transaction_address(&self, out_p: &OutPoint) -> String {
-        self.get_transaction_store(out_p)
+        self.get_transaction_store(out_p).key_address
     }
 }
 
@@ -315,10 +323,10 @@ pub fn save_address_store_to_wallet(db: &mut SimpleDb, key_addr: &str, store: &A
     db.put(key_addr, &input).unwrap();
 }
 
-/// Get the wallet transaction store (address/tx combo)
-pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> String {
+/// Get the wallet transaction store
+pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
     match db.get(&serialize(&out_p).unwrap()) {
-        Ok(Some(list)) => deserialize(&list).unwrap(),
+        Ok(Some(store)) => deserialize(&store).unwrap(),
         Ok(None) => panic!("Transaction not present in wallet: {:?}", out_p),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
@@ -331,9 +339,9 @@ pub fn delete_transaction_store(db: &mut SimpleDb, out_p: &OutPoint) {
 }
 
 /// Save transaction
-pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, address: &str) {
+pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, store: &TransactionStore) {
     let key = serialize(out_p).unwrap();
-    let input = serialize(address).unwrap();
+    let input = serialize(store).unwrap();
     db.put(&key, &input).unwrap();
 }
 
@@ -401,12 +409,12 @@ pub fn destroy_spent_transactions_and_keys(
         let unspent_key_addresses: BTreeSet<_> = fund_store
             .transactions()
             .keys()
-            .map(|out_p| get_transaction_store(db, out_p))
+            .map(|out_p| get_transaction_store(db, out_p).key_address)
             .collect();
 
         spent_txs
             .keys()
-            .map(|out_p| get_transaction_store(db, out_p))
+            .map(|out_p| get_transaction_store(db, out_p).key_address)
             .filter(|addr| !unspent_key_addresses.contains(addr))
             .collect()
     };
@@ -436,8 +444,8 @@ pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     out_p: OutPoint,
 ) -> (TxConstructor, (OutPoint, String)) {
-    let tx_store = get_transaction_store(db, &out_p);
-    let needed_store = get_address_store(db, &tx_store);
+    let key_address = get_transaction_store(db, &out_p).key_address;
+    let needed_store = get_address_store(db, &key_address);
 
     let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
     let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
@@ -449,7 +457,7 @@ pub fn tx_constructor_from_prev_out(
         pub_keys: vec![needed_store.public_key],
     };
 
-    (tx_const, (out_p, tx_store))
+    (tx_const, (out_p, key_address))
 }
 
 #[cfg(test)]
