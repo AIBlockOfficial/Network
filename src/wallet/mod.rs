@@ -137,10 +137,15 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            for (out_p, amount, key_address) in payments {
-                save_transaction_to_wallet(&mut db, &out_p, &key_address);
-                save_payment_to_fund_store(&mut db, out_p, amount);
+            for (out_p, _, key_address) in &payments {
+                save_transaction_to_wallet(&mut db, out_p, key_address);
             }
+            save_payment_to_fund_store(
+                &mut db,
+                payments
+                    .into_iter()
+                    .map(|(out_p, amount, _)| (out_p, amount)),
+            );
         })
         .await?)
     }
@@ -258,9 +263,14 @@ pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
 }
 
 /// Save a payment to fund store
-pub fn save_payment_to_fund_store(db: &mut SimpleDb, out_p: OutPoint, amount: TokenAmount) {
+pub fn save_payment_to_fund_store(
+    db: &mut SimpleDb,
+    payments: impl Iterator<Item = (OutPoint, TokenAmount)>,
+) {
     let mut fund_store = get_fund_store(db);
-    fund_store.store_tx(out_p, amount);
+    for (out_p, amount) in payments {
+        fund_store.store_tx(out_p, amount);
+    }
     set_fund_store(db, fund_store);
 }
 
