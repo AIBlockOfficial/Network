@@ -442,7 +442,7 @@ impl UserNode {
 
         let tx_ins = self
             .wallet_db
-            .consume_inputs_for_payment(tx_cons, total_amount, tx_used)
+            .consume_inputs_for_payment(tx_cons, tx_used)
             .await;
         let payment_tx = construct_payments_tx(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));

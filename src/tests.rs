@@ -1553,10 +1553,10 @@ async fn node_get_wallet_info(
     let addresses = wallet.get_known_address();
 
     let fund = wallet.get_fund_store();
-    let total = fund.running_total;
+    let total = fund.running_total();
 
     let mut txs_to_address_and_ammount = BTreeMap::new();
-    for (tx, amount) in fund.transactions.into_iter() {
+    for (tx, amount) in fund.into_transactions().into_iter() {
         let addr = wallet.get_transaction_address(&tx);
         txs_to_address_and_ammount.insert(tx, (addr, amount));
     }

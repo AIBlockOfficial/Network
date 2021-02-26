@@ -14,18 +14,13 @@ use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
+mod fund_store;
+pub use fund_store::FundStore;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
-}
-
-/// A reference to fund stores, where `transactions` contains the hash
-/// of the transaction and a `u64` of its holding amount
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct FundStore {
-    pub running_total: TokenAmount,
-    pub transactions: BTreeMap<OutPoint, TokenAmount>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,18 +176,16 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `tx_cons`         - TxIn TxConstructors
-    /// * `amount_consumed` - Amount consumed by tx_cons & tx_used
     /// * `tx_used`         - TxOut used for TxIns
     pub async fn consume_inputs_for_payment(
         &mut self,
         tx_cons: Vec<TxConstructor>,
-        amount_consumed: TokenAmount,
         tx_used: Vec<(OutPoint, String)>,
     ) -> Vec<TxIn> {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            consume_inputs_for_payment_to_wallet(&mut db, tx_cons, amount_consumed, tx_used)
+            consume_inputs_for_payment_to_wallet(&mut db, tx_cons, tx_used)
         })
         .await
         .unwrap()
@@ -257,11 +250,7 @@ pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
 // Save a payment to fund store
 pub fn save_payment_to_fund_store(db: &mut SimpleDb, hash: OutPoint, amount: TokenAmount) {
     let mut fund_store = get_fund_store(db);
-
-    let old_amount = fund_store.transactions.insert(hash, amount);
-    fund_store.running_total -= old_amount.unwrap_or_default();
-    fund_store.running_total += amount;
-
+    fund_store.store_tx(hash, amount);
     set_fund_store(db, fund_store);
 }
 
@@ -313,11 +302,11 @@ pub fn fetch_inputs_for_payment_from_db(
     let mut amount_made = TokenAmount(0);
 
     let fund_store = get_fund_store(db);
-    if fund_store.running_total < amount_required {
+    if fund_store.running_total() < amount_required {
         panic!("Not enough funds available for payment!");
     }
 
-    for (tx_hash, amount) in fund_store.transactions {
+    for (tx_hash, amount) in fund_store.into_transactions() {
         amount_made += amount;
 
         let (cons, used) = tx_constructor_from_prev_out(db, tx_hash);
@@ -336,15 +325,13 @@ pub fn fetch_inputs_for_payment_from_db(
 pub fn consume_inputs_for_payment_to_wallet(
     db: &mut SimpleDb,
     tx_cons: Vec<TxConstructor>,
-    amount_consumed: TokenAmount,
     tx_used: Vec<(OutPoint, String)>,
 ) -> Vec<TxIn> {
     let mut fund_store = get_fund_store(db);
     let mut address_store = get_address_stores(db);
 
-    fund_store.running_total -= amount_consumed;
     for (tx_hash, tx_store) in tx_used {
-        fund_store.transactions.remove(&tx_hash).unwrap();
+        fund_store.spend_tx(&tx_hash);
         address_store.remove(&tx_store).unwrap();
         delete_transaction_store(db, &tx_hash);
     }
