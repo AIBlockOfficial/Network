@@ -396,24 +396,18 @@ impl UserNode {
     /// * `transaction` - Transaction to be received and saved to wallet
     pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
-        let addresses = self.wallet_db.get_address_stores();
 
-        for (tx_out_p, tx_out) in get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
-        {
-            let amount = tx_out.amount;
-            let address = tx_out.script_public_key.clone().unwrap();
+        let payments: Vec<_> = get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
+            .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
+            .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
+            .collect();
 
-            if !addresses.contains_key(&address) {
-                // That TxOut is not ours to use
-                continue;
-            }
-
-            debug!("store_payment_transaction: {} -> {:?}", amount, address);
-            self.wallet_db
-                .save_payment_to_wallet(tx_out_p, amount, address)
-                .await
-                .unwrap();
-        }
+        let our_payments = self
+            .wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
+        debug!("store_payment_transactions: {:?}", our_payments);
     }
 
     /// Creates a new payment transaction and assigns it as an internal attribute
@@ -442,7 +436,7 @@ impl UserNode {
 
         let tx_ins = self
             .wallet_db
-            .consume_inputs_for_payment(tx_cons, total_amount, tx_used)
+            .consume_inputs_for_payment(tx_cons, tx_used)
             .await;
         let payment_tx = construct_payments_tx(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));

@@ -50,7 +50,7 @@ pub const DB_PATH_LIVE: &str = "live";
 pub const WALLET_PATH: &str = "src/wallet/wallet";
 
 /// Key for local addresses in wallet
-pub const ADDRESS_KEY: &str = "a";
+pub const KNOWN_ADDRESS_KEY: &str = "a";
 
 /// Key for a running total of wallet funds
 pub const FUND_KEY: &str = "f";
