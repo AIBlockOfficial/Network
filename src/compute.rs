@@ -873,7 +873,7 @@ impl ComputeNode {
     fn load_local_db(mut self) -> Result<Self> {
         self.request_list = match self.db.get(REQUEST_LIST_KEY) {
             Ok(Some(list)) => {
-                let list = deserialize::<BTreeSet<SocketAddr>>(&list).unwrap();
+                let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
                 debug!("load_local_db: request_list {:?}", list);
                 list
             }

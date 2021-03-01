@@ -180,15 +180,15 @@ impl StorageRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
-            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
+            RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
         }
     }
 
     /// Apply snapshot
-    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> CommittedItem {
         warn!("apply_snapshot called self.consensused updated");
         self.consensused = deserialize(&consensused_ser).unwrap();
-        Some(CommittedItem::Snapshot)
+        CommittedItem::Snapshot
     }
 
     /// Checks a commit of the RaftData for validity
