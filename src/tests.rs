@@ -292,6 +292,8 @@ async fn full_flow_common(
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
+    create_block_act(&mut network, Cfg::All, cfg_num).await;
+
     //
     // Assert
     //
