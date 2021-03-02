@@ -43,6 +43,8 @@ pub struct Network {
     raft_loop_handles: BTreeMap<String, JoinHandle<()>>,
     /// Currently active miner nodes
     active_nodes: BTreeMap<NodeType, Vec<String>>,
+    /// compute to miner mapping of only active nodes
+    active_compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
     /// Currently dead nodes
     dead_nodes: BTreeSet<String>,
     /// Extra params to use for node construction
@@ -129,6 +131,7 @@ impl Network {
         Self {
             config: config.clone(),
             active_nodes: config.nodes.clone(),
+            active_compute_to_miner_mapping: config.compute_to_miner_mapping.clone(),
             instance_info: info,
             arc_nodes,
             raft_loop_handles,
@@ -203,6 +206,43 @@ impl Network {
         Self::disconnect_all_nodes(&self.arc_nodes).await;
     }
 
+    /// Re-connect specified nodes.
+    pub async fn re_connect_nodes_named(&mut self, names: &[&str]) {
+        // Re-spawn specified nodes
+        for name in names {
+            self.dead_nodes.remove(*name);
+            if let Some(node) = self.arc_nodes.get(*name) {
+                let (mut node_conn, _, _) = connect_info_peers(node).await;
+                node_conn.set_pause_listening(false).await;
+            }
+        }
+        self.update_active_nodes();
+
+        // Re-establish all missing connections
+        let dead_addr: BTreeSet<_> = self
+            .dead_nodes
+            .iter()
+            .map(|n| self.instance_info.node_infos[n].node_spec.address)
+            .collect();
+        Self::connect_all_nodes(&self.arc_nodes, &dead_addr).await;
+        self.update_active_nodes();
+    }
+
+    /// disconnect specified nodes.
+    pub async fn disconnect_nodes_named(&mut self, names: &[&str]) {
+        info!("Start disconnect to peers");
+        for name in names {
+            if let Some(node) = self.arc_nodes.get(*name) {
+                let (mut node_conn, _, _) = connect_info_peers(node).await;
+                node_conn.set_pause_listening(true).await;
+                join_all(node_conn.disconnect_all().await).await;
+            }
+        }
+        // Remove from active nodes
+        self.dead_nodes.extend(names.iter().map(|v| v.to_string()));
+        self.update_active_nodes();
+    }
+
     /// Re-spawn specified nodes.
     pub async fn re_spawn_nodes_named(&mut self, names: &[&str]) {
         // Re-spawn specified nodes
@@ -266,6 +306,19 @@ impl Network {
             nodes.retain(|n| !self.dead_nodes.contains(n));
         }
 
+        let mut active_map: BTreeMap<_, _> = self
+            .config
+            .compute_to_miner_mapping
+            .clone()
+            .into_iter()
+            .filter(|(c, _)| !self.dead_nodes.contains(c))
+            .collect();
+
+        for miners in active_map.values_mut() {
+            miners.retain(|m| !self.dead_nodes.contains(m));
+        }
+
+        self.active_compute_to_miner_mapping = active_map;
         self.active_nodes = active_nodes;
     }
 
@@ -400,6 +453,10 @@ impl Network {
     ///Dead nodes not currently active
     pub fn dead_nodes(&self) -> &BTreeSet<String> {
         &self.dead_nodes
+    }
+
+    pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.active_compute_to_miner_mapping
     }
 }
 

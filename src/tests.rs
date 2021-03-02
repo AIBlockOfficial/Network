@@ -77,6 +77,8 @@ enum CfgModif {
     Drop(&'static str),
     Respawn(&'static str),
     HandleEvents(&'static str, &'static [&'static str]),
+    Disconnect(&'static str),
+    Reconnect(&'static str),
 }
 
 #[test]
@@ -160,22 +162,13 @@ async fn full_flow_multi_miners_raft_2_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_raft_kill_storage_node_3_nodes() {
+async fn full_flow_raft_kill_miner_node_3_nodes() {
     let modify_cfg = vec![
-        ("After create block 0", CfgModif::Drop("storage2")),
-        ("After create block 1", CfgModif::Respawn("storage2")),
-        (
-            "After create block 1",
-            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
-        ),
+        ("After create block 0", CfgModif::Drop("miner2")),
+        ("After create block 1", CfgModif::Respawn("miner2")),
     ];
-
-    full_flow_common(
-        complete_network_config_with_n_compute_raft(11100, 3),
-        CfgNum::All,
-        modify_cfg,
-    )
-    .await;
+    let network_config = complete_network_config_with_n_compute_miner(11120, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -196,12 +189,63 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
         ),
     ];
 
-    full_flow_common(
-        complete_network_config_with_n_compute_raft(11110, 3),
-        CfgNum::All,
-        modify_cfg,
-    )
-    .await;
+    let network_config = complete_network_config_with_n_compute_miner(11140, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_kill_storage_node_3_nodes() {
+    let modify_cfg = vec![
+        ("After create block 0", CfgModif::Drop("storage2")),
+        ("After create block 1", CfgModif::Respawn("storage2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
+        ),
+    ];
+
+    let network_config = complete_network_config_with_n_compute_miner(11160, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
+    let modify_cfg = vec![
+        ("After create block 0", CfgModif::Disconnect("miner2")),
+        ("After create block 1", CfgModif::Reconnect("miner2")),
+    ];
+    let network_config = complete_network_config_with_n_compute_miner(11180, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
+    let modify_cfg = vec![
+        ("After create block 0", CfgModif::Disconnect("compute2")),
+        ("After create block 1", CfgModif::Reconnect("compute2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents("compute2", &["Transactions committed", "Block committed"]),
+        ),
+    ];
+
+    let network_config = complete_network_config_with_n_compute_miner(11200, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
+    let modify_cfg = vec![
+        ("After create block 0", CfgModif::Disconnect("storage2")),
+        ("After create block 1", CfgModif::Reconnect("storage2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
+        ),
+    ];
+
+    let network_config = complete_network_config_with_n_compute_miner(11220, true, 3, 3);
+    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
 async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
@@ -300,6 +344,8 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
                 node_all_handle_different_event(network, &node_group, &all_raisons).await
             }
+            CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v]).await,
+            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v]).await,
         }
     }
 }
@@ -748,6 +794,7 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
     let compute_nodes = &active_nodes[&NodeType::Compute];
     let partition_size = config.compute_partition_full_size;
     let c_mined = &node_select(compute_nodes, cfg_num);
+    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg == Cfg::IgnoreMiner {
@@ -758,9 +805,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
     for compute in c_mined {
         let partition_last_idx = partition_size - 1;
-        let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
-        let in_miners: &[String] = &c_miners[0..partition_size];
-        let win_miner: &String = &in_miners[0];
+        let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
+        let in_miners: &[String] = &c_miners[0..std::cmp::min(partition_size, c_miners.len())];
 
         compute_flood_rand_num_to_requesters(network, compute).await;
         miner_all_handle_event(network, c_miners, "Received random number successfully").await;
@@ -785,8 +831,11 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         compute_flood_block_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
 
-        miner_send_pow_for_current(network, win_miner, compute).await;
-        compute_handle_event(network, compute, "Received PoW successfully").await;
+        if !c_miners.is_empty() {
+            let win_miner: &String = &in_miners[0];
+            miner_send_pow_for_current(network, win_miner, compute).await;
+            compute_handle_event(network, compute, "Received PoW successfully").await;
+        }
     }
 }
 
@@ -1027,10 +1076,19 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
 async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
     let storage_nodes = &active_nodes[&NodeType::Storage];
+
+    let compute_no_mining = network
+        .active_compute_to_miner_mapping()
+        .iter()
+        .filter(|(_, miners)| miners.is_empty())
+        .map(|(c, _)| c.clone());
+    let mut dead_nodes = network.dead_nodes().clone();
+    dead_nodes.extend(compute_no_mining);
+
     let (msg_c_nodes, msg_s_nodes) = node_combined_select(
         &network.config().nodes[&NodeType::Compute],
         &network.config().nodes[&NodeType::Storage],
-        &network.dead_nodes(),
+        &dead_nodes,
         cfg_num,
     );
 
