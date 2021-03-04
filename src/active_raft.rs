@@ -172,12 +172,14 @@ impl ActiveRaft {
     }
 
     /// Propose RaftData to raft if use_raft, or commit it otherwise.
-    pub async fn propose_data(&mut self, data: RaftData) {
+    pub async fn propose_data(&mut self, data: RaftData, context: RaftData) {
         if self.use_raft {
-            self.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
+            self.cmd_tx
+                .send(RaftCmd::Propose { data, context })
+                .unwrap();
         } else {
             self.committed_rx.lock().await.1.push_back(RaftCommit {
-                data: RaftCommitData::Proposed(data),
+                data: RaftCommitData::Proposed(data, context),
                 ..RaftCommit::default()
             });
         }

@@ -113,7 +113,7 @@ pub struct ComputeRaft {
     /// Timeout expiration time for transactions poposal.
     propose_transactions_timeout_at: Instant,
     /// Proposed items in flight.
-    proposed_in_flight: BTreeMap<ComputeRaftKey, RaftData>,
+    proposed_in_flight: BTreeMap<ComputeRaftKey, (RaftData, RaftData)>,
     /// Proposed transaction in flight length.
     proposed_tx_pool_len: usize,
     /// Maximum transaction in flight length.
@@ -169,12 +169,12 @@ impl ComputeRaft {
             raft_active,
             consensused,
             local_initial_utxo_txs: Some(utxo_set),
-            local_tx_pool: BTreeMap::new(),
-            local_tx_druid_pool: Vec::new(),
-            last_block_stored_infos: Vec::new(),
+            local_tx_pool: Default::default(),
+            local_tx_druid_pool: Default::default(),
+            last_block_stored_infos: Default::default(),
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
-            proposed_in_flight: BTreeMap::new(),
+            proposed_in_flight: Default::default(),
             proposed_tx_pool_len: 0,
             proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
@@ -219,8 +219,11 @@ impl ComputeRaft {
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
-            RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
+            RaftCommitData::Proposed(data, context) => {
+                self.received_commit_poposal(data, context).await
+            }
             RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
+            RaftCommitData::NewLeader => None,
         }
     }
 
@@ -236,9 +239,16 @@ impl ComputeRaft {
     /// ### Arguments
     /// * 'raft_data' - a RaftData struct from the raft.rs class that holds the data to be proposed to commit.
     /// Apply commited proposal
-    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
-        let (key, item) = match deserialize::<(ComputeRaftKey, ComputeRaftItem)>(&raft_data) {
-            Ok((key, item)) => {
+    async fn received_commit_poposal(
+        &mut self,
+        raft_data: RaftData,
+        raft_ctx: RaftData,
+    ) -> Option<CommittedItem> {
+        let (key, item) = match (
+            deserialize::<ComputeRaftItem>(&raft_data),
+            deserialize::<ComputeRaftKey>(&raft_ctx),
+        ) {
+            (Ok(item), Ok(key)) => {
                 if self.proposed_in_flight.remove(&key).is_some() {
                     if let ComputeRaftItem::Transactions(ref txs) = &item {
                         self.proposed_tx_pool_len -= txs.len();
@@ -246,7 +256,7 @@ impl ComputeRaft {
                 }
                 (key, item)
             }
-            Err(error) => {
+            (Err(error), _) | (_, Err(error)) => {
                 warn!(?error, "ComputeRaftItem-deserialize");
                 return None;
             }
@@ -375,10 +385,12 @@ impl ComputeRaft {
         };
 
         debug!("propose_item: {:?} -> {:?}", key, item);
-        let data = serialize(&(&key, item)).unwrap();
-        self.proposed_in_flight.insert(key, data.clone());
+        let data = serialize(item).unwrap();
+        let context = serialize(&key).unwrap();
+        self.proposed_in_flight
+            .insert(key, (data.clone(), context.clone()));
 
-        self.raft_active.propose_data(data).await
+        self.raft_active.propose_data(data, context).await
     }
 
     /// The current tx_pool that will be used to generate next block
