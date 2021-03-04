@@ -24,6 +24,13 @@ pub struct RaftCommit {
     pub data: RaftCommitData,
 }
 
+/// Key serialized into RaftData and process by Raft.
+#[derive(Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RaftContext {
+    pub proposer_id: u64,
+    pub proposal_id: u64,
+}
+
 /// Raft Commit data
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RaftCommitData {
@@ -126,6 +133,7 @@ pub struct RaftNode {
     total_tick_count: usize,
     /// Last snapshot index, and whether it need compacting.
     previous_snapshot_idx: (u64, bool),
+    // Context already waiting for committing
 }
 
 impl RaftNode {
@@ -241,10 +249,19 @@ impl RaftNode {
                 }
                 self.previous_snapshot_idx = (idx, idx != prev_idx);
             }
-            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => {
+            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(mut m)))) => {
                 trace!("next_event receive message({}, {:?})", self.node.raft.id, m);
                 self.incoming_msgs_count += 1;
-                self.node.step(m).unwrap()
+                let from = m.get_from();
+                if m.get_msg_type() == MessageType::MsgPropose {
+                    for mut e in m.take_entries().into_iter() {
+                        let data = e.take_data();
+                        let context = e.take_context();
+                        self.propose_data_backlog.push((data, context, from));
+                    }
+                } else {
+                    self.node.step(m).unwrap();
+                }
             }
             Err(_) => {
                 // Timeout
@@ -270,8 +287,12 @@ impl RaftNode {
         }
 
         if self.node.raft.leader_id != raft::INVALID_ID {
-            for (data, context, _) in self.propose_data_backlog.drain(..) {
-                self.node.propose(context, data).unwrap();
+            let is_leader = self.node.raft.leader_id == self.node.raft.id;
+            for (data, context, from) in self.propose_data_backlog.drain(..) {
+                let can_propose = is_leader || from == self.node.raft.id;
+                if can_propose && !self.node.get_store().is_context_in_log(&context) {
+                    self.node.propose(context, data).unwrap();
+                }
             }
         }
 

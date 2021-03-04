@@ -4,6 +4,7 @@ use protobuf::Message;
 use raft::prelude::*;
 use raft::storage::MemStorage;
 use raft::{Result as RaftResult, StorageError};
+use std::collections::HashMap;
 use tracing::{error, info};
 
 const HARDSTATE_KEY: &str = "HardStateKey";
@@ -18,6 +19,8 @@ pub struct RaftStore {
     presistent: SimpleDb,
     /// First valid entry index in persistent storage
     persistent_first_entry: u64,
+    /// Proposed context and log index
+    proposed_context: HashMap<Vec<u8>, u64>,
 }
 
 impl RaftStore {
@@ -27,6 +30,7 @@ impl RaftStore {
             in_memory: MemStorage::new(),
             presistent,
             persistent_first_entry: 0,
+            proposed_context: Default::default(),
         }
     }
 
@@ -80,6 +84,8 @@ impl RaftStore {
     /// Only apply to in memory storage: persistent storage always match the last snapshot
     pub fn compact(&mut self, compact_index: u64) -> RaftResult<()> {
         self.in_memory.wl().compact(compact_index)?;
+        self.proposed_context
+            .retain(|_, ctx_idx| *ctx_idx >= compact_index);
         Ok(())
     }
 
@@ -93,7 +99,14 @@ impl RaftStore {
             .map(|e| (e, e.get_index()))
             .filter(|(_, i)| *i >= persistent_first_entry);
 
+        let mut first = true;
         for (ent, index) in entries_to_write {
+            if first {
+                first = false;
+                self.proposed_context.retain(|_, ctx_idx| *ctx_idx < index);
+            }
+            self.proposed_context
+                .insert(ent.get_context().to_owned(), index);
             set_persistent_entry(&mut self.presistent, index, ent)?;
             set_last_persistent_entry(&mut self.presistent, index)?;
         }
@@ -159,6 +172,10 @@ impl RaftStore {
         }
 
         Ok(self)
+    }
+
+    pub fn is_context_in_log(&self, context: &[u8]) -> bool {
+        self.proposed_context.contains_key(context)
     }
 }
 
