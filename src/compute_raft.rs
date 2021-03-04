@@ -223,7 +223,10 @@ impl ComputeRaft {
                 self.received_commit_poposal(data, context).await
             }
             RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
-            RaftCommitData::NewLeader => None,
+            RaftCommitData::NewLeader => {
+                self.re_propose_all_items().await;
+                None
+            }
         }
     }
 
@@ -391,6 +394,15 @@ impl ComputeRaft {
             .insert(key, (data.clone(), context.clone()));
 
         self.raft_active.propose_data(data, context).await
+    }
+
+    /// Re-Propose all items in flight to raft.
+    pub async fn re_propose_all_items(&mut self) {
+        for (data, context) in self.proposed_in_flight.values() {
+            self.raft_active
+                .propose_data(data.clone(), context.clone())
+                .await;
+        }
     }
 
     /// The current tx_pool that will be used to generate next block

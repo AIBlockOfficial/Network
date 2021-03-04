@@ -192,7 +192,10 @@ impl StorageRaft {
                 self.received_commit_poposal(data, context).await
             }
             RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
-            RaftCommitData::NewLeader => None,
+            RaftCommitData::NewLeader => {
+                self.re_propose_all_items().await;
+                None
+            }
         }
     }
 
@@ -348,6 +351,15 @@ impl StorageRaft {
     ///  * `key` - The item key to be proposed to a raft.
     async fn re_propose_item(&mut self, key: StorageRaftKey) {
         if let Some((data, context)) = self.proposed_in_flight.get(&key) {
+            self.raft_active
+                .propose_data(data.clone(), context.clone())
+                .await;
+        }
+    }
+
+    /// Re-Propose all items in flight to raft.
+    pub async fn re_propose_all_items(&mut self) {
+        for (data, context) in self.proposed_in_flight.values() {
             self.raft_active
                 .propose_data(data.clone(), context.clone())
                 .await;
