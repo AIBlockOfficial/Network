@@ -267,7 +267,9 @@ impl StorageNode {
                 }
                 Some(_) = self.node_raft.timeout_propose_block() => {
                     trace!("handle_next_event timeout block");
-                    self.node_raft.propose_block_at_timeout().await;
+                    if !self.node_raft.propose_block_at_timeout().await {
+                        self.node_raft.re_propose_uncommitted_current_b_num().await;
+                    }
                 }
             }
         }
