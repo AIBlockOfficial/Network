@@ -388,11 +388,19 @@ impl Node {
     }
 
     /// Disconnect all remote peers and provide JoinHandles.
-    pub async fn disconnect_all(&mut self) -> Vec<JoinHandle<()>> {
+    /// If provided, only disconnect subset of peers.
+    pub async fn disconnect_all(&mut self, subset: Option<&[SocketAddr]>) -> Vec<JoinHandle<()>> {
         let mut all_peers = {
             let mut all_peers = self.peers.write().await;
-            let all_peers: &mut PeerList = &mut all_peers;
-            std::mem::take(all_peers)
+            if let Some(subset) = subset {
+                subset
+                    .iter()
+                    .filter_map(|addr| all_peers.remove_entry(addr))
+                    .collect()
+            } else {
+                let all_peers: &mut PeerList = &mut all_peers;
+                std::mem::take(all_peers)
+            }
         };
 
         trace!("disconnect_all {:?}", all_peers);

@@ -265,6 +265,7 @@ impl ComputeRaft {
             }
         };
 
+        trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
             ComputeRaftItem::FirstBlock(uxto_set) => {
                 if !self.consensused.is_first_block() {
@@ -398,6 +399,10 @@ impl ComputeRaft {
 
     /// Re-Propose all items in flight to raft.
     pub async fn re_propose_all_items(&mut self) {
+        debug!(
+            "Re-propose all non committed items: {}",
+            self.proposed_in_flight.len()
+        );
         for (data, context) in self.proposed_in_flight.values() {
             self.raft_active
                 .propose_data(data.clone(), context.clone())

@@ -13,7 +13,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -231,6 +231,7 @@ impl StorageRaft {
             }
         };
 
+        trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
             StorageRaftItem::PartBlock(block) => {
                 if self
@@ -359,6 +360,10 @@ impl StorageRaft {
 
     /// Re-Propose all items in flight to raft.
     pub async fn re_propose_all_items(&mut self) {
+        debug!(
+            "Re-propose all non committed items: {}",
+            self.proposed_in_flight.len()
+        );
         for (data, context) in self.proposed_in_flight.values() {
             self.raft_active
                 .propose_data(data.clone(), context.clone())

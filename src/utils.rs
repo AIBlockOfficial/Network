@@ -499,10 +499,27 @@ pub fn loops_re_connect_disconnect(
                         _ = &mut stop_re_connect_rx => break,
                     };
 
-                    match (paused, std::path::Path::new(&disconnect).exists()) {
+                    let path = std::path::Path::new(&disconnect);
+                    match (paused, path.exists()) {
                         (false, true) => {
+                            let content = std::fs::read_to_string(path).unwrap_or_default();
+                            let diconnect_addrs: Vec<_> = content
+                                .split(&[',', '\n'][..])
+                                .filter_map(|v| v.parse::<SocketAddr>().ok())
+                                .collect();
+
+                            warn!(
+                                "disconnect from {:?} all {:?}",
+                                node_conn.address(),
+                                diconnect_addrs
+                            );
                             node_conn.set_pause_listening(true).await;
-                            join_all(node_conn.disconnect_all().await).await;
+                            if diconnect_addrs.is_empty() {
+                                join_all(node_conn.disconnect_all(None).await).await;
+                            } else {
+                                join_all(node_conn.disconnect_all(Some(&diconnect_addrs)).await)
+                                    .await;
+                            }
                             paused = true;
                         }
                         (true, false) => {
