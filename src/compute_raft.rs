@@ -372,8 +372,9 @@ impl ComputeRaft {
     /// * `item` - The item to be proposed to a raft.
     async fn propose_item(&mut self, item: &ComputeRaftItem) -> RaftContextKey {
         self.proposed_in_flight
-            .propose_item(&mut self.raft_active, item)
+            .propose_item(&mut self.raft_active, item, None)
             .await
+            .unwrap()
     }
 
     /// The current tx_pool that will be used to generate next block

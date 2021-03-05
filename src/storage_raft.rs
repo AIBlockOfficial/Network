@@ -87,8 +87,6 @@ pub struct StorageRaft {
     local_blocks: Vec<ReceivedBlock>,
     /// Proposal block num associated with key
     proposed_keys_b_num: BTreeMap<RaftContextKey, u64>,
-    /// Last proposed timeout b_num
-    proposed_last_timeout_b_num: Option<u64>,
 }
 
 impl fmt::Debug for StorageRaft {
@@ -136,7 +134,6 @@ impl StorageRaft {
             proposed_in_flight: Default::default(),
             local_blocks: Default::default(),
             proposed_keys_b_num: Default::default(),
-            proposed_last_timeout_b_num: None,
         }
     }
 
@@ -277,12 +274,10 @@ impl StorageRaft {
         self.propose_block_timeout_at = self.next_propose_block_timeout_at();
 
         let b_num = self.consensused.current_block_num;
-        if self.proposed_last_timeout_b_num < Some(b_num) {
-            let item = StorageRaftItem::CompleteBlock(b_num);
-            let key = self.propose_item(&item).await;
+        let item = StorageRaftItem::CompleteBlock(b_num);
 
+        if let Some(key) = self.propose_item_dedup(&item, b_num).await {
             self.proposed_keys_b_num.insert(key, b_num);
-            self.proposed_last_timeout_b_num = Some(b_num);
             true
         } else {
             false
@@ -314,14 +309,32 @@ impl StorageRaft {
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
+    /// Deduplicate entries.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `item`  - The item to be proposed to a raft.
+    ///  * `b_num` - Block number associated with this item.
+    async fn propose_item_dedup(
+        &mut self,
+        item: &StorageRaftItem,
+        b_num: u64,
+    ) -> Option<RaftContextKey> {
+        self.proposed_in_flight
+            .propose_item(&mut self.raft_active, item, Some(b_num))
+            .await
+    }
+
+    /// Propose an item to raft if use_raft, or commit it otherwise.
     ///
     /// ### Arguments
     ///
     ///  * `item` - The item to be proposed to a raft.
     async fn propose_item(&mut self, item: &StorageRaftItem) -> RaftContextKey {
         self.proposed_in_flight
-            .propose_item(&mut self.raft_active, item)
+            .propose_item(&mut self.raft_active, item, None)
             .await
+            .unwrap()
     }
 
     /// Append block to our local pool from which to propose
@@ -364,7 +377,11 @@ impl StorageRaft {
     ///Creates and returns a complete block
     pub fn generate_complete_block(&mut self) -> CompleteBlock {
         self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        self.consensused.generate_complete_block()
+
+        let (block, b_num) = self.consensused.generate_complete_block();
+        self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
+
+        block
     }
 
     ///Returns the clock time after the proposed block time out
@@ -433,7 +450,7 @@ impl StorageConsensused {
     }
 
     ///generates a completed block and returns it.
-    pub fn generate_complete_block(&mut self) -> CompleteBlock {
+    pub fn generate_complete_block(&mut self) -> (CompleteBlock, u64) {
         self.current_block_num += 1;
         let _timeouts = std::mem::take(&mut self.current_block_complete_timeout_peer_ids);
         let completed_parts = std::mem::take(&mut self.current_block_completed_parts);
@@ -443,7 +460,7 @@ impl StorageConsensused {
             .max_by_key(|(_, v)| v.per_node.len())
             .unwrap();
 
-        complete_block
+        (complete_block, self.current_block_num)
     }
 }
 
