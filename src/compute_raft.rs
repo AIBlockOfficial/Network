@@ -267,7 +267,8 @@ impl ComputeRaft {
 
                 if self.consensused.has_block_stored_info_ready() {
                     // First block complete:
-                    self.consensused.apply_ready_block_stored_info();
+                    let b_num = self.consensused.apply_ready_block_stored_info();
+                    self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
                     return Some(CommittedItem::FirstBlock);
                 }
             }
@@ -295,7 +296,8 @@ impl ComputeRaft {
                     // New block:
                     // Must not populate further tx_pool & tx_druid_pool
                     // before generating block.
-                    self.consensused.apply_ready_block_stored_info();
+                    let b_num = self.consensused.apply_ready_block_stored_info();
+                    self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
                     return Some(CommittedItem::Block);
                 }
             }
@@ -333,7 +335,9 @@ impl ComputeRaft {
     pub async fn propose_block_with_last_info(&mut self) {
         let local_blocks = std::mem::take(&mut self.last_block_stored_infos);
         for block in local_blocks.into_iter() {
-            self.propose_item(&ComputeRaftItem::Block(block)).await;
+            let b_num = block.block_num;
+            let item = ComputeRaftItem::Block(block);
+            self.propose_item_dedup(&item, b_num).await;
         }
     }
 
@@ -363,6 +367,23 @@ impl ComputeRaft {
             self.propose_item(&ComputeRaftItem::DruidTransactions(txs))
                 .await;
         }
+    }
+
+    /// Propose an item to raft if use_raft, or commit it otherwise.
+    /// Deduplicate entries.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `item`  - The item to be proposed to a raft.
+    ///  * `b_num` - Block number associated with this item.
+    async fn propose_item_dedup(
+        &mut self,
+        item: &ComputeRaftItem,
+        b_num: u64,
+    ) -> Option<RaftContextKey> {
+        self.proposed_in_flight
+            .propose_item(&mut self.raft_active, item, Some(b_num))
+            .await
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
@@ -756,7 +777,7 @@ impl ComputeConsensused {
     }
 
     /// Apply accumulated block info.
-    pub fn apply_ready_block_stored_info(&mut self) {
+    pub fn apply_ready_block_stored_info(&mut self) -> u64 {
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_circulation = get_total_coinbase_tokens(&utxo_set);
@@ -773,6 +794,7 @@ impl ComputeConsensused {
             }
         }
         self.current_reward = calculate_reward(self.current_circulation);
+        self.tx_current_block_num.unwrap()
     }
 
     /// Take the block info with most vote and reset accumulator.

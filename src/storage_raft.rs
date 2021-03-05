@@ -289,11 +289,11 @@ impl StorageRaft {
         let local_blocks = std::mem::take(&mut self.local_blocks);
         for block in local_blocks.into_iter() {
             let b_num = block.common.block.header.b_num;
-
             let item = StorageRaftItem::PartBlock(block);
-            let key = self.propose_item(&item).await;
 
-            self.proposed_keys_b_num.insert(key, b_num);
+            if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+                self.proposed_keys_b_num.insert(key, b_num);
+            }
         }
     }
 
@@ -323,18 +323,6 @@ impl StorageRaft {
         self.proposed_in_flight
             .propose_item(&mut self.raft_active, item, Some(b_num))
             .await
-    }
-
-    /// Propose an item to raft if use_raft, or commit it otherwise.
-    ///
-    /// ### Arguments
-    ///
-    ///  * `item` - The item to be proposed to a raft.
-    async fn propose_item(&mut self, item: &StorageRaftItem) -> RaftContextKey {
-        self.proposed_in_flight
-            .propose_item(&mut self.raft_active, item, None)
-            .await
-            .unwrap()
     }
 
     /// Append block to our local pool from which to propose
