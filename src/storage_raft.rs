@@ -211,11 +211,13 @@ impl StorageRaft {
         raft_data: RaftData,
         raft_ctx: RaftData,
     ) -> Option<CommittedItem> {
-        let (key, item, _removed) = self
+        let (key, item, removed) = self
             .proposed_in_flight
             .received_commit_poposal(&raft_data, &raft_ctx)
             .await?;
-        self.proposed_keys_b_num.remove(&key);
+        if removed {
+            self.proposed_keys_b_num.remove(&key);
+        }
 
         trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
