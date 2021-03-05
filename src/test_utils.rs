@@ -146,7 +146,7 @@ impl Network {
         info!("Start disconnect to peers");
         for node in arc_nodes.values() {
             let (mut node_conn, _, _) = connect_info_peers(node).await;
-            join_all(node_conn.disconnect_all().await).await;
+            join_all(node_conn.disconnect_all(None).await).await;
         }
     }
 
@@ -235,7 +235,7 @@ impl Network {
             if let Some(node) = self.arc_nodes.get(*name) {
                 let (mut node_conn, _, _) = connect_info_peers(node).await;
                 node_conn.set_pause_listening(true).await;
-                join_all(node_conn.disconnect_all().await).await;
+                join_all(node_conn.disconnect_all(None).await).await;
             }
         }
         // Remove from active nodes

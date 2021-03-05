@@ -92,39 +92,68 @@ async fn multicast() {
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
 #[tokio::test(basic_scheduler)]
-async fn disconnect_connection() {
+async fn disconnect_connection_all() {
+    disconnect_connection(false).await;
+}
+
+/// Check that 2 nodes connected node are disconnected once one of them disconnect.
+#[tokio::test(basic_scheduler)]
+async fn disconnect_connection_some() {
+    disconnect_connection(true).await;
+}
+
+async fn disconnect_connection(subset: bool) {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(2, 1).await;
+    let mut nodes = create_compute_nodes(3, 2).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
-    let (n2, _) = tail.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
     n2.connect_to(n1.address()).await.unwrap();
+    n3.connect_to(n1.address()).await.unwrap();
 
     //
     // Act
     //
-    let join_n2 = n2.take_join_handle(n1.address()).await;
-    let join_n1 = n1.disconnect_all().await;
-    join_all(join_n2.into_iter().chain(join_n1.into_iter())).await;
+    let (actual2, actual3) = {
+        let mut joins = Vec::new();
+        let subset = if subset {
+            Some(vec![n3.address()])
+        } else {
+            joins.append(&mut n2.take_join_handle(n1.address()).await);
+            None
+        };
+        joins.append(&mut n3.take_join_handle(n1.address()).await);
+        joins.append(&mut n1.disconnect_all(subset.as_deref()).await);
+        join_all(joins.into_iter()).await;
 
-    let actual2 = n2.send(n1.address(), "Hello1").await;
-    let actual1 = n1.send(n2.address(), "Hello2").await;
+        let actual2_1 = n2.send(n1.address(), "Hello1_2").await;
+        let actual1_2 = n1.send(n2.address(), "Hello2_1").await;
+        let actual3_1 = n3.send(n1.address(), "Hello1_3").await;
+        let actual1_3 = n1.send(n3.address(), "Hello3_1").await;
+
+        ((actual2_1, actual1_2), (actual3_1, actual1_3))
+    };
 
     //
     // Assert
     //
-    let actual = (actual1, actual2);
-    assert!(
+    let success2 = if subset {
+        matches!(actual2, (Ok(_), Ok(_)),)
+    } else {
         matches!(
-            actual,
-            (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound)),
-        ),
-        "{:?}",
-        actual
+            actual2,
+            (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound))
+        )
+    };
+    let sucess3 = matches!(
+        actual3,
+        (Err(CommsError::PeerNotFound), Err(CommsError::PeerNotFound)),
     );
+    assert!(success2 && sucess3, "{:?}", (actual2, actual3));
 
     complete_compute_nodes(nodes).await;
 }

@@ -13,7 +13,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,7 +23,7 @@ pub enum StorageRaftItem {
 }
 
 /// Key serialized into RaftData and process by Raft.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StorageRaftKey {
     pub proposer_id: u64,
     pub proposal_id: u64,
@@ -87,10 +87,16 @@ pub struct StorageRaft {
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
     propose_block_timeout_at: ProposeBlockTimeout,
+    /// Proposed items in flight.
+    proposed_in_flight: BTreeMap<StorageRaftKey, (RaftData, RaftData)>,
     /// The last id of a proposed item.
     proposed_last_id: u64,
     /// Received blocks
     local_blocks: Vec<ReceivedBlock>,
+    /// Proposal block num associated with key
+    proposed_keys_b_num: BTreeMap<StorageRaftKey, u64>,
+    /// Last proposed timeout b_num
+    proposed_last_timeout_b_num: Option<u64>,
 }
 
 impl fmt::Debug for StorageRaft {
@@ -135,8 +141,11 @@ impl StorageRaft {
             consensused,
             propose_block_timeout_duration,
             propose_block_timeout_at,
+            proposed_in_flight: Default::default(),
             proposed_last_id: 0,
-            local_blocks: Vec::new(),
+            local_blocks: Default::default(),
+            proposed_keys_b_num: Default::default(),
+            proposed_last_timeout_b_num: None,
         }
     }
 
@@ -179,8 +188,14 @@ impl StorageRaft {
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
-            RaftCommitData::Proposed(data) => self.received_commit_poposal(data).await,
+            RaftCommitData::Proposed(data, context) => {
+                self.received_commit_poposal(data, context).await
+            }
             RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
+            RaftCommitData::NewLeader => {
+                self.re_propose_all_items().await;
+                None
+            }
         }
     }
 
@@ -196,15 +211,27 @@ impl StorageRaft {
     /// ### Arguments
     ///
     /// * `raft_commit` - RaftCommit object holding the data for the commit
-    async fn received_commit_poposal(&mut self, raft_data: RaftData) -> Option<CommittedItem> {
-        let (key, item) = match deserialize::<(StorageRaftKey, StorageRaftItem)>(&raft_data) {
-            Ok((key, item)) => (key, item),
-            Err(error) => {
+    async fn received_commit_poposal(
+        &mut self,
+        raft_data: RaftData,
+        raft_ctx: RaftData,
+    ) -> Option<CommittedItem> {
+        let (key, item) = match (
+            deserialize::<StorageRaftItem>(&raft_data),
+            deserialize::<StorageRaftKey>(&raft_ctx),
+        ) {
+            (Ok(item), Ok(key)) => {
+                self.proposed_in_flight.remove(&key);
+                self.proposed_keys_b_num.remove(&key);
+                (key, item)
+            }
+            (Err(error), _) | (_, Err(error)) => {
                 warn!(?error, "StorageRaftItem-deserialize");
                 return None;
             }
         };
 
+        trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
             StorageRaftItem::PartBlock(block) => {
                 if self
@@ -257,20 +284,42 @@ impl StorageRaft {
 
     /// Process as a result of timeout_propose_block.
     /// Signal that the current block should complete.
-    /// Reset timeout, Only restart it when complete block is generated.
-    pub async fn propose_block_at_timeout(&mut self) {
-        self.propose_block_timeout_at = ProposeBlockTimeout::None;
-        self.propose_item(&StorageRaftItem::CompleteBlock(
-            self.consensused.current_block_num,
-        ))
-        .await;
+    /// Restart timeout, for re-proposal.
+    pub async fn propose_block_at_timeout(&mut self) -> bool {
+        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+
+        let b_num = self.consensused.current_block_num;
+        if self.proposed_last_timeout_b_num < Some(b_num) {
+            let item = StorageRaftItem::CompleteBlock(b_num);
+            let key = self.propose_item(&item).await;
+
+            self.proposed_keys_b_num.insert(key, b_num);
+            self.proposed_last_timeout_b_num = Some(b_num);
+            true
+        } else {
+            false
+        }
     }
 
     /// Add any ready local blocks.
     pub async fn propose_received_part_block(&mut self) {
         let local_blocks = std::mem::take(&mut self.local_blocks);
         for block in local_blocks.into_iter() {
-            self.propose_item(&StorageRaftItem::PartBlock(block)).await;
+            let b_num = block.common.block.header.b_num;
+
+            let item = StorageRaftItem::PartBlock(block);
+            let key = self.propose_item(&item).await;
+
+            self.proposed_keys_b_num.insert(key, b_num);
+        }
+    }
+
+    /// Re-propose uncommited items relevant for current block.
+    pub async fn re_propose_uncommitted_current_b_num(&mut self) {
+        for (key, block_num) in self.proposed_keys_b_num.clone() {
+            if self.consensused.is_current_block(block_num) {
+                self.re_propose_item(key).await;
+            }
         }
     }
 
@@ -278,8 +327,8 @@ impl StorageRaft {
     ///
     /// ### Arguments
     ///
-    ///  * `item` - &StorageRaftItem. The item to be proposed to a radt.
-    async fn propose_item(&mut self, item: &StorageRaftItem) {
+    ///  * `item` - &StorageRaftItem. The item to be proposed to a raft.
+    async fn propose_item(&mut self, item: &StorageRaftItem) -> StorageRaftKey {
         self.proposed_last_id += 1;
         let key = StorageRaftKey {
             proposer_id: self.raft_active.peer_id(),
@@ -287,9 +336,39 @@ impl StorageRaft {
         };
 
         debug!("propose_item: {:?} -> {:?}", key, item);
-        let data = serialize(&(&key, item)).unwrap();
+        let data = serialize(item).unwrap();
+        let context = serialize(&key).unwrap();
+        self.proposed_in_flight
+            .insert(key, (data.clone(), context.clone()));
 
-        self.raft_active.propose_data(data).await
+        self.raft_active.propose_data(data, context).await;
+        key
+    }
+
+    /// Re-Propose an item in flight to raft.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `key` - The item key to be proposed to a raft.
+    async fn re_propose_item(&mut self, key: StorageRaftKey) {
+        if let Some((data, context)) = self.proposed_in_flight.get(&key) {
+            self.raft_active
+                .propose_data(data.clone(), context.clone())
+                .await;
+        }
+    }
+
+    /// Re-Propose all items in flight to raft.
+    pub async fn re_propose_all_items(&mut self) {
+        debug!(
+            "Re-propose all non committed items: {}",
+            self.proposed_in_flight.len()
+        );
+        for (data, context) in self.proposed_in_flight.values() {
+            self.raft_active
+                .propose_data(data.clone(), context.clone())
+                .await;
+        }
     }
 
     /// Append block to our local pool from which to propose

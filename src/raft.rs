@@ -24,25 +24,34 @@ pub struct RaftCommit {
     pub data: RaftCommitData,
 }
 
+/// Key serialized into RaftData and process by Raft.
+#[derive(Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RaftContext {
+    pub proposer_id: u64,
+    pub proposal_id: u64,
+}
+
 /// Raft Commit data
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RaftCommitData {
-    Proposed(RaftData),
+    Proposed(RaftData, RaftData),
     Snapshot(RaftData),
+    NewLeader,
 }
 
 impl RaftCommitData {
-    fn take_data(self) -> RaftData {
+    fn take_data(self) -> Option<RaftData> {
         match self {
-            Self::Proposed(data) => data,
-            Self::Snapshot(data) => data,
+            Self::Proposed(data, _) => Some(data),
+            Self::Snapshot(data) => Some(data),
+            Self::NewLeader => None,
         }
     }
 }
 
 impl Default for RaftCommitData {
     fn default() -> Self {
-        Self::Proposed(Default::default())
+        Self::Proposed(Default::default(), Default::default())
     }
 }
 
@@ -93,7 +102,7 @@ impl<'a> Deserialize<'a> for RaftMessageWrapper {
 /// Input command/messages to the raft loop.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RaftCmd {
-    Propose { data: RaftData },
+    Propose { data: RaftData, context: RaftData },
     Snapshot { idx: u64, data: RaftData },
     Raft(RaftMessageWrapper),
     Close,
@@ -102,8 +111,8 @@ pub enum RaftCmd {
 pub struct RaftNode {
     /// Runing raft node.
     node: RawNode<RaftStore>,
-    /// Backlog of raft proposal while leader unavailable.
-    propose_data_backlog: Vec<RaftData>,
+    /// Backlog of raft proposal while leader unavailable, and proposer id.
+    propose_data_backlog: Vec<(RaftData, RaftData, u64)>,
     /// Input command and messages.
     cmd_rx: RaftCmdReceiver,
     /// Output commited data.
@@ -124,6 +133,7 @@ pub struct RaftNode {
     total_tick_count: usize,
     /// Last snapshot index, and whether it need compacting.
     previous_snapshot_idx: (u64, bool),
+    // Context already waiting for committing
 }
 
 impl RaftNode {
@@ -149,7 +159,7 @@ impl RaftNode {
 
         Self {
             node,
-            propose_data_backlog: Vec::new(),
+            propose_data_backlog: Default::default(),
             cmd_rx: raft_config.cmd_rx,
             committed_tx: raft_config.committed_tx,
             msg_out_tx: raft_config.msg_out_tx,
@@ -222,9 +232,10 @@ impl RaftNode {
     /// Async RAFT loop processing inputs and populating output channels.
     async fn next_event(&mut self) -> Option<()> {
         match timeout_at(self.tick_timeout_at, self.cmd_rx.recv()).await {
-            Ok(Some(RaftCmd::Propose { data })) => {
+            Ok(Some(RaftCmd::Propose { data, context })) => {
                 trace!("next_event Propose({}, {:?})", self.node.raft.id, data);
-                self.propose_data_backlog.push(data);
+                self.propose_data_backlog
+                    .push((data, context, self.node.raft.id));
             }
             Ok(Some(RaftCmd::Snapshot { idx, data })) => {
                 trace!("next_event snapshot({}, idx: {})", self.node.raft.id, idx);
@@ -238,10 +249,19 @@ impl RaftNode {
                 }
                 self.previous_snapshot_idx = (idx, idx != prev_idx);
             }
-            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(m)))) => {
+            Ok(Some(RaftCmd::Raft(RaftMessageWrapper(mut m)))) => {
                 trace!("next_event receive message({}, {:?})", self.node.raft.id, m);
                 self.incoming_msgs_count += 1;
-                self.node.step(m).unwrap()
+                let from = m.get_from();
+                if m.get_msg_type() == MessageType::MsgPropose {
+                    for mut e in m.take_entries().into_iter() {
+                        let data = e.take_data();
+                        let context = e.take_context();
+                        self.propose_data_backlog.push((data, context, from));
+                    }
+                } else {
+                    self.node.step(m).unwrap();
+                }
             }
             Err(_) => {
                 // Timeout
@@ -267,9 +287,12 @@ impl RaftNode {
         }
 
         if self.node.raft.leader_id != raft::INVALID_ID {
-            for data in self.propose_data_backlog.drain(..) {
-                let context = Vec::new();
-                self.node.propose(context, data).unwrap();
+            let is_leader = self.node.raft.leader_id == self.node.raft.id;
+            for (data, context, from) in self.propose_data_backlog.drain(..) {
+                let can_propose = is_leader || from == self.node.raft.id;
+                if can_propose && !self.node.get_store().is_context_in_log(&context) {
+                    self.node.propose(context, data).unwrap();
+                }
             }
         }
 
@@ -365,13 +388,16 @@ impl RaftNode {
             committed.extend(
                 committed_entries
                     .drain(..)
-                    // Skip emtpy entry sent when the peer becomes Leader.
-                    .filter(|entry| !entry.get_data().is_empty())
                     .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
-                    .map(|mut entry| RaftCommit {
-                        term: entry.get_term(),
-                        index: entry.get_index(),
-                        data: RaftCommitData::Proposed(entry.take_data()),
+                    .map(|mut entry| {
+                        let term = entry.get_term();
+                        let index = entry.get_index();
+                        let data = if entry.get_data().is_empty() {
+                            RaftCommitData::NewLeader
+                        } else {
+                            RaftCommitData::Proposed(entry.take_data(), entry.take_context())
+                        };
+                        RaftCommit { term, index, data }
                     }),
             );
         }
@@ -419,6 +445,7 @@ mod tests {
         pub cmd_tx: RaftCmdSender,
         pub committed_rx: CommitReceiver,
         pub last_committed: Option<RaftCommit>,
+        pub last_proposed_id: u8,
     }
 
     struct RaftHooks {
@@ -969,7 +996,11 @@ mod tests {
     }
 
     async fn send_proposal(test_node: &mut TestNode, data: RaftData) {
-        test_node.cmd_tx.send(RaftCmd::Propose { data }).unwrap();
+        test_node.last_proposed_id += 1;
+        let context = vec![test_node.peer_id as u8, test_node.last_proposed_id];
+        let cmd = RaftCmd::Propose { data, context };
+
+        test_node.cmd_tx.send(cmd).unwrap();
     }
 
     async fn all_snapshot(test_nodes: &mut [TestNode], data: RaftData) {
@@ -999,16 +1030,25 @@ mod tests {
     }
 
     async fn one_recv_commited(test_node: &mut TestNode, i: usize, count: usize) -> Vec<RaftData> {
-        match time::timeout(TIMEOUT_TEST_WAIT_DURATION, test_node.committed_rx.recv()).await {
-            Ok(commits) => {
-                let commits = commits.unwrap();
-                test_node.last_committed = Some(commits.last().cloned().unwrap());
-                commits.into_iter().map(|e| e.data.take_data()).collect()
+        loop {
+            match time::timeout(TIMEOUT_TEST_WAIT_DURATION, test_node.committed_rx.recv()).await {
+                Ok(commits) => {
+                    let mut commits = commits.unwrap();
+                    commits.retain(|e| e.data != RaftCommitData::NewLeader);
+
+                    if !commits.is_empty() {
+                        test_node.last_committed = Some(commits.last().cloned().unwrap());
+                        return commits
+                            .into_iter()
+                            .map(|e| e.data.take_data().unwrap())
+                            .collect();
+                    }
+                }
+                Err(_) => panic!(
+                    "Unexpected timeout: peer_id={}, i={} in 0..{}",
+                    test_node.peer_id, i, count
+                ),
             }
-            Err(_) => panic!(
-                "Unexpected timeout: peer_id={}, i={} in 0..{}",
-                test_node.peer_id, i, count
-            ),
         }
     }
 
@@ -1048,6 +1088,7 @@ mod tests {
             committed_rx: node_channels.committed_rx,
             msg_out_rx: Some(node_channels.msg_out_rx),
             last_committed: None,
+            last_proposed_id: 0,
         }
     }
 }
