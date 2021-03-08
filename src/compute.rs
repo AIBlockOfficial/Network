@@ -518,6 +518,10 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: false,
+                reason: "PoW received is invalid",
+            }) => {}
+            Ok(Response {
+                success: false,
                 reason: "Not block currently mined",
             }) => {}
             Ok(Response {
