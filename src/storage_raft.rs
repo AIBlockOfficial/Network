@@ -451,11 +451,3 @@ impl StorageConsensused {
         (complete_block, self.current_block_num)
     }
 }
-
-#[cfg(test)]
-mod test {
-    //use super::*;
-
-    #[tokio::test]
-    async fn test_storage_raft() {}
-}
