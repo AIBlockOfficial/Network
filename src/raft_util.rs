@@ -1,10 +1,9 @@
-use std::collections::BTreeMap;
-//use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::active_raft::ActiveRaft;
 use crate::raft::RaftData;
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use tracing::{debug, warn};
 
@@ -31,7 +30,7 @@ pub struct RaftInFlightProposals {
 
 impl RaftInFlightProposals {
     /// Checks a commit of the RaftData for validity
-    /// Apply commited proposal
+    /// Return commited proposal
     ///
     /// ### Arguments
     ///
@@ -137,6 +136,11 @@ impl RaftInFlightProposals {
     }
 
     /// Re-propose uncommited items relevant for current block.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `raft_active`       - The raft instance to propose to.
+    ///  * `current_block_num` - The block number to re-propose for.
     pub async fn re_propose_uncommitted_current_b_num(
         &mut self,
         raft_active: &mut ActiveRaft,
