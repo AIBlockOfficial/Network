@@ -154,9 +154,10 @@ async fn full_flow_multi_miners_raft_1_node() {
 }
 
 #[tokio::test(basic_scheduler)]
+#[ignore]
 async fn full_flow_multi_miners_raft_2_nodes() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
-        11020, true, 2, 6,
+        11020, true, 2, 3,
     ))
     .await;
 }
@@ -315,19 +316,24 @@ async fn full_flow_common(
         )
     );
 
-    let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let (actual_w0_token, _vec, wi) =
+        node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let total_reward = actual_w0_token.0 as u64 * compute_nodes.len() as u64;
 
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(15020370483 * mining_txs.len() as u64);
+        let total = TokenAmount(7510185 * compute_nodes.len() as u64);
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
     };
     assert_eq!(
-        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
+        (
+            TokenAmount(total_reward),
+            wi.keys().cloned().collect::<Vec<_>>()
+        ),
         expected_w0
     );
 
@@ -925,6 +931,8 @@ async fn proof_winner(network_config: NetworkConfig) {
     proof_winner_act(&mut network).await;
     let info_after = node_all_get_wallet_info(&mut network, &winning_miners).await;
 
+    let token_amount = (7510185 as f64 / network.instance_info.compute_nodes.len() as f64).floor();
+
     //
     // Assert
     //
@@ -943,7 +951,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&TokenAmount(15020370483), 1, 1)),
+        node_all(&winning_miners, (&TokenAmount(token_amount as u64), 1, 1)),
         "Info After: {:?}",
         info_after
     );

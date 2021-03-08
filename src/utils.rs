@@ -229,6 +229,17 @@ pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
 ///
 /// * `current_circulation` - Current circulation of all tokens
 pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
+    println!("All tokens: {:?}", TOTAL_TOKENS);
+    println!("Init circulation: {:?}", current_circulation.0);
+    println!(
+        "Current circulation: {:?}",
+        TOTAL_TOKENS - current_circulation.0
+    );
+    println!(
+        "Total reward: {:?}",
+        (TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL
+    );
+
     TokenAmount((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
 }
 

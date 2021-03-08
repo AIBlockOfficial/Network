@@ -9,7 +9,7 @@ pub const NETWORK_VERSION: u8 = 0;
 pub const MAX_BLOCK_SIZE: usize = 1000;
 
 // Bit shifting value for reward issuance
-pub const REWARD_ISSUANCE_VAL: u8 = 24;
+pub const REWARD_ISSUANCE_VAL: u8 = 25;
 
 /*------- SCRIPT CONSTANTS -------*/
 

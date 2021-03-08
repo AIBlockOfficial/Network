@@ -36,7 +36,7 @@ pub type ArcUserNode = Arc<Mutex<UserNode>>;
 pub struct Network {
     config: NetworkConfig,
     /// The info needed to create network nodes
-    instance_info: NetworkInstanceInfo,
+    pub instance_info: NetworkInstanceInfo,
     /// All networked nodes
     arc_nodes: BTreeMap<String, ArcNode>,
     /// Handles for raft loop tasks
