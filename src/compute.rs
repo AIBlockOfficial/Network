@@ -980,6 +980,7 @@ impl ComputeNode {
             .propose_block_with_last_info(previous_block_info)
             .await
         {
+            self.node_raft.re_propose_uncommitted_current_b_num().await;
             self.resend_trigger_message().await;
             return None;
         }

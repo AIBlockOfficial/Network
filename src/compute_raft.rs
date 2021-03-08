@@ -333,12 +333,6 @@ impl ComputeRaft {
         let b_num = block.block_num;
         let item = ComputeRaftItem::Block(block);
         self.propose_item_dedup(&item, b_num).await.is_some()
-        // if let Some(key) = self.propose_item_dedup(&item, b_num).await {
-        //     self.proposed_keys_b_num.insert(key, b_num);
-        //     true
-        // } else {
-        //     false
-        // }
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -367,6 +361,16 @@ impl ComputeRaft {
             self.propose_item(&ComputeRaftItem::DruidTransactions(txs))
                 .await;
         }
+    }
+
+    /// Re-propose uncommited items relevant for current block.
+    pub async fn re_propose_uncommitted_current_b_num(&mut self) {
+        self.proposed_in_flight
+            .re_propose_uncommitted_current_b_num(
+                &mut self.raft_active,
+                self.consensused.tx_current_block_num.unwrap(),
+            )
+            .await;
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.

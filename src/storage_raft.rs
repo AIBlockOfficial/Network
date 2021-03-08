@@ -83,8 +83,6 @@ pub struct StorageRaft {
     propose_block_timeout_at: ProposeBlockTimeout,
     /// Proposed items in flight.
     proposed_in_flight: RaftInFlightProposals,
-    /// Proposal block num associated with key
-    proposed_keys_b_num: BTreeMap<RaftContextKey, u64>,
 }
 
 impl fmt::Debug for StorageRaft {
@@ -130,7 +128,6 @@ impl StorageRaft {
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
-            proposed_keys_b_num: Default::default(),
         }
     }
 
@@ -205,13 +202,10 @@ impl StorageRaft {
         raft_data: RaftData,
         raft_ctx: RaftData,
     ) -> Option<CommittedItem> {
-        let (key, item, removed) = self
+        let (key, item, _) = self
             .proposed_in_flight
             .received_commit_poposal(&raft_data, &raft_ctx)
             .await?;
-        if removed {
-            self.proposed_keys_b_num.remove(&key);
-        }
 
         trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
@@ -273,15 +267,8 @@ impl StorageRaft {
         let b_num = self.consensused.current_block_num;
         let item = StorageRaftItem::CompleteBlock(b_num);
 
-        if let Some(key) = self.propose_item_dedup(&item, b_num).await {
-            self.proposed_keys_b_num.insert(key, b_num);
-            true
-        } else {
-            false
-        }
+        self.propose_item_dedup(&item, b_num).await.is_some()
     }
-
-    pub fn append_to_our_blocks(&mut self) {}
 
     /// Add block to our local pool from which to propose
     /// consensused blocks.
@@ -310,23 +297,17 @@ impl StorageRaft {
             per_node: mined_info,
         });
 
-        if let Some(key) = self.propose_item_dedup(&item, b_num).await {
-            self.proposed_keys_b_num.insert(key, b_num);
-            true
-        } else {
-            false
-        }
+        self.propose_item_dedup(&item, b_num).await.is_some()
     }
 
     /// Re-propose uncommited items relevant for current block.
     pub async fn re_propose_uncommitted_current_b_num(&mut self) {
-        for (key, block_num) in self.proposed_keys_b_num.clone() {
-            if self.consensused.is_current_block(block_num) {
-                self.proposed_in_flight
-                    .re_propose_item(&mut self.raft_active, key)
-                    .await;
-            }
-        }
+        self.proposed_in_flight
+            .re_propose_uncommitted_current_b_num(
+                &mut self.raft_active,
+                self.consensused.current_block_num,
+            )
+            .await;
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.

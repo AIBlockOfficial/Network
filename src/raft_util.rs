@@ -19,6 +19,8 @@ pub struct RaftContextKey {
 pub struct RaftInFlightProposals {
     /// Proposed items in flight.
     proposed_in_flight: BTreeMap<RaftContextKey, (RaftData, RaftData)>,
+    /// Proposal block num associated with key
+    proposed_keys_b_num: BTreeMap<RaftContextKey, u64>,
     /// The last id of a proposed item.
     proposed_last_id: u64,
     /// Proposal data hash, to ignore if re-propose, with b_num to remove them at.
@@ -46,6 +48,7 @@ impl RaftInFlightProposals {
         ) {
             (Ok(item), Ok(key)) => {
                 let removed = self.proposed_in_flight.remove(&key).is_some();
+                self.proposed_keys_b_num.remove(&key);
                 Some((key, item, removed))
             }
             (Err(error), Ok(key)) => {
@@ -95,6 +98,7 @@ impl RaftInFlightProposals {
             .insert(key, (data.clone(), context.clone()));
         if let Some((item_hash, b_num)) = dedup_info {
             self.already_proposed_hashes.insert(item_hash, (key, b_num));
+            self.proposed_keys_b_num.insert(key, b_num);
         }
 
         raft_active.propose_data(data, context).await;
@@ -132,6 +136,19 @@ impl RaftInFlightProposals {
         }
     }
 
+    /// Re-propose uncommited items relevant for current block.
+    pub async fn re_propose_uncommitted_current_b_num(
+        &mut self,
+        raft_active: &mut ActiveRaft,
+        current_block_num: u64,
+    ) {
+        for (key, block_num) in self.proposed_keys_b_num.clone() {
+            if block_num == current_block_num {
+                self.re_propose_item(raft_active, key).await;
+            }
+        }
+    }
+
     /// Set new min_b_num for de-duplicate.
     /// Clear no lonber relevant entries.
     ///
@@ -145,6 +162,12 @@ impl RaftInFlightProposals {
             std::mem::take(&mut self.already_proposed_hashes)
                 .into_iter()
                 .filter(|(_, (_, b_num))| min_b_num > *b_num)
+                .collect()
+        };
+        self.proposed_keys_b_num = {
+            std::mem::take(&mut self.proposed_keys_b_num)
+                .into_iter()
+                .filter(|(_, b_num)| min_b_num > *b_num)
                 .collect()
         };
     }
