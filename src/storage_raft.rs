@@ -83,8 +83,6 @@ pub struct StorageRaft {
     propose_block_timeout_at: ProposeBlockTimeout,
     /// Proposed items in flight.
     proposed_in_flight: RaftInFlightProposals,
-    /// Received blocks
-    local_blocks: Vec<ReceivedBlock>,
     /// Proposal block num associated with key
     proposed_keys_b_num: BTreeMap<RaftContextKey, u64>,
 }
@@ -132,7 +130,6 @@ impl StorageRaft {
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
-            local_blocks: Default::default(),
             proposed_keys_b_num: Default::default(),
         }
     }
@@ -284,16 +281,40 @@ impl StorageRaft {
         }
     }
 
-    /// Add any ready local blocks.
-    pub async fn propose_received_part_block(&mut self) {
-        let local_blocks = std::mem::take(&mut self.local_blocks);
-        for block in local_blocks.into_iter() {
-            let b_num = block.common.block.header.b_num;
-            let item = StorageRaftItem::PartBlock(block);
+    pub fn append_to_our_blocks(&mut self) {}
 
-            if let Some(key) = self.propose_item_dedup(&item, b_num).await {
-                self.proposed_keys_b_num.insert(key, b_num);
-            }
+    /// Add block to our local pool from which to propose
+    /// consensused blocks.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - socket address of the sending peer
+    /// * `common` - CommonBlockInfo holding all block infomation to be stored
+    /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
+    pub async fn propose_received_part_block(
+        &mut self,
+        peer: SocketAddr,
+        common: CommonBlockInfo,
+        mined_info: MinedBlockExtraInfo,
+    ) -> bool {
+        if let ProposeBlockTimeout::First = &self.propose_block_timeout_at {
+            // Wait for compute and other nodes to be ready so we do not unecessarily
+            // timeout early on first block.
+            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+        }
+
+        let b_num = common.block.header.b_num;
+        let item = StorageRaftItem::PartBlock(ReceivedBlock {
+            peer,
+            common,
+            per_node: mined_info,
+        });
+
+        if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+            self.proposed_keys_b_num.insert(key, b_num);
+            true
+        } else {
+            false
         }
     }
 
@@ -323,33 +344,6 @@ impl StorageRaft {
         self.proposed_in_flight
             .propose_item(&mut self.raft_active, item, Some(b_num))
             .await
-    }
-
-    /// Append block to our local pool from which to propose
-    /// consensused blocks.
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer` - socket address of the sending peer
-    /// * `common` - CommonBlockInfo holding all block infomation to be stored
-    /// * `mined_info` - MinedBlockExtraInfo holding mining info to be stored
-    pub fn append_to_our_blocks(
-        &mut self,
-        peer: SocketAddr,
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    ) {
-        if let ProposeBlockTimeout::First = &self.propose_block_timeout_at {
-            // Wait for compute and other nodes to be ready so we do not unecessarily
-            // timeout early on first block.
-            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        }
-
-        self.local_blocks.push(ReceivedBlock {
-            peer,
-            common,
-            per_node: mined_info,
-        });
     }
 
     /// Generate a snapshot, needs to happen at the end of the event processing.

@@ -327,17 +327,6 @@ pub trait ComputeInterface {
     /// Returns the internal service level data
     fn get_service_levels(&self) -> Response;
 
-    /// Receives block info from its storage node
-    /// ### Arguments
-    ///
-    /// * `peer` - Address of the storage peer sending the block
-    /// * `BlockStoredInfo` - Infomation about the recieved block
-    fn receive_block_stored(
-        &mut self,
-        peer: SocketAddr,
-        previous_block_info: BlockStoredInfo,
-    ) -> Response;
-
     /// Receives transactions to be bundled into blocks
     ///
     /// ### Arguments

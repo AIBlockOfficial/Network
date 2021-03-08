@@ -392,8 +392,7 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
-        // Only the first call will send to storage.
-        let mined_block = self.current_mined_block.take().unwrap();
+        let mined_block = self.current_mined_block.clone().unwrap();
         let block = mined_block.block;
         let block_txs = mined_block.block_tx;
         let nonce = mined_block.nonce;
@@ -545,9 +544,6 @@ impl ComputeNode {
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         loop {
-            // Process pending submission.
-            self.node_raft.propose_block_with_last_info().await;
-
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
             // i.e they should only await a channel.
@@ -658,7 +654,7 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
-            SendBlockStored(info) => Some(self.receive_block_stored(peer, info)),
+            SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
                 block_num,
                 nonce,
@@ -867,6 +863,7 @@ impl ComputeNode {
                 self.last_coinbase_hash = Some((miner, out_point.t_hash, true));
             }
         }
+        self.current_mined_block = None;
     }
 
     /// Load and apply the local database to our state
@@ -955,6 +952,49 @@ impl ComputeNode {
             reason: "Received PoW successfully",
         }
     }
+
+    /// Receives block info from its storage node
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Address of the storage peer sending the block
+    /// * `BlockStoredInfo` - Infomation about the recieved block
+    async fn receive_block_stored(
+        &mut self,
+        peer: SocketAddr,
+        previous_block_info: BlockStoredInfo,
+    ) -> Option<Response> {
+        if peer != self.storage_addr {
+            return Some(Response {
+                success: false,
+                reason: "Received block stored not from our storage peer",
+            });
+        }
+
+        if !self
+            .node_raft
+            .propose_block_with_last_info(previous_block_info)
+            .await
+        {
+            self.resend_trigger_message().await;
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Received block stored",
+        })
+    }
+
+    /// Re-Sends Message triggering the next step in flow
+    pub async fn resend_trigger_message(&mut self) {
+        if self.current_mined_block.is_some() {
+            info!("Resend block block to storage");
+            if let Err(e) = self.send_block_to_storage().await {
+                error!("Resend block to storage failed {:?}", e);
+            }
+        }
+    }
 }
 
 impl ComputeInterface for ComputeNode {
@@ -1009,26 +1049,6 @@ impl ComputeInterface for ComputeNode {
         Response {
             success: false,
             reason: "Not implemented yet",
-        }
-    }
-
-    fn receive_block_stored(
-        &mut self,
-        peer: SocketAddr,
-        previous_block_info: BlockStoredInfo,
-    ) -> Response {
-        if peer != self.storage_addr {
-            return Response {
-                success: false,
-                reason: "Received block stored not from our storage peer",
-            };
-        }
-
-        self.node_raft.append_block_stored_info(previous_block_info);
-
-        Response {
-            success: true,
-            reason: "Received block stored",
         }
     }
 

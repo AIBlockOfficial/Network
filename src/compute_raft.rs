@@ -100,8 +100,6 @@ pub struct ComputeRaft {
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
-    /// Block to propose: should contain all needed information.
-    last_block_stored_infos: Vec<BlockStoredInfo>,
     /// Min duration between each transaction poposal.
     propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
@@ -163,7 +161,6 @@ impl ComputeRaft {
             local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
-            last_block_stored_infos: Default::default(),
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
             proposed_in_flight: Default::default(),
@@ -331,14 +328,17 @@ impl ComputeRaft {
             .await;
     }
 
-    /// Process as received block info.
-    pub async fn propose_block_with_last_info(&mut self) {
-        let local_blocks = std::mem::take(&mut self.last_block_stored_infos);
-        for block in local_blocks.into_iter() {
-            let b_num = block.block_num;
-            let item = ComputeRaftItem::Block(block);
-            self.propose_item_dedup(&item, b_num).await;
-        }
+    /// Process as received block info necessary for new block to be generated.
+    pub async fn propose_block_with_last_info(&mut self, block: BlockStoredInfo) -> bool {
+        let b_num = block.block_num;
+        let item = ComputeRaftItem::Block(block);
+        self.propose_item_dedup(&item, b_num).await.is_some()
+        // if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+        //     self.proposed_keys_b_num.insert(key, b_num);
+        //     true
+        // } else {
+        //     false
+        // }
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -435,11 +435,6 @@ impl ComputeRaft {
     /// * 'transactions' - a mutable BTreeMap that has a String and a Transaction parameters
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
         self.local_tx_pool.append(&mut transactions);
-    }
-
-    /// Set result of mined block necessary for new block to be generated.
-    pub fn append_block_stored_info(&mut self, info: BlockStoredInfo) {
-        self.last_block_stored_infos.push(info);
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -855,7 +850,6 @@ mod test {
         node.propose_initial_uxto_set().await;
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
-        node.propose_block_with_last_info().await;
 
         let commit = node.next_commit().await.unwrap();
         let first_block = node.received_commit(commit).await;
@@ -977,8 +971,7 @@ mod test {
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
 
-        node.append_block_stored_info(previous_block);
-        node.propose_block_with_last_info().await;
+        node.propose_block_with_last_info(previous_block).await;
         let mut commits = Vec::new();
         for _ in 0..3 {
             let commit = node.next_commit().await.unwrap();
