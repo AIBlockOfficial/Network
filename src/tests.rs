@@ -316,11 +316,12 @@ async fn full_flow_common(
     );
 
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(916770 * mining_txs.len() as u64);
+        let total = TokenAmount(15020370483 * mining_txs.len() as u64);
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
@@ -942,7 +943,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&TokenAmount(916770), 1, 1)),
+        node_all(&winning_miners, (&TokenAmount(15020370483), 1, 1)),
         "Info After: {:?}",
         info_after
     );
