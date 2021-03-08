@@ -17,6 +17,7 @@ pub mod key_creation;
 mod miner;
 mod raft;
 mod raft_store;
+mod raft_util;
 mod storage;
 mod storage_raft;
 #[cfg(test)]
@@ -39,9 +40,8 @@ pub use storage::StorageNode;
 pub use transaction_gen::TransactionGen;
 pub use user::UserNode;
 pub use utils::{
-    command_input_to_socket, create_and_save_fake_to_wallet, create_valid_transaction,
-    get_sanction_addresses, loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async,
-    loops_re_connect_disconnect,
+    create_and_save_fake_to_wallet, create_valid_transaction, get_sanction_addresses,
+    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
 };
 
 #[cfg(not(features = "mock"))]

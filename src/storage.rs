@@ -221,9 +221,6 @@ impl StorageNode {
     /// The future returned from this function should be executed in the runtime. It will block execution.
     pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
         loop {
-            // Process pending submission.
-            self.node_raft.propose_received_part_block().await;
-
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
             // i.e they should only await a channel.
@@ -269,6 +266,7 @@ impl StorageNode {
                     trace!("handle_next_event timeout block");
                     if !self.node_raft.propose_block_at_timeout().await {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
+                        self.resend_trigger_message().await;
                     }
                 }
             }
@@ -329,9 +327,7 @@ impl StorageNode {
             } => Some(self.get_history(&start_time, &end_time)),
             GetUnicornTable { n_last_items } => Some(self.get_unicorn_table(n_last_items)),
             SendPow { pow } => Some(self.receive_pow(pow)),
-            SendBlock { common, mined_info } => {
-                Some(self.receive_block(peer, common, mined_info).await)
-            }
+            SendBlock { common, mined_info } => self.receive_block(peer, common, mined_info).await,
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -480,6 +476,16 @@ impl StorageNode {
         Ok(())
     }
 
+    /// Re-Sends Message triggering the next step in flow
+    pub async fn resend_trigger_message(&mut self) {
+        if self.last_block_stored.is_some() {
+            info!("Resend block stored");
+            if let Err(e) = self.send_stored_block().await {
+                error!("Resend block stored failed {:?}", e);
+            }
+        }
+    }
+
     /// Receives the new block from the miner with permissions to write
     ///
     /// ### Arguments
@@ -492,40 +498,41 @@ impl StorageNode {
         peer: SocketAddr,
         common: CommonBlockInfo,
         mined_info: MinedBlockExtraInfo,
-    ) -> Response {
-        let unicorn = common.block.header.previous_hash.clone();
-        let unicorn_unwrap;
-        let not_empty;
-        let valid;
-        match unicorn {
-            None => not_empty = false,
-            _ => not_empty = true,
-        }
-        if not_empty {
-            unicorn_unwrap = unicorn.unwrap();
-        } else {
-            unicorn_unwrap = String::from("");
-        }
+    ) -> Option<Response> {
+        let valid = {
+            let prev_hash = {
+                let prev_hash = &common.block.header.previous_hash;
+                prev_hash.as_deref().unwrap_or(&"")
+            };
+            let merkle_for_pow = {
+                let merkle_root = &common.block.header.merkle_root_hash;
+                let (mining_tx, _) = &mined_info.mining_tx;
+                concat_merkle_coinbase(&merkle_root, mining_tx).await
+            };
+            let nonce = &mined_info.nonce;
 
-        let merk = common.block.header.merkle_root_hash.clone();
-        let nonce = mined_info.nonce.clone();
-        let merkle_for_pow = concat_merkle_coinbase(&merk, &mined_info.mining_tx.0).await;
-        valid = validate_pow_block(&unicorn_unwrap, &merkle_for_pow, &nonce);
+            validate_pow_block(&prev_hash, &merkle_for_pow, nonce)
+        };
 
-        if valid {
-            self.node_raft
-                .append_to_our_blocks(peer, common, mined_info);
-
-            Response {
-                success: true,
-                reason: "Block received to be added",
-            }
-        } else {
-            Response {
+        if !valid {
+            return Some(Response {
                 success: false,
                 reason: "Block received not added. PoW invalid",
-            }
+            });
         }
+
+        if !self
+            .node_raft
+            .propose_received_part_block(peer, common, mined_info)
+            .await
+        {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Block received to be added",
+        })
     }
 }
 

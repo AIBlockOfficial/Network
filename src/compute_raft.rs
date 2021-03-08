@@ -4,6 +4,7 @@ use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
 use crate::db_utils::{self, SimpleDb};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
+use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -29,13 +30,6 @@ pub enum ComputeRaftItem {
     Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
-}
-
-/// Key serialized into RaftData and process by Raft.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ComputeRaftKey {
-    proposer_id: u64,
-    proposal_id: u64,
 }
 
 /// Commited item to process.
@@ -106,22 +100,18 @@ pub struct ComputeRaft {
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
-    /// Block to propose: should contain all needed information.
-    last_block_stored_infos: Vec<BlockStoredInfo>,
     /// Min duration between each transaction poposal.
     propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
     propose_transactions_timeout_at: Instant,
     /// Proposed items in flight.
-    proposed_in_flight: BTreeMap<ComputeRaftKey, (RaftData, RaftData)>,
+    proposed_in_flight: RaftInFlightProposals,
     /// Proposed transaction in flight length.
     proposed_tx_pool_len: usize,
     /// Maximum transaction in flight length.
     proposed_tx_pool_len_max: usize,
     /// Maximum transaction consensused and in flight for proposing more.
     proposed_and_consensused_tx_pool_len_max: usize,
-    /// The last id of a proposed item.
-    proposed_last_id: u64,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -171,14 +161,12 @@ impl ComputeRaft {
             local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
-            last_block_stored_infos: Default::default(),
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
             proposed_in_flight: Default::default(),
             proposed_tx_pool_len: 0,
             proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
-            proposed_last_id: 0,
         }
     }
 
@@ -224,7 +212,9 @@ impl ComputeRaft {
             }
             RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
             RaftCommitData::NewLeader => {
-                self.re_propose_all_items().await;
+                self.proposed_in_flight
+                    .re_propose_all_items(&mut self.raft_active)
+                    .await;
                 None
             }
         }
@@ -239,31 +229,25 @@ impl ComputeRaft {
 
     /// Process data in RaftData.
     /// Return Some CommitedItem if block to mine is ready to generate or none if there is a deserialize error.
+    ///
     /// ### Arguments
-    /// * 'raft_data' - a RaftData struct from the raft.rs class that holds the data to be proposed to commit.
-    /// Apply commited proposal
+    ///
+    /// * `raft_data` - Data for the commit
+    /// * `raft_ctx`  - Context for the commit
     async fn received_commit_poposal(
         &mut self,
         raft_data: RaftData,
         raft_ctx: RaftData,
     ) -> Option<CommittedItem> {
-        let (key, item) = match (
-            deserialize::<ComputeRaftItem>(&raft_data),
-            deserialize::<ComputeRaftKey>(&raft_ctx),
-        ) {
-            (Ok(item), Ok(key)) => {
-                if self.proposed_in_flight.remove(&key).is_some() {
-                    if let ComputeRaftItem::Transactions(ref txs) = &item {
-                        self.proposed_tx_pool_len -= txs.len();
-                    }
-                }
-                (key, item)
+        let (key, item, removed) = self
+            .proposed_in_flight
+            .received_commit_poposal(&raft_data, &raft_ctx)
+            .await?;
+        if removed {
+            if let ComputeRaftItem::Transactions(ref txs) = &item {
+                self.proposed_tx_pool_len -= txs.len();
             }
-            (Err(error), _) | (_, Err(error)) => {
-                warn!(?error, "ComputeRaftItem-deserialize");
-                return None;
-            }
-        };
+        }
 
         trace!("received_commit_poposal {:?} -> {:?}", key, item);
         match item {
@@ -280,7 +264,8 @@ impl ComputeRaft {
 
                 if self.consensused.has_block_stored_info_ready() {
                     // First block complete:
-                    self.consensused.apply_ready_block_stored_info();
+                    let b_num = self.consensused.apply_ready_block_stored_info();
+                    self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
                     return Some(CommittedItem::FirstBlock);
                 }
             }
@@ -308,7 +293,8 @@ impl ComputeRaft {
                     // New block:
                     // Must not populate further tx_pool & tx_druid_pool
                     // before generating block.
-                    self.consensused.apply_ready_block_stored_info();
+                    let b_num = self.consensused.apply_ready_block_stored_info();
+                    self.proposed_in_flight.ignore_dedeup_b_num_less_than(b_num);
                     return Some(CommittedItem::Block);
                 }
             }
@@ -342,12 +328,11 @@ impl ComputeRaft {
             .await;
     }
 
-    /// Process as received block info.
-    pub async fn propose_block_with_last_info(&mut self) {
-        let local_blocks = std::mem::take(&mut self.last_block_stored_infos);
-        for block in local_blocks.into_iter() {
-            self.propose_item(&ComputeRaftItem::Block(block)).await;
-        }
+    /// Process as received block info necessary for new block to be generated.
+    pub async fn propose_block_with_last_info(&mut self, block: BlockStoredInfo) -> bool {
+        let b_num = block.block_num;
+        let item = ComputeRaftItem::Block(block);
+        self.propose_item_dedup(&item, b_num).await.is_some()
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -378,36 +363,43 @@ impl ComputeRaft {
         }
     }
 
-    /// Propose an item to raft if use_raft, or commit it otherwise.
-    /// ### Arguments
-    /// * `item`   - ComputeRaftItem reference (&ComputeRaftItem).
-    async fn propose_item(&mut self, item: &ComputeRaftItem) {
-        self.proposed_last_id += 1;
-        let key = ComputeRaftKey {
-            proposer_id: self.raft_active.peer_id(),
-            proposal_id: self.proposed_last_id,
-        };
-
-        debug!("propose_item: {:?} -> {:?}", key, item);
-        let data = serialize(item).unwrap();
-        let context = serialize(&key).unwrap();
+    /// Re-propose uncommited items relevant for current block.
+    pub async fn re_propose_uncommitted_current_b_num(&mut self) {
         self.proposed_in_flight
-            .insert(key, (data.clone(), context.clone()));
-
-        self.raft_active.propose_data(data, context).await
+            .re_propose_uncommitted_current_b_num(
+                &mut self.raft_active,
+                self.consensused.tx_current_block_num.unwrap(),
+            )
+            .await;
     }
 
-    /// Re-Propose all items in flight to raft.
-    pub async fn re_propose_all_items(&mut self) {
-        debug!(
-            "Re-propose all non committed items: {}",
-            self.proposed_in_flight.len()
-        );
-        for (data, context) in self.proposed_in_flight.values() {
-            self.raft_active
-                .propose_data(data.clone(), context.clone())
-                .await;
-        }
+    /// Propose an item to raft if use_raft, or commit it otherwise.
+    /// Deduplicate entries.
+    ///
+    /// ### Arguments
+    ///
+    ///  * `item`  - The item to be proposed to a raft.
+    ///  * `b_num` - Block number associated with this item.
+    async fn propose_item_dedup(
+        &mut self,
+        item: &ComputeRaftItem,
+        b_num: u64,
+    ) -> Option<RaftContextKey> {
+        self.proposed_in_flight
+            .propose_item(&mut self.raft_active, item, Some(b_num))
+            .await
+    }
+
+    /// Propose an item to raft if use_raft, or commit it otherwise.
+    ///
+    /// ### Arguments
+    ///
+    /// * `item` - The item to be proposed to a raft.
+    async fn propose_item(&mut self, item: &ComputeRaftItem) -> RaftContextKey {
+        self.proposed_in_flight
+            .propose_item(&mut self.raft_active, item, None)
+            .await
+            .unwrap()
     }
 
     /// The current tx_pool that will be used to generate next block
@@ -447,11 +439,6 @@ impl ComputeRaft {
     /// * 'transactions' - a mutable BTreeMap that has a String and a Transaction parameters
     pub fn append_to_tx_pool(&mut self, mut transactions: BTreeMap<String, Transaction>) {
         self.local_tx_pool.append(&mut transactions);
-    }
-
-    /// Set result of mined block necessary for new block to be generated.
-    pub fn append_block_stored_info(&mut self, info: BlockStoredInfo) {
-        self.last_block_stored_infos.push(info);
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -744,11 +731,11 @@ impl ComputeConsensused {
     ///
     /// ### Arguments
     ///
-    /// * `key`   - ComputerRaftKey object of the first block
-    /// * `utxo_set`   - transaction BTreeMap of the first block.
+    /// * `key`      - Key object of the first block
+    /// * `utxo_set` - Transaction BTreeMap of the first block.
     pub fn append_first_block_info(
         &mut self,
-        key: ComputeRaftKey,
+        key: RaftContextKey,
         utxo_set: BTreeMap<String, Transaction>,
     ) {
         self.append_current_block_stored_info(
@@ -761,9 +748,9 @@ impl ComputeConsensused {
     ///
     /// ### Arguments
     ///
-    /// * `key`   - ComputerRaftKey object of the block to append
+    /// * `key`   - Key object of the block to append
     /// * `block` - BlockStoredInfo to be appended.
-    pub fn append_block_stored_info(&mut self, key: ComputeRaftKey, block: BlockStoredInfo) {
+    pub fn append_block_stored_info(&mut self, key: RaftContextKey, block: BlockStoredInfo) {
         self.append_current_block_stored_info(key, AccumulatingBlockStoredInfo::Block(block))
     }
 
@@ -771,11 +758,11 @@ impl ComputeConsensused {
     ///     
     /// ### Arguments
     ///
-    /// * `key`   - ComputerRaftKey object of the block to append
+    /// * `key`   - Key object of the block to append
     /// * `block` - AccumulatingBlockStoredInfo to be appended.
     pub fn append_current_block_stored_info(
         &mut self,
-        key: ComputeRaftKey,
+        key: RaftContextKey,
         block: AccumulatingBlockStoredInfo,
     ) {
         let block_ser = serialize(&block).unwrap();
@@ -789,7 +776,7 @@ impl ComputeConsensused {
     }
 
     /// Apply accumulated block info.
-    pub fn apply_ready_block_stored_info(&mut self) {
+    pub fn apply_ready_block_stored_info(&mut self) -> u64 {
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_circulation = get_total_coinbase_tokens(&utxo_set);
@@ -806,6 +793,7 @@ impl ComputeConsensused {
             }
         }
         self.current_reward = calculate_reward(self.current_circulation);
+        self.tx_current_block_num.unwrap()
     }
 
     /// Take the block info with most vote and reset accumulator.
@@ -866,7 +854,6 @@ mod test {
         node.propose_initial_uxto_set().await;
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
-        node.propose_block_with_last_info().await;
 
         let commit = node.next_commit().await.unwrap();
         let first_block = node.received_commit(commit).await;
@@ -988,8 +975,7 @@ mod test {
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
 
-        node.append_block_stored_info(previous_block);
-        node.propose_block_with_last_info().await;
+        node.propose_block_with_last_info(previous_block).await;
         let mut commits = Vec::new();
         for _ in 0..3 {
             let commit = node.next_commit().await.unwrap();

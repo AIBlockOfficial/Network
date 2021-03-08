@@ -7,13 +7,13 @@ use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
-use naom::primitives::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
-};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
     transaction::{OutPoint, Transaction, TxConstructor, TxOut},
+    transaction_utils::{
+        construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
+    },
 };
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -176,23 +176,6 @@ pub async fn create_and_save_fake_to_wallet(
         .unwrap();
 
     Ok(())
-}
-
-/// Returns a socket address from command input
-///
-/// ### Arguments
-///
-/// * `comand_input` - command line input to find the socket address
-pub fn command_input_to_socket(command_input: String) -> SocketAddr {
-    let ip_and_port: Vec<&str> = command_input.split(':').collect();
-    let port = ip_and_port[1].parse::<u16>().unwrap();
-    let ip: Vec<u8> = ip_and_port[0]
-        .split('.')
-        .map(|x| x.parse::<u8>().unwrap())
-        .collect();
-    let ip_addr = IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]));
-
-    SocketAddr::new(ip_addr, port)
 }
 
 /// Computes a key that will be shared from a vector of PoWs
