@@ -7,16 +7,31 @@ echo "//-----------------------------//"
 echo " "
 UPLOAD=$1
 if [ "$2" = "stage_first" ]
-    echo "Upload $UPLOAD to first only"
-    UPLOAD_OTHERS=0
 then
+    echo "Upload $UPLOAD to first only"
+    UPLOAD_FIRST=1
+    UPLOAD_OTHERS=0
+elif [ "$2" = "stage_others" ]
+then
+    echo "Upload $UPLOAD to others only"
+    UPLOAD_FIRST=0
+    UPLOAD_OTHERS=1
+elif [ "$2" = "skip_stage" ]
+then
+    echo "Not send $UPLOAD to any"
+    UPLOAD_FIRST=0
+    UPLOAD_OTHERS=0
+else
     echo "Upload $UPLOAD to all"
+    UPLOAD_FIRST=1
     UPLOAD_OTHERS=1
 fi
 
-echo "Upload first"
-scp -i ~/.ssh/Zenotta-Node.pem $UPLOAD  ubuntu@ec2-52-40-82-170.us-west-2.compute.amazonaws.com:~/
-
+if [ "$UPLOAD_FIRST" = "1" ]
+then
+    echo "Upload first"
+    scp -i ~/.ssh/Zenotta-Node.pem $UPLOAD  ubuntu@ec2-52-40-82-170.us-west-2.compute.amazonaws.com:~/
+fi
 if [ "$UPLOAD_OTHERS" = "1" ]
 then
     echo "Upload Others"
