@@ -931,7 +931,7 @@ async fn proof_winner(network_config: NetworkConfig) {
     proof_winner_act(&mut network).await;
     let info_after = node_all_get_wallet_info(&mut network, &winning_miners).await;
 
-    let token_amount = (7510185 as f64 / network.instance_info.compute_nodes.len() as f64).floor();
+    let token_amount = (7510185_f64 / network.instance_info.compute_nodes.len() as f64).floor();
 
     //
     // Assert
