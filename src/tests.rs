@@ -273,6 +273,7 @@ async fn full_flow_common(
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
+    let mining_reward = network.mining_reward();
     let transactions = valid_transactions(true);
 
     //
@@ -315,25 +316,18 @@ async fn full_flow_common(
         )
     );
 
-    let (actual_w0_token, _vec, wi) =
-        node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let total_reward = actual_w0_token.0 as u64 * miner_nodes.len() as u64;
-
+    let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(total_reward);
+        let total = mining_reward * mining_txs.len() as u64;
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
     };
-
     assert_eq!(
-        (
-            TokenAmount(total_reward),
-            wi.keys().cloned().collect::<Vec<_>>()
-        ),
+        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
         expected_w0
     );
 
@@ -916,6 +910,7 @@ async fn proof_winner(network_config: NetworkConfig) {
         .values()
         .map(|ms| ms.first().unwrap().clone())
         .collect();
+    let mining_reward = network.mining_reward();
 
     create_first_block_act(&mut network).await;
 
@@ -930,8 +925,6 @@ async fn proof_winner(network_config: NetworkConfig) {
     let info_before = node_all_get_wallet_info(&mut network, &winning_miners).await;
     proof_winner_act(&mut network).await;
     let info_after = node_all_get_wallet_info(&mut network, &winning_miners).await;
-
-    let token_amount = (7510185_f64 / network.instance_info.compute_nodes.len() as f64).floor();
 
     //
     // Assert
@@ -951,7 +944,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&TokenAmount(token_amount as u64), 1, 1)),
+        node_all(&winning_miners, (&mining_reward, 1, 1)),
         "Info After: {:?}",
         info_after
     );
