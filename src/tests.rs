@@ -154,7 +154,6 @@ async fn full_flow_multi_miners_raft_1_node() {
 }
 
 #[tokio::test(basic_scheduler)]
-#[ignore]
 async fn full_flow_multi_miners_raft_2_nodes() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
         11020, true, 2, 3,
@@ -324,11 +323,12 @@ async fn full_flow_common(
         (TokenAmount(0), vec![])
     } else {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = TokenAmount(7510185 * compute_nodes.len() as u64);
+        let total = TokenAmount(total_reward);
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
         (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
     };
+
     assert_eq!(
         (
             TokenAmount(total_reward),

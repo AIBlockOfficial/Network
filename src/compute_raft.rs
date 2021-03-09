@@ -792,11 +792,11 @@ impl ComputeConsensused {
                 ));
             }
         }
-        
+
         let whole_reward = calculate_reward(self.current_circulation).0;
         let ind_reward = (whole_reward as f64 / self.unanimous_majority as f64).floor();
         self.current_reward = TokenAmount(ind_reward as u64);
-        
+
         self.tx_current_block_num.unwrap()
     }
 
