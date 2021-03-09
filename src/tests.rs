@@ -156,7 +156,7 @@ async fn full_flow_multi_miners_raft_1_node() {
 #[tokio::test(basic_scheduler)]
 async fn full_flow_multi_miners_raft_2_nodes() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
-        11020, true, 2, 3,
+        11020, true, 2, 6,
     ))
     .await;
 }
@@ -317,7 +317,7 @@ async fn full_flow_common(
 
     let (actual_w0_token, _vec, wi) =
         node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let total_reward = actual_w0_token.0 as u64 * compute_nodes.len() as u64;
+    let total_reward = actual_w0_token.0 as u64 * miner_nodes.len() as u64;
 
     let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
         (TokenAmount(0), vec![])
