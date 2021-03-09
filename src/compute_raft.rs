@@ -792,7 +792,9 @@ impl ComputeConsensused {
                 ));
             }
         }
-        self.current_reward = calculate_reward(self.current_circulation);
+
+        self.current_reward =
+            calculate_reward(self.current_circulation) / self.unanimous_majority as u64;
         self.tx_current_block_num.unwrap()
     }
 

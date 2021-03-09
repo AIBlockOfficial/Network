@@ -16,6 +16,7 @@ use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
 };
 use futures::future::join_all;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::Transaction;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -445,6 +446,11 @@ impl Network {
         &self.active_nodes
     }
 
+    ///Active Compute miner mapping
+    pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.active_compute_to_miner_mapping
+    }
+
     ///Config that launched the network
     pub fn config(&self) -> &NetworkConfig {
         &self.config
@@ -455,8 +461,10 @@ impl Network {
         &self.dead_nodes
     }
 
-    pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
-        &self.active_compute_to_miner_mapping
+    ///Mining Reward
+    pub fn mining_reward(&self) -> TokenAmount {
+        let c_len = self.config.nodes[&NodeType::Compute].len();
+        TokenAmount(7510185) / c_len as u64
     }
 }
 
