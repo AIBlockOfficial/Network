@@ -32,7 +32,7 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tokio::time;
@@ -815,7 +815,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
         for (idx, miner) in c_miners.iter().enumerate() {
-            miner_send_partition_pow(network, miner, compute).await;
+            miner_start_gen_partition_pow(network, miner, compute).await;
+            miner_handle_event(network, miner, "Partition PoW found and sent").await;
 
             use std::cmp::Ordering::*;
             let (success, evt) = match idx.cmp(&partition_last_idx) {
@@ -836,7 +837,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
         if !c_miners.is_empty() {
             let win_miner: &String = &in_miners[0];
-            miner_send_pow_for_current(network, win_miner, compute).await;
+            miner_start_gen_pow_for_current(network, win_miner, compute).await;
+            miner_handle_event(network, win_miner, "Block PoW found and sent").await;
             compute_handle_event(network, compute, "Received PoW successfully").await;
         }
     }
@@ -852,7 +854,8 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
     for compute in c_mined {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         for miner in c_miners {
-            miner_send_pow_for_current(network, miner, compute).await;
+            miner_start_gen_pow_for_current(network, miner, compute).await;
+            miner_handle_event(network, miner, "Block PoW found and sent").await;
             compute_handle_error(network, compute, "Not block currently mined").await;
         }
     }
@@ -1281,7 +1284,8 @@ async fn proof_of_work_reject() {
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
     compute_flood_rand_num_to_requesters(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
-    miner_send_partition_pow(&mut network, miner, compute).await;
+    miner_start_gen_partition_pow(&mut network, miner, compute).await;
+    miner_handle_event(&mut network, miner, "Partition PoW found and sent").await;
     compute_handle_event(&mut network, compute, "Partition list is full").await;
 
     //
@@ -1418,7 +1422,6 @@ async fn main_loops_raft_1_node_common(
     }));
 
     handles.push(tokio::spawn({
-        let now = SystemTime::now();
         let node = network.miner("miner1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
@@ -1428,7 +1431,7 @@ async fn main_loops_raft_1_node_common(
             node.send_partition_request(address).await.unwrap();
 
             while let Some(response) = node.handle_next_event().await {
-                if node.handle_next_event_response(now, response).await {
+                if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
                         break;
@@ -2211,37 +2214,28 @@ async fn miner_send_partition_request(network: &mut Network, from_miner: &str, t
     m.send_partition_request(compute_node_addr).await.unwrap();
 }
 
-async fn miner_send_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
+async fn miner_start_gen_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let pow = m.generate_partition_pow().await.unwrap();
-    m.send_partition_pow(compute_node_addr, pow).await.unwrap();
+    m.start_generate_partition_pow(compute_node_addr).await;
 }
 
-async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_compute: &str) {
+async fn miner_start_gen_pow_for_current(
+    network: &mut Network,
+    from_miner: &str,
+    to_compute: &str,
+) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let (b_num, nonce, transaction) = m.generate_pow_for_current_block().await.unwrap();
-    m.send_pow(compute_node_addr, b_num, nonce, transaction)
-        .await
-        .unwrap();
+    m.start_generate_pow_for_current_block(compute_node_addr)
+        .await;
 }
 
 async fn miner_commit_block_found(network: &mut Network, miner: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
     m.commit_block_found().await;
-}
-
-async fn miner_all_send_pow_for_current(
-    network: &mut Network,
-    from_miner: &str,
-    to_compute_group: &[String],
-) {
-    for to_compute in to_compute_group {
-        miner_send_pow_for_current(network, from_miner, to_compute).await;
-    }
 }
 
 //
