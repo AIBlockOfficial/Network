@@ -464,7 +464,7 @@ impl Network {
     ///Mining Reward
     pub fn mining_reward(&self) -> TokenAmount {
         let c_len = self.config.nodes[&NodeType::Compute].len();
-        TokenAmount(7510185241) / c_len as u64
+        TokenAmount(7510185) / c_len as u64
     }
 }
 
