@@ -1,7 +1,7 @@
-compute_db_mode = "Live"
-storage_db_mode = "Live"
-miner_db_mode = "Live"
-user_db_mode = "Live"
+compute_db_mode = {Live = 0}
+storage_db_mode = {Live = 0}
+miner_db_mode = {Live = 0}
+user_db_mode = {Live = 0}
 api_port = 3000
 compute_raft = 1
 storage_raft = 1
@@ -14,7 +14,7 @@ user_setup_tx_max_count = 100000
 
 #first node is leader
 [[compute_nodes]]
-address = "34.219.102.194:12300"
+address = "44.239.251.56:12300"
 
 [[storage_nodes]]
 address = "52.40.82.170:8080"
@@ -23,4 +23,4 @@ address = "52.40.82.170:8080"
 address = "52.27.248.13:12340"
 
 [[user_nodes]]
-address = "34.221.188.21:12342"
+address = "35.155.18.122:12342"
