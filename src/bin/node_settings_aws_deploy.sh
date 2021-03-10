@@ -116,6 +116,7 @@ then
     echo "Upload first"
     set -v
     scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $UPLOAD $NODE_ADDR_1:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem src/bin/node_settings_aws_deploy.sh $NODE_ADDR_1:~/
     set +v
 fi
 if [ "$UPLOAD_OTHERS" = "1" ]
@@ -145,7 +146,6 @@ then
     echo "Complete deploy first"
     set -x
     scp -i ~/.ssh/Zenotta-Node.pem target/release/node_settings_aws_run_storage_0.sh $NODE_ADDR_1:~/
-    scp -i ~/.ssh/Zenotta-Node.pem src/bin/node_settings_aws_deploy.sh $NODE_ADDR_1:~/
     ssh  -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_1 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_storage_0.sh
     set +x
 fi
