@@ -195,8 +195,16 @@ impl Node {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // TODO: wrap this socket with TLS 1.3 - https://github.com/tokio-rs/tls
-        let listener = TcpListener::bind(address).await?;
-        let listener_address = listener.local_addr()?;
+        let (listener, listener_address) = {
+            let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+            bind_address.set_port(address.port());
+
+            let listener = TcpListener::bind(bind_address).await?;
+            let mut listener_address = address;
+            listener_address.set_port(listener.local_addr()?.port());
+
+            (listener, listener_address)
+        };
         let span = info_span!("node", ?listener_address);
 
         Ok(Self {

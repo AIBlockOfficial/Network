@@ -14,25 +14,25 @@ user_setup_tx_max_count = 100000
 
 #first node is leader
 [[compute_nodes]]
-address = "0.0.0.0:12300"
+address = "127.0.0.1:12300"
 
 [[compute_nodes]]
-address = "0.0.0.0:12301"
+address = "127.0.0.1:12301"
 
 [[storage_nodes]]
-address = "0.0.0.0:8080"
+address = "127.0.0.1:8080"
 
 [[storage_nodes]]
-address = "0.0.0.0:8081"
+address = "127.0.0.1:8081"
 
 [[miner_nodes]]
-address = "0.0.0.0:12340"
+address = "127.0.0.1:12340"
 
 [[miner_nodes]]
-address = "0.0.0.0:12341"
+address = "127.0.0.1:12341"
 
 [[user_nodes]]
-address = "0.0.0.0:12342"
+address = "127.0.0.1:12342"
 
 [[user_nodes]]
-address = "0.0.0.0:12343"
+address = "127.0.0.1:12343"
