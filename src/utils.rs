@@ -376,9 +376,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                             if let Some(addr) = pk_to_address.get(&out.public_key) {
                                 addr.clone()
                             } else {
-                                let pk_slice = hex::decode(&out.public_key).unwrap();
-                                let pk = PublicKey::from_slice(&pk_slice).unwrap();
-                                let addr = construct_address(pk);
+                                let addr = decode_pub_key_as_address(&out.public_key);
                                 pk_to_address.insert(out.public_key.clone(), addr.clone());
                                 addr
                             };
@@ -417,6 +415,15 @@ pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
     let n = it.next().unwrap().parse().unwrap();
     let tx_hash = it.next().unwrap().parse().unwrap();
     OutPoint::new(tx_hash, n)
+}
+
+/// Decodes the public key as address
+///
+/// ### Arguments
+///
+/// * `key`    - key to be decoded to give the public key
+pub fn decode_pub_key_as_address(key: &str) -> String {
+    construct_address(decode_pub_key(key))
 }
 
 /// Decodes the public key
