@@ -80,3 +80,9 @@ pub const BLOCK_SIZE: usize = 1_000_000;
 
 /// The size of the block in transactions (approx)
 pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
+
+/// The TxIn content for genesis block.
+/// As a marketing requestm a quote from the the Magna Carta document, the 39th claim.
+/// This version was updated to be more inclusive.
+pub const GENESIS_INITIAL_TX_INS: &str =
+    "+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.";

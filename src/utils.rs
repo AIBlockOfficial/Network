@@ -1,6 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
-use crate::constants::{MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
+use crate::constants::{GENESIS_INITIAL_TX_INS, MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
@@ -10,11 +10,12 @@ use naom::constants::TOTAL_TOKENS;
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
-    transaction::{OutPoint, Transaction, TxConstructor, TxOut},
+    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
     transaction_utils::{
         construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
     },
 };
+use naom::script::{lang::Script, StackEntry};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
@@ -359,6 +360,21 @@ pub fn create_valid_transaction_with_ins_outs(
     (t_hash, payment_tx)
 }
 
+/// Get the string to display for genesis TxIn
+///
+/// ### Arguments
+///
+/// * `tx`    - The transaction
+pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
+    if let Some(tx_in) = tx.inputs.first() {
+        if let Some(StackEntry::Bytes(v)) = tx_in.script_signature.stack.first() {
+            return &v;
+        }
+    }
+
+    &""
+}
+
 /// Generate utxo_set transactions from seed info
 ///
 /// ### Arguments
@@ -366,6 +382,15 @@ pub fn create_valid_transaction_with_ins_outs(
 /// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
 pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
     let mut pk_to_address: BTreeMap<String, String> = BTreeMap::new();
+    let genesis_tx_in = {
+        let entry = StackEntry::Bytes(GENESIS_INITIAL_TX_INS.to_owned());
+        let mut script_signature = Script::new();
+        script_signature.stack.push(entry);
+        TxIn {
+            previous_out: None,
+            script_signature,
+        }
+    };
     seed.iter()
         .map(|(tx_hash, tx_out)| {
             let tx = Transaction {
@@ -384,6 +409,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                         TxOut::new_amount(script_public_key, out.amount)
                     })
                     .collect(),
+                inputs: vec![genesis_tx_in.clone()],
                 ..Transaction::default()
             };
             (tx_hash.clone(), tx)
