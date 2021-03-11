@@ -379,7 +379,8 @@ pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
 ///
 /// ### Arguments
 ///
-/// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
+/// * `seed`      - Set iterated through to generate the transaction set utxo
+/// * `tx_in_str` - String to use as genesis transactions TxIn bytes.
 pub fn make_utxo_set_from_seed(
     seed: &UtxoSetSpec,
     tx_in_str: &Option<String>,
