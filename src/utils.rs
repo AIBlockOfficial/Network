@@ -1,6 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
-use crate::constants::{GENESIS_INITIAL_TX_INS, MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
+use crate::constants::{MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
 use crate::interfaces::ProofOfWork;
 use crate::wallet::WalletDb;
@@ -380,17 +380,19 @@ pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
 /// ### Arguments
 ///
 /// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
-pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
+pub fn make_utxo_set_from_seed(
+    seed: &UtxoSetSpec,
+    tx_in_str: &Option<String>,
+) -> BTreeMap<String, Transaction> {
     let mut pk_to_address: BTreeMap<String, String> = BTreeMap::new();
-    let genesis_tx_in = {
-        let entry = StackEntry::Bytes(GENESIS_INITIAL_TX_INS.to_owned());
+    let genesis_tx_in = tx_in_str.clone().map(|tx_in| {
         let mut script_signature = Script::new();
-        script_signature.stack.push(entry);
+        script_signature.stack.push(StackEntry::Bytes(tx_in));
         TxIn {
             previous_out: None,
             script_signature,
         }
-    };
+    });
     seed.iter()
         .map(|(tx_hash, tx_out)| {
             let tx = Transaction {
@@ -409,7 +411,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                         TxOut::new_amount(script_public_key, out.amount)
                     })
                     .collect(),
-                inputs: vec![genesis_tx_in.clone()],
+                inputs: genesis_tx_in.clone().into_iter().collect(),
                 ..Transaction::default()
             };
             (tx_hash.clone(), tx)

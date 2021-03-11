@@ -143,7 +143,8 @@ impl ComputeRaft {
         let propose_transactions_timeout_at =
             Instant::now() + propose_transactions_timeout_duration;
 
-        let utxo_set = make_utxo_set_from_seed(&config.compute_seed_utxo);
+        let utxo_set =
+            make_utxo_set_from_seed(&config.compute_seed_utxo, &config.compute_genesis_tx_in);
 
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
@@ -1125,6 +1126,7 @@ mod test {
                 .iter()
                 .map(|v| (v.to_string(), vec![tx_out.clone()]))
                 .collect(),
+            compute_genesis_tx_in: None,
             compute_partition_full_size: 1,
             compute_minimum_miner_pool_len: 1,
             jurisdiction: "US".to_string(),

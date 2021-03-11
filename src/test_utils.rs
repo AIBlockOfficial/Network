@@ -63,6 +63,7 @@ pub struct NetworkConfig {
     pub compute_partition_full_size: usize,
     pub compute_minimum_miner_pool_len: usize,
     pub compute_seed_utxo: UtxoSetSpec,
+    pub compute_genesis_tx_in: Option<String>,
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     pub nodes: BTreeMap<NodeType, Vec<String>>,
     pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
@@ -433,7 +434,10 @@ impl Network {
 
     ///Returns a list of initial transactions
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
-        make_utxo_set_from_seed(&self.config.compute_seed_utxo)
+        make_utxo_set_from_seed(
+            &self.config.compute_seed_utxo,
+            &self.config.compute_genesis_tx_in,
+        )
     }
 
     ///Returns active nodes of given type
@@ -740,6 +744,7 @@ async fn init_compute(
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_transaction_timeout: 100 / config.test_duration_divider,
         compute_seed_utxo: config.compute_seed_utxo.clone(),
+        compute_genesis_tx_in: config.compute_genesis_tx_in.clone(),
         compute_partition_full_size: config.compute_partition_full_size,
         compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
         jurisdiction: "US".to_string(),
