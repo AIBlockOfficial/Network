@@ -2478,6 +2478,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         .into_iter()
         .collect(),
         compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
+        compute_genesis_tx_in: None,
         user_wallet_seeds: Vec::new(),
         compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
             .into_iter()

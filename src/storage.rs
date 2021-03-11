@@ -7,8 +7,7 @@ use crate::interfaces::{
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
-use crate::utils::concat_merkle_coinbase;
-use crate::utils::validate_pow_block;
+use crate::utils::{concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::{block::Block, transaction::Transaction};
@@ -403,12 +402,17 @@ impl StorageNode {
         if block_num == 0 {
             // Celebrate genesis block:
             info!("!!! Stored Genesis Block !!!");
-            for tx_out in block_txs.values().flat_map(|tx| tx.outputs.iter()) {
-                if let Some(script_public_key) = &tx_out.script_public_key {
-                    info!(
-                        "Genesis entry: Key:{} -> Tokens:{}",
-                        script_public_key, tx_out.amount
-                    );
+            for (hash, tx) in block_txs.iter() {
+                let tx_in = get_genesis_tx_in_display(tx);
+                info!("Genesis Transaction: Hash:{} -> TxIn:{}", hash, tx_in);
+
+                for (idx, tx_out) in tx.outputs.iter().enumerate() {
+                    if let Some(key) = &tx_out.script_public_key {
+                        info!(
+                            "Genesis entry: Index:{}, Key:{} -> Tokens:{}",
+                            idx, key, tx_out.amount
+                        );
+                    }
                 }
             }
         }

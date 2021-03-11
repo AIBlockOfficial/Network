@@ -10,11 +10,12 @@ use naom::constants::TOTAL_TOKENS;
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
-    transaction::{OutPoint, Transaction, TxConstructor, TxOut},
+    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
     transaction_utils::{
         construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
     },
 };
+use naom::script::{lang::Script, StackEntry};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
@@ -359,13 +360,40 @@ pub fn create_valid_transaction_with_ins_outs(
     (t_hash, payment_tx)
 }
 
+/// Get the string to display for genesis TxIn
+///
+/// ### Arguments
+///
+/// * `tx`    - The transaction
+pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
+    if let Some(tx_in) = tx.inputs.first() {
+        if let Some(StackEntry::Bytes(v)) = tx_in.script_signature.stack.first() {
+            return &v;
+        }
+    }
+
+    &""
+}
+
 /// Generate utxo_set transactions from seed info
 ///
 /// ### Arguments
 ///
-/// * `seed`    - &UtxoSetSpec object iterated through to generate the transaction set utxo
-pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transaction> {
+/// * `seed`      - Set iterated through to generate the transaction set utxo
+/// * `tx_in_str` - String to use as genesis transactions TxIn bytes.
+pub fn make_utxo_set_from_seed(
+    seed: &UtxoSetSpec,
+    tx_in_str: &Option<String>,
+) -> BTreeMap<String, Transaction> {
     let mut pk_to_address: BTreeMap<String, String> = BTreeMap::new();
+    let genesis_tx_in = tx_in_str.clone().map(|tx_in| {
+        let mut script_signature = Script::new();
+        script_signature.stack.push(StackEntry::Bytes(tx_in));
+        TxIn {
+            previous_out: None,
+            script_signature,
+        }
+    });
     seed.iter()
         .map(|(tx_hash, tx_out)| {
             let tx = Transaction {
@@ -376,9 +404,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                             if let Some(addr) = pk_to_address.get(&out.public_key) {
                                 addr.clone()
                             } else {
-                                let pk_slice = hex::decode(&out.public_key).unwrap();
-                                let pk = PublicKey::from_slice(&pk_slice).unwrap();
-                                let addr = construct_address(pk);
+                                let addr = decode_pub_key_as_address(&out.public_key);
                                 pk_to_address.insert(out.public_key.clone(), addr.clone());
                                 addr
                             };
@@ -386,6 +412,7 @@ pub fn make_utxo_set_from_seed(seed: &UtxoSetSpec) -> BTreeMap<String, Transacti
                         TxOut::new_amount(script_public_key, out.amount)
                     })
                     .collect(),
+                inputs: genesis_tx_in.clone().into_iter().collect(),
                 ..Transaction::default()
             };
             (tx_hash.clone(), tx)
@@ -417,6 +444,15 @@ pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
     let n = it.next().unwrap().parse().unwrap();
     let tx_hash = it.next().unwrap().parse().unwrap();
     OutPoint::new(tx_hash, n)
+}
+
+/// Decodes the public key as address
+///
+/// ### Arguments
+///
+/// * `key`    - key to be decoded to give the public key
+pub fn decode_pub_key_as_address(key: &str) -> String {
+    construct_address(decode_pub_key(key))
 }
 
 /// Decodes the public key

@@ -64,6 +64,8 @@ pub struct ComputeNodeConfig {
     pub compute_transaction_timeout: usize,
     /// Transaction hash and TxOut info to use to seed utxo
     pub compute_seed_utxo: UtxoSetSpec,
+    /// String to use for genesis block TxIn
+    pub compute_genesis_tx_in: Option<String>,
     /// Partition full size
     pub compute_partition_full_size: usize,
     /// Minimum miner pool size
