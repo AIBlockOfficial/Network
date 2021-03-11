@@ -38,9 +38,7 @@ async fn main() {
         settings
             .set_default("storage_raft_tick_timeout", 10)
             .unwrap();
-        settings
-            .set_default("storage_block_timeout", 60000)
-            .unwrap();
+        settings.set_default("storage_block_timeout", 1000).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
