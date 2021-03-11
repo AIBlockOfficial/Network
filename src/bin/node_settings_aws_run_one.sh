@@ -8,7 +8,7 @@ LOG_LEVEL=$4
 PACKAGE_NAME=$5
 START_CLEAN_DB=$6
 NODE_CONFIG=src/bin/node_settings_aws.toml
-NODE_INIT_BLOCK=src/bin/initial_block.json
+NODE_INIT_BLOCK=src/bin/initial_block_aws.json
 set +x
 
 echo " "
