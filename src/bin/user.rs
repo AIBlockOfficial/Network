@@ -2,6 +2,7 @@
 
 use clap::{App, Arg};
 use naom::primitives::asset::TokenAmount;
+use std::net::SocketAddr;
 use system::configurations::{UserNodeConfig, UserNodeSetup};
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
 use system::{routes, TransactionGen, UserNode};
@@ -213,11 +214,13 @@ async fn main() {
         println!();
 
         let (db, node, api_addr) = api_inputs;
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(api_addr.port());
 
         async move {
             use warp::Filter;
             warp::serve(routes::wallet_info(db).or(routes::make_payment(node)))
-                .run(api_addr)
+                .run(bind_address)
                 .await;
         }
     });
