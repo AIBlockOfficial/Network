@@ -400,6 +400,19 @@ impl StorageNode {
             self.db.put(tx_hash, &tx_input).unwrap();
         }
 
+        if block_num == 0 {
+            // Celebrate genesis block:
+            info!("!!! Stored Genesis Block !!!");
+            for tx_out in block_txs.values().flat_map(|tx| tx.outputs.iter()) {
+                if let Some(script_public_key) = &tx_out.script_public_key {
+                    info!(
+                        "Genesis entry: Key:{} -> Tokens:{}",
+                        script_public_key, tx_out.amount
+                    );
+                }
+            }
+        }
+
         let stored_info = BlockStoredInfo {
             block_hash,
             block_num,
