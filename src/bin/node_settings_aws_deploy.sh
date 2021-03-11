@@ -74,6 +74,30 @@ else
     GET_EXISTING_LOGS=0
 fi
 
+if [ "$6" = "start_with_clean_db" ]
+then
+    echo "Will start node by wiping all databases"
+    START_WITH_CLEAN="start_with_clean_db"
+elif [ "$6" = "start_with_wipe_znp" ]
+then
+    echo "Will start node by wiping all znp folder"
+    START_WITH_CLEAN="start_with_wipe_znp"
+else
+    echo "Will start node with existing znp folder/databases"
+    START_WITH_CLEAN="start_with_existing"
+fi
+
+if [ "$7" != "no_prompt" ]
+then
+    read -p "Continue (y/n)?" CONT
+    if [ "$CONT" = "y" ]
+    then
+        echo "Proceeding"
+    else
+        echo "Quiting"
+        exit
+    fi
+fi
 
 echo " "
 echo "//-----------------------------//"
@@ -135,10 +159,10 @@ echo "Create deploy scripts"
 echo "//-----------------------------//"
 echo " "
 set -v
-cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/storage/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/start_with_clean_db/g" > target/release/node_settings_aws_run_storage_0.sh
-cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/compute/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/start_with_clean_db/g" > target/release/node_settings_aws_run_compute_0.sh
-cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/miner/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/start_with_clean_db/g" > target/release/node_settings_aws_run_miner_0.sh
-cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/user/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/start_with_clean_db/g" > target/release/node_settings_aws_run_user_0.sh
+cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/storage/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_storage_0.sh
+cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/compute/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_compute_0.sh
+cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/miner/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_miner_0.sh
+cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/user/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_user_0.sh
 set +v
 
 if [ "$COMPLETE_DEPLOY_FIRST" = "1" ]

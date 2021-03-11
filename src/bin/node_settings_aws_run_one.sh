@@ -22,6 +22,26 @@ set +v
 
 echo " "
 echo "//-----------------------------//"
+echo "Check if need start clean db $START_CLEAN_DB==start_with_clean_db"
+echo "Check if need start folder $START_CLEAN_DB==start_with_wipe_znp"
+echo "//-----------------------------//"
+echo " "
+if [ "$START_CLEAN_DB" = "start_with_clean_db" ]
+then
+    set -v
+    echo "Delete databases"
+    rm -rf ./znp/src/db/db/* ./znp/src/wallet/wallet/*
+    set +v
+elif [ "$START_CLEAN_DB" = "start_with_wipe_znp" ]
+then
+    set -v
+    echo "Delete all znp"
+    rm -rf ./znp
+    set +v
+fi
+
+echo " "
+echo "//-----------------------------//"
 echo "Extract package if $PACKAGE_NAME != keep_file_restart_only"
 echo "//-----------------------------//"
 echo " "
@@ -41,19 +61,6 @@ echo " "
 set -v
 cd znp
 set +v
-
-echo " "
-echo "//-----------------------------//"
-echo "Check if need start clean db $START_CLEAN_DB==start_with_clean_db"
-echo "//-----------------------------//"
-echo " "
-if [ "$START_CLEAN_DB" = "start_with_clean_db" ]
-then
-    set -v
-    echo "Delete databases"
-    rm -rf src/db/db/test.* src/wallet/wallet/test.*
-    set +v
-fi
 
 echo " "
 echo "//-----------------------------//"
