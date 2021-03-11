@@ -48,55 +48,55 @@
     "user_wallet_seeds": [
         [
             {
-                "out_point": "0-000010",
+                "out_point": "0-000000",
                 "secret_key": "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
                 "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
                 "amount": 12600000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "1-000000",
                 "secret_key": "4484d9dda49dd72ba4b0a68a478111d983a78397f8e6cba348ed06ec41a909db4580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a",
                 "public_key": "4580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a",
                 "amount": 12600000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "2-000000",
                 "secret_key": "c81822091474ae24a22922ee3ab87fefb838d59710cf1e5fe9e471bf55caa189a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51",
                 "public_key": "a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51",
                 "amount": 7560000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "3-000000",
                 "secret_key": "68dca829734887fd5ee3c017b754eaf3a864afc04efe269cd7391be3541dcd5a951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5",
                 "public_key": "951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5",
                 "amount": 15624000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "4-000000",
                 "secret_key": "ddd7806b4b26648c4187c395c4c1c3467f0d06a2afccebbc499fc74edd255d435eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada",
                 "public_key": "5eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada",
                 "amount": 6552000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "5-000000",
                 "secret_key": "09784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
                 "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
                 "amount": 25145064000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "6-000000",
                 "secret_key": "0f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
                 "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
                 "amount": 25200000000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "7-000000",
                 "secret_key": "05c5098f18eb4a85676c167b89455af63709779e6e4bcddf250f20ec35b510b09caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
                 "public_key": "9caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
                 "amount": 12474000000000
             },
             {
-                "out_point": "0-000010",
+                "out_point": "8-000000",
                 "secret_key": "3ec3e9ad312fdaf4ed144e2498c1439c4301c376eb08827f4eb2da360c34b5d725564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
                 "public_key": "25564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
                 "amount": 252000000000
