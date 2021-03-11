@@ -69,6 +69,11 @@ if [ "$5" = "get_existing_logs" ]
 then
     echo "Get existing logs"
     GET_EXISTING_LOGS=1
+elif [ "$1" = "get_existing_logs" ]
+then
+    echo "ONLY Get existing logs"
+    GET_EXISTING_LOGS=1
+    ONLY_GET_EXISTING_LOGS=1
 else
     echo "Not get existing logs: $5"
     GET_EXISTING_LOGS=0
@@ -127,6 +132,10 @@ then
     scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_3:~/znp/compute_0.log ./
     scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_4:~/znp/user_0.log ./
     set +x
+    if [ "$ONLY_GET_EXISTING_LOGS" = "1" ]
+    then
+        exit
+    fi
 fi
 
 echo " "
