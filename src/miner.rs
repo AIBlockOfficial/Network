@@ -97,7 +97,6 @@ impl From<task::JoinError> for MinerError {
 pub struct MinerNode {
     node: Node,
     pub compute_addr: SocketAddr,
-    pub extra_connect_addr: Vec<SocketAddr>,
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
     pub current_block: HashBlock,
@@ -131,11 +130,10 @@ impl MinerNode {
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             compute_addr,
-            extra_connect_addr: Vec::new(),
-            partition_list: Vec::new(),
-            rand_num: Vec::new(),
+            partition_list: Default::default(),
+            rand_num: Default::default(),
             partition_key: None,
-            current_block: HashBlock::new(),
+            current_block: Default::default(),
             last_pow: None,
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
@@ -168,8 +166,8 @@ impl MinerNode {
     /// Connect info for peers on the network.
     pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
         let compute = Some(self.compute_addr);
-        let to_connect = compute.iter().chain(&self.extra_connect_addr);
-        let expect_connect = compute.iter().chain(&self.extra_connect_addr);
+        let to_connect = compute.iter();
+        let expect_connect = compute.iter();
         (
             self.node.clone(),
             to_connect.copied().collect(),

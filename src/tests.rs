@@ -167,7 +167,7 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
         ("After create block 0", CfgModif::Drop("miner2")),
         ("After create block 1", CfgModif::Respawn("miner2")),
     ];
-    let network_config = complete_network_config_with_n_compute_miner(11120, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11120, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -189,7 +189,7 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11140, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11140, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -204,7 +204,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11160, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11160, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -214,7 +214,7 @@ async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
         ("After create block 0", CfgModif::Disconnect("miner2")),
         ("After create block 1", CfgModif::Reconnect("miner2")),
     ];
-    let network_config = complete_network_config_with_n_compute_miner(11180, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11180, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -229,7 +229,7 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11200, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11200, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -244,7 +244,7 @@ async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11220, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11220, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -2515,11 +2515,10 @@ fn complete_network_config_with_n_compute_miner(
     cfg.compute_to_miner_mapping = {
         let miner_nodes = &cfg.nodes[&NodeType::Miner];
         let compute_nodes = &cfg.nodes[&NodeType::Compute];
-        let miners = miner_nodes.iter().cloned().cycle();
+        let miners = miner_nodes.iter().cloned();
         let computes = compute_nodes.iter().cloned().cycle();
-        let connections = std::cmp::max(miner_nodes.len(), compute_nodes.len());
         let mut mapping = BTreeMap::new();
-        for (miner, compute) in miners.zip(computes).take(connections) {
+        for (miner, compute) in miners.zip(computes) {
             mapping.entry(compute).or_insert_with(Vec::new).push(miner);
         }
         mapping
