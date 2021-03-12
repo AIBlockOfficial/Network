@@ -133,8 +133,8 @@ async fn full_flow_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_raft_20_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
+async fn full_flow_raft_15_nodes() {
+    full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -269,7 +269,6 @@ async fn full_flow_common(
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
@@ -301,12 +300,21 @@ async fn full_flow_common(
     let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
     assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
 
+    let stored0_mining_tx_len = stored0.as_ref().unwrap().mining_transactions.len();
+    let stored1_mining_tx_len = stored1.as_ref().unwrap().mining_transactions.len();
+    let majority = storage_nodes.len() / 2 + 1;
+    assert!(
+        stored0_mining_tx_len >= majority && stored1_mining_tx_len >= majority,
+        "{} >= majority, {} >= majority, majority = {}",
+        stored0_mining_tx_len,
+        stored1_mining_tx_len,
+        majority
+    );
+
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
-    let expected_block0_db_count =
-        1 + initial_utxo_txs.len() + stored0.as_ref().unwrap().mining_transactions.len();
-    let expected_block1_db_count =
-        1 + transactions.len() + stored1.as_ref().unwrap().mining_transactions.len();
+    let expected_block0_db_count = 1 + initial_utxo_txs.len() + stored0_mining_tx_len;
+    let expected_block1_db_count = 1 + transactions.len() + stored1_mining_tx_len;
 
     assert_eq!(
         actual0_db_count,
@@ -317,9 +325,7 @@ async fn full_flow_common(
     );
 
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
-        (TokenAmount(0), vec![])
-    } else {
+    let expected_w0 = {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = mining_reward * mining_txs.len() as u64;
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
@@ -374,8 +380,8 @@ async fn create_first_block_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn create_first_block_raft_20_nodes() {
-    create_first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
+async fn create_first_block_raft_15_nodes() {
+    create_first_block(complete_network_config_with_n_compute_raft(10040, 15)).await;
 }
 
 async fn create_first_block(network_config: NetworkConfig) {
@@ -457,8 +463,8 @@ async fn send_first_block_to_storage_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn send_first_block_to_storage_raft_20_nodes() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 20)).await;
+async fn send_first_block_to_storage_raft_15_nodes() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 15)).await;
 }
 
 async fn send_first_block_to_storage(network_config: NetworkConfig) {
@@ -534,8 +540,8 @@ async fn add_transactions_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn add_transactions_raft_20_nodes() {
-    add_transactions(complete_network_config_with_n_compute_raft(10640, 20)).await;
+async fn add_transactions_raft_15_nodes() {
+    add_transactions(complete_network_config_with_n_compute_raft(10640, 15)).await;
 }
 
 async fn add_transactions(network_config: NetworkConfig) {
@@ -609,8 +615,8 @@ async fn create_block_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn create_block_raft_20_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10150, 20)).await;
+async fn create_block_raft_15_nodes() {
+    create_block(complete_network_config_with_n_compute_raft(10150, 15)).await;
 }
 
 async fn create_block(network_config: NetworkConfig) {
@@ -1008,8 +1014,8 @@ async fn send_block_to_storage_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn send_block_to_storage_raft_20_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 20)).await;
+async fn send_block_to_storage_raft_15_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 15)).await;
 }
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
@@ -2485,7 +2491,7 @@ fn complete_network_config_with_n_compute_raft(
     initial_port: u16,
     compute_count: usize,
 ) -> NetworkConfig {
-    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, 1)
+    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, compute_count)
 }
 
 fn complete_network_config_with_n_compute_miner(
