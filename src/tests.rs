@@ -32,7 +32,7 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tokio::time;
@@ -133,8 +133,8 @@ async fn full_flow_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn full_flow_raft_20_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10550, 20)).await;
+async fn full_flow_raft_15_nodes() {
+    full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -167,7 +167,7 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
         ("After create block 0", CfgModif::Drop("miner2")),
         ("After create block 1", CfgModif::Respawn("miner2")),
     ];
-    let network_config = complete_network_config_with_n_compute_miner(11120, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11120, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -189,7 +189,7 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11140, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11140, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -204,7 +204,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11160, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11160, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -214,7 +214,7 @@ async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
         ("After create block 0", CfgModif::Disconnect("miner2")),
         ("After create block 1", CfgModif::Reconnect("miner2")),
     ];
-    let network_config = complete_network_config_with_n_compute_miner(11180, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11180, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -229,7 +229,7 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11200, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11200, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -244,7 +244,7 @@ async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_miner(11220, true, 3, 3);
+    let network_config = complete_network_config_with_n_compute_raft(11220, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -269,7 +269,6 @@ async fn full_flow_common(
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
@@ -301,12 +300,21 @@ async fn full_flow_common(
     let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
     assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
 
+    let stored0_mining_tx_len = stored0.as_ref().unwrap().mining_transactions.len();
+    let stored1_mining_tx_len = stored1.as_ref().unwrap().mining_transactions.len();
+    let majority = storage_nodes.len() / 2 + 1;
+    assert!(
+        stored0_mining_tx_len >= majority && stored1_mining_tx_len >= majority,
+        "{} >= majority, {} >= majority, majority = {}",
+        stored0_mining_tx_len,
+        stored1_mining_tx_len,
+        majority
+    );
+
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
-    let expected_block0_db_count =
-        1 + initial_utxo_txs.len() + stored0.as_ref().unwrap().mining_transactions.len();
-    let expected_block1_db_count =
-        1 + transactions.len() + stored1.as_ref().unwrap().mining_transactions.len();
+    let expected_block0_db_count = 1 + initial_utxo_txs.len() + stored0_mining_tx_len;
+    let expected_block1_db_count = 1 + transactions.len() + stored1_mining_tx_len;
 
     assert_eq!(
         actual0_db_count,
@@ -317,9 +325,7 @@ async fn full_flow_common(
     );
 
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let expected_w0 = if miner_nodes.len() < compute_nodes.len() {
-        (TokenAmount(0), vec![])
-    } else {
+    let expected_w0 = {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = mining_reward * mining_txs.len() as u64;
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
@@ -374,8 +380,8 @@ async fn create_first_block_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn create_first_block_raft_20_nodes() {
-    create_first_block(complete_network_config_with_n_compute_raft(10040, 20)).await;
+async fn create_first_block_raft_15_nodes() {
+    create_first_block(complete_network_config_with_n_compute_raft(10040, 15)).await;
 }
 
 async fn create_first_block(network_config: NetworkConfig) {
@@ -457,8 +463,8 @@ async fn send_first_block_to_storage_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn send_first_block_to_storage_raft_20_nodes() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 20)).await;
+async fn send_first_block_to_storage_raft_15_nodes() {
+    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 15)).await;
 }
 
 async fn send_first_block_to_storage(network_config: NetworkConfig) {
@@ -534,8 +540,8 @@ async fn add_transactions_raft_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn add_transactions_raft_20_nodes() {
-    add_transactions(complete_network_config_with_n_compute_raft(10640, 20)).await;
+async fn add_transactions_raft_15_nodes() {
+    add_transactions(complete_network_config_with_n_compute_raft(10640, 15)).await;
 }
 
 async fn add_transactions(network_config: NetworkConfig) {
@@ -609,8 +615,8 @@ async fn create_block_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn create_block_raft_20_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10150, 20)).await;
+async fn create_block_raft_15_nodes() {
+    create_block(complete_network_config_with_n_compute_raft(10150, 15)).await;
 }
 
 async fn create_block(network_config: NetworkConfig) {
@@ -815,7 +821,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
         for (idx, miner) in c_miners.iter().enumerate() {
-            miner_send_partition_pow(network, miner, compute).await;
+            miner_start_gen_partition_pow(network, miner, compute).await;
+            miner_handle_event(network, miner, "Partition PoW found and sent").await;
 
             use std::cmp::Ordering::*;
             let (success, evt) = match idx.cmp(&partition_last_idx) {
@@ -836,7 +843,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
         if !c_miners.is_empty() {
             let win_miner: &String = &in_miners[0];
-            miner_send_pow_for_current(network, win_miner, compute).await;
+            miner_start_gen_pow_for_current(network, win_miner, compute).await;
+            miner_handle_event(network, win_miner, "Block PoW found and sent").await;
             compute_handle_event(network, compute, "Received PoW successfully").await;
         }
     }
@@ -852,7 +860,8 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
     for compute in c_mined {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         for miner in c_miners {
-            miner_send_pow_for_current(network, miner, compute).await;
+            miner_start_gen_pow_for_current(network, miner, compute).await;
+            miner_handle_event(network, miner, "Block PoW found and sent").await;
             compute_handle_error(network, compute, "Not block currently mined").await;
         }
     }
@@ -1005,8 +1014,8 @@ async fn send_block_to_storage_raft_majority_3_nodes() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn send_block_to_storage_raft_20_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 20)).await;
+async fn send_block_to_storage_raft_15_nodes() {
+    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 15)).await;
 }
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
@@ -1281,7 +1290,8 @@ async fn proof_of_work_reject() {
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
     compute_flood_rand_num_to_requesters(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
-    miner_send_partition_pow(&mut network, miner, compute).await;
+    miner_start_gen_partition_pow(&mut network, miner, compute).await;
+    miner_handle_event(&mut network, miner, "Partition PoW found and sent").await;
     compute_handle_event(&mut network, compute, "Partition list is full").await;
 
     //
@@ -1418,7 +1428,6 @@ async fn main_loops_raft_1_node_common(
     }));
 
     handles.push(tokio::spawn({
-        let now = SystemTime::now();
         let node = network.miner("miner1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
@@ -1428,7 +1437,7 @@ async fn main_loops_raft_1_node_common(
             node.send_partition_request(address).await.unwrap();
 
             while let Some(response) = node.handle_next_event().await {
-                if node.handle_next_event_response(now, response).await {
+                if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
                         break;
@@ -2211,37 +2220,28 @@ async fn miner_send_partition_request(network: &mut Network, from_miner: &str, t
     m.send_partition_request(compute_node_addr).await.unwrap();
 }
 
-async fn miner_send_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
+async fn miner_start_gen_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let pow = m.generate_partition_pow().await.unwrap();
-    m.send_partition_pow(compute_node_addr, pow).await.unwrap();
+    m.start_generate_partition_pow(compute_node_addr).await;
 }
 
-async fn miner_send_pow_for_current(network: &mut Network, from_miner: &str, to_compute: &str) {
+async fn miner_start_gen_pow_for_current(
+    network: &mut Network,
+    from_miner: &str,
+    to_compute: &str,
+) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
 
-    let (b_num, nonce, transaction) = m.generate_pow_for_current_block().await.unwrap();
-    m.send_pow(compute_node_addr, b_num, nonce, transaction)
-        .await
-        .unwrap();
+    m.start_generate_pow_for_current_block(compute_node_addr)
+        .await;
 }
 
 async fn miner_commit_block_found(network: &mut Network, miner: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
     m.commit_block_found().await;
-}
-
-async fn miner_all_send_pow_for_current(
-    network: &mut Network,
-    from_miner: &str,
-    to_compute_group: &[String],
-) {
-    for to_compute in to_compute_group {
-        miner_send_pow_for_current(network, from_miner, to_compute).await;
-    }
 }
 
 //
@@ -2491,7 +2491,7 @@ fn complete_network_config_with_n_compute_raft(
     initial_port: u16,
     compute_count: usize,
 ) -> NetworkConfig {
-    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, 1)
+    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, compute_count)
 }
 
 fn complete_network_config_with_n_compute_miner(
@@ -2515,11 +2515,10 @@ fn complete_network_config_with_n_compute_miner(
     cfg.compute_to_miner_mapping = {
         let miner_nodes = &cfg.nodes[&NodeType::Miner];
         let compute_nodes = &cfg.nodes[&NodeType::Compute];
-        let miners = miner_nodes.iter().cloned().cycle();
+        let miners = miner_nodes.iter().cloned();
         let computes = compute_nodes.iter().cloned().cycle();
-        let connections = std::cmp::max(miner_nodes.len(), compute_nodes.len());
         let mut mapping = BTreeMap::new();
-        for (miner, compute) in miners.zip(computes).take(connections) {
+        for (miner, compute) in miners.zip(computes) {
             mapping.entry(compute).or_insert_with(Vec::new).push(miner);
         }
         mapping

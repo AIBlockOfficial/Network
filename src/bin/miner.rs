@@ -1,7 +1,6 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
-use std::time::SystemTime;
 use system::configurations::MinerNodeConfig;
 use system::MinerNode;
 use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
@@ -89,13 +88,12 @@ async fn main() {
         .await
         .unwrap();
 
-    let now = SystemTime::now();
     let main_loop_handle = tokio::spawn({
         let mut node = node;
 
         async move {
             while let Some(response) = node.handle_next_event().await {
-                node.handle_next_event_response(now, response).await;
+                node.handle_next_event_response(response).await;
             }
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();

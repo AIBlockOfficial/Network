@@ -650,18 +650,11 @@ async fn init_miner(
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
 ) -> ArcMinerNode {
-    // Handle the single miner multi compute node in test only
-    let (miner_compute_node_idx, extra_connect_addr) = {
+    let miner_compute_node_idx = {
         let name = name.to_owned();
-        let mut miner_compute_infos = config
-            .compute_to_miner_mapping
-            .iter()
-            .filter(|(_, ms)| ms.contains(&name))
-            .map(|(c, _)| &info.node_infos[c]);
-
-        let miner_compute_node_idx = miner_compute_infos.next().unwrap().index;
-        let extra_connect_addr = miner_compute_infos.map(|i| i.node_spec.address).collect();
-        (miner_compute_node_idx, extra_connect_addr)
+        let mut mapping = config.compute_to_miner_mapping.iter();
+        let (c, _) = mapping.find(|(_, ms)| ms.contains(&name)).unwrap();
+        info.node_infos[c].index
     };
 
     // Create node
@@ -677,10 +670,9 @@ async fn init_miner(
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
-
-    let mut miner = MinerNode::new(miner_config).await.expect(&info_str);
-    miner.extra_connect_addr = extra_connect_addr;
-    Arc::new(Mutex::new(miner))
+    Arc::new(Mutex::new(
+        MinerNode::new(miner_config).await.expect(&info_str),
+    ))
 }
 
 ///Initialize Storage node of given name based on network info.

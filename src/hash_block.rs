@@ -17,7 +17,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// The hash information of the current block to mine
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct HashBlock {
     pub unicorn: String,
     pub merkle_hash: String,
@@ -25,23 +25,7 @@ pub struct HashBlock {
     pub b_num: u64,
 }
 
-impl Default for HashBlock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HashBlock {
-    /// Creates a new HashBlock
-    pub fn new() -> HashBlock {
-        HashBlock {
-            unicorn: "".to_string(),
-            merkle_hash: "".to_string(),
-            nonce: Vec::new(),
-            b_num: 0,
-        }
-    }
-
     /// Creates a new HashBlock to send for mining
     ///
     /// ### Arguments
