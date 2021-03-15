@@ -27,7 +27,8 @@ use std::{
     net::{IpAddr, Ipv4Addr},
 };
 use tokio::task;
-use tracing::{debug, error, info, info_span, trace, warn};
+use tracing::{debug, error, error_span, info, trace, warn};
+use tracing_futures::Instrument;
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -287,7 +288,12 @@ impl MinerNode {
     /// * `event`   - Event object to be handled.
     async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+            Event::NewFrame { peer, frame } => {
+                let peer_span = error_span!("peer", ?peer);
+                self.handle_new_frame(peer, frame)
+                    .instrument(peer_span)
+                    .await
+            }
         }
     }
 
@@ -302,19 +308,16 @@ impl MinerNode {
         peer: SocketAddr,
         frame: Bytes,
     ) -> Result<Option<Response>> {
-        info_span!("peer", ?peer).in_scope(|| {
-            let req = deserialize::<MineRequest>(&frame).map_err(|error| {
-                warn!(?error, "frame-deserialize");
-                error
-            })?;
+        let req = deserialize::<MineRequest>(&frame).map_err(|error| {
+            warn!(?error, "frame-deserialize");
+            error
+        })?;
 
-            info_span!("request", ?req).in_scope(|| {
-                let response = self.handle_request(peer, req);
-                debug!(?response, ?peer, "response");
+        let req_span = error_span!("request", ?req);
+        let response = self.handle_request(peer, req).instrument(req_span).await;
+        debug!(?response, ?peer, "response");
 
-                Ok(response)
-            })
-        })
+        Ok(response)
     }
 
     /// Handles a compute request.
@@ -323,9 +326,9 @@ impl MinerNode {
     ///
     /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
-    fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Option<Response> {
+    async fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Option<Response> {
         use MineRequest::*;
-        trace!("RECEIVED REQUEST: {:?}", req);
+        trace!("handle_request: {:?}", req);
 
         match req {
             NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
@@ -386,6 +389,32 @@ impl MinerNode {
         Response {
             success: true,
             reason: "Received partition list successfully",
+        }
+    }
+
+    /// Receives a new block to be mined
+    ///
+    /// ### Arguments
+    ///
+    /// * `pre_block` - New block to be mined
+    /// * `reward`    - The block reward to be paid on successful PoW
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Option<Response> {
+        let new_block = BlockPoWReceived {
+            hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
+            reward,
+        };
+
+        if Some(new_block.hash_block.b_num)
+            >= self.current_block.as_ref().map(|c| c.hash_block.b_num)
+        {
+            self.current_block = Some(new_block);
+
+            Some(Response {
+                success: true,
+                reason: "Pre-block received successfully",
+            })
+        } else {
+            None
         }
     }
 
@@ -529,10 +558,10 @@ impl MinerNode {
     ///
     /// * `compute`   - Socket address of recipient
     pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
-        let _peer_span = info_span!("sending partition participation request");
-
+        let peer_span = error_span!("sending partition participation request");
         self.node
             .send(compute, ComputeRequest::SendPartitionRequest {})
+            .instrument(peer_span)
             .await?;
 
         Ok(())
@@ -684,27 +713,7 @@ impl MinerNode {
     }
 }
 
-impl MinerInterface for MinerNode {
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Option<Response> {
-        let new_block = BlockPoWReceived {
-            hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
-            reward,
-        };
-
-        if Some(new_block.hash_block.b_num)
-            >= self.current_block.as_ref().map(|c| c.hash_block.b_num)
-        {
-            self.current_block = Some(new_block);
-
-            Some(Response {
-                success: true,
-                reason: "Pre-block received successfully",
-            })
-        } else {
-            None
-        }
-    }
-}
+impl MinerInterface for MinerNode {}
 
 /// Wait for the handle to complete or wait forever
 ///
