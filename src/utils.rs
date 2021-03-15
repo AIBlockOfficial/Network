@@ -27,6 +27,7 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
@@ -68,6 +69,40 @@ impl<T> MpscTracingSender<T> {
                 result
             }
             Err(TrySendError::Closed(value)) => Err(SendError(value)),
+        }
+    }
+}
+
+/// A running tasks or end result
+#[derive(Debug)]
+pub enum RunningTaskOrResult<T> {
+    None,
+    Running(task::JoinHandle<T>),
+    Completed(Result<T, task::JoinError>),
+}
+
+impl<T> Default for RunningTaskOrResult<T> {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl<T> RunningTaskOrResult<T> {
+    /// Wait for the handle to complete or wait forever
+    pub async fn wait(&mut self) {
+        *self = if let RunningTaskOrResult::Running(task) = self {
+            Self::Completed(task.await)
+        } else {
+            std::future::pending().await
+        }
+    }
+
+    /// Return completed result or None if no completed task
+    pub fn completed_result(&self) -> Option<&Result<T, task::JoinError>> {
+        if let Self::Completed(v) = self {
+            Some(v)
+        } else {
+            None
         }
     }
 }

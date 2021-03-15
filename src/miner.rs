@@ -7,7 +7,7 @@ use crate::interfaces::{
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
-    validate_pow_block, validate_pow_for_address,
+    validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -34,7 +34,7 @@ use tracing_futures::Instrument;
 pub type Result<T> = std::result::Result<T, MinerError>;
 
 /// Block Pow task input/output
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockPoWInfo {
     peer: SocketAddr,
     start_time: SystemTime,
@@ -113,8 +113,8 @@ pub struct MinerNode {
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    mining_partition_task: Option<task::JoinHandle<(ProofOfWork, SocketAddr)>>,
-    mining_block_task: Option<task::JoinHandle<BlockPoWInfo>>,
+    mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
+    mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
 }
 
 impl MinerNode {
@@ -145,8 +145,8 @@ impl MinerNode {
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
             current_payment_address: None,
-            mining_partition_task: None,
-            mining_block_task: None,
+            mining_partition_task: Default::default(),
+            mining_block_task: Default::default(),
         })
     }
 
@@ -269,13 +269,11 @@ impl MinerNode {
                 event = self.node.next_event() => {
                     return self.handle_event(event?).await.transpose();
                 }
-                pow = wait_optional_task(self.mining_partition_task.as_mut()) => {
-                    self.mining_partition_task = None;
-                    return Some(Ok(self.process_found_partition_pow(pow).await));
+                _ = self.mining_partition_task.wait() => {
+                    return Ok(self.process_found_partition_pow().await).transpose();
                 }
-                pow = wait_optional_task(self.mining_block_task.as_mut()) => {
-                    self.mining_block_task = None;
-                    return Some(Ok(self.process_found_block_pow(pow).await));
+                _ = self.mining_block_task.wait() => {
+                    return Ok(self.process_found_block_pow().await).transpose();
                 }
             }
         }
@@ -333,7 +331,7 @@ impl MinerNode {
         match req {
             NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
             SendBlock { block, reward } => self.receive_pre_block(block, reward),
-            SendPartitionList { p_list } => Some(self.receive_partition_list(p_list)),
+            SendPartitionList { p_list } => self.receive_partition_list(p_list),
             SendRandomNum { rnum } => self.receive_random_number(rnum),
         }
     }
@@ -382,13 +380,18 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
-    fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Response {
-        self.partition_key = Some(get_partition_entry_key(&p_list));
-        self.partition_list = p_list;
+    fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Option<Response> {
+        let new_key = Some(get_partition_entry_key(&p_list));
+        if self.partition_key != new_key {
+            self.partition_key = new_key;
+            self.partition_list = p_list;
 
-        Response {
-            success: true,
-            reason: "Received partition list successfully",
+            Some(Response {
+                success: true,
+                reason: "Received partition list successfully",
+            })
+        } else {
+            None
         }
     }
 
@@ -430,11 +433,7 @@ impl MinerNode {
     }
 
     /// Process the found PoW sending it to the related peer and logging errors
-    ///
-    /// ### Arguments
-    ///
-    /// * `pow`   - Socket address of peer and Proof of Work
-    pub async fn process_found_block_pow(&mut self, pow: Result<BlockPoWInfo>) -> Response {
+    pub async fn process_found_block_pow(&mut self) -> Option<Response> {
         let BlockPoWInfo {
             peer,
             start_time,
@@ -442,14 +441,18 @@ impl MinerNode {
             nonce,
             coinbase,
             ..
-        } = match pow {
-            Ok(v) => v,
-            Err(e) => {
+        } = match self.mining_block_task.completed_result() {
+            Some(Ok(v)) => v.clone(),
+            Some(Err(e)) => {
                 error!("process_found_block_pow PoW {:?}", e);
-                return Response {
+                return Some(Response {
                     success: false,
                     reason: "Block PoW not found",
-                };
+                });
+            }
+            None => {
+                trace!("process_found_block_pow PoW Not ready yet");
+                return None;
             }
         };
 
@@ -462,16 +465,16 @@ impl MinerNode {
 
         if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase).await {
             error!("process_found_block_pow PoW {:?}", e);
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Block PoW not sent",
-            };
+            });
         }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Block PoW found and sent",
-        }
+        })
     }
 
     /// Sends PoW to a compute node.
@@ -502,37 +505,34 @@ impl MinerNode {
     }
 
     /// Process the found Pow sending it to the related peer and logging errors
-    ///
-    /// ### Arguments
-    ///
-    /// * `pow`   - Socket address of peer and Proof of Work
-    pub async fn process_found_partition_pow(
-        &mut self,
-        pow: Result<(ProofOfWork, SocketAddr)>,
-    ) -> Response {
-        let (partition_entry, peer) = match pow {
-            Ok(v) => v,
-            Err(e) => {
+    pub async fn process_found_partition_pow(&mut self) -> Option<Response> {
+        let (partition_entry, peer) = match self.mining_partition_task.completed_result() {
+            Some(Ok((e, p))) => (e.clone(), *p),
+            Some(Err(e)) => {
                 error!("process_found_partition_pow PoW {:?}", e);
-                return Response {
+                return Some(Response {
                     success: false,
                     reason: "Partition PoW not found",
-                };
+                });
+            }
+            None => {
+                trace!("process_found_partition_pow PoW Not ready yet");
+                return None;
             }
         };
 
         if let Err(e) = self.send_partition_pow(peer, partition_entry).await {
             error!("process_found_partition_pow PoW {:?}", e);
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Partition PoW not sent",
-            };
+            });
         }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Partition PoW found and sent",
-        }
+        })
     }
 
     /// Sends the light partition PoW to a compute node
@@ -606,7 +606,7 @@ impl MinerNode {
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
-            Some(Self::generate_pow_for_block(BlockPoWInfo {
+            RunningTaskOrResult::Running(Self::generate_pow_for_block(BlockPoWInfo {
                 peer,
                 start_time,
                 unicorn,
@@ -643,7 +643,7 @@ impl MinerNode {
     /// * `peer`    - Peer to send PoW to
     pub async fn start_generate_partition_pow(&mut self, peer: SocketAddr) {
         let address_proof = format_parition_pow_address(self.address());
-        self.mining_partition_task = Some(Self::generate_pow_for_address(
+        self.mining_partition_task = RunningTaskOrResult::Running(Self::generate_pow_for_address(
             peer,
             address_proof,
             Some(self.rand_num.clone()),
@@ -714,16 +714,3 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {}
-
-/// Wait for the handle to complete or wait forever
-///
-/// ### Arguments
-///
-/// * `task`    - Task to wait on
-async fn wait_optional_task<R>(task: Option<&mut task::JoinHandle<R>>) -> Result<R> {
-    if let Some(task) = task {
-        Ok(task.await?)
-    } else {
-        std::future::pending().await
-    }
-}
