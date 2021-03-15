@@ -253,15 +253,7 @@ impl fmt::Debug for MineRequest {
     }
 }
 
-pub trait MinerInterface {
-    /// Receives a new block to be mined
-    ///
-    /// ### Arguments
-    ///
-    /// * `pre_block` - New block to be mined
-    /// * `reward`    - The block reward to be paid on successful PoW
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response;
-}
+pub trait MinerInterface {}
 
 ///============ COMPUTE NODE ============///
 

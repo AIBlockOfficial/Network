@@ -858,8 +858,10 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
 
     info!("Test Step Miner block Proof of Work to late");
     for compute in c_mined {
+        let partition_size = config.compute_partition_full_size;
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
-        for miner in c_miners {
+        let in_miners: &[String] = &c_miners[0..std::cmp::min(partition_size, c_miners.len())];
+        for miner in in_miners {
             miner_start_gen_pow_for_current(network, miner, compute).await;
             miner_handle_event(network, miner, "Block PoW found and sent").await;
             compute_handle_error(network, compute, "Not block currently mined").await;

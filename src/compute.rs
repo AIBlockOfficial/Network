@@ -994,9 +994,22 @@ impl ComputeNode {
     /// Re-Sends Message triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
         if self.current_mined_block.is_some() {
-            info!("Resend block block to storage");
+            info!("Resend block to storage");
             if let Err(e) = self.send_block_to_storage().await {
                 error!("Resend block to storage failed {:?}", e);
+            }
+        } else if self.partition_key.is_some() {
+            info!("Resend partition list and block to partition miners");
+            if let Err(e) = self.flood_list_to_partition().await {
+                error!("Resend partition list to partition miners failed {:?}", e);
+            }
+            if let Err(e) = self.flood_block_to_partition().await {
+                error!("Resend block to partition miners failed {:?}", e);
+            }
+        } else if self.node_raft.get_mining_block().is_some() {
+            info!("Resend partition random number to miners");
+            if let Err(e) = self.flood_rand_num_to_requesters().await {
+                error!("Resend partition random number to miners failed {:?}", e);
             }
         }
     }
