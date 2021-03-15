@@ -331,7 +331,7 @@ impl MinerNode {
             NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
             SendBlock { block, reward } => self.receive_pre_block(block, reward),
             SendPartitionList { p_list } => Some(self.receive_partition_list(p_list)),
-            SendRandomNum { rnum } => Some(self.receive_random_number(rnum)),
+            SendRandomNum { rnum } => self.receive_random_number(rnum),
         }
     }
 
@@ -360,13 +360,17 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `rand_num`   - random num to be recieved in Vec<u8>
-    fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Response {
-        self.rand_num = rand_num;
-        debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num.clone());
+    fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Option<Response> {
+        if self.rand_num != rand_num {
+            self.rand_num = rand_num;
+            debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num);
 
-        Response {
-            success: true,
-            reason: "Received random number successfully",
+            Some(Response {
+                success: true,
+                reason: "Received random number successfully",
+            })
+        } else {
+            None
         }
     }
 
