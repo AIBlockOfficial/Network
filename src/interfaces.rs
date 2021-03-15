@@ -260,7 +260,7 @@ pub trait MinerInterface {
     ///
     /// * `pre_block` - New block to be mined
     /// * `reward`    - The block reward to be paid on successful PoW
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response;
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Option<Response>;
 }
 
 ///============ COMPUTE NODE ============///

@@ -44,6 +44,13 @@ pub struct BlockPoWInfo {
     nonce: Vec<u8>,
 }
 
+/// Received block
+#[derive(Debug)]
+pub struct BlockPoWReceived {
+    hash_block: HashBlock,
+    reward: TokenAmount,
+}
+
 #[derive(Debug)]
 pub enum MinerError {
     ConfigError(&'static str),
@@ -99,13 +106,12 @@ pub struct MinerNode {
     pub compute_addr: SocketAddr,
     pub partition_key: Option<Key>,
     pub rand_num: Vec<u8>,
-    pub current_block: HashBlock,
+    current_block: Option<BlockPoWReceived>,
     last_pow: Option<ProofOfWork>,
     pub partition_list: Vec<ProofOfWork>,
     wallet_db: WalletDb,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    current_reward: TokenAmount,
     mining_partition_task: Option<task::JoinHandle<(ProofOfWork, SocketAddr)>>,
     mining_block_task: Option<task::JoinHandle<BlockPoWInfo>>,
 }
@@ -133,12 +139,11 @@ impl MinerNode {
             partition_list: Default::default(),
             rand_num: Default::default(),
             partition_key: None,
-            current_block: Default::default(),
+            current_block: None,
             last_pow: None,
             wallet_db: WalletDb::new(config.miner_db_mode),
             current_coinbase: None,
             current_payment_address: None,
-            current_reward: TokenAmount(0),
             mining_partition_task: None,
             mining_block_task: None,
         })
@@ -261,7 +266,7 @@ impl MinerNode {
             // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
-                    return self.handle_event(event?).await.into();
+                    return self.handle_event(event?).await.transpose();
                 }
                 pow = wait_optional_task(self.mining_partition_task.as_mut()) => {
                     self.mining_partition_task = None;
@@ -280,7 +285,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `event`   - Event object to be handled.
-    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+    async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
             Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
         }
@@ -292,7 +297,11 @@ impl MinerNode {
     ///
     /// * `peer`   - Socket address of the peer sending the message.
     /// * `frame`   - Bytes object holding the frame
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+    async fn handle_new_frame(
+        &mut self,
+        peer: SocketAddr,
+        frame: Bytes,
+    ) -> Result<Option<Response>> {
         info_span!("peer", ?peer).in_scope(|| {
             let req = deserialize::<MineRequest>(&frame).map_err(|error| {
                 warn!(?error, "frame-deserialize");
@@ -314,15 +323,15 @@ impl MinerNode {
     ///
     /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
-    fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Response {
+    fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Option<Response> {
         use MineRequest::*;
         trace!("RECEIVED REQUEST: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase } => self.receive_block_found(win_coinbase),
+            NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
             SendBlock { block, reward } => self.receive_pre_block(block, reward),
-            SendPartitionList { p_list } => self.receive_partition_list(p_list),
-            SendRandomNum { rnum } => self.receive_random_number(rnum),
+            SendPartitionList { p_list } => Some(self.receive_partition_list(p_list)),
+            SendRandomNum { rnum } => Some(self.receive_random_number(rnum)),
         }
     }
 
@@ -543,7 +552,8 @@ impl MinerNode {
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
     pub async fn start_generate_pow_for_current_block(&mut self, peer: SocketAddr) {
-        let b_num = self.current_block.b_num;
+        let current_block = self.current_block.as_ref().unwrap();
+        let b_num = current_block.hash_block.b_num;
 
         if self.current_payment_address.is_none() {
             let (address, _) = self.wallet_db.generate_payment_address().await;
@@ -551,15 +561,15 @@ impl MinerNode {
         }
         let mining_tx = construct_coinbase_tx(
             b_num,
-            self.current_reward,
+            current_block.reward,
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
         self.mining_block_task = {
-            let merkle_hash = &self.current_block.merkle_hash;
+            let merkle_hash = &current_block.hash_block.merkle_hash;
             let hash_to_mine = concat_merkle_coinbase(merkle_hash, &mining_tx_hash).await;
-            let unicorn = self.current_block.unicorn.clone();
+            let unicorn = current_block.hash_block.unicorn.clone();
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
@@ -671,13 +681,23 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Response {
-        self.current_block = deserialize::<HashBlock>(&pre_block).unwrap();
-        self.current_reward = reward;
+    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Option<Response> {
+        let new_block = BlockPoWReceived {
+            hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
+            reward,
+        };
 
-        Response {
-            success: true,
-            reason: "Pre-block received successfully",
+        if Some(new_block.hash_block.b_num)
+            >= self.current_block.as_ref().map(|c| c.hash_block.b_num)
+        {
+            self.current_block = Some(new_block);
+
+            Some(Response {
+                success: true,
+                reason: "Pre-block received successfully",
+            })
+        } else {
+            None
         }
     }
 }
