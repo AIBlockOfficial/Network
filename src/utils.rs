@@ -549,7 +549,7 @@ pub fn loops_re_connect_disconnect(
                 println!("Start mode input check");
                 loop {
                     tokio::select! {
-                        _ = tokio::time::delay_for(Duration::from_millis(500)) => (),
+                        _ = tokio::time::delay_for(Duration::from_millis(100)) => (),
                         _ = &mut stop_re_connect_rx => break,
                     };
 

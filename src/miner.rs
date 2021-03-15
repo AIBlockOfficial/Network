@@ -267,13 +267,16 @@ impl MinerNode {
             // i.e they should only await a channel.
             tokio::select! {
                 event = self.node.next_event() => {
-                    return self.handle_event(event?).await.transpose();
+                    trace!("handle_next_event evt {:?}", event);
+                    if let res @ Some(_) = self.handle_event(event?).await.transpose() {
+                        return res;
+                    }
                 }
                 _ = self.mining_partition_task.wait() => {
-                    return Ok(self.process_found_partition_pow().await).transpose();
+                    return Some(Ok(self.process_found_partition_pow().await.unwrap()));
                 }
                 _ = self.mining_block_task.wait() => {
-                    return Ok(self.process_found_block_pow().await).transpose();
+                    return Some(Ok(self.process_found_block_pow().await.unwrap()));
                 }
             }
         }
@@ -330,9 +333,9 @@ impl MinerNode {
 
         match req {
             NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
-            SendBlock { block, reward } => self.receive_pre_block(block, reward),
+            SendBlock { block, reward } => self.receive_pre_block(block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(p_list),
-            SendRandomNum { rnum } => self.receive_random_number(rnum),
+            SendRandomNum { rnum } => self.receive_random_number(rnum).await,
         }
     }
 
@@ -361,7 +364,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `rand_num`   - random num to be recieved in Vec<u8>
-    fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Option<Response> {
+    async fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Option<Response> {
         if self.rand_num != rand_num {
             self.rand_num = rand_num;
             debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num);
@@ -371,6 +374,7 @@ impl MinerNode {
                 reason: "Received random number successfully",
             })
         } else {
+            self.process_found_partition_pow().await;
             None
         }
     }
@@ -401,7 +405,11 @@ impl MinerNode {
     ///
     /// * `pre_block` - New block to be mined
     /// * `reward`    - The block reward to be paid on successful PoW
-    fn receive_pre_block(&mut self, pre_block: Vec<u8>, reward: TokenAmount) -> Option<Response> {
+    async fn receive_pre_block(
+        &mut self,
+        pre_block: Vec<u8>,
+        reward: TokenAmount,
+    ) -> Option<Response> {
         let new_block = BlockPoWReceived {
             hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
             reward,
@@ -417,6 +425,7 @@ impl MinerNode {
                 reason: "Pre-block received successfully",
             })
         } else {
+            self.process_found_block_pow().await;
             None
         }
     }
