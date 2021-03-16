@@ -7,10 +7,12 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, UtxoSet,
 };
+use crate::miner::MinerNode;
 use crate::storage::{StorageNode, StoredSerializingBlock};
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
 use crate::transaction_gen::TransactionGen;
+use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
     get_sanction_addresses, validate_pow_block,
@@ -821,8 +823,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
         for (idx, miner) in c_miners.iter().enumerate() {
-            miner_start_gen_partition_pow(network, miner, compute).await;
-            miner_handle_event(network, miner, "Partition PoW found and sent").await;
+            miner_handle_event(network, miner, "Partition PoW complete").await;
+            miner_process_found_partition_pow(network, miner).await;
 
             use std::cmp::Ordering::*;
             let (success, evt) = match idx.cmp(&partition_last_idx) {
@@ -840,11 +842,11 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
         compute_flood_block_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
+        miner_all_handle_event(network, in_miners, "Block PoW complete").await;
 
         if !c_miners.is_empty() {
             let win_miner: &String = &in_miners[0];
-            miner_start_gen_pow_for_current(network, win_miner, compute).await;
-            miner_handle_event(network, win_miner, "Block PoW found and sent").await;
+            miner_process_found_block_pow(network, win_miner).await;
             compute_handle_event(network, compute, "Received PoW successfully").await;
         }
     }
@@ -862,8 +864,7 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         let in_miners: &[String] = &c_miners[0..std::cmp::min(partition_size, c_miners.len())];
         for miner in in_miners {
-            miner_start_gen_pow_for_current(network, miner, compute).await;
-            miner_handle_event(network, miner, "Block PoW found and sent").await;
+            miner_process_found_block_pow(network, miner).await;
             compute_handle_error(network, compute, "Not block currently mined").await;
         }
     }
@@ -1292,8 +1293,8 @@ async fn proof_of_work_reject() {
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
     compute_flood_rand_num_to_requesters(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
-    miner_start_gen_partition_pow(&mut network, miner, compute).await;
-    miner_handle_event(&mut network, miner, "Partition PoW found and sent").await;
+    miner_handle_event(&mut network, miner, "Partition PoW complete").await;
+    miner_process_found_partition_pow(&mut network, miner).await;
     compute_handle_event(&mut network, compute, "Partition list is full").await;
 
     //
@@ -1486,6 +1487,71 @@ async fn main_loops_raft_1_node_common(
     test_step_complete(network).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config(10460);
+    network_config.test_duration_divider = 10;
+    let mut network = Network::create_from_config(&network_config).await;
+    let all_nodes = vec![
+        "storage1".to_owned(),
+        "compute1".to_owned(),
+        "miner1".to_owned(),
+        "user1".to_owned(),
+    ];
+    let expected_events: BTreeMap<_, _> = vec![
+        (
+            "storage1".to_owned(),
+            vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
+        ),
+        (
+            "compute1".to_owned(),
+            vec![
+                "Received block stored".to_owned(),
+                "Block committed".to_owned(),
+                "Partition list is full".to_owned(),
+                "Received PoW successfully".to_owned(),
+            ],
+        ),
+        (
+            "miner1".to_owned(),
+            vec![
+                "Received random number successfully".to_owned(),
+                "Partition PoW complete".to_owned(),
+                "Received partition list successfully".to_owned(),
+                "Pre-block received successfully".to_owned(),
+                "Block PoW complete".to_owned(),
+            ],
+        ),
+        ("user1".to_owned(), vec![]),
+    ]
+    .into_iter()
+    .collect();
+
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events).await;
+
+    //
+    // Assert
+    //
+    let actual1 = storage_get_last_stored_info(&mut network, "storage1").await;
+    let actual1_values = actual1.1.as_ref();
+    let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
+    assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
+
+    test_step_complete(network).await;
+}
+
 //
 // Node helpers
 //
@@ -1573,6 +1639,8 @@ async fn node_all_handle_different_event<'a>(
         let node_name = node_name.clone();
         let compute = network.compute(&node_name).cloned();
         let storage = network.storage(&node_name).cloned();
+        let miner = network.miner(&node_name).cloned();
+        let user = network.user(&node_name).cloned();
 
         let peer_span = error_span!("peer", ?node_name);
         join_handles.push(tokio::spawn(
@@ -1581,6 +1649,10 @@ async fn node_all_handle_different_event<'a>(
                     compute_one_handle_event(&compute, &barrier, &reason_str).await;
                 } else if let Some(storage) = storage {
                     storage_one_handle_event(&storage, &barrier, &reason_str).await;
+                } else if let Some(miner) = miner {
+                    miner_one_handle_event(&miner, &barrier, &reason_str).await;
+                } else if let Some(user) = user {
+                    user_one_handle_event(&user, &barrier, &reason_str).await;
                 } else {
                     panic!("Node not found");
                 }
@@ -2133,13 +2205,36 @@ async fn storage_one_handle_event(
 
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    let success_val = true;
+    user_handle_event_for_node(&mut u, true, reason_val).await;
+}
 
+async fn user_handle_event_for_node(u: &mut UserNode, success_val: bool, reason_val: &str) {
     match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
         Ok(Some(Ok(Response { success, reason })))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
+}
+
+async fn user_one_handle_event(
+    user: &Arc<Mutex<UserNode>>,
+    barrier: &Barrier,
+    reason_str: &[String],
+) {
+    debug!("Start wait for event");
+
+    let mut user = user.lock().await;
+    for reason in reason_str {
+        user_handle_event_for_node(&mut user, true, &reason).await;
+    }
+
+    debug!("Start wait for completion of other in raft group");
+    let result = tokio::select!(
+       _ = barrier.wait() => (),
+       _ = user_handle_event_for_node(&mut user, true, "Not an event") => (),
+    );
+
+    debug!("Stop wait for event: {:?}", result);
 }
 
 async fn user_send_transaction_to_compute(
@@ -2201,13 +2296,7 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let success_val = true;
-
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
-            if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
-    }
+    miner_handle_event_for_node(&mut m, true, reason_val).await;
 }
 
 async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], reason_str: &str) {
@@ -2216,29 +2305,49 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
     }
 }
 
+async fn miner_handle_event_for_node(m: &mut MinerNode, success_val: bool, reason_val: &str) {
+    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
+        Ok(Some(Ok(Response { success, reason })))
+            if success == success_val && reason == reason_val => {}
+        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+    }
+}
+
+async fn miner_one_handle_event(
+    miner: &Arc<Mutex<MinerNode>>,
+    barrier: &Barrier,
+    reason_str: &[String],
+) {
+    debug!("Start wait for event");
+
+    let mut miner = miner.lock().await;
+    for reason in reason_str {
+        miner_handle_event_for_node(&mut miner, true, &reason).await;
+    }
+
+    debug!("Start wait for completion of other in raft group");
+    let result = tokio::select!(
+       _ = barrier.wait() => (),
+       _ = miner_handle_event_for_node(&mut miner, true, "Not an event") => (),
+    );
+
+    debug!("Stop wait for event: {:?}", result);
+}
+
 async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.send_partition_request(compute_node_addr).await.unwrap();
 }
 
-async fn miner_start_gen_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
-
-    m.start_generate_partition_pow(compute_node_addr).await;
+    m.process_found_partition_pow().await;
 }
 
-async fn miner_start_gen_pow_for_current(
-    network: &mut Network,
-    from_miner: &str,
-    to_compute: &str,
-) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
-
-    m.start_generate_pow_for_current_block(compute_node_addr)
-        .await;
+    m.process_found_block_pow().await;
 }
 
 async fn miner_commit_block_found(network: &mut Network, miner: &str) {
