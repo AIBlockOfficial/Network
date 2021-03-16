@@ -196,9 +196,7 @@ impl MinerNode {
                 success: true,
                 reason: "Received random number successfully",
             }) => {
-                info!("RANDOM NUMBER RECEIVED: {:?}", self.rand_num.clone());
-                self.start_generate_partition_pow(self.compute_address())
-                    .await;
+                info!("RANDOM NUMBER RECEIVED: {:?}", self.rand_num);
             }
             Ok(Response {
                 success: true,
@@ -219,8 +217,6 @@ impl MinerNode {
                 reason: "Pre-block received successfully",
             }) => {
                 info!("PRE-BLOCK RECEIVED");
-                self.start_generate_pow_for_current_block(self.compute_address())
-                    .await;
             }
             Ok(Response {
                 success: true,
@@ -337,15 +333,15 @@ impl MinerNode {
     ///
     /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
-    async fn handle_request(&mut self, _peer: SocketAddr, req: MineRequest) -> Option<Response> {
+    async fn handle_request(&mut self, peer: SocketAddr, req: MineRequest) -> Option<Response> {
         use MineRequest::*;
         trace!("handle_request: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase } => Some(self.receive_block_found(win_coinbase)),
-            SendBlock { block, reward } => self.receive_pre_block(block, reward).await,
-            SendPartitionList { p_list } => self.receive_partition_list(p_list),
-            SendRandomNum { rnum } => self.receive_random_number(rnum).await,
+            NotifyBlockFound { win_coinbase } => self.receive_block_found(peer, win_coinbase),
+            SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
+            SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
+            SendRandomNum { rnum } => self.receive_random_number(peer, rnum).await,
         }
     }
 
@@ -354,18 +350,21 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
-    fn receive_block_found(&mut self, win_coinbase: String) -> Response {
-        debug!("RECEIVE BLOCK FOUND: {:?}", win_coinbase);
+    fn receive_block_found(&mut self, peer: SocketAddr, win_coinbase: String) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
         if Some(&win_coinbase) == self.current_coinbase.as_ref().map(|(hash, _)| hash) {
-            Response {
+            Some(Response {
                 success: true,
                 reason: "Block found",
-            }
+            })
         } else {
-            Response {
+            Some(Response {
                 success: false,
                 reason: "Block not found",
-            }
+            })
         }
     }
 
@@ -373,20 +372,27 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
-    /// * `rand_num`   - random num to be recieved in Vec<u8>
-    async fn receive_random_number(&mut self, rand_num: Vec<u8>) -> Option<Response> {
-        if self.rand_num != rand_num {
-            self.rand_num = rand_num;
-            debug!("RANDOM NUMBER IN SELF: {:?}", self.rand_num);
-
-            Some(Response {
-                success: true,
-                reason: "Received random number successfully",
-            })
-        } else {
-            self.process_found_partition_pow().await;
-            None
+    /// * `peer`     - Sending peer's socket address
+    /// * `rand_num` - random num to be recieved in Vec<u8>
+    async fn receive_random_number(
+        &mut self,
+        peer: SocketAddr,
+        rand_num: Vec<u8>,
+    ) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
         }
+
+        if self.rand_num == rand_num {
+            self.process_found_partition_pow().await;
+            return None;
+        }
+
+        self.start_generate_partition_pow(peer, rand_num).await;
+        Some(Response {
+            success: true,
+            reason: "Received random number successfully",
+        })
     }
 
     /// Handles the receipt of the filled partition list
@@ -394,19 +400,26 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
-    fn receive_partition_list(&mut self, p_list: Vec<ProofOfWork>) -> Option<Response> {
-        let new_key = Some(get_partition_entry_key(&p_list));
-        if self.partition_key != new_key {
-            self.partition_key = new_key;
-            self.partition_list = p_list;
-
-            Some(Response {
-                success: true,
-                reason: "Received partition list successfully",
-            })
-        } else {
-            None
+    fn receive_partition_list(
+        &mut self,
+        peer: SocketAddr,
+        p_list: Vec<ProofOfWork>,
+    ) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
         }
+
+        let new_key = Some(get_partition_entry_key(&p_list));
+        if self.partition_key == new_key {
+            return None;
+        }
+
+        self.partition_key = new_key;
+        self.partition_list = p_list;
+        Some(Response {
+            success: true,
+            reason: "Received partition list successfully",
+        })
     }
 
     /// Receives a new block to be mined
@@ -417,27 +430,34 @@ impl MinerNode {
     /// * `reward`    - The block reward to be paid on successful PoW
     async fn receive_pre_block(
         &mut self,
+        peer: SocketAddr,
         pre_block: Vec<u8>,
         reward: TokenAmount,
     ) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
         let new_block = BlockPoWReceived {
             hash_block: deserialize::<HashBlock>(&pre_block).unwrap(),
             reward,
         };
 
-        if Some(new_block.hash_block.b_num)
-            >= self.current_block.as_ref().map(|c| c.hash_block.b_num)
-        {
-            self.current_block = Some(new_block);
-
-            Some(Response {
-                success: true,
-                reason: "Pre-block received successfully",
-            })
-        } else {
-            self.process_found_block_pow().await;
-            None
+        let new_b_num = Some(new_block.hash_block.b_num);
+        let current_b_num = self.current_block.as_ref().map(|c| c.hash_block.b_num);
+        if new_b_num <= current_b_num {
+            if new_b_num == current_b_num {
+                self.process_found_block_pow().await;
+            }
+            return None;
         }
+
+        self.start_generate_pow_for_current_block(peer, new_block)
+            .await;
+        Some(Response {
+            success: true,
+            reason: "Pre-block received successfully",
+        })
     }
 
     /// Util function to get a socket address for PID table checks
@@ -585,9 +605,12 @@ impl MinerNode {
 
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
-    pub async fn start_generate_pow_for_current_block(&mut self, peer: SocketAddr) {
-        let current_block = self.current_block.as_ref().unwrap();
-        let b_num = current_block.hash_block.b_num;
+    pub async fn start_generate_pow_for_current_block(
+        &mut self,
+        peer: SocketAddr,
+        new_block: BlockPoWReceived,
+    ) {
+        let b_num = new_block.hash_block.b_num;
 
         if self.current_payment_address.is_none() {
             let (address, _) = self.wallet_db.generate_payment_address().await;
@@ -595,15 +618,15 @@ impl MinerNode {
         }
         let mining_tx = construct_coinbase_tx(
             b_num,
-            current_block.reward,
+            new_block.reward,
             self.current_payment_address.clone().unwrap(),
         );
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
         self.mining_block_task = {
-            let merkle_hash = &current_block.hash_block.merkle_hash;
+            let merkle_hash = &new_block.hash_block.merkle_hash;
             let hash_to_mine = concat_merkle_coinbase(merkle_hash, &mining_tx_hash).await;
-            let unicorn = current_block.hash_block.unicorn.clone();
+            let unicorn = new_block.hash_block.unicorn.clone();
             let coinbase = (mining_tx_hash, mining_tx);
             let nonce = Vec::new();
             let start_time = SystemTime::now();
@@ -617,6 +640,7 @@ impl MinerNode {
                 nonce,
             }))
         };
+        self.current_block = Some(new_block);
     }
 
     /// Generates and returns the nonce of a block.active_raft
@@ -641,14 +665,17 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
-    /// * `peer`    - Peer to send PoW to
-    pub async fn start_generate_partition_pow(&mut self, peer: SocketAddr) {
+    /// * `peer`     - Peer to send PoW to
+    /// * `rand_num` - random num for PoW
+    pub async fn start_generate_partition_pow(&mut self, peer: SocketAddr, rand_num: Vec<u8>) {
         let address_proof = format_parition_pow_address(self.address());
+
         self.mining_partition_task = RunningTaskOrResult::Running(Self::generate_pow_for_address(
             peer,
             address_proof,
-            Some(self.rand_num.clone()),
+            Some(rand_num.clone()),
         ));
+        self.rand_num = rand_num;
     }
 
     /// Generates a ProofOfWork for a given address

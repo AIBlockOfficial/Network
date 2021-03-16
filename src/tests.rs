@@ -821,7 +821,6 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         miner_all_handle_event(network, c_miners, "Received random number successfully").await;
 
         for (idx, miner) in c_miners.iter().enumerate() {
-            miner_start_gen_partition_pow(network, miner, compute).await;
             miner_handle_event(network, miner, "Partition PoW complete").await;
             miner_process_found_partition_pow(network, miner).await;
 
@@ -841,11 +840,10 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
         compute_flood_block_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
+        miner_all_handle_event(network, in_miners, "Block PoW complete").await;
 
         if !c_miners.is_empty() {
             let win_miner: &String = &in_miners[0];
-            miner_start_gen_pow_for_current(network, win_miner, compute).await;
-            miner_handle_event(network, win_miner, "Block PoW complete").await;
             miner_process_found_block_pow(network, win_miner).await;
             compute_handle_event(network, compute, "Received PoW successfully").await;
         }
@@ -864,8 +862,6 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
         let c_miners = config.compute_to_miner_mapping.get(compute).unwrap();
         let in_miners: &[String] = &c_miners[0..std::cmp::min(partition_size, c_miners.len())];
         for miner in in_miners {
-            miner_start_gen_pow_for_current(network, miner, compute).await;
-            miner_handle_event(network, miner, "Block PoW complete").await;
             miner_process_found_block_pow(network, miner).await;
             compute_handle_error(network, compute, "Not block currently mined").await;
         }
@@ -1295,7 +1291,6 @@ async fn proof_of_work_reject() {
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
     compute_flood_rand_num_to_requesters(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
-    miner_start_gen_partition_pow(&mut network, miner, compute).await;
     miner_handle_event(&mut network, miner, "Partition PoW complete").await;
     miner_process_found_partition_pow(&mut network, miner).await;
     compute_handle_event(&mut network, compute, "Partition list is full").await;
@@ -2226,28 +2221,9 @@ async fn miner_send_partition_request(network: &mut Network, from_miner: &str, t
     m.send_partition_request(compute_node_addr).await.unwrap();
 }
 
-async fn miner_start_gen_partition_pow(network: &mut Network, from_miner: &str, to_compute: &str) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
-    let mut m = network.miner(from_miner).unwrap().lock().await;
-
-    m.start_generate_partition_pow(compute_node_addr).await;
-}
-
 async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.process_found_partition_pow().await;
-}
-
-async fn miner_start_gen_pow_for_current(
-    network: &mut Network,
-    from_miner: &str,
-    to_compute: &str,
-) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
-    let mut m = network.miner(from_miner).unwrap().lock().await;
-
-    m.start_generate_pow_for_current_block(compute_node_addr)
-        .await;
 }
 
 async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
