@@ -202,9 +202,11 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Partition PoW found and sent",
+                reason: "Partition PoW complete",
             }) => {
-                info!("Partition Pow found and sent");
+                if self.process_found_partition_pow().await {
+                    info!("Partition Pow found and sent");
+                }
             }
             Ok(Response {
                 success: true,
@@ -222,10 +224,12 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block PoW found and sent",
+                reason: "Block PoW complete",
             }) => {
-                info!("Block PoW found and sent");
-                return true;
+                if self.process_found_block_pow().await {
+                    info!("Block PoW found and sent");
+                    return true;
+                }
             }
             Ok(Response {
                 success: true,
@@ -273,10 +277,16 @@ impl MinerNode {
                     }
                 }
                 _ = self.mining_partition_task.wait() => {
-                    return Some(Ok(self.process_found_partition_pow().await.unwrap()));
+                    return Some(Ok(Response {
+                        success: true,
+                        reason: "Partition PoW complete",
+                    }));
                 }
                 _ = self.mining_block_task.wait() => {
-                    return Some(Ok(self.process_found_block_pow().await.unwrap()));
+                    return Some(Ok(Response {
+                        success: true,
+                        reason: "Block PoW complete",
+                    }));
                 }
             }
         }
@@ -442,7 +452,7 @@ impl MinerNode {
     }
 
     /// Process the found PoW sending it to the related peer and logging errors
-    pub async fn process_found_block_pow(&mut self) -> Option<Response> {
+    pub async fn process_found_block_pow(&mut self) -> bool {
         let BlockPoWInfo {
             peer,
             start_time,
@@ -454,14 +464,11 @@ impl MinerNode {
             Some(Ok(v)) => v.clone(),
             Some(Err(e)) => {
                 error!("process_found_block_pow PoW {:?}", e);
-                return Some(Response {
-                    success: false,
-                    reason: "Block PoW not found",
-                });
+                return false;
             }
             None => {
                 trace!("process_found_block_pow PoW Not ready yet");
-                return None;
+                return false;
             }
         };
 
@@ -474,16 +481,10 @@ impl MinerNode {
 
         if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase).await {
             error!("process_found_block_pow PoW {:?}", e);
-            return Some(Response {
-                success: false,
-                reason: "Block PoW not sent",
-            });
+            return false;
         }
 
-        Some(Response {
-            success: true,
-            reason: "Block PoW found and sent",
-        })
+        true
     }
 
     /// Sends PoW to a compute node.
@@ -514,34 +515,25 @@ impl MinerNode {
     }
 
     /// Process the found Pow sending it to the related peer and logging errors
-    pub async fn process_found_partition_pow(&mut self) -> Option<Response> {
+    pub async fn process_found_partition_pow(&mut self) -> bool {
         let (partition_entry, peer) = match self.mining_partition_task.completed_result() {
             Some(Ok((e, p))) => (e.clone(), *p),
             Some(Err(e)) => {
                 error!("process_found_partition_pow PoW {:?}", e);
-                return Some(Response {
-                    success: false,
-                    reason: "Partition PoW not found",
-                });
+                return false;
             }
             None => {
                 trace!("process_found_partition_pow PoW Not ready yet");
-                return None;
+                return false;
             }
         };
 
         if let Err(e) = self.send_partition_pow(peer, partition_entry).await {
             error!("process_found_partition_pow PoW {:?}", e);
-            return Some(Response {
-                success: false,
-                reason: "Partition PoW not sent",
-            });
+            return false;
         }
 
-        Some(Response {
-            success: true,
-            reason: "Partition PoW found and sent",
-        })
+        true
     }
 
     /// Sends the light partition PoW to a compute node
