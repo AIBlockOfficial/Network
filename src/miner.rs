@@ -331,6 +331,7 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
+    /// * `peer`     - Sending peer's socket address
     /// * `req`   - MineRequest object that is the recieved request
     /// TODO: Find something to do with win_coinbase. Allows to know winner
     async fn handle_request(&mut self, peer: SocketAddr, req: MineRequest) -> Option<Response> {
@@ -349,6 +350,7 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
+    /// * `peer`     - Sending peer's socket address
     /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
     fn receive_block_found(&mut self, peer: SocketAddr, win_coinbase: String) -> Option<Response> {
         if peer != self.compute_address() {
@@ -399,6 +401,7 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
+    /// * `peer`     - Sending peer's socket address
     /// * `p_list`   - Vec<ProofOfWork>. Is the partition list being recieved. It is a Vec containing proof of work objects.
     fn receive_partition_list(
         &mut self,
@@ -426,6 +429,7 @@ impl MinerNode {
     ///
     /// ### Arguments
     ///
+    /// * `peer`     - Sending peer's socket address
     /// * `pre_block` - New block to be mined
     /// * `reward`    - The block reward to be paid on successful PoW
     async fn receive_pre_block(
@@ -605,6 +609,8 @@ impl MinerNode {
 
     /// Generates a valid PoW for a block specifically
     /// TODO: Update the numbers used for reward and block time
+    /// * `peer`      - Peer to send PoW to
+    /// * `new_block` - Block for PoW
     pub async fn start_generate_pow_for_current_block(
         &mut self,
         peer: SocketAddr,
