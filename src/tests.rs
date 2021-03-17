@@ -1751,7 +1751,7 @@ async fn node_all_combined_get_wallet_info(
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, true, reason_str).await;
+    compute_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
 }
 
 async fn compute_all_handle_event(
@@ -1766,7 +1766,7 @@ async fn compute_all_handle_event(
 
 async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, false, reason_str).await;
+    compute_handle_event_for_node(&mut c, false, reason_str, &mut test_timeout()).await;
 }
 
 async fn compute_all_handle_error(
@@ -1779,8 +1779,13 @@ async fn compute_all_handle_error(
     }
 }
 
-async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
-    match c.handle_next_event(&mut test_timeout()).await {
+async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    c: &mut ComputeNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
@@ -1796,16 +1801,15 @@ async fn compute_one_handle_event(
 
     let mut compute = compute.lock().await;
     for reason in reason_str {
-        compute_handle_event_for_node(&mut compute, true, &reason).await;
+        compute_handle_event_for_node(&mut compute, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    compute_handle_event_for_node(&mut compute, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn compute_set_mining_block(
@@ -2158,7 +2162,7 @@ async fn storage_all_send_stored_block(network: &mut Network, storage_group: &[S
 
 async fn storage_handle_event(network: &mut Network, storage: &str, reason_str: &str) {
     let mut s = network.storage(storage).unwrap().lock().await;
-    storage_handle_event_for_node(&mut s, true, reason_str).await;
+    storage_handle_event_for_node(&mut s, true, reason_str, &mut test_timeout()).await;
 }
 
 async fn storage_all_handle_event(
@@ -2171,8 +2175,13 @@ async fn storage_all_handle_event(
     }
 }
 
-async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
-    match s.handle_next_event(&mut test_timeout()).await {
+async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    s: &mut StorageNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match s.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
@@ -2188,16 +2197,15 @@ async fn storage_one_handle_event(
 
     let mut storage = storage.lock().await;
     for reason in reason_str {
-        storage_handle_event_for_node(&mut storage, true, &reason).await;
+        storage_handle_event_for_node(&mut storage, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    storage_handle_event_for_node(&mut storage, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 //
@@ -2206,11 +2214,16 @@ async fn storage_one_handle_event(
 
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    user_handle_event_for_node(&mut u, true, reason_val).await;
+    user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
 }
 
-async fn user_handle_event_for_node(u: &mut UserNode, success_val: bool, reason_val: &str) {
-    match u.handle_next_event(&mut test_timeout()).await {
+async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    u: &mut UserNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match u.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
@@ -2226,16 +2239,15 @@ async fn user_one_handle_event(
 
     let mut user = user.lock().await;
     for reason in reason_str {
-        user_handle_event_for_node(&mut user, true, &reason).await;
+        user_handle_event_for_node(&mut user, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = user_handle_event_for_node(&mut user, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    user_handle_event_for_node(&mut user, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn user_send_transaction_to_compute(
@@ -2297,7 +2309,7 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
-    miner_handle_event_for_node(&mut m, true, reason_val).await;
+    miner_handle_event_for_node(&mut m, true, reason_val, &mut test_timeout()).await;
 }
 
 async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], reason_str: &str) {
@@ -2306,8 +2318,13 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
     }
 }
 
-async fn miner_handle_event_for_node(m: &mut MinerNode, success_val: bool, reason_val: &str) {
-    match m.handle_next_event(&mut test_timeout()).await {
+async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    m: &mut MinerNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match m.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
@@ -2323,16 +2340,15 @@ async fn miner_one_handle_event(
 
     let mut miner = miner.lock().await;
     for reason in reason_str {
-        miner_handle_event_for_node(&mut miner, true, &reason).await;
+        miner_handle_event_for_node(&mut miner, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = miner_handle_event_for_node(&mut miner, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    miner_handle_event_for_node(&mut miner, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
@@ -2418,9 +2434,22 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
         .collect()
 }
 
-fn test_timeout() -> impl Future<Output = &'static str> {
-    use futures::FutureExt;
-    time::delay_for(TIMEOUT_TEST_WAIT_DURATION).map(|_| "Test timeout elapsed")
+fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
+    Box::pin(async move {
+        time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
+        "Test timeout elapsed"
+    })
+}
+
+fn test_timeout_barrier<'a>(
+    barrier: &'a Barrier,
+) -> impl Future<Output = &'static str> + Unpin + 'a {
+    Box::pin(async move {
+        tokio::select! {
+            r = test_timeout() => r,
+            _ = barrier.wait() => "Barrier complete",
+        }
+    })
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
