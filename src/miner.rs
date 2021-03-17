@@ -261,7 +261,7 @@ impl MinerNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = ()> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -288,8 +288,11 @@ impl MinerNode {
                         reason: "Block PoW complete",
                     }));
                 }
-                _ = &mut *exit => {
-                    return None;
+                reason = &mut *exit => {
+                    return Some(Ok(Response {
+                        success: true,
+                        reason,
+                    }));
                 }
             }
         }

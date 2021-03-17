@@ -33,6 +33,7 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -2417,8 +2418,9 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
         .collect()
 }
 
-fn test_timeout() -> time::Delay {
-    time::delay_for(TIMEOUT_TEST_WAIT_DURATION)
+fn test_timeout() -> impl Future<Output = &'static str> {
+    use futures::FutureExt;
+    time::delay_for(TIMEOUT_TEST_WAIT_DURATION).map(|_| "Test timeout elapsed")
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
