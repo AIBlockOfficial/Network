@@ -13,10 +13,11 @@ struct WalletInfo {
     running_total: f64,
 }
 
-/// Information about a payee to be returned to requester
+/// Information about a payee to pay
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PayeeInfo {
-    address: String,
+pub struct PayeeInfo {
+    pub address: String,
+    pub amount: TokenAmount,
 }
 
 /// Gets the state of the connected wallet and returns it.
@@ -37,10 +38,13 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
 /// Post a new payment from the connected wallet.
 pub async fn make_payment(
     peer: Node,
-    address: String,
-    amount: TokenAmount,
+    payee_info: PayeeInfo,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let request = UserRequest::SendPaymentAddress { address, amount };
+    let request = UserRequest::SendPaymentAddress {
+        address: payee_info.address,
+        amount: payee_info.amount,
+    };
+
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:make_payment error: {:?}", e);
         return Err(warp::reject::custom(errors::ErrorCannotUserNode));

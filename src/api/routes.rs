@@ -1,7 +1,6 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
 use crate::wallet::WalletDb;
-use naom::primitives::asset::TokenAmount;
 use std::convert::Infallible;
 use warp::{self, Filter};
 
@@ -35,14 +34,22 @@ pub fn make_payment(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["*"])
+        .allow_headers(vec![
+            "User-Agent",
+            "Sec-Fetch-Mode",
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
         .allow_methods(vec!["POST"]);
 
     warp::path("make_payment")
         .and(warp::post())
         .and(with_peer(peer))
-        .and(warp::path::param())
-        .and(warp::path::param().map(TokenAmount))
+        .and(warp::body::json())
         .and_then(handlers::make_payment)
         .with(cors)
 }
