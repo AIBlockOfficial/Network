@@ -1419,7 +1419,7 @@ async fn main_loops_raft_1_node_common(
         async move {
             let mut node = node.lock().await;
             let mut expected_blocks = expected_blocks;
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -2171,8 +2171,8 @@ async fn storage_all_handle_event(
 }
 
 async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, s.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+    match s.handle_next_event(&mut test_timeout()).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2415,6 +2415,10 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
             )
         })
         .collect()
+}
+
+fn test_timeout() -> time::Delay {
+    time::delay_for(TIMEOUT_TEST_WAIT_DURATION)
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
