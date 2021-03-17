@@ -318,12 +318,13 @@ async fn full_flow_common(
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     let expected_block0_db_count = 1 + initial_utxo_txs.len() + stored0_mining_tx_len;
     let expected_block1_db_count = 1 + transactions.len() + stored1_mining_tx_len;
+    let expected_extra_items = 1; // RAFT_KEY_RUN
 
     assert_eq!(
         actual0_db_count,
         node_all(
             storage_nodes,
-            expected_block0_db_count + expected_block1_db_count
+            expected_block0_db_count + expected_block1_db_count + expected_extra_items
         )
     );
 
@@ -514,9 +515,13 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    let expected_extra_items = 1; // RAFT_KEY_RUN
     assert_eq!(
         actual0_db_count,
-        node_all(storage_nodes, 1 + initial_utxo_txs.len() + c_mined.len())
+        node_all(
+            storage_nodes,
+            1 + initial_utxo_txs.len() + c_mined.len() + expected_extra_items
+        )
     );
 
     test_step_complete(network).await;

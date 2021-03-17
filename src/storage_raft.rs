@@ -131,6 +131,11 @@ impl StorageRaft {
         }
     }
 
+    /// Set the key run for all proposals (load from db before first proposal).
+    pub fn set_key_run(&mut self, key_run: u64) {
+        self.proposed_in_flight.set_key_run(key_run)
+    }
+
     /// All the peers to connect to when using raft.
     pub fn raft_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
         self.raft_active.raft_peer_to_connect()

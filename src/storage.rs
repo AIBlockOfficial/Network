@@ -23,6 +23,9 @@ use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
+/// Key storing current proposer run
+pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
 
@@ -114,7 +117,8 @@ impl StorageNode {
             compute_addr,
             whitelisted: HashMap::new(),
             last_block_stored: None,
-        })
+        }
+        .load_local_db()?)
     }
 
     /// Returns the compute node's public endpoint.
@@ -559,6 +563,24 @@ impl StorageNode {
             success: true,
             reason: "Block received to be added",
         })
+    }
+
+    /// Load and apply the local database to our state
+    fn load_local_db(mut self) -> Result<Self> {
+        self.node_raft.set_key_run({
+            let key_run = match self.db.get(RAFT_KEY_RUN) {
+                Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
+                Ok(None) => 0,
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            };
+            debug!("load_local_db: key_run update to {:?}", key_run);
+            if let Err(e) = self.db.put(RAFT_KEY_RUN, &serialize(&key_run)?) {
+                panic!("Error accessing db: {:?}", e);
+            }
+            key_run
+        });
+
+        Ok(self)
     }
 }
 
