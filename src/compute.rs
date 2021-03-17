@@ -546,7 +546,10 @@ impl ComputeNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+    pub async fn handle_next_event<E: Future<Output = ()> + Unpin>(
+        &mut self,
+        exit: &mut E,
+    ) -> Option<Result<Response>> {
         loop {
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -606,6 +609,9 @@ impl ComputeNode {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
+                }
+                _ = &mut *exit => {
+                    return None;
                 }
             }
         }

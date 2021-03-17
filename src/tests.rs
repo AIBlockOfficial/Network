@@ -1403,7 +1403,7 @@ async fn main_loops_raft_1_node_common(
         async move {
             let mut node = node.lock().await;
             let mut expected_blocks = expected_blocks;
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -1439,7 +1439,7 @@ async fn main_loops_raft_1_node_common(
             let address = node.compute_address();
             node.send_partition_request(address).await.unwrap();
 
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -1459,7 +1459,7 @@ async fn main_loops_raft_1_node_common(
             let address = node.compute_address();
             node.send_block_notification_request(address).await.unwrap();
 
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node
                     .handle_next_event_response(&setup, &mut tx_generator, response)
                     .await
@@ -1779,8 +1779,8 @@ async fn compute_all_handle_error(
 }
 
 async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, c.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+    match c.handle_next_event(&mut test_timeout()).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2209,8 +2209,8 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
 }
 
 async fn user_handle_event_for_node(u: &mut UserNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+    match u.handle_next_event(&mut test_timeout()).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2306,8 +2306,8 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
 }
 
 async fn miner_handle_event_for_node(m: &mut MinerNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+    match m.handle_next_event(&mut test_timeout()).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }

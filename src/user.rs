@@ -12,7 +12,7 @@ use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::primitives::transaction_utils::{
     construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
 };
-use std::{error::Error, fmt, net::SocketAddr};
+use std::{error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
@@ -266,9 +266,26 @@ impl UserNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
-        let event = self.node.next_event().await?;
-        self.handle_event(event).await.into()
+    pub async fn handle_next_event<E: Future<Output = ()> + Unpin>(
+        &mut self,
+        exit: &mut E,
+    ) -> Option<Result<Response>> {
+        loop {
+            // State machines are not keept between iterations or calls.
+            // All selection calls (between = and =>), need to be dropable
+            // i.e they should only await a channel.
+            tokio::select! {
+                event = self.node.next_event() => {
+                    trace!("handle_next_event evt {:?}", event);
+                    if let res @ Some(_) = self.handle_event(event?).await.transpose() {
+                        return res;
+                    }
+                }
+                _ = &mut *exit => {
+                    return None;
+                }
+            }
+        }
     }
 
     ///Passes a frame from an event to the handle_new_frame method
@@ -276,9 +293,14 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `event` - Event object holding the frame to be passed.
-    async fn handle_event(&mut self, event: Event) -> Result<Response> {
+    async fn handle_event(&mut self, event: Event) -> Result<Option<Response>> {
         match event {
-            Event::NewFrame { peer, frame } => Ok(self.handle_new_frame(peer, frame).await?),
+            Event::NewFrame { peer, frame } => {
+                let peer_span = error_span!("peer", ?peer);
+                self.handle_new_frame(peer, frame)
+                    .instrument(peer_span)
+                    .await
+            }
         }
     }
 
@@ -288,7 +310,11 @@ impl UserNode {
     ///
     /// * `peer` - Socket Address of the sending peer node.
     /// * `frame` - Byte object holding the frame being handled.
-    async fn handle_new_frame(&mut self, peer: SocketAddr, frame: Bytes) -> Result<Response> {
+    async fn handle_new_frame(
+        &mut self,
+        peer: SocketAddr,
+        frame: Bytes,
+    ) -> Result<Option<Response>> {
         let req = deserialize::<UserRequest>(&frame).map_err(|error| {
             warn!(?error, "frame-deserialize");
             error
@@ -296,7 +322,7 @@ impl UserNode {
 
         let req_span = error_span!("request", ?req);
         let response = self.handle_request(peer, req).instrument(req_span).await;
-        debug!(?response, ?peer, "response");
+        trace!(?response, ?peer, "response");
 
         Ok(response)
     }
@@ -307,19 +333,21 @@ impl UserNode {
     ///
     /// * `peer` - SocketAddress holding the address of the peer sending the request.
     /// * `req` - UserRequest object containing the compute request.
-    async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Response {
+    async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Option<Response> {
         use UserRequest::*;
-        trace!("RECEIVED REQUEST: {:?}", req);
+        trace!("handle_request: {:?}", req);
 
         match req {
-            SendAddressRequest { amount } => self.receive_payment_address_request(peer, amount),
+            SendAddressRequest { amount } => {
+                Some(self.receive_payment_address_request(peer, amount))
+            }
             SendPaymentTransaction { transaction } => {
-                self.receive_payment_transaction(transaction).await
+                Some(self.receive_payment_transaction(transaction).await)
             }
             SendPaymentAddress { address, amount } => {
-                self.make_payment_transactions(peer, address, amount).await
+                Some(self.make_payment_transactions(peer, address, amount).await)
             }
-            BlockMining { block } => self.notified_block_mining(peer, block),
+            BlockMining { block } => Some(self.notified_block_mining(peer, block)),
         }
     }
 
