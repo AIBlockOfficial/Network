@@ -82,7 +82,6 @@ pub struct StorageNode {
     db: SimpleDb,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
-    last_block_stored: Option<BlockStoredInfo>,
 }
 
 impl StorageNode {
@@ -116,7 +115,6 @@ impl StorageNode {
             db,
             compute_addr,
             whitelisted: HashMap::new(),
-            last_block_stored: None,
         }
         .load_local_db()?)
     }
@@ -242,8 +240,8 @@ impl StorageNode {
                     match self.node_raft.received_commit(commit_data).await {
                         Some(CommittedItem::Block) => {
                             let block = self.node_raft.generate_complete_block();
-                            self.store_complete_block(block);
-                            self.node_raft.event_processed_generate_snapshot();
+                            let block_stored = Self::store_complete_block(&mut self.db, block);
+                            self.node_raft.event_processed_generate_snapshot(block_stored);
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block complete stored",
@@ -353,7 +351,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `complete` - CompleteBlock object to be stored.
-    fn store_complete_block(&mut self, complete: CompleteBlock) {
+    fn store_complete_block(self_db: &mut SimpleDb, complete: CompleteBlock) -> BlockStoredInfo {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
@@ -403,13 +401,13 @@ impl StorageNode {
         );
 
         // Save Block
-        self.db.put(&block_hash, &block_input).unwrap();
+        self_db.put(&block_hash, &block_input).unwrap();
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            self.db.put(tx_hash, &tx_input).unwrap();
+            self_db.put(tx_hash, &tx_input).unwrap();
         }
 
         if block_num == 0 {
@@ -430,19 +428,18 @@ impl StorageNode {
             }
         }
 
-        let stored_info = BlockStoredInfo {
+        BlockStoredInfo {
             block_hash,
             block_num,
             merkle_hash,
             nonce,
             mining_transactions,
-        };
-        self.last_block_stored = Some(stored_info);
+        }
     }
 
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
-        &self.last_block_stored
+        self.node_raft.get_last_block_stored()
     }
 
     /// Get the stored value at the given key
@@ -497,7 +494,7 @@ impl StorageNode {
     /// Sends the latest block to storage
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = self.last_block_stored.as_ref().unwrap().clone();
+        let block = self.get_last_block_stored().as_ref().unwrap().clone();
 
         self.node
             .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
@@ -508,7 +505,7 @@ impl StorageNode {
 
     /// Re-Sends Message triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
-        if self.last_block_stored.is_some() {
+        if self.get_last_block_stored().is_some() {
             info!("Resend block stored");
             if let Err(e) = self.send_stored_block().await {
                 error!("Resend block stored failed {:?}", e);

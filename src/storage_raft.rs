@@ -2,7 +2,7 @@ use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::constants::DB_PATH;
 use crate::db_utils::{self, SimpleDb};
-use crate::interfaces::{CommonBlockInfo, MinedBlockExtraInfo};
+use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use bincode::{deserialize, serialize};
@@ -67,6 +67,8 @@ pub struct StorageConsensused {
     current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
+    /// The last block stored by ours and other node in consensus.
+    last_block_stored: Option<BlockStoredInfo>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -192,6 +194,7 @@ impl StorageRaft {
     fn apply_snapshot(&mut self, consensused_ser: RaftData) -> CommittedItem {
         warn!("apply_snapshot called self.consensused updated");
         self.consensused = deserialize(&consensused_ser).unwrap();
+        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
         CommittedItem::Snapshot
     }
 
@@ -333,7 +336,9 @@ impl StorageRaft {
     }
 
     /// Generate a snapshot, needs to happen at the end of the event processing.
-    pub fn event_processed_generate_snapshot(&mut self) {
+    pub fn event_processed_generate_snapshot(&mut self, block_stored: BlockStoredInfo) {
+        self.consensused.last_block_stored = Some(block_stored);
+
         let consensused_ser = serialize(&self.consensused).unwrap();
         let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
 
@@ -355,6 +360,11 @@ impl StorageRaft {
     ///Returns the clock time after the proposed block time out
     fn next_propose_block_timeout_at(&mut self) -> ProposeBlockTimeout {
         ProposeBlockTimeout::Some(Instant::now() + self.propose_block_timeout_duration)
+    }
+
+    /// Get the last block stored info to send to the compute nodes
+    pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
+        self.consensused.get_last_block_stored()
     }
 }
 
@@ -429,5 +439,10 @@ impl StorageConsensused {
             .unwrap();
 
         (complete_block, self.current_block_num)
+    }
+
+    /// Get the last block stored info to send to the compute nodes
+    pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
+        &self.last_block_stored
     }
 }

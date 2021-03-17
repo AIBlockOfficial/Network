@@ -1494,13 +1494,26 @@ async fn main_loops_raft_1_node_common(
 }
 
 #[tokio::test(basic_scheduler)]
-async fn handle_message_lost() {
+async fn handle_message_lost_no_restart_no_raft() {
+    handle_message_lost_common(complete_network_config(10460), false).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_no_restart_raft_1_node() {
+    handle_message_lost_common(complete_network_config_with_n_compute_raft(10470, 1), false).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_with_restart_raft_1_node() {
+    handle_message_lost_common(complete_network_config_with_n_compute_raft(10480, 1), true).await
+}
+
+async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: bool) {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config(10460);
     network_config.test_duration_divider = 10;
     let mut network = Network::create_from_config(&network_config).await;
     let all_nodes = vec![
@@ -1541,6 +1554,17 @@ async fn handle_message_lost() {
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
+    if restart {
+        let nodes: Vec<&str> = all_nodes.iter().map(|v| v.as_str()).collect();
+        network.close_raft_loops_and_drop_named(&nodes).await;
+        network.re_spawn_nodes_named(&nodes).await;
+        node_all_handle_event(
+            &mut network,
+            &["compute1".to_owned(), "storage1".to_owned()],
+            &["Snapshot applied"],
+        )
+        .await;
+    }
 
     //
     // Act
