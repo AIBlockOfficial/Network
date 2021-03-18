@@ -457,6 +457,13 @@ impl Network {
             .flat_map(|(t, ns)| ns.iter().map(move |n| (t, n)))
     }
 
+    ///Returns all active nodes
+    pub fn all_active_nodes_name_vec(&self) -> Vec<String> {
+        self.all_active_nodes_flat_iter()
+            .map(|(_, n)| n.to_string())
+            .collect()
+    }
+
     ///Active Compute miner mapping
     pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
         &self.active_compute_to_miner_mapping

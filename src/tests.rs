@@ -1504,10 +1504,19 @@ async fn handle_message_lost_no_restart_raft_1_node() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn handle_message_lost_with_restart_raft_1_node() {
+async fn handle_message_lost_restart_block_stored_raft_1_node() {
     handle_message_lost_common(
         complete_network_config_with_n_compute_raft(10480, 1),
-        &["After store initial block"],
+        &["After store block 0"],
+    )
+    .await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_block_complete_raft_1_node() {
+    handle_message_lost_common(
+        complete_network_config_with_n_compute_raft(10490, 1),
+        &["After create block 1"],
     )
     .await
 }
@@ -1520,13 +1529,17 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     //
     network_config.test_duration_divider = 10;
     let mut network = Network::create_from_config(&network_config).await;
-    let all_nodes = vec![
-        "storage1".to_owned(),
+    let all_nodes = network.all_active_nodes_name_vec();
+    let expected_events_b1_complete: BTreeMap<_, _> = vec![(
         "compute1".to_owned(),
-        "miner1".to_owned(),
-        "user1".to_owned(),
-    ];
-    let expected_events: BTreeMap<_, _> = vec![
+        vec![
+            "Received block stored".to_owned(),
+            "Block committed".to_owned(),
+        ],
+    )]
+    .into_iter()
+    .collect();
+    let expected_events_b1_stored: BTreeMap<_, _> = vec![
         (
             "storage1".to_owned(),
             vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
@@ -1534,8 +1547,6 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
         (
             "compute1".to_owned(),
             vec![
-                "Received block stored".to_owned(),
-                "Block committed".to_owned(),
                 "Partition list is full".to_owned(),
                 "Received PoW successfully".to_owned(),
             ],
@@ -1562,8 +1573,10 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     //
     // Act
     //
-    restart_all_nodes(&mut network, restart, "After store initial block").await;
-    node_all_handle_different_event(&mut network, &all_nodes, &expected_events).await;
+    restart_all_nodes(&mut network, restart, "After store block 0").await;
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_complete).await;
+    restart_all_nodes(&mut network, restart, "After create block 1").await;
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_stored).await;
 
     //
     // Assert
@@ -1578,15 +1591,25 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
 
 async fn restart_all_nodes(network: &mut Network, restart: &[&str], tag: &str) {
     if restart.contains(&tag) {
-        let all_nodes: Vec<String> = network
-            .all_active_nodes_flat_iter()
-            .map(|(_, n)| n.to_string())
-            .collect();
+        let all_nodes = network.all_active_nodes_name_vec();
         let nodes: Vec<&str> = all_nodes.iter().map(|v| v.as_str()).collect();
         let events: BTreeMap<_, _> = network
             .all_active_nodes_flat_iter()
-            .filter(|(t, _)| matches!(t, NodeType::Compute | NodeType::Storage))
-            .map(|(_, n)| (n.to_string(), vec!["Snapshot applied".to_owned()]))
+            .map(|(t, n)| {
+                (
+                    n.to_string(),
+                    match t {
+                        NodeType::Compute if tag.starts_with("After create block") => vec![
+                            "Snapshot applied".to_owned(),
+                            "Received block stored".to_owned(),
+                        ],
+                        NodeType::Storage | NodeType::Compute => {
+                            vec!["Snapshot applied".to_owned()]
+                        }
+                        _ => vec![],
+                    },
+                )
+            })
             .collect();
 
         network.close_raft_loops_and_drop_named(&nodes).await;
