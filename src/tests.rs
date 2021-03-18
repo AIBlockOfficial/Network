@@ -1530,41 +1530,28 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     network_config.test_duration_divider = 10;
     let mut network = Network::create_from_config(&network_config).await;
     let all_nodes = network.all_active_nodes_name_vec();
-    let expected_events_b1_complete: BTreeMap<_, _> = vec![(
-        "compute1".to_owned(),
-        vec![
+    let expected_events_b1_create = network.all_active_nodes_events(|t| match t {
+        NodeType::Compute => vec![
             "Received block stored".to_owned(),
             "Block committed".to_owned(),
         ],
-    )]
-    .into_iter()
-    .collect();
-    let expected_events_b1_stored: BTreeMap<_, _> = vec![
-        (
-            "storage1".to_owned(),
-            vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
-        ),
-        (
-            "compute1".to_owned(),
-            vec![
-                "Partition list is full".to_owned(),
-                "Received PoW successfully".to_owned(),
-            ],
-        ),
-        (
-            "miner1".to_owned(),
-            vec![
-                "Received random number successfully".to_owned(),
-                "Partition PoW complete".to_owned(),
-                "Received partition list successfully".to_owned(),
-                "Pre-block received successfully".to_owned(),
-                "Block PoW complete".to_owned(),
-            ],
-        ),
-        ("user1".to_owned(), vec![]),
-    ]
-    .into_iter()
-    .collect();
+        NodeType::Storage | NodeType::Miner | NodeType::User => vec![],
+    });
+    let expected_events_b1_stored = network.all_active_nodes_events(|t| match t {
+        NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
+        NodeType::Compute => vec![
+            "Partition list is full".to_owned(),
+            "Received PoW successfully".to_owned(),
+        ],
+        NodeType::Miner => vec![
+            "Received random number successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
+            "Received partition list successfully".to_owned(),
+            "Pre-block received successfully".to_owned(),
+            "Block PoW complete".to_owned(),
+        ],
+        NodeType::User => vec![],
+    });
 
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
@@ -1574,7 +1561,7 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     // Act
     //
     restart_all_nodes(&mut network, restart, "After store block 0").await;
-    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_complete).await;
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_create).await;
     restart_all_nodes(&mut network, restart, "After create block 1").await;
     node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_stored).await;
 
@@ -1593,24 +1580,16 @@ async fn restart_all_nodes(network: &mut Network, restart: &[&str], tag: &str) {
     if restart.contains(&tag) {
         let all_nodes = network.all_active_nodes_name_vec();
         let nodes: Vec<&str> = all_nodes.iter().map(|v| v.as_str()).collect();
-        let events: BTreeMap<_, _> = network
-            .all_active_nodes_flat_iter()
-            .map(|(t, n)| {
-                (
-                    n.to_string(),
-                    match t {
-                        NodeType::Compute if tag.starts_with("After create block") => vec![
-                            "Snapshot applied".to_owned(),
-                            "Received block stored".to_owned(),
-                        ],
-                        NodeType::Storage | NodeType::Compute => {
-                            vec!["Snapshot applied".to_owned()]
-                        }
-                        _ => vec![],
-                    },
-                )
-            })
-            .collect();
+        let events = network.all_active_nodes_events(|t| match t {
+            NodeType::Compute if tag.starts_with("After create block") => vec![
+                "Snapshot applied".to_owned(),
+                "Received block stored".to_owned(),
+            ],
+            NodeType::Storage | NodeType::Compute => {
+                vec!["Snapshot applied".to_owned()]
+            }
+            _ => vec![],
+        });
 
         network.close_raft_loops_and_drop_named(&nodes).await;
         network.re_spawn_nodes_named(&nodes).await;

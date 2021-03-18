@@ -484,6 +484,16 @@ impl Network {
         let c_len = self.config.nodes[&NodeType::Compute].len();
         TokenAmount(7510185) / c_len as u64
     }
+
+    ///Returns all active nodes
+    pub fn all_active_nodes_events(
+        &self,
+        evts: impl Fn(NodeType) -> Vec<String>,
+    ) -> BTreeMap<String, Vec<String>> {
+        self.all_active_nodes_flat_iter()
+            .map(|(t, n)| (n.clone(), evts(*t)))
+            .collect()
+    }
 }
 
 ///Dispatch to address
