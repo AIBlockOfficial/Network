@@ -450,6 +450,13 @@ impl Network {
         &self.active_nodes
     }
 
+    ///Returns all active nodes
+    pub fn all_active_nodes_flat_iter(&self) -> impl Iterator<Item = (&NodeType, &String)> {
+        self.active_nodes
+            .iter()
+            .flat_map(|(t, ns)| ns.iter().map(move |n| (t, n)))
+    }
+
     ///Active Compute miner mapping
     pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
         &self.active_compute_to_miner_mapping
