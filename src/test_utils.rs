@@ -103,7 +103,7 @@ pub enum ArcNode {
 }
 
 /// Types of nodes to create
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NodeType {
     Miner,
     Compute,
@@ -209,11 +209,11 @@ impl Network {
     }
 
     /// Re-connect specified nodes.
-    pub async fn re_connect_nodes_named(&mut self, names: &[&str]) {
+    pub async fn re_connect_nodes_named(&mut self, names: &[String]) {
         // Re-spawn specified nodes
         for name in names {
-            self.dead_nodes.remove(*name);
-            if let Some(node) = self.arc_nodes.get(*name) {
+            self.dead_nodes.remove(name);
+            if let Some(node) = self.arc_nodes.get(name) {
                 let (mut node_conn, _, _) = connect_info_peers(node).await;
                 node_conn.set_pause_listening(false).await;
             }
@@ -231,29 +231,29 @@ impl Network {
     }
 
     /// disconnect specified nodes.
-    pub async fn disconnect_nodes_named(&mut self, names: &[&str]) {
+    pub async fn disconnect_nodes_named(&mut self, names: &[String]) {
         info!("Start disconnect to peers");
         for name in names {
-            if let Some(node) = self.arc_nodes.get(*name) {
+            if let Some(node) = self.arc_nodes.get(name) {
                 let (mut node_conn, _, _) = connect_info_peers(node).await;
                 node_conn.set_pause_listening(true).await;
                 join_all(node_conn.disconnect_all(None).await).await;
             }
         }
         // Remove from active nodes
-        self.dead_nodes.extend(names.iter().map(|v| v.to_string()));
+        self.dead_nodes.extend(names.iter().cloned());
         self.update_active_nodes();
     }
 
     /// Re-spawn specified nodes.
-    pub async fn re_spawn_nodes_named(&mut self, names: &[&str]) {
+    pub async fn re_spawn_nodes_named(&mut self, names: &[String]) {
         // Re-spawn specified nodes
         let mut arc_nodes = BTreeMap::new();
         for name in names {
-            let extra = self.extra_params.remove(*name).unwrap_or_default();
+            let extra = self.extra_params.remove(name).unwrap_or_default();
             let arc_node = init_arc_node(name, &self.config, &self.instance_info, extra).await;
-            arc_nodes.insert(name.to_string(), arc_node);
-            self.dead_nodes.remove(*name);
+            arc_nodes.insert(name.clone(), arc_node);
+            self.dead_nodes.remove(name);
         }
         self.arc_nodes.append(&mut arc_nodes.clone());
         self.update_active_nodes();
@@ -272,16 +272,16 @@ impl Network {
     }
 
     /// Kill specified nodes.
-    pub async fn close_raft_loops_and_drop_named(&mut self, names: &[&str]) {
+    pub async fn close_loops_and_drop_named(&mut self, names: &[String]) {
         let mut arc_nodes = BTreeMap::new();
         let mut raft_loop_handles = BTreeMap::new();
 
         // Kill nodes
         for name in names {
-            if let Some((k, v)) = self.arc_nodes.remove_entry(*name) {
+            if let Some((k, v)) = self.arc_nodes.remove_entry(name) {
                 arc_nodes.insert(k, v);
             }
-            if let Some((k, v)) = self.raft_loop_handles.remove_entry(*name) {
+            if let Some((k, v)) = self.raft_loop_handles.remove_entry(name) {
                 raft_loop_handles.insert(k, v);
             }
         }
@@ -450,6 +450,20 @@ impl Network {
         &self.active_nodes
     }
 
+    ///Returns all active nodes
+    pub fn all_active_nodes_flat_iter(&self) -> impl Iterator<Item = (&NodeType, &String)> {
+        self.active_nodes
+            .iter()
+            .flat_map(|(t, ns)| ns.iter().map(move |n| (t, n)))
+    }
+
+    ///Returns all active nodes
+    pub fn all_active_nodes_name_vec(&self) -> Vec<String> {
+        self.all_active_nodes_flat_iter()
+            .map(|(_, n)| n.to_string())
+            .collect()
+    }
+
     ///Active Compute miner mapping
     pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
         &self.active_compute_to_miner_mapping
@@ -469,6 +483,16 @@ impl Network {
     pub fn mining_reward(&self) -> TokenAmount {
         let c_len = self.config.nodes[&NodeType::Compute].len();
         TokenAmount(7510185) / c_len as u64
+    }
+
+    ///Returns all active nodes
+    pub fn all_active_nodes_events(
+        &self,
+        evts: impl Fn(NodeType) -> Vec<String>,
+    ) -> BTreeMap<String, Vec<String>> {
+        self.all_active_nodes_flat_iter()
+            .map(|(t, n)| (n.clone(), evts(*t)))
+            .collect()
     }
 }
 

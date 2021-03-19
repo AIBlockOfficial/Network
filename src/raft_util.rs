@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RaftContextKey {
     pub proposer_id: u64,
+    pub proposer_run: u64,
     pub proposal_id: u64,
 }
 
@@ -22,6 +23,8 @@ pub struct RaftInFlightProposals {
     proposed_keys_b_num: BTreeMap<RaftContextKey, u64>,
     /// The last id of a proposed item.
     proposed_last_id: u64,
+    /// The current proposing key run.
+    proposed_key_run: Option<u64>,
     /// Proposal data hash, to ignore if re-propose, with b_num to remove them at.
     already_proposed_hashes: BTreeMap<Vec<u8>, (RaftContextKey, u64)>,
     /// Minimum block number to accept for deduplicated entries
@@ -29,6 +32,11 @@ pub struct RaftInFlightProposals {
 }
 
 impl RaftInFlightProposals {
+    /// Set the key run for all proposals (load from db before first proposal).
+    pub fn set_key_run(&mut self, key_run: u64) {
+        self.proposed_key_run = Some(key_run);
+    }
+
     /// Checks a commit of the RaftData for validity
     /// Return commited proposal
     ///
@@ -86,6 +94,7 @@ impl RaftInFlightProposals {
             self.proposed_last_id += 1;
             RaftContextKey {
                 proposer_id: raft_active.peer_id(),
+                proposer_run: self.proposed_key_run.unwrap(),
                 proposal_id: self.proposed_last_id,
             }
         };

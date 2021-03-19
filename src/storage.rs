@@ -23,6 +23,9 @@ use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
+/// Key storing current proposer run
+pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
 
@@ -79,7 +82,6 @@ pub struct StorageNode {
     db: SimpleDb,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
-    last_block_stored: Option<BlockStoredInfo>,
 }
 
 impl StorageNode {
@@ -113,8 +115,8 @@ impl StorageNode {
             db,
             compute_addr,
             whitelisted: HashMap::new(),
-            last_block_stored: None,
-        })
+        }
+        .load_local_db()?)
     }
 
     /// Returns the compute node's public endpoint.
@@ -218,7 +220,10 @@ impl StorageNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+        &mut self,
+        exit: &mut E,
+    ) -> Option<Result<Response>> {
         loop {
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -235,8 +240,8 @@ impl StorageNode {
                     match self.node_raft.received_commit(commit_data).await {
                         Some(CommittedItem::Block) => {
                             let block = self.node_raft.generate_complete_block();
-                            self.store_complete_block(block);
-                            self.node_raft.event_processed_generate_snapshot();
+                            let block_stored = Self::store_complete_block(&mut self.db, block);
+                            self.node_raft.event_processed_generate_snapshot(block_stored);
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block complete stored",
@@ -267,6 +272,12 @@ impl StorageNode {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
                         self.resend_trigger_message().await;
                     }
+                }
+                reason = &mut *exit => {
+                    return Some(Ok(Response {
+                        success: true,
+                        reason,
+                    }));
                 }
             }
         }
@@ -340,7 +351,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `complete` - CompleteBlock object to be stored.
-    fn store_complete_block(&mut self, complete: CompleteBlock) {
+    fn store_complete_block(self_db: &mut SimpleDb, complete: CompleteBlock) -> BlockStoredInfo {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
@@ -390,13 +401,13 @@ impl StorageNode {
         );
 
         // Save Block
-        self.db.put(&block_hash, &block_input).unwrap();
+        self_db.put(&block_hash, &block_input).unwrap();
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            self.db.put(tx_hash, &tx_input).unwrap();
+            self_db.put(tx_hash, &tx_input).unwrap();
         }
 
         if block_num == 0 {
@@ -417,19 +428,18 @@ impl StorageNode {
             }
         }
 
-        let stored_info = BlockStoredInfo {
+        BlockStoredInfo {
             block_hash,
             block_num,
             merkle_hash,
             nonce,
             mining_transactions,
-        };
-        self.last_block_stored = Some(stored_info);
+        }
     }
 
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
-        &self.last_block_stored
+        self.node_raft.get_last_block_stored()
     }
 
     /// Get the stored value at the given key
@@ -484,7 +494,7 @@ impl StorageNode {
     /// Sends the latest block to storage
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
-        let block = self.last_block_stored.as_ref().unwrap().clone();
+        let block = self.get_last_block_stored().as_ref().unwrap().clone();
 
         self.node
             .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
@@ -495,7 +505,7 @@ impl StorageNode {
 
     /// Re-Sends Message triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
-        if self.last_block_stored.is_some() {
+        if self.get_last_block_stored().is_some() {
             info!("Resend block stored");
             if let Err(e) = self.send_stored_block().await {
                 error!("Resend block stored failed {:?}", e);
@@ -550,6 +560,24 @@ impl StorageNode {
             success: true,
             reason: "Block received to be added",
         })
+    }
+
+    /// Load and apply the local database to our state
+    fn load_local_db(mut self) -> Result<Self> {
+        self.node_raft.set_key_run({
+            let key_run = match self.db.get(RAFT_KEY_RUN) {
+                Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
+                Ok(None) => 0,
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            };
+            debug!("load_local_db: key_run update to {:?}", key_run);
+            if let Err(e) = self.db.put(RAFT_KEY_RUN, &serialize(&key_run)?) {
+                panic!("Error accessing db: {:?}", e);
+            }
+            key_run
+        });
+
+        Ok(self)
     }
 }
 

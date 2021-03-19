@@ -39,6 +39,7 @@ use tracing_futures::Instrument;
 
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
+pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -546,7 +547,10 @@ impl ComputeNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+        &mut self,
+        exit: &mut E,
+    ) -> Option<Result<Response>> {
         loop {
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -606,6 +610,12 @@ impl ComputeNode {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
+                }
+                reason = &mut *exit => {
+                    return Some(Ok(Response {
+                        success: true,
+                        reason,
+                    }));
                 }
             }
         }
@@ -886,6 +896,19 @@ impl ComputeNode {
                 self.request_list_first_flood = None;
             }
         }
+        self.node_raft.set_key_run({
+            let key_run = match self.db.get(RAFT_KEY_RUN) {
+                Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
+                Ok(None) => 0,
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            };
+            debug!("load_local_db: key_run update to {:?}", key_run);
+            if let Err(e) = self.db.put(RAFT_KEY_RUN, &serialize(&key_run)?) {
+                panic!("Error accessing db: {:?}", e);
+            }
+            key_run
+        });
+
         Ok(self)
     }
 

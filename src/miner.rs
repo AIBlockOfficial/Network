@@ -19,12 +19,13 @@ use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_ha
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
-use std::time::SystemTime;
 use std::{
     error::Error,
     fmt,
+    future::Future,
     net::SocketAddr,
     net::{IpAddr, Ipv4Addr},
+    time::SystemTime,
 };
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
@@ -260,7 +261,10 @@ impl MinerNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event(&mut self) -> Option<Result<Response>> {
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+        &mut self,
+        exit: &mut E,
+    ) -> Option<Result<Response>> {
         loop {
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -282,6 +286,12 @@ impl MinerNode {
                     return Some(Ok(Response {
                         success: true,
                         reason: "Block PoW complete",
+                    }));
+                }
+                reason = &mut *exit => {
+                    return Some(Ok(Response {
+                        success: true,
+                        reason,
                     }));
                 }
             }

@@ -199,7 +199,8 @@ async fn main() {
         let mut tx_generator = tx_generator;
 
         async move {
-            while let Some(response) = node.handle_next_event().await {
+            let mut exit = std::future::pending();
+            while let Some(response) = node.handle_next_event(&mut exit).await {
                 node.handle_next_event_response(&setup, &mut tx_generator, response)
                     .await;
             }

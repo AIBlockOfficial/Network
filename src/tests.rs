@@ -33,6 +33,7 @@ use sha3::Sha3_256;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -79,6 +80,7 @@ enum CfgModif {
     Drop(&'static str),
     Respawn(&'static str),
     HandleEvents(&'static str, &'static [&'static str]),
+    RestartEventsAll(&'static [(NodeType, &'static str)]),
     Disconnect(&'static str),
     Reconnect(&'static str),
 }
@@ -317,12 +319,13 @@ async fn full_flow_common(
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     let expected_block0_db_count = 1 + initial_utxo_txs.len() + stored0_mining_tx_len;
     let expected_block1_db_count = 1 + transactions.len() + stored1_mining_tx_len;
+    let expected_extra_items = 1; // RAFT_KEY_RUN
 
     assert_eq!(
         actual0_db_count,
         node_all(
             storage_nodes,
-            expected_block0_db_count + expected_block1_db_count
+            expected_block0_db_count + expected_block1_db_count + expected_extra_items
         )
     );
 
@@ -345,18 +348,26 @@ async fn full_flow_common(
 async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str, CfgModif)]) {
     for (_tag, modif) in modif_config.iter().filter(|(t, _)| tag == *t) {
         match modif {
-            CfgModif::Drop(v) => network.close_raft_loops_and_drop_named(&[v]).await,
-            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v]).await,
+            CfgModif::Drop(v) => network.close_loops_and_drop_named(&[v.to_string()]).await,
+            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v.to_string()]).await,
             CfgModif::HandleEvents(n, es) => {
-                let computes = network.active_nodes(NodeType::Compute);
-                let storage = network.active_nodes(NodeType::Storage);
-                let node_group: Vec<String> = computes.iter().chain(storage).cloned().collect();
+                let all_nodes = network.all_active_nodes_name_vec();
                 let raisons: Vec<String> = es.iter().map(|e| e.to_string()).collect();
                 let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
-                node_all_handle_different_event(network, &node_group, &all_raisons).await
+                node_all_handle_different_event(network, &all_nodes, &all_raisons).await
             }
-            CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v]).await,
-            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v]).await,
+            CfgModif::RestartEventsAll(es) => {
+                let all_nodes = network.all_active_nodes_name_vec();
+                let all_raisons = network.all_active_nodes_events(|t| {
+                    let es_for_t = es.iter().filter(|(te, _)| *te == t);
+                    es_for_t.map(|(_, e)| e.to_string()).collect()
+                });
+                network.close_loops_and_drop_named(&all_nodes).await;
+                network.re_spawn_nodes_named(&all_nodes).await;
+                node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+            }
+            CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
+            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
         }
     }
 }
@@ -513,9 +524,13 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    let expected_extra_items = 1; // RAFT_KEY_RUN
     assert_eq!(
         actual0_db_count,
-        node_all(storage_nodes, 1 + initial_utxo_txs.len() + c_mined.len())
+        node_all(
+            storage_nodes,
+            1 + initial_utxo_txs.len() + c_mined.len() + expected_extra_items
+        )
     );
 
     test_step_complete(network).await;
@@ -1403,7 +1418,7 @@ async fn main_loops_raft_1_node_common(
         async move {
             let mut node = node.lock().await;
             let mut expected_blocks = expected_blocks;
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -1419,7 +1434,7 @@ async fn main_loops_raft_1_node_common(
         async move {
             let mut node = node.lock().await;
             let mut expected_blocks = expected_blocks;
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -1439,7 +1454,7 @@ async fn main_loops_raft_1_node_common(
             let address = node.compute_address();
             node.send_partition_request(address).await.unwrap();
 
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node.handle_next_event_response(response).await {
                     expected_blocks -= 1;
                     if expected_blocks == 0 {
@@ -1459,7 +1474,7 @@ async fn main_loops_raft_1_node_common(
             let address = node.compute_address();
             node.send_block_notification_request(address).await.unwrap();
 
-            while let Some(response) = node.handle_next_event().await {
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                 if node
                     .handle_next_event_response(&setup, &mut tx_generator, response)
                     .await
@@ -1488,49 +1503,78 @@ async fn main_loops_raft_1_node_common(
 }
 
 #[tokio::test(basic_scheduler)]
-async fn handle_message_lost() {
+async fn handle_message_lost_no_restart_no_raft() {
+    handle_message_lost_common(complete_network_config(10460), &[]).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_no_restart_raft_1_node() {
+    handle_message_lost_common(complete_network_config_with_n_compute_raft(10470, 1), &[]).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_block_stored_raft_1_node() {
+    let modify_cfg = vec![(
+        "After store block 0",
+        CfgModif::RestartEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_block_complete_raft_1_node() {
+    let modify_cfg = vec![(
+        "After create block 1",
+        CfgModif::RestartEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received block stored"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10490, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
+}
+
+async fn handle_message_lost_common(
+    mut network_config: NetworkConfig,
+    modify_cfg: &[(&str, CfgModif)],
+) {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config(10460);
     network_config.test_duration_divider = 10;
     let mut network = Network::create_from_config(&network_config).await;
-    let all_nodes = vec![
-        "storage1".to_owned(),
-        "compute1".to_owned(),
-        "miner1".to_owned(),
-        "user1".to_owned(),
-    ];
-    let expected_events: BTreeMap<_, _> = vec![
-        (
-            "storage1".to_owned(),
-            vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
-        ),
-        (
-            "compute1".to_owned(),
-            vec![
-                "Received block stored".to_owned(),
-                "Block committed".to_owned(),
-                "Partition list is full".to_owned(),
-                "Received PoW successfully".to_owned(),
-            ],
-        ),
-        (
-            "miner1".to_owned(),
-            vec![
-                "Received random number successfully".to_owned(),
-                "Partition PoW complete".to_owned(),
-                "Received partition list successfully".to_owned(),
-                "Pre-block received successfully".to_owned(),
-                "Block PoW complete".to_owned(),
-            ],
-        ),
-        ("user1".to_owned(), vec![]),
-    ]
-    .into_iter()
-    .collect();
+    let all_nodes = network.all_active_nodes_name_vec();
+    let expected_events_b1_create = network.all_active_nodes_events(|t| match t {
+        NodeType::Compute => vec![
+            "Received block stored".to_owned(),
+            "Block committed".to_owned(),
+        ],
+        NodeType::Storage | NodeType::Miner | NodeType::User => vec![],
+    });
+    let expected_events_b1_stored = network.all_active_nodes_events(|t| match t {
+        NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
+        NodeType::Compute => vec![
+            "Partition list is full".to_owned(),
+            "Received PoW successfully".to_owned(),
+        ],
+        NodeType::Miner => vec![
+            "Received random number successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
+            "Received partition list successfully".to_owned(),
+            "Pre-block received successfully".to_owned(),
+            "Block PoW complete".to_owned(),
+        ],
+        NodeType::User => vec![],
+    });
 
     create_first_block_act(&mut network).await;
     proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
@@ -1539,7 +1583,10 @@ async fn handle_message_lost() {
     //
     // Act
     //
-    node_all_handle_different_event(&mut network, &all_nodes, &expected_events).await;
+    modify_network(&mut network, "After store block 0", &modify_cfg).await;
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_create).await;
+    modify_network(&mut network, "After create block 1", &modify_cfg).await;
+    node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_stored).await;
 
     //
     // Assert
@@ -1669,7 +1716,10 @@ async fn node_all_handle_different_event<'a>(
         .map(|(_, name)| name)
         .collect();
     if !failed_join.is_empty() {
-        panic!("Failed joined {:?}", failed_join);
+        panic!(
+            "Failed joined {:?}, out of {:?} (all_reasons: {:?})",
+            failed_join, node_group, all_raisons
+        );
     }
 }
 
@@ -1750,7 +1800,7 @@ async fn node_all_combined_get_wallet_info(
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, true, reason_str).await;
+    compute_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
 }
 
 async fn compute_all_handle_event(
@@ -1765,7 +1815,7 @@ async fn compute_all_handle_event(
 
 async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, false, reason_str).await;
+    compute_handle_event_for_node(&mut c, false, reason_str, &mut test_timeout()).await;
 }
 
 async fn compute_all_handle_error(
@@ -1778,9 +1828,14 @@ async fn compute_all_handle_error(
     }
 }
 
-async fn compute_handle_event_for_node(c: &mut ComputeNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, c.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    c: &mut ComputeNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match c.handle_next_event(exit).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -1795,16 +1850,15 @@ async fn compute_one_handle_event(
 
     let mut compute = compute.lock().await;
     for reason in reason_str {
-        compute_handle_event_for_node(&mut compute, true, &reason).await;
+        compute_handle_event_for_node(&mut compute, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = compute_handle_event_for_node(&mut compute, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    compute_handle_event_for_node(&mut compute, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn compute_set_mining_block(
@@ -2157,7 +2211,7 @@ async fn storage_all_send_stored_block(network: &mut Network, storage_group: &[S
 
 async fn storage_handle_event(network: &mut Network, storage: &str, reason_str: &str) {
     let mut s = network.storage(storage).unwrap().lock().await;
-    storage_handle_event_for_node(&mut s, true, reason_str).await;
+    storage_handle_event_for_node(&mut s, true, reason_str, &mut test_timeout()).await;
 }
 
 async fn storage_all_handle_event(
@@ -2170,9 +2224,14 @@ async fn storage_all_handle_event(
     }
 }
 
-async fn storage_handle_event_for_node(s: &mut StorageNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, s.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    s: &mut StorageNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match s.handle_next_event(exit).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2187,16 +2246,15 @@ async fn storage_one_handle_event(
 
     let mut storage = storage.lock().await;
     for reason in reason_str {
-        storage_handle_event_for_node(&mut storage, true, &reason).await;
+        storage_handle_event_for_node(&mut storage, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = storage_handle_event_for_node(&mut storage, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    storage_handle_event_for_node(&mut storage, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 //
@@ -2205,12 +2263,17 @@ async fn storage_one_handle_event(
 
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    user_handle_event_for_node(&mut u, true, reason_val).await;
+    user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
 }
 
-async fn user_handle_event_for_node(u: &mut UserNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, u.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    u: &mut UserNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match u.handle_next_event(exit).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2225,16 +2288,15 @@ async fn user_one_handle_event(
 
     let mut user = user.lock().await;
     for reason in reason_str {
-        user_handle_event_for_node(&mut user, true, &reason).await;
+        user_handle_event_for_node(&mut user, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = user_handle_event_for_node(&mut user, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    user_handle_event_for_node(&mut user, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn user_send_transaction_to_compute(
@@ -2296,7 +2358,7 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
-    miner_handle_event_for_node(&mut m, true, reason_val).await;
+    miner_handle_event_for_node(&mut m, true, reason_val, &mut test_timeout()).await;
 }
 
 async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], reason_str: &str) {
@@ -2305,9 +2367,14 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
     }
 }
 
-async fn miner_handle_event_for_node(m: &mut MinerNode, success_val: bool, reason_val: &str) {
-    match time::timeout(TIMEOUT_TEST_WAIT_DURATION, m.handle_next_event()).await {
-        Ok(Some(Ok(Response { success, reason })))
+async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    m: &mut MinerNode,
+    success_val: bool,
+    reason_val: &str,
+    exit: &mut E,
+) {
+    match m.handle_next_event(exit).await {
+        Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
         other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
     }
@@ -2322,16 +2389,15 @@ async fn miner_one_handle_event(
 
     let mut miner = miner.lock().await;
     for reason in reason_str {
-        miner_handle_event_for_node(&mut miner, true, &reason).await;
+        miner_handle_event_for_node(&mut miner, true, &reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
-    let result = tokio::select!(
-       _ = barrier.wait() => (),
-       _ = miner_handle_event_for_node(&mut miner, true, "Not an event") => (),
-    );
 
-    debug!("Stop wait for event: {:?}", result);
+    let mut exit = test_timeout_barrier(barrier);
+    miner_handle_event_for_node(&mut miner, true, "Barrier complete", &mut exit).await;
+
+    debug!("Stop wait for event");
 }
 
 async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
@@ -2415,6 +2481,24 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
             )
         })
         .collect()
+}
+
+fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
+    Box::pin(async move {
+        time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
+        "Test timeout elapsed"
+    })
+}
+
+fn test_timeout_barrier<'a>(
+    barrier: &'a Barrier,
+) -> impl Future<Output = &'static str> + Unpin + 'a {
+    Box::pin(async move {
+        tokio::select! {
+            r = test_timeout() => r,
+            _ = barrier.wait() => "Barrier complete",
+        }
+    })
 }
 
 fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
