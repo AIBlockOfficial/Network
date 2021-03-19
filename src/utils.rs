@@ -13,6 +13,7 @@ use naom::primitives::{
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
     transaction_utils::{
         construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
+        get_tx_out_with_out_point,
     },
 };
 use naom::script::{lang::Script, StackEntry};
@@ -320,6 +321,7 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
     pow.extend_from_slice(prev_hash.as_bytes());
     validate_pow(&pow)
 }
+
 /// Check the hash of given data reach MINING_DIFFICULTY
 ///
 /// ### Arguments
@@ -328,6 +330,20 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
 fn validate_pow(pow: &[u8]) -> bool {
     let pow_hash = Sha3_256::digest(pow).to_vec();
     pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
+}
+
+/// Get the paiment info from the given transactions
+///
+/// ### Arguments
+///
+/// * `txs`   - The transactions
+pub fn get_paiments_for_wallet<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
+) -> Vec<(OutPoint, TokenAmount, String)> {
+    get_tx_out_with_out_point(txs)
+        .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
+        .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
+        .collect()
 }
 
 /// Create a valid transaction from givent info

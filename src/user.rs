@@ -3,15 +3,14 @@ use crate::configurations::{UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
+use crate::utils::get_paiments_for_wallet;
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use naom::primitives::transaction_utils::{
-    construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
-};
+use naom::primitives::transaction_utils::{construct_payments_tx, construct_tx_hash};
 use std::{error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
@@ -428,10 +427,7 @@ impl UserNode {
     pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
 
-        let payments: Vec<_> = get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
-            .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
-            .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
-            .collect();
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
         let our_payments = self
             .wallet_db

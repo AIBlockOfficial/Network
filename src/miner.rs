@@ -6,15 +6,15 @@ use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
-    validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
+    concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -584,13 +584,11 @@ impl MinerNode {
 
     /// Handles the receipt of a block found
     async fn commit_found_coinbase(&mut self) {
-        let address = self.current_payment_address.take().unwrap();
-        let (tx_hash, tx) = self.current_coinbase.take().unwrap();
+        self.current_payment_address = None;
+        let (hash, transaction) = self.current_coinbase.take().unwrap();
 
-        let tx_out_p = OutPoint::new(tx_hash, 0);
-        let tx_amount = tx.outputs.first().unwrap().amount;
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
-        let payments = vec![(tx_out_p, tx_amount, address)];
         self.wallet_db
             .save_usable_payments_to_wallet(payments)
             .await
