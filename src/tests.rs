@@ -80,6 +80,7 @@ enum CfgModif {
     Drop(&'static str),
     Respawn(&'static str),
     HandleEvents(&'static str, &'static [&'static str]),
+    RestartEventsAll(&'static [(NodeType, &'static str)]),
     Disconnect(&'static str),
     Reconnect(&'static str),
 }
@@ -347,18 +348,26 @@ async fn full_flow_common(
 async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str, CfgModif)]) {
     for (_tag, modif) in modif_config.iter().filter(|(t, _)| tag == *t) {
         match modif {
-            CfgModif::Drop(v) => network.close_raft_loops_and_drop_named(&[v]).await,
-            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v]).await,
+            CfgModif::Drop(v) => network.close_loops_and_drop_named(&[v.to_string()]).await,
+            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v.to_string()]).await,
             CfgModif::HandleEvents(n, es) => {
-                let computes = network.active_nodes(NodeType::Compute);
-                let storage = network.active_nodes(NodeType::Storage);
-                let node_group: Vec<String> = computes.iter().chain(storage).cloned().collect();
+                let all_nodes = network.all_active_nodes_name_vec();
                 let raisons: Vec<String> = es.iter().map(|e| e.to_string()).collect();
                 let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
-                node_all_handle_different_event(network, &node_group, &all_raisons).await
+                node_all_handle_different_event(network, &all_nodes, &all_raisons).await
             }
-            CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v]).await,
-            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v]).await,
+            CfgModif::RestartEventsAll(es) => {
+                let all_nodes = network.all_active_nodes_name_vec();
+                let all_raisons = network.all_active_nodes_events(|t| {
+                    let es_for_t = es.iter().filter(|(te, _)| *te == t);
+                    es_for_t.map(|(_, e)| e.to_string()).collect()
+                });
+                network.close_loops_and_drop_named(&all_nodes).await;
+                network.re_spawn_nodes_named(&all_nodes).await;
+                node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+            }
+            CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
+            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
         }
     }
 }
@@ -1505,23 +1514,37 @@ async fn handle_message_lost_no_restart_raft_1_node() {
 
 #[tokio::test(basic_scheduler)]
 async fn handle_message_lost_restart_block_stored_raft_1_node() {
-    handle_message_lost_common(
-        complete_network_config_with_n_compute_raft(10480, 1),
-        &["After store block 0"],
-    )
-    .await
+    let modify_cfg = vec![(
+        "After store block 0",
+        CfgModif::RestartEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn handle_message_lost_restart_block_complete_raft_1_node() {
-    handle_message_lost_common(
-        complete_network_config_with_n_compute_raft(10490, 1),
-        &["After create block 1"],
-    )
-    .await
+    let modify_cfg = vec![(
+        "After create block 1",
+        CfgModif::RestartEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received block stored"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10490, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
 }
 
-async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: &[&str]) {
+async fn handle_message_lost_common(
+    mut network_config: NetworkConfig,
+    modify_cfg: &[(&str, CfgModif)],
+) {
     test_step_start();
 
     //
@@ -1560,9 +1583,9 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     //
     // Act
     //
-    restart_all_nodes(&mut network, restart, "After store block 0").await;
+    modify_network(&mut network, "After store block 0", &modify_cfg).await;
     node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_create).await;
-    restart_all_nodes(&mut network, restart, "After create block 1").await;
+    modify_network(&mut network, "After create block 1", &modify_cfg).await;
     node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_stored).await;
 
     //
@@ -1574,27 +1597,6 @@ async fn handle_message_lost_common(mut network_config: NetworkConfig, restart: 
     assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
 
     test_step_complete(network).await;
-}
-
-async fn restart_all_nodes(network: &mut Network, restart: &[&str], tag: &str) {
-    if restart.contains(&tag) {
-        let all_nodes = network.all_active_nodes_name_vec();
-        let nodes: Vec<&str> = all_nodes.iter().map(|v| v.as_str()).collect();
-        let events = network.all_active_nodes_events(|t| match t {
-            NodeType::Compute if tag.starts_with("After create block") => vec![
-                "Snapshot applied".to_owned(),
-                "Received block stored".to_owned(),
-            ],
-            NodeType::Storage | NodeType::Compute => {
-                vec!["Snapshot applied".to_owned()]
-            }
-            _ => vec![],
-        });
-
-        network.close_raft_loops_and_drop_named(&nodes).await;
-        network.re_spawn_nodes_named(&nodes).await;
-        node_all_handle_different_event(network, &all_nodes, &events).await;
-    }
 }
 
 //
@@ -1714,7 +1716,10 @@ async fn node_all_handle_different_event<'a>(
         .map(|(_, name)| name)
         .collect();
     if !failed_join.is_empty() {
-        panic!("Failed joined {:?}", failed_join);
+        panic!(
+            "Failed joined {:?}, out of {:?} (all_reasons: {:?})",
+            failed_join, node_group, all_raisons
+        );
     }
 }
 
