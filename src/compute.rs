@@ -18,7 +18,7 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::construct_tx_hash;
 use naom::script::utils::tx_is_valid;
 
@@ -118,7 +118,6 @@ pub struct ComputeNode {
     pub druid_pool: BTreeMap<String, DruidDroplet>,
     pub unicorn_limit: usize,
     pub current_random_num: Vec<u8>,
-    pub last_coinbase_hash: Option<(SocketAddr, String, bool)>,
     pub partition_key: Option<Key>,
     pub partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
     pub partition_full_size: usize,
@@ -163,7 +162,6 @@ impl ComputeNode {
             current_mined_block: None,
             druid_pool: Default::default(),
             current_random_num: Self::generate_random_num(),
-            last_coinbase_hash: None,
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -375,22 +373,6 @@ impl ComputeNode {
         }
     }
 
-    /// Sends notification of a block found and stored to the winner.
-    pub async fn send_bf_notification(&mut self) -> Result<bool> {
-        let last_winer = self.last_coinbase_hash.take();
-        info!("send_bf_notification {:?}", last_winer);
-
-        if let Some((peer, win_coinbase, true)) = last_winer {
-            // TODO: Allow resend winner notification if error.
-            self.node
-                .send(peer, MineRequest::NotifyBlockFound { win_coinbase })
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone().unwrap();
@@ -481,9 +463,6 @@ impl ComputeNode {
                 reason: "Block committed",
             }) => {
                 debug!("Block ready to mine: {:?}", self.get_mining_block());
-                if let Err(e) = self.send_bf_notification().await {
-                    error!("Could not send block found notification to winner {:?}", e);
-                }
                 self.flood_rand_num_to_requesters().await.unwrap();
             }
             Ok(Response {
@@ -574,9 +553,9 @@ impl ComputeNode {
                             }));
                         }
                         Some(CommittedItem::Block) => {
-                            self.validate_wining_miner_tx();
                             self.node_raft.generate_block().await;
                             self.node_raft.event_processed_generate_snapshot();
+                            self.current_mined_block = None;
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block committed",
@@ -771,12 +750,20 @@ impl ComputeNode {
     /// Floods the random number to everyone who requested
     pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
         let rnum = self.current_random_num.clone();
-        info!("RANDOM NUMBER IN COMPUTE: {:?}", rnum);
+        let win_coinbases = self.node_raft.get_last_mining_transaction_hashes().clone();
+        info!(
+            "RANDOM NUMBER IN COMPUTE: {:?}, (mined:{})",
+            rnum,
+            win_coinbases.len()
+        );
 
         self.node
             .send_to_all(
                 self.request_list.iter().copied(),
-                MineRequest::SendRandomNum { rnum },
+                MineRequest::SendRandomNum {
+                    rnum,
+                    win_coinbases,
+                },
             )
             .await
             .unwrap();
@@ -842,12 +829,10 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `nonce` - Sequence number in a Vec<u8>
-    /// * `miner` - address of the miner who won the block
     /// * `mining_transaction` - String and transaction to be put into a BTreeMap    
     pub fn mining_block_mined(
         &mut self,
         nonce: Vec<u8>,
-        miner: SocketAddr,
         mining_transaction: (String, Transaction),
     ) {
         // Take mining block info: no more mining for it.
@@ -856,9 +841,6 @@ impl ComputeNode {
         self.partition_list = Default::default();
         self.partition_key = None;
 
-        // Update latest coinbase to notify winner
-        self.last_coinbase_hash = Some((miner, mining_transaction.0.clone(), false));
-
         // Set mined block
         self.current_mined_block = Some(MinedBlock {
             nonce,
@@ -866,18 +848,6 @@ impl ComputeNode {
             block_tx,
             mining_transaction,
         });
-    }
-
-    ///Validates the miner who won as the winner of the block.
-    fn validate_wining_miner_tx(&mut self) {
-        if let Some((miner, tx_hash, false)) = self.last_coinbase_hash.take() {
-            let utxo_set = self.node_raft.get_committed_utxo_set();
-            let out_point = OutPoint::new(tx_hash, 0);
-            if utxo_set.contains_key(&out_point) {
-                self.last_coinbase_hash = Some((miner, out_point.t_hash, true));
-            }
-        }
-        self.current_mined_block = None;
     }
 
     /// Load and apply the local database to our state
@@ -972,7 +942,7 @@ impl ComputeNode {
             };
         }
 
-        self.mining_block_mined(nonce, address, (coinbase_hash, coinbase));
+        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
 
         Response {
             success: true,

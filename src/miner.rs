@@ -230,17 +230,6 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block found",
-            }) => {
-                info!("Block nonce has been successfully found");
-                self.commit_block_found().await;
-            }
-            Ok(Response {
-                success: false,
-                reason: "Block not found",
-            }) => {}
-            Ok(Response {
-                success: true,
                 reason,
             }) => {
                 error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
@@ -349,34 +338,12 @@ impl MinerNode {
         trace!("handle_request: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase } => self.receive_block_found(peer, win_coinbase),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
-            SendRandomNum { rnum } => self.receive_random_number(peer, rnum).await,
-        }
-    }
-
-    /// Handles the receipt of a block found
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`     - Sending peer's socket address
-    /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
-    fn receive_block_found(&mut self, peer: SocketAddr, win_coinbase: String) -> Option<Response> {
-        if peer != self.compute_address() {
-            return None;
-        }
-
-        if Some(&win_coinbase) == self.current_coinbase.as_ref().map(|(hash, _)| hash) {
-            Some(Response {
-                success: true,
-                reason: "Block found",
-            })
-        } else {
-            Some(Response {
-                success: false,
-                reason: "Block not found",
-            })
+            SendRandomNum {
+                rnum,
+                win_coinbases,
+            } => self.receive_random_number(peer, rnum, win_coinbases).await,
         }
     }
 
@@ -390,6 +357,7 @@ impl MinerNode {
         &mut self,
         peer: SocketAddr,
         rand_num: Vec<u8>,
+        win_coinbases: Vec<String>,
     ) -> Option<Response> {
         if peer != self.compute_address() {
             return None;
@@ -400,6 +368,9 @@ impl MinerNode {
             return None;
         }
 
+        if self.is_current_coinbase_found(&win_coinbases) {
+            self.commit_found_coinbase().await;
+        }
         self.start_generate_partition_pow(peer, rand_num).await;
         Some(Response {
             success: true,
@@ -603,7 +574,16 @@ impl MinerNode {
     }
 
     /// Handles the receipt of a block found
-    pub async fn commit_block_found(&mut self) {
+    fn is_current_coinbase_found(&self, win_coinbases: &[String]) -> bool {
+        if let Some((tx_hash, _)) = &self.current_coinbase {
+            win_coinbases.contains(tx_hash)
+        } else {
+            false
+        }
+    }
+
+    /// Handles the receipt of a block found
+    async fn commit_found_coinbase(&mut self) {
         let address = self.current_payment_address.take().unwrap();
         let (tx_hash, tx) = self.current_coinbase.take().unwrap();
 

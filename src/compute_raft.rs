@@ -84,6 +84,8 @@ pub struct ComputeConsensused {
     current_circulation: TokenAmount,
     /// The current reward for a given compute node
     current_reward: TokenAmount,
+    /// The last mining rewards.
+    last_mining_transaction_hashes: Vec<String>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -511,6 +513,11 @@ impl ComputeRaft {
     pub fn get_committed_current_block_num(&self) -> Option<u64> {
         self.consensused.tx_current_block_num
     }
+
+    /// The mining transactions accepted for previous block
+    pub fn get_last_mining_transaction_hashes(&self) -> &Vec<String> {
+        &self.consensused.last_mining_transaction_hashes
+    }
 }
 
 impl ComputeConsensused {
@@ -796,6 +803,8 @@ impl ComputeConsensused {
                 self.utxo_set.extend(get_tx_out_with_out_point_cloned(
                     info.mining_transactions.iter(),
                 ));
+                self.last_mining_transaction_hashes =
+                    info.mining_transactions.keys().cloned().collect();
             }
         }
 
