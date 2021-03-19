@@ -15,7 +15,11 @@ echo "//-----------------------------//"
 echo "Delete databases"
 echo "//-----------------------------//"
 echo " "
-rm -rf src/db/db/test.* src/wallet/wallet/test.*
+if [ "$1" != "no_rm" ]
+then
+    echo "delete dbs"
+    rm -rf src/db/db/test.* src/wallet/wallet/test.*
+fi
 echo " "
 echo "//-----------------------------//"
 echo "Running nodes for node_settings_local_raft.toml"
