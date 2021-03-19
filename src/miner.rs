@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::configurations::MinerNodeConfig;
+use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
@@ -11,7 +11,7 @@ use crate::utils::{
 };
 use crate::wallet::WalletDb;
 use crate::Node;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::Transaction;
@@ -30,6 +30,9 @@ use std::{
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
+
+/// Key for last pow coinbase produced
+pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -124,7 +127,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `config`   - MinerNodeConfig object that hold the miner_nodes and miner_db_mode
-    pub async fn new(config: MinerNodeConfig) -> Result<MinerNode> {
+    pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config
             .miner_nodes
             .get(config.miner_node_idx)
@@ -135,6 +138,7 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
             .address;
+
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             compute_addr,
@@ -143,12 +147,14 @@ impl MinerNode {
             partition_key: None,
             current_block: None,
             last_pow: None,
-            wallet_db: WalletDb::new(config.miner_db_mode),
+            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             current_coinbase: None,
             current_payment_address: None,
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
-        })
+        }
+        .load_local_db()
+        .await?)
     }
 
     /// Returns the node's public endpoint.
@@ -185,6 +191,14 @@ impl MinerNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            wallet_db: Some(self.wallet_db.take_closed_persistent_store().await),
+            ..Default::default()
+        }
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
@@ -481,14 +495,15 @@ impl MinerNode {
             debug!("Found block in {}ms", elapsed.as_millis());
         }
 
-        self.current_coinbase = Some(coinbase.clone());
-        let (_, coinbase) = coinbase;
-
-        if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase).await {
+        let coinbase_tx = coinbase.1.clone();
+        if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase_tx).await {
             error!("process_found_block_pow PoW {:?}", e);
             return false;
         }
 
+        let ser_cb = serialize(&coinbase).unwrap();
+        self.wallet_db.set_db_value(LAST_COINBASE_KEY, ser_cb).await;
+        self.current_coinbase = Some(coinbase);
         true
     }
 
@@ -732,6 +747,21 @@ impl MinerNode {
     // Get the wallet db
     pub fn get_wallet_db(&self) -> &WalletDb {
         &self.wallet_db
+    }
+
+    /// Load and apply the local database to our state
+    async fn load_local_db(mut self) -> Result<Self> {
+        self.current_coinbase = self
+            .wallet_db
+            .get_db_value(LAST_COINBASE_KEY)
+            .await
+            .map(|v| deserialize(&v))
+            .transpose()?;
+        if let Some(cb) = &self.current_coinbase {
+            debug!("load_local_db: current_coinbase {:?}", cb);
+        }
+
+        Ok(self)
     }
 }
 

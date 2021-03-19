@@ -564,7 +564,8 @@ async fn take_closed_extra_params(node: &ArcNode) -> Option<ExtraNodeParams> {
     match node {
         ArcNode::Compute(n) => Some(n.lock().await.take_closed_extra_params().await),
         ArcNode::Storage(n) => Some(n.lock().await.take_closed_extra_params().await),
-        ArcNode::Miner(_) | ArcNode::User(_) => None,
+        ArcNode::Miner(n) => Some(n.lock().await.take_closed_extra_params().await),
+        ArcNode::User(n) => Some(n.lock().await.take_closed_extra_params().await),
     }
 }
 
@@ -655,10 +656,10 @@ async fn init_arc_node(
 ) -> ArcNode {
     let node_info = &info.node_infos[name];
     match node_info.node_type {
-        NodeType::Miner => ArcNode::Miner(init_miner(name, &config, &info).await),
+        NodeType::Miner => ArcNode::Miner(init_miner(name, &config, &info, extra).await),
         NodeType::Compute => ArcNode::Compute(init_compute(name, &config, &info, extra).await),
         NodeType::Storage => ArcNode::Storage(init_storage(name, &config, &info, extra).await),
-        NodeType::User => ArcNode::User(init_user(name, &config, &info).await),
+        NodeType::User => ArcNode::User(init_user(name, &config, &info, extra).await),
     }
 }
 
@@ -673,6 +674,7 @@ async fn init_miner(
     name: &str,
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
 ) -> ArcMinerNode {
     let miner_compute_node_idx = {
         let name = name.to_owned();
@@ -695,7 +697,7 @@ async fn init_miner(
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
     Arc::new(Mutex::new(
-        MinerNode::new(miner_config).await.expect(&info_str),
+        MinerNode::new(miner_config, extra).await.expect(&info_str),
     ))
 }
 
@@ -779,7 +781,12 @@ async fn init_compute(
 ///
 /// * `name`   - Name of the node to initialize.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
-async fn init_user(name: &str, config: &NetworkConfig, info: &NetworkInstanceInfo) -> ArcUserNode {
+async fn init_user(
+    name: &str,
+    config: &NetworkConfig,
+    info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
+) -> ArcUserNode {
     let node_info = &info.node_infos[name];
     let user_config = UserNodeConfig {
         user_node_idx: node_info.index,
@@ -796,7 +803,9 @@ async fn init_user(name: &str, config: &NetworkConfig, info: &NetworkInstanceInf
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New User {}", info);
-    Arc::new(Mutex::new(UserNode::new(user_config).await.expect(&info)))
+    Arc::new(Mutex::new(
+        UserNode::new(user_config, extra).await.expect(&info),
+    ))
 }
 
 /// Remove all db for the given config

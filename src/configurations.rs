@@ -159,6 +159,7 @@ pub struct UserNodeSetup {
 pub struct ExtraNodeParams {
     pub db: Option<SimpleDb>,
     pub raft_db: Option<SimpleDb>,
+    pub wallet_db: Option<SimpleDb>,
 }
 
 ///Hacky deserializer to work around deserializatio error with u128

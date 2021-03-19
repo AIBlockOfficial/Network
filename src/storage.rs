@@ -169,6 +169,7 @@ impl StorageNode {
         ExtraNodeParams {
             db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
             raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+            ..Default::default()
         }
     }
 

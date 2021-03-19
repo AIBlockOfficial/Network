@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::{UserNodeConfig, UserNodeSetup};
+use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
@@ -101,7 +101,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `config` - UserNodeConfig object containing UserNode parameters.
-    pub async fn new(config: UserNodeConfig) -> Result<UserNode> {
+    pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config
             .user_nodes
             .get(config.user_node_idx)
@@ -115,7 +115,7 @@ impl UserNode {
         let api_addr = SocketAddr::new(addr.ip(), config.api_port);
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
-        let wallet_db = WalletDb::new(config.user_db_mode)
+        let wallet_db = WalletDb::new(config.user_db_mode, extra.wallet_db.take())
             .with_seed(config.user_node_idx, &config.user_wallet_seeds)
             .await;
 
@@ -172,6 +172,14 @@ impl UserNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            wallet_db: Some(self.wallet_db.take_closed_persistent_store().await),
+            ..Default::default()
+        }
     }
 
     /// Listens for new events from peers and handles them, processing any errors.

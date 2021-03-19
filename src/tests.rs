@@ -1547,7 +1547,10 @@ async fn handle_message_lost_common(
     //
     network_config.test_duration_divider = 10;
     let mut network = Network::create_from_config(&network_config).await;
+    let miner_nodes = &network_config.nodes[&NodeType::Miner];
     let all_nodes = network.all_active_nodes_name_vec();
+    let mining_reward = network.mining_reward();
+
     let expected_events_b1_create = network.all_active_nodes_events(|t| match t {
         NodeType::Compute => vec![
             "Received block stored".to_owned(),
@@ -1572,8 +1575,9 @@ async fn handle_message_lost_common(
     });
 
     create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, Cfg::IgnoreMiner, CfgNum::All).await;
+    proof_of_work_act(&mut network, Cfg::All, CfgNum::All).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
+    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     //
     // Act
@@ -1590,6 +1594,19 @@ async fn handle_message_lost_common(
     let actual1_values = actual1.1.as_ref();
     let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
     assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
+
+    let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
+    let expected_w0 = {
+        let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
+        let total = mining_reward * mining_txs.len() as u64;
+        let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
+
+        (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
+    };
+    assert_eq!(
+        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
+        expected_w0
+    );
 
     test_step_complete(network).await;
 }
