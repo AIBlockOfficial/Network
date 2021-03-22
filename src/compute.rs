@@ -548,6 +548,7 @@ impl ComputeNode {
                         Some(CommittedItem::FirstBlock) => {
                             self.node_raft.generate_first_block();
                             self.node_raft.event_processed_generate_snapshot();
+                            self.reset_mining_block_process();
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "First Block committed",
@@ -556,7 +557,7 @@ impl ComputeNode {
                         Some(CommittedItem::Block) => {
                             self.node_raft.generate_block().await;
                             self.node_raft.event_processed_generate_snapshot();
-                            self.current_mined_block = None;
+                            self.reset_mining_block_process();
                             return Some(Ok(Response{
                                 success: true,
                                 reason: "Block committed",
@@ -838,17 +839,20 @@ impl ComputeNode {
     ) {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
-        self.current_random_num = Self::generate_random_num();
-        self.partition_list = Default::default();
-        self.partition_key = None;
-
-        // Set mined block
         self.current_mined_block = Some(MinedBlock {
             nonce,
             block,
             block_tx,
             mining_transaction,
         });
+    }
+
+    /// Reset the mining block processing to allow a new block.
+    fn reset_mining_block_process(&mut self) {
+        self.current_random_num = Self::generate_random_num();
+        self.partition_list = Default::default();
+        self.partition_key = None;
+        self.current_mined_block = None;
     }
 
     /// Load and apply the local database to our state
@@ -969,13 +973,17 @@ impl ComputeNode {
             });
         }
 
+        let b_num = previous_block_info.block_num;
         if !self
             .node_raft
             .propose_block_with_last_info(previous_block_info)
             .await
         {
-            self.node_raft.re_propose_uncommitted_current_b_num().await;
-            self.resend_trigger_message().await;
+            if self.node_raft.get_committed_current_block_num() == Some(b_num + 1) {
+                self.resend_trigger_message().await;
+            } else {
+                self.node_raft.re_propose_uncommitted_current_b_num().await;
+            }
             return None;
         }
 
