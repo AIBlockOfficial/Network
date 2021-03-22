@@ -133,6 +133,7 @@ impl ComputeNode {
     /// Generates a new compute node instance
     /// ### Arguments
     /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
+    /// * `extra`  - additional parameter for construction
     pub async fn new(config: ComputeNodeConfig, mut extra: ExtraNodeParams) -> Result<Self> {
         let addr = config
             .compute_nodes

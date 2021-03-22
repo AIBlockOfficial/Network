@@ -101,6 +101,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `config` - UserNodeConfig object containing UserNode parameters.
+    /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config
             .user_nodes

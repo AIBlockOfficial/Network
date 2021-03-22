@@ -670,6 +670,7 @@ async fn init_arc_node(
 /// * `name`   - Name of the node to initialize.
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
 async fn init_miner(
     name: &str,
     config: &NetworkConfig,
@@ -780,7 +781,9 @@ async fn init_compute(
 /// ### Arguments
 ///
 /// * `name`   - Name of the node to initialize.
+/// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
 async fn init_user(
     name: &str,
     config: &NetworkConfig,

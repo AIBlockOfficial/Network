@@ -130,6 +130,7 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `config`   - MinerNodeConfig object that hold the miner_nodes and miner_db_mode
+    /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config
             .miner_nodes
@@ -589,7 +590,7 @@ impl MinerNode {
         Ok(())
     }
 
-    /// Handles the receipt of a block found
+    /// Check if block found include our wining mining tx
     fn is_current_coinbase_found(&self, win_coinbases: &[String]) -> bool {
         if let Some((tx_hash, _)) = &self.current_coinbase {
             win_coinbases.contains(tx_hash)
@@ -598,7 +599,7 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of a block found
+    /// Commit our winning mining tx to wallet
     async fn commit_found_coinbase(&mut self) {
         self.current_payment_address = Some(generate_mining_address(&self.wallet_db).await);
         let (hash, transaction) = std::mem::replace(

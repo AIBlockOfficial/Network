@@ -90,6 +90,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
+    /// * `extra`  - additional parameter for construction
     pub async fn new(config: StorageNodeConfig, mut extra: ExtraNodeParams) -> Result<StorageNode> {
         let addr = config
             .storage_nodes
