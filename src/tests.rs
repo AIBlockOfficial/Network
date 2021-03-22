@@ -332,12 +332,21 @@ async fn full_flow_common(
     let expected_w0 = {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = mining_reward * mining_txs.len() as u64;
+        let addresses = miner_nodes.len() + mining_txs.len();
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
-        (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
+        (
+            total,
+            addresses,
+            mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>(),
+        )
     };
     assert_eq!(
-        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
+        (
+            actual_w0.0,
+            actual_w0.1.len(),
+            actual_w0.2.keys().cloned().collect::<Vec<_>>()
+        ),
         expected_w0
     );
 
@@ -970,7 +979,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&mining_reward, 1, 1)),
+        node_all(&winning_miners, (&mining_reward, 2, 1)),
         "Info After: {:?}",
         info_after
     );
@@ -1599,12 +1608,21 @@ async fn handle_message_lost_common(
     let expected_w0 = {
         let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
         let total = mining_reward * mining_txs.len() as u64;
+        let addresses = miner_nodes.len() + mining_txs.len();
         let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
 
-        (total, mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>())
+        (
+            total,
+            addresses,
+            mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>(),
+        )
     };
     assert_eq!(
-        (actual_w0.0, actual_w0.2.keys().cloned().collect::<Vec<_>>()),
+        (
+            actual_w0.0,
+            actual_w0.1.len(),
+            actual_w0.2.keys().cloned().collect::<Vec<_>>()
+        ),
         expected_w0
     );
 

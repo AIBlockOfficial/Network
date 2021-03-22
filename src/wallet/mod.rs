@@ -248,6 +248,14 @@ impl WalletDb {
             .unwrap()
     }
 
+    /// Delete value stored at given key
+    pub async fn delete_db_value(&self, key: &'static str) {
+        let db = self.db.clone();
+        task::spawn_blocking(move || db.lock().unwrap().delete(key).unwrap())
+            .await
+            .unwrap()
+    }
+
     /// Get the wallet fund store
     pub fn get_fund_store(&self) -> FundStore {
         get_fund_store(&self.db.lock().unwrap())

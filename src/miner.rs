@@ -34,6 +34,9 @@ use tracing_futures::Instrument;
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 
+/// Key for last pow coinbase produced
+pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
+
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
 
@@ -501,9 +504,7 @@ impl MinerNode {
             return false;
         }
 
-        let ser_cb = serialize(&coinbase).unwrap();
-        self.wallet_db.set_db_value(LAST_COINBASE_KEY, ser_cb).await;
-        self.current_coinbase = Some(coinbase);
+        self.current_coinbase = store_last_coinbase(&self.wallet_db, Some(coinbase)).await;
         true
     }
 
@@ -599,8 +600,12 @@ impl MinerNode {
 
     /// Handles the receipt of a block found
     async fn commit_found_coinbase(&mut self) {
-        self.current_payment_address = None;
-        let (hash, transaction) = self.current_coinbase.take().unwrap();
+        self.current_payment_address = Some(generate_mining_address(&self.wallet_db).await);
+        let (hash, transaction) = std::mem::replace(
+            &mut self.current_coinbase,
+            store_last_coinbase(&self.wallet_db, None).await,
+        )
+        .unwrap();
 
         let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
@@ -620,16 +625,9 @@ impl MinerNode {
         new_block: BlockPoWReceived,
     ) {
         let b_num = new_block.hash_block.b_num;
+        let current_payment_address = self.current_payment_address.clone().unwrap();
 
-        if self.current_payment_address.is_none() {
-            let (address, _) = self.wallet_db.generate_payment_address().await;
-            self.current_payment_address = Some(address);
-        }
-        let mining_tx = construct_coinbase_tx(
-            b_num,
-            new_block.reward,
-            self.current_payment_address.clone().unwrap(),
-        );
+        let mining_tx = construct_coinbase_tx(b_num, new_block.reward, current_payment_address);
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
         self.mining_block_task = {
@@ -751,18 +749,63 @@ impl MinerNode {
 
     /// Load and apply the local database to our state
     async fn load_local_db(mut self) -> Result<Self> {
-        self.current_coinbase = self
-            .wallet_db
-            .get_db_value(LAST_COINBASE_KEY)
-            .await
-            .map(|v| deserialize(&v))
-            .transpose()?;
-        if let Some(cb) = &self.current_coinbase {
+        self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
             debug!("load_local_db: current_coinbase {:?}", cb);
-        }
+            Some(cb)
+        } else {
+            None
+        };
+
+        self.current_payment_address =
+            if let Some(addr) = load_mining_address(&self.wallet_db).await? {
+                debug!("load_local_db: current_payment_address {:?}", addr);
+                Some(addr)
+            } else {
+                Some(generate_mining_address(&self.wallet_db).await)
+            };
 
         Ok(self)
     }
 }
 
 impl MinerInterface for MinerNode {}
+
+/// Load mining address from wallet
+async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
+    Ok(wallet_db
+        .get_db_value(MINING_ADDRESS_KEY)
+        .await
+        .map(|v| deserialize(&v))
+        .transpose()?)
+}
+
+/// Generate mining address storing it in wallet
+async fn generate_mining_address(wallet_db: &WalletDb) -> String {
+    let addr: String = wallet_db.generate_payment_address().await.0;
+    let ser_addr = serialize(&addr).unwrap();
+    wallet_db.set_db_value(MINING_ADDRESS_KEY, ser_addr).await;
+    addr
+}
+
+/// Load last coinbase from wallet
+async fn load_last_coinbase(wallet_db: &WalletDb) -> Result<Option<(String, Transaction)>> {
+    Ok(wallet_db
+        .get_db_value(LAST_COINBASE_KEY)
+        .await
+        .map(|v| deserialize(&v))
+        .transpose()?)
+}
+
+/// Store last coinbase in wallet
+async fn store_last_coinbase(
+    wallet_db: &WalletDb,
+    coinbase: Option<(String, Transaction)>,
+) -> Option<(String, Transaction)> {
+    if let Some(cb) = &coinbase {
+        let ser_cb = serialize(cb).unwrap();
+        wallet_db.set_db_value(LAST_COINBASE_KEY, ser_cb).await;
+    } else {
+        wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
+    }
+    coinbase
+}
