@@ -1,20 +1,20 @@
 use crate::comms_handler::{CommsError, Event};
-use crate::configurations::MinerNodeConfig;
+use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
 };
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
-    validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
+    concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -30,6 +30,12 @@ use std::{
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
+
+/// Key for last pow coinbase produced
+pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
+
+/// Key for last pow coinbase produced
+pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -124,7 +130,8 @@ impl MinerNode {
     /// ### Arguments
     ///
     /// * `config`   - MinerNodeConfig object that hold the miner_nodes and miner_db_mode
-    pub async fn new(config: MinerNodeConfig) -> Result<MinerNode> {
+    /// * `extra`  - additional parameter for construction
+    pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config
             .miner_nodes
             .get(config.miner_node_idx)
@@ -135,6 +142,7 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
             .address;
+
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             compute_addr,
@@ -143,12 +151,14 @@ impl MinerNode {
             partition_key: None,
             current_block: None,
             last_pow: None,
-            wallet_db: WalletDb::new(config.miner_db_mode),
+            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             current_coinbase: None,
             current_payment_address: None,
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
-        })
+        }
+        .load_local_db()
+        .await?)
     }
 
     /// Returns the node's public endpoint.
@@ -185,6 +195,14 @@ impl MinerNode {
     /// Signal to the node listening loop to complete
     pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
         self.node.stop_listening().await
+    }
+
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            wallet_db: Some(self.wallet_db.take_closed_persistent_store().await),
+            ..Default::default()
+        }
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
@@ -228,17 +246,6 @@ impl MinerNode {
                     return true;
                 }
             }
-            Ok(Response {
-                success: true,
-                reason: "Block found",
-            }) => {
-                info!("Block nonce has been successfully found");
-                self.commit_block_found().await;
-            }
-            Ok(Response {
-                success: false,
-                reason: "Block not found",
-            }) => {}
             Ok(Response {
                 success: true,
                 reason,
@@ -349,34 +356,12 @@ impl MinerNode {
         trace!("handle_request: {:?}", req);
 
         match req {
-            NotifyBlockFound { win_coinbase } => self.receive_block_found(peer, win_coinbase),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
-            SendRandomNum { rnum } => self.receive_random_number(peer, rnum).await,
-        }
-    }
-
-    /// Handles the receipt of a block found
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`     - Sending peer's socket address
-    /// * `win_coinbase`   - String compared to the current block map/hash to check if it matches
-    fn receive_block_found(&mut self, peer: SocketAddr, win_coinbase: String) -> Option<Response> {
-        if peer != self.compute_address() {
-            return None;
-        }
-
-        if Some(&win_coinbase) == self.current_coinbase.as_ref().map(|(hash, _)| hash) {
-            Some(Response {
-                success: true,
-                reason: "Block found",
-            })
-        } else {
-            Some(Response {
-                success: false,
-                reason: "Block not found",
-            })
+            SendRandomNum {
+                rnum,
+                win_coinbases,
+            } => self.receive_random_number(peer, rnum, win_coinbases).await,
         }
     }
 
@@ -390,6 +375,7 @@ impl MinerNode {
         &mut self,
         peer: SocketAddr,
         rand_num: Vec<u8>,
+        win_coinbases: Vec<String>,
     ) -> Option<Response> {
         if peer != self.compute_address() {
             return None;
@@ -400,6 +386,9 @@ impl MinerNode {
             return None;
         }
 
+        if self.is_current_coinbase_found(&win_coinbases) {
+            self.commit_found_coinbase().await;
+        }
         self.start_generate_partition_pow(peer, rand_num).await;
         Some(Response {
             success: true,
@@ -510,14 +499,13 @@ impl MinerNode {
             debug!("Found block in {}ms", elapsed.as_millis());
         }
 
-        self.current_coinbase = Some(coinbase.clone());
-        let (_, coinbase) = coinbase;
-
-        if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase).await {
+        let coinbase_tx = coinbase.1.clone();
+        if let Err(e) = self.send_pow(peer, b_num, nonce, coinbase_tx).await {
             error!("process_found_block_pow PoW {:?}", e);
             return false;
         }
 
+        self.current_coinbase = store_last_coinbase(&self.wallet_db, Some(coinbase)).await;
         true
     }
 
@@ -602,15 +590,26 @@ impl MinerNode {
         Ok(())
     }
 
-    /// Handles the receipt of a block found
-    pub async fn commit_block_found(&mut self) {
-        let address = self.current_payment_address.take().unwrap();
-        let (tx_hash, tx) = self.current_coinbase.take().unwrap();
+    /// Check if block found include our wining mining tx
+    fn is_current_coinbase_found(&self, win_coinbases: &[String]) -> bool {
+        if let Some((tx_hash, _)) = &self.current_coinbase {
+            win_coinbases.contains(tx_hash)
+        } else {
+            false
+        }
+    }
 
-        let tx_out_p = OutPoint::new(tx_hash, 0);
-        let tx_amount = tx.outputs.first().unwrap().amount;
+    /// Commit our winning mining tx to wallet
+    async fn commit_found_coinbase(&mut self) {
+        self.current_payment_address = Some(generate_mining_address(&self.wallet_db).await);
+        let (hash, transaction) = std::mem::replace(
+            &mut self.current_coinbase,
+            store_last_coinbase(&self.wallet_db, None).await,
+        )
+        .unwrap();
 
-        let payments = vec![(tx_out_p, tx_amount, address)];
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
+
         self.wallet_db
             .save_usable_payments_to_wallet(payments)
             .await
@@ -627,16 +626,9 @@ impl MinerNode {
         new_block: BlockPoWReceived,
     ) {
         let b_num = new_block.hash_block.b_num;
+        let current_payment_address = self.current_payment_address.clone().unwrap();
 
-        if self.current_payment_address.is_none() {
-            let (address, _) = self.wallet_db.generate_payment_address().await;
-            self.current_payment_address = Some(address);
-        }
-        let mining_tx = construct_coinbase_tx(
-            b_num,
-            new_block.reward,
-            self.current_payment_address.clone().unwrap(),
-        );
+        let mining_tx = construct_coinbase_tx(b_num, new_block.reward, current_payment_address);
         let mining_tx_hash = construct_tx_hash(&mining_tx);
 
         self.mining_block_task = {
@@ -755,6 +747,66 @@ impl MinerNode {
     pub fn get_wallet_db(&self) -> &WalletDb {
         &self.wallet_db
     }
+
+    /// Load and apply the local database to our state
+    async fn load_local_db(mut self) -> Result<Self> {
+        self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
+            debug!("load_local_db: current_coinbase {:?}", cb);
+            Some(cb)
+        } else {
+            None
+        };
+
+        self.current_payment_address =
+            if let Some(addr) = load_mining_address(&self.wallet_db).await? {
+                debug!("load_local_db: current_payment_address {:?}", addr);
+                Some(addr)
+            } else {
+                Some(generate_mining_address(&self.wallet_db).await)
+            };
+
+        Ok(self)
+    }
 }
 
 impl MinerInterface for MinerNode {}
+
+/// Load mining address from wallet
+async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
+    Ok(wallet_db
+        .get_db_value(MINING_ADDRESS_KEY)
+        .await
+        .map(|v| deserialize(&v))
+        .transpose()?)
+}
+
+/// Generate mining address storing it in wallet
+async fn generate_mining_address(wallet_db: &WalletDb) -> String {
+    let addr: String = wallet_db.generate_payment_address().await.0;
+    let ser_addr = serialize(&addr).unwrap();
+    wallet_db.set_db_value(MINING_ADDRESS_KEY, ser_addr).await;
+    addr
+}
+
+/// Load last coinbase from wallet
+async fn load_last_coinbase(wallet_db: &WalletDb) -> Result<Option<(String, Transaction)>> {
+    Ok(wallet_db
+        .get_db_value(LAST_COINBASE_KEY)
+        .await
+        .map(|v| deserialize(&v))
+        .transpose()?)
+}
+
+/// Store last coinbase in wallet
+async fn store_last_coinbase(
+    wallet_db: &WalletDb,
+    coinbase: Option<(String, Transaction)>,
+) -> Option<(String, Transaction)> {
+    if let Some(cb) = &coinbase {
+        let ser_cb = serialize(cb).unwrap();
+        wallet_db.set_db_value(LAST_COINBASE_KEY, ser_cb).await;
+    } else {
+        wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
+    }
+    coinbase
+}

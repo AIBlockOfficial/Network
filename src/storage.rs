@@ -90,6 +90,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
+    /// * `extra`  - additional parameter for construction
     pub async fn new(config: StorageNodeConfig, mut extra: ExtraNodeParams) -> Result<StorageNode> {
         let addr = config
             .storage_nodes
@@ -169,6 +170,7 @@ impl StorageNode {
         ExtraNodeParams {
             db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
             raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+            ..Default::default()
         }
     }
 

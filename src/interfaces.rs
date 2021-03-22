@@ -231,10 +231,17 @@ pub trait StorageInterface {
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
-    SendBlock { block: Vec<u8>, reward: TokenAmount },
-    SendRandomNum { rnum: Vec<u8> },
-    SendPartitionList { p_list: Vec<ProofOfWork> },
-    NotifyBlockFound { win_coinbase: String },
+    SendBlock {
+        block: Vec<u8>,
+        reward: TokenAmount,
+    },
+    SendRandomNum {
+        rnum: Vec<u8>,
+        win_coinbases: Vec<String>,
+    },
+    SendPartitionList {
+        p_list: Vec<ProofOfWork>,
+    },
 }
 
 impl fmt::Debug for MineRequest {
@@ -246,9 +253,11 @@ impl fmt::Debug for MineRequest {
                 ref block,
                 ref reward,
             } => write!(f, "SendBlock"),
-            SendRandomNum { ref rnum } => write!(f, "SendRandomNum"),
+            SendRandomNum {
+                ref rnum,
+                ref win_coinbases,
+            } => write!(f, "SendRandomNum"),
             SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
-            NotifyBlockFound { ref win_coinbase } => write!(f, "NotifyBlockFound"),
         }
     }
 }

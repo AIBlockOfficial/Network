@@ -140,7 +140,7 @@ async fn main() {
     };
 
     let user_node_idx = config.user_node_idx;
-    let mut node = UserNode::new(config).await.unwrap();
+    let mut node = UserNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();

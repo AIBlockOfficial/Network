@@ -34,9 +34,10 @@ pub struct WalletDb {
 }
 
 impl WalletDb {
-    pub fn new(db_mode: DbMode) -> Self {
+    pub fn new(db_mode: DbMode, db: Option<SimpleDb>) -> Self {
+        let db = db.unwrap_or_else(|| db_utils::new_db(db_mode, WALLET_PATH, ""));
         Self {
-            db: Arc::new(Mutex::new(db_utils::new_db(db_mode, WALLET_PATH, ""))),
+            db: Arc::new(Mutex::new(db)),
         }
     }
 
@@ -54,6 +55,11 @@ impl WalletDb {
             self.save_usable_payments_to_wallet(payments).await.unwrap();
         }
         self
+    }
+
+    /// Extract persistent storage of a closed raft
+    pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
+        std::mem::replace(&mut self.db.lock().unwrap(), SimpleDb::new_in_memory())
     }
 
     /// Generates a new payment address, saving the related keys to the wallet
@@ -224,6 +230,30 @@ impl WalletDb {
         })
         .await
         .unwrap()
+    }
+
+    /// Get a the serialized value stored at given key
+    pub async fn get_db_value(&self, key: &'static str) -> Option<Vec<u8>> {
+        let db = self.db.clone();
+        task::spawn_blocking(move || db.lock().unwrap().get(key).unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// Set a the serialized value stored at given key
+    pub async fn set_db_value(&self, key: &'static str, value: Vec<u8>) {
+        let db = self.db.clone();
+        task::spawn_blocking(move || db.lock().unwrap().put(key, &value).unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// Delete value stored at given key
+    pub async fn delete_db_value(&self, key: &'static str) {
+        let db = self.db.clone();
+        task::spawn_blocking(move || db.lock().unwrap().delete(key).unwrap())
+            .await
+            .unwrap()
     }
 
     /// Get the wallet fund store
@@ -512,7 +542,7 @@ mod tests {
         //
         // Act
         //
-        let mut wallet = WalletDb::new(DbMode::InMemory);
+        let mut wallet = WalletDb::new(DbMode::InMemory, None);
 
         // Unlinked keys and transactions
         let (_key_addr_unused, _) = wallet.generate_payment_address().await;

@@ -61,7 +61,7 @@ async fn main() {
     };
     println!("Start node with config {:?}", config);
 
-    let mut node = MinerNode::new(config).await.unwrap();
+    let mut node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();

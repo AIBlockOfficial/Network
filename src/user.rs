@@ -1,21 +1,23 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::{UserNodeConfig, UserNodeSetup};
+use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
+use crate::utils::get_paiments_for_wallet;
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use naom::primitives::transaction_utils::{
-    construct_payments_tx, construct_tx_hash, get_tx_out_with_out_point,
-};
+use naom::primitives::transaction_utils::{construct_payments_tx, construct_tx_hash};
 use std::{error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
+
+/// Key for last pow coinbase produced
+pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, UserError>;
@@ -102,7 +104,8 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `config` - UserNodeConfig object containing UserNode parameters.
-    pub async fn new(config: UserNodeConfig) -> Result<UserNode> {
+    /// * `extra`  - additional parameter for construction
+    pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config
             .user_nodes
             .get(config.user_node_idx)
@@ -116,7 +119,7 @@ impl UserNode {
         let api_addr = SocketAddr::new(addr.ip(), config.api_port);
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
-        let wallet_db = WalletDb::new(config.user_db_mode)
+        let wallet_db = WalletDb::new(config.user_db_mode, extra.wallet_db.take())
             .with_seed(config.user_node_idx, &config.user_wallet_seeds)
             .await;
 
@@ -175,6 +178,14 @@ impl UserNode {
         self.node.stop_listening().await
     }
 
+    /// Extract persistent dbs
+    pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        ExtraNodeParams {
+            wallet_db: Some(self.wallet_db.take_closed_persistent_store().await),
+            ..Default::default()
+        }
+    }
+
     /// Listens for new events from peers and handles them, processing any errors.
     /// Return true when a block was completed.
     pub async fn handle_next_event_response(
@@ -205,6 +216,13 @@ impl UserNode {
                 success: true,
                 reason: "Block mining notified",
             }) => {
+                // Load any data after restart
+                if !tx_generator.is_up_to_date_with_snapshot() {
+                    if let Some(v) = self.wallet_db.get_db_value(TX_GENERATOR_KEY).await {
+                        tx_generator.apply_snapshot_state(&v);
+                    }
+                }
+
                 // Process committed transactions
                 {
                     let txs = &self.last_block_notified.transactions;
@@ -241,6 +259,10 @@ impl UserNode {
                 if total_txs > 0 {
                     info!("New Generated txs sent: {}", total_txs);
                 }
+
+                self.wallet_db
+                    .set_db_value(TX_GENERATOR_KEY, tx_generator.snapshot_state())
+                    .await;
 
                 return true;
             }
@@ -428,10 +450,7 @@ impl UserNode {
     pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
         let hash = construct_tx_hash(&transaction);
 
-        let payments: Vec<_> = get_tx_out_with_out_point(Some((&hash, &transaction)).into_iter())
-            .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
-            .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
-            .collect();
+        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
 
         let our_payments = self
             .wallet_db
