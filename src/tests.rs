@@ -24,7 +24,6 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::primitives::transaction_utils::{
     construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
-    get_tx_with_out_point,
 };
 use naom::script::StackEntry;
 use rand::{self, Rng};
@@ -303,8 +302,10 @@ async fn full_flow_common(
     let actual1 = storage_all_get_last_stored_info(&mut network, storage_nodes).await;
     assert_eq!(equal_first(&actual1), node_all(storage_nodes, true));
 
-    let stored0_mining_tx_len = stored0.as_ref().unwrap().mining_transactions.len();
-    let stored1_mining_tx_len = stored1.as_ref().unwrap().mining_transactions.len();
+    let stored0 = stored0.unwrap();
+    let stored1 = stored1.unwrap();
+    let stored0_mining_tx_len = stored0.mining_transactions.len();
+    let stored1_mining_tx_len = stored1.mining_transactions.len();
     let majority = storage_nodes.len() / 2 + 1;
     assert!(
         stored0_mining_tx_len >= majority && stored1_mining_tx_len >= majority,
@@ -329,26 +330,9 @@ async fn full_flow_common(
     );
 
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let expected_w0 = {
-        let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = mining_reward * mining_txs.len() as u64;
-        let addresses = miner_nodes.len() + mining_txs.len();
-        let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
-
-        (
-            total,
-            addresses,
-            mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>(),
-        )
-    };
-    assert_eq!(
-        (
-            actual_w0.0,
-            actual_w0.1.len(),
-            actual_w0.2.keys().cloned().collect::<Vec<_>>()
-        ),
-        expected_w0
-    );
+    let expected_w0 =
+        node_all_combined_expected_wallet_info(miner_nodes, mining_reward, &[&stored0]);
+    assert_eq!((actual_w0.0, actual_w0.1.len(), actual_w0.2), expected_w0);
 
     test_step_complete(network).await;
 }
@@ -1604,27 +1588,11 @@ async fn handle_message_lost_common(
     let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
     assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
 
+    let stored0 = stored0.unwrap();
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
-    let expected_w0 = {
-        let mining_txs = &stored0.as_ref().unwrap().mining_transactions;
-        let total = mining_reward * mining_txs.len() as u64;
-        let addresses = miner_nodes.len() + mining_txs.len();
-        let mining_tx_out = get_tx_with_out_point(mining_txs.iter());
-
-        (
-            total,
-            addresses,
-            mining_tx_out.map(|(k, _)| k).collect::<Vec<_>>(),
-        )
-    };
-    assert_eq!(
-        (
-            actual_w0.0,
-            actual_w0.1.len(),
-            actual_w0.2.keys().cloned().collect::<Vec<_>>()
-        ),
-        expected_w0
-    );
+    let expected_w0 =
+        node_all_combined_expected_wallet_info(miner_nodes, mining_reward, &[&stored0]);
+    assert_eq!((actual_w0.0, actual_w0.1.len(), actual_w0.2), expected_w0);
 
     test_step_complete(network).await;
 }
@@ -1821,6 +1789,33 @@ async fn node_all_combined_get_wallet_info(
         addresses.append(&mut a);
         txs_to_address_and_ammount.append(&mut txs);
     }
+    (total, addresses, txs_to_address_and_ammount)
+}
+
+fn node_all_combined_expected_wallet_info(
+    miner_group: &[String],
+    mining_reward: TokenAmount,
+    stored: &[&BlockStoredInfo],
+) -> (
+    TokenAmount,
+    usize,
+    BTreeMap<OutPoint, (String, TokenAmount)>,
+) {
+    let mining_txs: Vec<_> = {
+        let txs = stored.iter().flat_map(|b| b.mining_transactions.iter());
+        txs.collect()
+    };
+
+    let total = mining_reward * mining_txs.len() as u64;
+    let addresses = miner_group.len() + mining_txs.len();
+    let txs_to_address_and_ammount = {
+        let mining_tx_out = get_tx_out_with_out_point_cloned(mining_txs.iter().copied());
+        mining_tx_out
+            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.amount)))
+            .map(|(k, (addr, amount))| (k, (addr.unwrap(), amount)))
+            .collect()
+    };
+
     (total, addresses, txs_to_address_and_ammount)
 }
 
