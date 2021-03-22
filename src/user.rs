@@ -16,6 +16,9 @@ use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
 
+/// Key for last pow coinbase produced
+pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
+
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, UserError>;
 
@@ -213,6 +216,13 @@ impl UserNode {
                 success: true,
                 reason: "Block mining notified",
             }) => {
+                // Load any data after restart
+                if !tx_generator.is_up_to_date_with_snapshot() {
+                    if let Some(v) = self.wallet_db.get_db_value(TX_GENERATOR_KEY).await {
+                        tx_generator.apply_snapshot_state(&v);
+                    }
+                }
+
                 // Process committed transactions
                 {
                     let txs = &self.last_block_notified.transactions;
@@ -249,6 +259,10 @@ impl UserNode {
                 if total_txs > 0 {
                     info!("New Generated txs sent: {}", total_txs);
                 }
+
+                self.wallet_db
+                    .set_db_value(TX_GENERATOR_KEY, tx_generator.snapshot_state())
+                    .await;
 
                 return true;
             }

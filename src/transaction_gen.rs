@@ -1,5 +1,6 @@
 use crate::configurations::WalletTxSpec;
 use crate::utils::{create_valid_transaction_with_ins_outs, make_wallet_tx_info};
+use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::primitives::transaction_utils::{construct_address, get_tx_out_with_out_point};
@@ -7,7 +8,7 @@ use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 
 /// Key material to generate transactions
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TransactionsKeys {
     pub pk: PublicKey,
     pub sk: SecretKey,
@@ -15,8 +16,10 @@ pub struct TransactionsKeys {
 }
 
 /// Maintain a list of valid transactions to submit
+#[derive(Clone, Debug)]
 pub struct TransactionGen {
     addr_to_keys: BTreeMap<String, TransactionsKeys>,
+    up_to_date_with_snapshot: bool,
     pending: BTreeMap<String, Transaction>,
     ready: BTreeMap<String, Vec<(OutPoint, TokenAmount)>>,
 }
@@ -43,9 +46,26 @@ impl TransactionGen {
 
         Self {
             addr_to_keys,
+            up_to_date_with_snapshot: false,
             pending: Default::default(),
             ready,
         }
+    }
+
+    pub fn is_up_to_date_with_snapshot(&self) -> bool {
+        self.up_to_date_with_snapshot
+    }
+
+    pub fn snapshot_state(&mut self) -> Vec<u8> {
+        self.up_to_date_with_snapshot = true;
+        serialize(&(&self.pending, &self.ready)).unwrap()
+    }
+
+    pub fn apply_snapshot_state(&mut self, snapshot: &[u8]) {
+        let (pending, ready) = deserialize(snapshot).unwrap();
+        self.pending = pending;
+        self.ready = ready;
+        self.up_to_date_with_snapshot = true;
     }
 
     /// Commit transaction that are ready to be spent
