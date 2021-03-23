@@ -22,6 +22,13 @@ pub struct Response {
     pub reason: &'static str,
 }
 
+/// Mined block as stored in DB.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredSerializingBlock {
+    pub block: Block,
+    pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
+}
+
 /// Common info in all mined block that form a complete block.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommonBlockInfo {
@@ -150,6 +157,9 @@ pub enum CommMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
+    GetSpecifiedBlock {
+        key: String,
+    },
     GetHistory {
         start_time: u64,
         end_time: u64,
@@ -176,6 +186,7 @@ impl fmt::Debug for StorageRequest {
         use StorageRequest::*;
 
         match *self {
+            GetSpecifiedBlock { ref key } => write!(f, "GetSpecifiedBlock"),
             GetHistory {
                 ref start_time,
                 ref end_time,
@@ -196,6 +207,14 @@ impl fmt::Debug for StorageRequest {
 }
 
 pub trait StorageInterface {
+    /// Get a specific block from stored history.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - The address of the peer who requested the block.
+    /// * `key` - The hash key of the block which needs to be returned from storage.
+    fn get_specified_block(&mut self, peer: SocketAddr, key: &str) -> Response;
+
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
     fn get_history(&self, start_time: &u64, end_time: &u64) -> Response;
@@ -246,6 +265,9 @@ pub enum MineRequest {
     SendPartitionList {
         p_list: Vec<ProofOfWork>,
     },
+    SendSpecifiedBlock {
+        block: Vec<u8>,
+    },
     Closing,
 }
 
@@ -254,6 +276,7 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
+            SendSpecifiedBlock { ref block } => write!(f, "SendSpecifiedBlock"),
             SendBlock {
                 ref block,
                 ref reward,
@@ -268,7 +291,14 @@ impl fmt::Debug for MineRequest {
     }
 }
 
-pub trait MinerInterface {}
+pub trait MinerInterface {
+    /// Receive a specific block as requested from storage node.
+    ///
+    /// ### Arguments
+    ///
+    /// * `block` - The received block.
+    fn receive_specified_block(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response;
+}
 
 ///============ COMPUTE NODE ============///
 

@@ -3,8 +3,8 @@ use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, DbIteratorItem, SimpleDb};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
-    ProofOfWork, Response, StorageInterface, StorageRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
+    NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
@@ -14,8 +14,8 @@ use crate::utils::{
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::{block::Block, transaction::Transaction};
-use serde::{Deserialize, Serialize};
+use naom::primitives::transaction::Transaction;
+use serde::Serialize;
 use sha3::Digest;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -71,13 +71,6 @@ impl From<bincode::Error> for StorageError {
     }
 }
 
-/// Mined block as stored in DB.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredSerializingBlock {
-    pub block: Block,
-    pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
-}
-
 #[derive(Debug)]
 pub struct StorageNode {
     node: Node,
@@ -87,6 +80,7 @@ pub struct StorageNode {
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
+    specified_block_fetched: Option<(Vec<u8>, SocketAddr)>,
 }
 
 impl StorageNode {
@@ -128,6 +122,7 @@ impl StorageNode {
             compute_addr,
             whitelisted: Default::default(),
             shutdown_group,
+            specified_block_fetched: Default::default(),
         }
         .load_local_db()?)
     }
@@ -194,6 +189,14 @@ impl StorageNode {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Specified block fetched from storage",
+            }) => {
+                if let Err(e) = self.send_specified_block().await {
+                    error!("Specified block not sent {:?}", e);
+                }
+            }
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
@@ -396,6 +399,7 @@ impl StorageNode {
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
         match req {
+            GetSpecifiedBlock { key } => Some(self.get_specified_block(peer, &key)),
             GetHistory {
                 start_time,
                 end_time,
@@ -410,6 +414,16 @@ impl StorageNode {
                 None
             }
         }
+    }
+
+    ///Sends the latest block fetched from storage.
+    pub async fn send_specified_block(&mut self) -> Result<()> {
+        if let Some((block, peer)) = self.specified_block_fetched.take() {
+            self.node
+                .send(peer, MineRequest::SendSpecifiedBlock { block })
+                .await?;
+        }
+        Ok(())
     }
 
     ///Stores a completed block including transactions and mining transactions.
@@ -696,6 +710,14 @@ impl StorageNode {
 }
 
 impl StorageInterface for StorageNode {
+    fn get_specified_block(&mut self, peer: SocketAddr, key: &str) -> Response {
+        self.specified_block_fetched = Some((self.get_stored_value(key).unwrap_or_default(), peer));
+        Response {
+            success: true,
+            reason: "Specified block fetched from storage",
+        }
+    }
+
     fn get_history(&self, _start_time: &u64, _end_time: &u64) -> Response {
         Response {
             success: false,
