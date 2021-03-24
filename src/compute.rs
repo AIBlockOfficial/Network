@@ -8,6 +8,7 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest, UtxoSet,
 };
+use crate::raft::RaftCommit;
 use crate::unicorn::UnicornShard;
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
@@ -563,38 +564,8 @@ impl ComputeNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    match self.node_raft.received_commit(commit_data).await {
-                        Some(CommittedItem::FirstBlock) => {
-                            self.node_raft.generate_first_block();
-                            self.node_raft.event_processed_generate_snapshot();
-                            self.reset_mining_block_process();
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "First Block committed",
-                            }));
-                        }
-                        Some(CommittedItem::Block) => {
-                            self.node_raft.generate_block().await;
-                            self.node_raft.event_processed_generate_snapshot();
-                            self.reset_mining_block_process();
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Block committed",
-                            }));
-                        }
-                        Some(CommittedItem::Snapshot) => {
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Snapshot applied",
-                            }));
-                        }
-                        Some(CommittedItem::Transactions) => {
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Transactions committed",
-                            }));
-                        }
-                        None => {}
+                    if let res @ Some(_) = self.handle_committed_data(commit_data).await {
+                        return res;
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
@@ -617,6 +588,45 @@ impl ComputeNode {
                     }
                 }
             }
+        }
+    }
+
+    ///Handle commit data
+    ///
+    /// ### Arguments
+    ///
+    /// * `commit_data` - Commit to process.
+    async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
+        match self.node_raft.received_commit(commit_data).await {
+            Some(CommittedItem::FirstBlock) => {
+                self.node_raft.generate_first_block();
+                self.node_raft.event_processed_generate_snapshot();
+                self.reset_mining_block_process();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "First Block committed",
+                }))
+            }
+            Some(CommittedItem::Block) => {
+                self.node_raft.generate_block().await;
+                self.node_raft.event_processed_generate_snapshot();
+                self.reset_mining_block_process();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Block committed",
+                }))
+            }
+            Some(CommittedItem::Snapshot) => {
+                return Some(Ok(Response {
+                    success: true,
+                    reason: "Snapshot applied",
+                }))
+            }
+            Some(CommittedItem::Transactions) => Some(Ok(Response {
+                success: true,
+                reason: "Transactions committed",
+            })),
+            None => None,
         }
     }
 

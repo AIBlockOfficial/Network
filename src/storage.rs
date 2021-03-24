@@ -6,6 +6,7 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
+use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
@@ -241,23 +242,8 @@ impl StorageNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    match self.node_raft.received_commit(commit_data).await {
-                        Some(CommittedItem::Block) => {
-                            let block = self.node_raft.generate_complete_block();
-                            let block_stored = Self::store_complete_block(&mut self.db, block);
-                            self.node_raft.event_processed_generate_snapshot(block_stored);
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Block complete stored",
-                            }));
-                        }
-                        Some(CommittedItem::Snapshot) => {
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Snapshot applied",
-                            }));
-                        }
-                        None => (),
+                    if let res @ Some(_) = self.handle_committed_data(commit_data).await {
+                        return res;
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
@@ -299,6 +285,31 @@ impl StorageNode {
             }),
             LocalEvent::CoordinatedShutdown => None,
             LocalEvent::Ignore => None,
+        }
+    }
+
+    ///Handle commit data
+    ///
+    /// ### Arguments
+    ///
+    /// * `commit_data` - Commit to process.
+    async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
+        match self.node_raft.received_commit(commit_data).await {
+            Some(CommittedItem::Block) => {
+                let block = self.node_raft.generate_complete_block();
+                let block_stored = Self::store_complete_block(&mut self.db, block);
+                self.node_raft
+                    .event_processed_generate_snapshot(block_stored);
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Block complete stored",
+                }))
+            }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
+            None => None,
         }
     }
 
