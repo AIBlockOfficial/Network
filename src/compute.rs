@@ -11,7 +11,7 @@ use crate::interfaces::{
 use crate::unicorn::UnicornShard;
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
-    serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address,
+    serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address, LocalEvent,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -528,7 +528,7 @@ impl ComputeNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -594,14 +594,33 @@ impl ComputeNode {
                     self.node_raft.propose_local_druid_transactions().await;
                 }
                 reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                    if let Some(res) = self.handle_local_event(reason) {
+                        return Some(Ok(res));
+                    }
                 }
             }
         }
     }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown => Some(Response {
+                success: true,
+                reason: "Start Coordianted shutdown",
+            }),
+            LocalEvent::Ignore => None,
+        }
+    }
+
     /// Haddles errors or events that are passed
     ///
     /// ### Arguments

@@ -3,7 +3,7 @@ use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
-use crate::utils::get_paiments_for_wallet;
+use crate::utils::{get_paiments_for_wallet, LocalEvent};
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -288,7 +288,7 @@ impl UserNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -304,12 +304,27 @@ impl UserNode {
                     }
                 }
                 reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                    if let Some(res) = self.handle_local_event(reason) {
+                        return Some(Ok(res));
+                    }
                 }
             }
+        }
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::Ignore => None,
         }
     }
 

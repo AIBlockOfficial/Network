@@ -32,6 +32,13 @@ use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+/// Local command event to nodes
+pub enum LocalEvent {
+    CoordinatedShutdown,
+    Exit(&'static str),
+    Ignore,
+}
+
 pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
 }

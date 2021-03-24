@@ -7,7 +7,8 @@ use crate::interfaces::{
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
-    get_partition_entry_key, validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
+    RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -268,7 +269,7 @@ impl MinerNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -296,12 +297,27 @@ impl MinerNode {
                     }));
                 }
                 reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                    if let Some(res) = self.handle_local_event(reason) {
+                        return Some(Ok(res));
+                    }
                 }
             }
+        }
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::Ignore => None,
         }
     }
 

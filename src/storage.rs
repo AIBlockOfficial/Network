@@ -7,7 +7,9 @@ use crate::interfaces::{
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
-use crate::utils::{concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block};
+use crate::utils::{
+    concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
+};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::{block::Block, transaction::Transaction};
@@ -222,7 +224,7 @@ impl StorageNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -276,12 +278,27 @@ impl StorageNode {
                     }
                 }
                 reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                    if let Some(res) = self.handle_local_event(reason) {
+                        return Some(Ok(res));
+                    }
                 }
             }
+        }
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::Ignore => None,
         }
     }
 

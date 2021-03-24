@@ -15,7 +15,7 @@ use crate::transaction_gen::TransactionGen;
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
-    get_sanction_addresses, validate_pow_block,
+    get_sanction_addresses, validate_pow_block, LocalEvent,
 };
 use bincode::serialize;
 use futures::future::join_all;
@@ -1853,7 +1853,7 @@ async fn compute_all_handle_error(
     }
 }
 
-async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+async fn compute_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
     c: &mut ComputeNode,
     success_val: bool,
     reason_val: &str,
@@ -2238,7 +2238,7 @@ async fn storage_all_handle_event(
     }
 }
 
-async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+async fn storage_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
     s: &mut StorageNode,
     success_val: bool,
     reason_val: &str,
@@ -2280,7 +2280,7 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
 }
 
-async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+async fn user_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
     u: &mut UserNode,
     success_val: bool,
     reason_val: &str,
@@ -2381,7 +2381,7 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
     }
 }
 
-async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+async fn miner_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
     m: &mut MinerNode,
     success_val: bool,
     reason_val: &str,
@@ -2492,20 +2492,18 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
         .collect()
 }
 
-fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
+fn test_timeout() -> impl Future<Output = LocalEvent> + Unpin {
     Box::pin(async move {
         time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
-        "Test timeout elapsed"
+        LocalEvent::Exit("Test timeout elapsed")
     })
 }
 
-fn test_timeout_barrier<'a>(
-    barrier: &'a Barrier,
-) -> impl Future<Output = &'static str> + Unpin + 'a {
+fn test_timeout_barrier(barrier: &'_ Barrier) -> impl Future<Output = LocalEvent> + Unpin + '_ {
     Box::pin(async move {
         tokio::select! {
             r = test_timeout() => r,
-            _ = barrier.wait() => "Barrier complete",
+            _ = barrier.wait() => LocalEvent::Exit("Barrier complete"),
         }
     })
 }
