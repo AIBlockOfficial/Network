@@ -15,7 +15,7 @@ use crate::transaction_gen::TransactionGen;
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
-    get_sanction_addresses, validate_pow_block, LocalEvent,
+    get_sanction_addresses, validate_pow_block, LocalEvent, ResponseResult,
 };
 use bincode::serialize;
 use futures::future::join_all;
@@ -1392,8 +1392,7 @@ async fn main_loops_raft_1_node_common(
         user_setup_tx_max_count: tx_max_count,
         ..Default::default()
     };
-    let expected_blocks = 6;
-    let expected_block_num = expected_blocks - 1;
+    let expected_block_num = 5;
 
     //
     // Act
@@ -1405,13 +1404,18 @@ async fn main_loops_raft_1_node_common(
         let node = network.compute("compute1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
-            let mut expected_blocks = expected_blocks;
+            {
+                let mut shutdown = test_shutdown(expected_block_num);
+                let response = node.handle_next_event(&mut shutdown).await.unwrap();
+                if response.as_ref().unwrap().reason != "Start Coordianted shutdown" {
+                    panic!("Shutdown event not processed")
+                }
+                node.handle_next_event_response(response).await;
+            }
             while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                if node.handle_next_event_response(response).await {
-                    expected_blocks -= 1;
-                    if expected_blocks == 0 {
-                        break;
-                    }
+                panic_on_timeout(&response, "compute1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
                 }
             }
         }
@@ -1421,13 +1425,10 @@ async fn main_loops_raft_1_node_common(
         let node = network.storage("storage1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
-            let mut expected_blocks = expected_blocks;
             while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                if node.handle_next_event_response(response).await {
-                    expected_blocks -= 1;
-                    if expected_blocks == 0 {
-                        break;
-                    }
+                panic_on_timeout(&response, "storage1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
                 }
             }
         }
@@ -1437,17 +1438,13 @@ async fn main_loops_raft_1_node_common(
         let node = network.miner("miner1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
-            let mut expected_blocks = expected_blocks;
-
             let address = node.compute_address();
             node.send_partition_request(address).await.unwrap();
 
             while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                if node.handle_next_event_response(response).await {
-                    expected_blocks -= 1;
-                    if expected_blocks == 0 {
-                        break;
-                    }
+                panic_on_timeout(&response, "miner1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
                 }
             }
         }
@@ -1457,20 +1454,17 @@ async fn main_loops_raft_1_node_common(
         let node = network.user("user1").unwrap().clone();
         async move {
             let mut node = node.lock().await;
-            let mut expected_blocks = expected_blocks;
-
             let address = node.compute_address();
             node.send_block_notification_request(address).await.unwrap();
 
             while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
+                panic_on_timeout(&response, "user1");
                 if node
                     .handle_next_event_response(&setup, &mut tx_generator, response)
                     .await
+                    == ResponseResult::Exit
                 {
-                    expected_blocks -= 1;
-                    if expected_blocks == 0 {
-                        break;
-                    }
+                    break;
                 }
             }
         }
@@ -1485,7 +1479,12 @@ async fn main_loops_raft_1_node_common(
         let block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
         block_stored.map(|bs| bs.block_num)
     };
+    let last_complete_b_num = {
+        let block_complete = compute_current_mining_block(&mut network, "compute1").await;
+        block_complete.map(|bs| bs.header.b_num)
+    };
     assert_eq!(last_stored_b_num, Some(expected_block_num));
+    assert_eq!(last_complete_b_num, Some(expected_block_num + 1));
 
     test_step_complete(network).await;
 }
@@ -2496,6 +2495,20 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
             )
         })
         .collect()
+}
+
+fn test_shutdown(b_num: u64) -> impl Future<Output = LocalEvent> + Unpin {
+    Box::pin(async move { LocalEvent::CoordinatedShutdown(b_num) })
+}
+
+fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
+    if let Ok(Response {
+        success: true,
+        reason: "Test timeout elapsed",
+    }) = response
+    {
+        panic!("Test timeout elapsed - {}", tag);
+    }
 }
 
 fn test_timeout() -> impl Future<Output = LocalEvent> + Unpin {

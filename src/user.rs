@@ -3,7 +3,7 @@ use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
-use crate::utils::{get_paiments_for_wallet, LocalEvent};
+use crate::utils::{get_paiments_for_wallet, LocalEvent, ResponseResult};
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -187,16 +187,21 @@ impl UserNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was completed.
     pub async fn handle_next_event_response(
         &mut self,
         setup: &UserNodeSetup,
         tx_generator: &mut TransactionGen,
         response: Result<Response>,
-    ) -> bool {
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                return ResponseResult::Exit;
+            }
             Ok(Response {
                 success: true,
                 reason: "New address ready to be sent",
@@ -263,8 +268,6 @@ impl UserNode {
                 self.wallet_db
                     .set_db_value(TX_GENERATOR_KEY, tx_generator.snapshot_state())
                     .await;
-
-                return true;
             }
             Ok(Response {
                 success: true,
@@ -283,7 +286,7 @@ impl UserNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -323,7 +326,7 @@ impl UserNode {
                 success: true,
                 reason,
             }),
-            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
     }
@@ -388,7 +391,24 @@ impl UserNode {
                 Some(self.make_payment_transactions(peer, address, amount).await)
             }
             BlockMining { block } => Some(self.notified_block_mining(peer, block)),
+            Closing => self.receive_closing(peer),
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Sends the next internal payment transaction to be processed by the connected Compute

@@ -10,6 +10,7 @@ use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
+    ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -178,11 +179,19 @@ impl StorageNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was stored.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+    pub async fn handle_next_event_response(
+        &mut self,
+        response: Result<Response>,
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                return ResponseResult::Exit;
+            }
             Ok(Response {
                 success: true,
                 reason: "Block received to be added",
@@ -195,7 +204,6 @@ impl StorageNode {
                 if let Err(e) = self.send_stored_block().await {
                     error!("Block stored not sent {:?}", e);
                 }
-                return true;
             }
             Ok(Response {
                 success: true,
@@ -220,7 +228,7 @@ impl StorageNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -283,7 +291,7 @@ impl StorageNode {
                 success: true,
                 reason,
             }),
-            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
     }
@@ -369,6 +377,7 @@ impl StorageNode {
             SendPow { pow } => Some(self.receive_pow(pow)),
             SendBlock { common, mined_info } => self.receive_block(peer, common, mined_info).await,
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
+            Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
@@ -541,6 +550,22 @@ impl StorageNode {
                 error!("Resend block stored failed {:?}", e);
             }
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if peer != self.compute_addr {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Receives the new block from the miner with permissions to write

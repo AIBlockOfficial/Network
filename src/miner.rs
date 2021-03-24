@@ -8,7 +8,7 @@ use crate::interfaces::{
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
     get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
-    RunningTaskOrResult,
+    ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -207,11 +207,19 @@ impl MinerNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was mined.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+    pub async fn handle_next_event_response(
+        &mut self,
+        response: Result<Response>,
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                return ResponseResult::Exit;
+            }
             Ok(Response {
                 success: true,
                 reason: "Received random number successfully",
@@ -244,7 +252,6 @@ impl MinerNode {
             }) => {
                 if self.process_found_block_pow().await {
                     info!("Block PoW found and sent");
-                    return true;
                 }
             }
             Ok(Response {
@@ -264,7 +271,7 @@ impl MinerNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -316,7 +323,7 @@ impl MinerNode {
                 success: true,
                 reason,
             }),
-            LocalEvent::CoordinatedShutdown => None,
+            LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
     }
@@ -378,7 +385,24 @@ impl MinerNode {
                 rnum,
                 win_coinbases,
             } => self.receive_random_number(peer, rnum, win_coinbases).await,
+            Closing => self.receive_closing(peer),
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Handles the receipt of the random number of partitioning

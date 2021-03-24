@@ -86,6 +86,8 @@ pub struct ComputeConsensused {
     current_reward: TokenAmount,
     /// The last mining rewards.
     last_mining_transaction_hashes: Vec<String>,
+    /// Shutting down on this block.
+    shutdown: bool,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -518,6 +520,11 @@ impl ComputeRaft {
     pub fn get_last_mining_transaction_hashes(&self) -> &Vec<String> {
         &self.consensused.last_mining_transaction_hashes
     }
+
+    /// Whether to shutdown when block committed
+    pub fn is_shutdown_on_commit(&self) -> bool {
+        self.consensused.shutdown
+    }
 }
 
 impl ComputeConsensused {
@@ -805,6 +812,7 @@ impl ComputeConsensused {
                 ));
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
+                self.shutdown = info.shutdown;
             }
         }
 

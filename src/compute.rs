@@ -13,6 +13,7 @@ use crate::unicorn::UnicornShard;
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address, LocalEvent,
+    ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -129,7 +130,7 @@ pub struct ComputeNode {
     unicorn_list: HashMap<SocketAddr, UnicornShard>,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
-    coordiated_shudown: bool,
+    coordiated_shudown: u64,
 }
 
 impl ComputeNode {
@@ -175,7 +176,7 @@ impl ComputeNode {
             partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
-            coordiated_shudown: false,
+            coordiated_shudown: u64::MAX,
         }
         .load_local_db()?)
     }
@@ -422,22 +423,24 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
-    pub fn start_coordiated_shudown(&mut self) {
-        self.coordiated_shudown = true;
-    }
-
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was stored.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+    pub async fn handle_next_event_response(
+        &mut self,
+        response: Result<Response>,
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
             Ok(Response {
                 success: true,
-                reason: "Start Coordianted shutdown",
+                reason: "Shutdown",
             }) => {
-                self.start_coordiated_shudown();
+                return ResponseResult::Exit;
             }
+            Ok(Response {
+                success: true,
+                reason: "Start Coordianted shutdown",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Received partition request successfully",
@@ -488,6 +491,17 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Block committed shutdown",
+            }) => {
+                debug!(
+                    "Block ready to mine (SHUTDOWN): {:?}",
+                    self.get_mining_block()
+                );
+                self.flood_closing_events().await.unwrap();
+                return ResponseResult::Exit;
+            }
+            Ok(Response {
+                success: true,
                 reason: "Transactions committed",
             }) => {
                 debug!("Transactions ready to be used in next block");
@@ -497,7 +511,6 @@ impl ComputeNode {
                 reason: "Received block stored",
             }) => {
                 info!("Block info received from storage: ready to generate block");
-                return true;
             }
             Ok(Response {
                 success: true,
@@ -542,7 +555,7 @@ impl ComputeNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -611,9 +624,14 @@ impl ComputeNode {
                 self.node_raft.generate_block().await;
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
+                let shutdown = self.node_raft.is_shutdown_on_commit();
                 Some(Ok(Response {
                     success: true,
-                    reason: "Block committed",
+                    reason: if shutdown {
+                        "Block committed shutdown"
+                    } else {
+                        "Block committed"
+                    },
                 }))
             }
             Some(CommittedItem::Snapshot) => {
@@ -641,10 +659,13 @@ impl ComputeNode {
                 success: true,
                 reason,
             }),
-            LocalEvent::CoordinatedShutdown => Some(Response {
-                success: true,
-                reason: "Start Coordianted shutdown",
-            }),
+            LocalEvent::CoordinatedShutdown(shutdown) => {
+                self.coordiated_shudown = shutdown;
+                Some(Response {
+                    success: true,
+                    reason: "Start Coordianted shutdown",
+                })
+            }
             LocalEvent::Ignore => None,
         }
     }
@@ -797,6 +818,29 @@ impl ComputeNode {
         }
     }
 
+    /// Floods the closing event to everyone
+    pub async fn flood_closing_events(&mut self) -> Result<()> {
+        self.node
+            .send_to_all(Some(self.storage_addr).into_iter(), StorageRequest::Closing)
+            .await
+            .unwrap();
+
+        self.node
+            .send_to_all(self.request_list.iter().copied(), MineRequest::Closing)
+            .await
+            .unwrap();
+
+        self.node
+            .send_to_all(
+                self.user_notification_list.iter().copied(),
+                UserRequest::Closing,
+            )
+            .await
+            .unwrap();
+
+        Ok(())
+    }
+
     /// Floods the random number to everyone who requested
     pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
         let rnum = self.current_random_num.clone();
@@ -887,7 +931,7 @@ impl ComputeNode {
     ) {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
-        let shutdown = self.coordiated_shudown;
+        let shutdown = self.coordiated_shudown <= block.header.b_num;
         self.current_mined_block = Some(MinedBlock {
             nonce,
             block,

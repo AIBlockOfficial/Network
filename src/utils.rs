@@ -34,9 +34,16 @@ use tracing::{trace, warn};
 
 /// Local command event to nodes
 pub enum LocalEvent {
-    CoordinatedShutdown,
+    CoordinatedShutdown(u64),
     Exit(&'static str),
     Ignore,
+}
+
+/// Event response processing
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResponseResult {
+    Exit,
+    Continue,
 }
 
 pub struct MpscTracingSender<T> {
