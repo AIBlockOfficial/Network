@@ -927,6 +927,7 @@ mod test {
             nonce: vec![0],
             merkle_hash: "0123".to_string(),
             mining_transactions: BTreeMap::new(),
+            shutdown: false,
         };
 
         // 1. Add 2 valid and 2 double spend and one spent transactions

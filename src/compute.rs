@@ -99,6 +99,7 @@ pub struct MinedBlock {
     pub block: Block,
     pub block_tx: BTreeMap<String, Transaction>,
     pub mining_transaction: (String, Transaction),
+    pub shutdown: bool,
 }
 
 /// Druid pool structure for checking and holding participants
@@ -127,6 +128,7 @@ pub struct ComputeNode {
     unicorn_list: HashMap<SocketAddr, UnicornShard>,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
+    coordiated_shudown: bool,
 }
 
 impl ComputeNode {
@@ -172,6 +174,7 @@ impl ComputeNode {
             partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
+            coordiated_shudown: false,
         }
         .load_local_db()?)
     }
@@ -382,10 +385,15 @@ impl ComputeNode {
         let block_txs = mined_block.block_tx;
         let nonce = mined_block.nonce;
         let mining_tx = mined_block.mining_transaction;
+        let shutdown = mined_block.shutdown;
 
         let request = StorageRequest::SendBlock {
             common: CommonBlockInfo { block, block_txs },
-            mined_info: MinedBlockExtraInfo { nonce, mining_tx },
+            mined_info: MinedBlockExtraInfo {
+                nonce,
+                mining_tx,
+                shutdown,
+            },
         };
         self.node.send(self.storage_addr, request).await?;
 
@@ -413,12 +421,22 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
+    pub fn start_coordiated_shudown(&mut self) {
+        self.coordiated_shudown = true;
+    }
+
     /// Listens for new events from peers and handles them, processing any errors.
     /// Return true when a block was stored.
     pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Start Coordianted shutdown",
+            }) => {
+                self.start_coordiated_shudown();
+            }
             Ok(Response {
                 success: true,
                 reason: "Received partition request successfully",
@@ -859,11 +877,13 @@ impl ComputeNode {
     ) {
         // Take mining block info: no more mining for it.
         let (block, block_tx) = self.node_raft.take_mining_block();
+        let shutdown = self.coordiated_shudown;
         self.current_mined_block = Some(MinedBlock {
             nonce,
             block,
             block_tx,
             mining_transaction,
+            shutdown,
         });
     }
 

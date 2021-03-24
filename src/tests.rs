@@ -2106,10 +2106,15 @@ async fn storage_inject_send_block_to_storage(
     let block_txs = block_info.common.block_txs.clone();
     let nonce = mined.nonce.clone();
     let mining_tx = mined.mining_tx.clone();
+    let shutdown = false;
 
     let request = StorageRequest::SendBlock {
         common: CommonBlockInfo { block, block_txs },
-        mined_info: MinedBlockExtraInfo { nonce, mining_tx },
+        mined_info: MinedBlockExtraInfo {
+            nonce,
+            mining_tx,
+            shutdown,
+        },
     };
 
     storage_inject_next_event(network, compute, storage, request).await;
@@ -2190,6 +2195,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
             MinedBlockExtraInfo {
                 nonce: nonce.clone(),
                 mining_tx: (tx_hash.clone(), stored_tx),
+                shutdown: false,
             },
         );
     }
@@ -2588,6 +2594,7 @@ async fn construct_mining_extra_info(
     MinedBlockExtraInfo {
         nonce: generate_pow_for_block(&block.clone(), hash.clone()).await,
         mining_tx: (hash, tx),
+        shutdown: false,
     }
 }
 

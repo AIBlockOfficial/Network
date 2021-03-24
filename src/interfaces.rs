@@ -34,6 +34,7 @@ pub struct CommonBlockInfo {
 pub struct MinedBlockExtraInfo {
     pub nonce: Vec<u8>,
     pub mining_tx: (String, Transaction),
+    pub shutdown: bool,
 }
 
 /// Stored block info needed to generate next block
@@ -44,6 +45,7 @@ pub struct BlockStoredInfo {
     pub nonce: Vec<u8>,
     pub merkle_hash: String,
     pub mining_transactions: BTreeMap<String, Transaction>,
+    pub shutdown: bool,
 }
 
 /// PoW structure

@@ -377,13 +377,17 @@ impl StorageNode {
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
 
-        let (stored_block, block_txs, mining_transactions, block_num, merkle_hash, nonce) = {
+        let (
+            (stored_block, block_txs, mining_transactions),
+            (block_num, merkle_hash, nonce, shutdown),
+        ) = {
             let CompleteBlock { common, per_node } = complete;
 
             let header = common.block.header.clone();
             let block_num = header.b_num;
             let merkle_hash = header.merkle_root_hash;
             let nonce = header.nonce;
+            let shutdown = per_node.values().all(|v| v.shutdown);
             let stored_block = StoredSerializingBlock {
                 block: common.block,
                 mining_tx_hash_and_nonces: per_node
@@ -395,14 +399,9 @@ impl StorageNode {
             let mining_transactions: BTreeMap<_, _> =
                 per_node.into_iter().map(|(_, v)| v.mining_tx).collect();
 
-            (
-                stored_block,
-                block_txs,
-                mining_transactions,
-                block_num,
-                merkle_hash,
-                nonce,
-            )
+            let to_store = (stored_block, block_txs, mining_transactions);
+            let store_extra_info = (block_num, merkle_hash, nonce, shutdown);
+            (to_store, store_extra_info)
         };
 
         let block_input = serialize(&stored_block).unwrap();
@@ -453,6 +452,7 @@ impl StorageNode {
             merkle_hash,
             nonce,
             mining_transactions,
+            shutdown,
         }
     }
 
