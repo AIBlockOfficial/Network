@@ -131,6 +131,7 @@ pub struct ComputeNode {
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
     coordiated_shudown: u64,
+    shutdown_group: BTreeSet<SocketAddr>,
 }
 
 impl ComputeNode {
@@ -157,6 +158,11 @@ impl ComputeNode {
             .db
             .take()
             .unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute"));
+        let shutdown_group = {
+            let storage = std::iter::once(storage_addr);
+            let raft_peers = node_raft.raft_peer_addrs().copied();
+            raft_peers.chain(storage).collect()
+        };
 
         Ok(ComputeNode {
             node,
@@ -177,6 +183,7 @@ impl ComputeNode {
             storage_addr,
             user_notification_list: Default::default(),
             coordiated_shudown: u64::MAX,
+            shutdown_group,
         }
         .load_local_db()?)
     }
@@ -437,6 +444,10 @@ impl ComputeNode {
             }) => {
                 return ResponseResult::Exit;
             }
+            Ok(Response {
+                success: true,
+                reason: "Shutdown pending",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Start Coordianted shutdown",
@@ -732,11 +743,35 @@ impl ComputeNode {
                 Some(self.receive_block_user_notification_request(peer))
             }
             SendPartitionRequest => Some(self.receive_partition_request(peer)),
+            Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
             }
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if !self.shutdown_group.remove(&peer) {
+            return None;
+        }
+
+        if !self.shutdown_group.is_empty() {
+            return Some(Response {
+                success: true,
+                reason: "Shutdown pending",
+            });
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Receive a block notification request from a user node

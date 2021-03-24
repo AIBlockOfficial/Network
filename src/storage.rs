@@ -18,7 +18,7 @@ use naom::primitives::{block::Block, transaction::Transaction};
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sha3::Sha3_256;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -86,6 +86,7 @@ pub struct StorageNode {
     db: SimpleDb,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
+    shutdown_group: BTreeSet<SocketAddr>,
 }
 
 impl StorageNode {
@@ -113,13 +114,19 @@ impl StorageNode {
             .db
             .take()
             .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"));
+        let shutdown_group = {
+            let compute = std::iter::once(compute_addr);
+            let raft_peers = node_raft.raft_peer_addrs().copied();
+            raft_peers.chain(compute).collect()
+        };
 
         Ok(StorageNode {
             node,
             node_raft,
             db,
             compute_addr,
-            whitelisted: HashMap::new(),
+            whitelisted: Default::default(),
+            shutdown_group,
         }
         .load_local_db()?)
     }
@@ -190,8 +197,23 @@ impl StorageNode {
                 success: true,
                 reason: "Shutdown",
             }) => {
+                info!("Shutdown");
                 return ResponseResult::Exit;
             }
+            Ok(Response {
+                success: true,
+                reason: "Compute Shutdown",
+            }) => {
+                debug!("Compute shutdown");
+                if self.flood_closing_events().await.unwrap() {
+                    info!("Flood closing event shutdown");
+                    return ResponseResult::Exit;
+                }
+            }
+            Ok(Response {
+                success: true,
+                reason: "Shutdown pending",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Block received to be added",
@@ -552,14 +574,41 @@ impl StorageNode {
         }
     }
 
+    /// Floods the closing event to everyone
+    pub async fn flood_closing_events(&mut self) -> Result<bool> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                StorageRequest::Closing,
+            )
+            .await
+            .unwrap();
+
+        Ok(self.shutdown_group.is_empty())
+    }
+
     /// Handles the receipt of closing event
     ///
     /// ### Arguments
     ///
     /// * `peer`     - Sending peer's socket address
     fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
-        if peer != self.compute_addr {
+        if !self.shutdown_group.remove(&peer) {
             return None;
+        }
+
+        if peer == self.compute_addr {
+            return Some(Response {
+                success: true,
+                reason: "Compute Shutdown",
+            });
+        }
+
+        if !self.shutdown_group.is_empty() {
+            return Some(Response {
+                success: true,
+                reason: "Shutdown pending",
+            });
         }
 
         Some(Response {

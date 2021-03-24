@@ -290,6 +290,7 @@ pub enum ComputeRequest {
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
+    Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -310,6 +311,7 @@ impl fmt::Debug for ComputeRequest {
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            Closing => write!(f, "Closing"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
