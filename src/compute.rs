@@ -113,20 +113,20 @@ pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
-    pub jurisdiction: String,
-    pub current_mined_block: Option<MinedBlock>,
-    pub druid_pool: BTreeMap<String, DruidDroplet>,
-    pub unicorn_limit: usize,
-    pub current_random_num: Vec<u8>,
-    pub partition_key: Option<Key>,
-    pub partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
-    pub partition_full_size: usize,
-    pub request_list: BTreeSet<SocketAddr>,
-    pub request_list_first_flood: Option<usize>,
-    pub storage_addr: SocketAddr,
-    pub unicorn_list: HashMap<SocketAddr, UnicornShard>,
-    pub sanction_list: Vec<String>,
-    pub user_notification_list: BTreeSet<SocketAddr>,
+    jurisdiction: String,
+    current_mined_block: Option<MinedBlock>,
+    druid_pool: BTreeMap<String, DruidDroplet>,
+    unicorn_limit: usize,
+    current_random_num: Vec<u8>,
+    partition_key: Option<Key>,
+    partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
+    partition_full_size: usize,
+    request_list: BTreeSet<SocketAddr>,
+    request_list_first_flood: Option<usize>,
+    storage_addr: SocketAddr,
+    unicorn_list: HashMap<SocketAddr, UnicornShard>,
+    sanction_list: Vec<String>,
+    user_notification_list: BTreeSet<SocketAddr>,
 }
 
 impl ComputeNode {
@@ -181,9 +181,9 @@ impl ComputeNode {
         self.node.address()
     }
 
-    /// Check if the node has a current block.
-    pub fn has_current_mined_block(&self) -> bool {
-        self.current_mined_block.is_some()
+    /// Get the node's mined block if any
+    pub fn get_current_mined_block(&self) -> &Option<MinedBlock> {
+        &self.current_mined_block
     }
 
     pub fn inject_next_event(

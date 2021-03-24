@@ -1908,7 +1908,9 @@ async fn compute_all_set_mining_block(
 
 async fn compute_mined_block_num(network: &mut Network, compute: &str) -> Option<u64> {
     let c = network.compute(compute).unwrap().lock().await;
-    c.current_mined_block.as_ref().map(|b| b.block.header.b_num)
+    c.get_current_mined_block()
+        .as_ref()
+        .map(|b| b.block.header.b_num)
 }
 
 async fn compute_all_mined_block_num(
@@ -2068,11 +2070,6 @@ async fn compute_all_mining_block_mined(
     for compute in compute_group {
         compute_mining_block_mined(network, compute, block_info).await;
     }
-}
-
-async fn compute_miner_request_list_is_empty(network: &mut Network, compute: &str) -> bool {
-    let c = network.compute(compute).unwrap().lock().await;
-    c.request_list.is_empty()
 }
 
 //
