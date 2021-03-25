@@ -3,7 +3,9 @@ use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
-use crate::utils::{get_paiments_for_wallet, LocalEvent, ResponseResult};
+use crate::utils::{
+    get_paiments_for_wallet, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+};
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -87,15 +89,16 @@ pub struct ReturnPayment {
 /// An instance of a MinerNode
 #[derive(Debug)]
 pub struct UserNode {
-    pub node: Node,
-    pub compute_addr: SocketAddr,
-    pub api_addr: SocketAddr,
-    pub assets: Vec<Asset>,
-    pub trading_peer: Option<(SocketAddr, TokenAmount)>,
-    pub next_payment: Option<(SocketAddr, Transaction)>,
-    pub return_payment: Option<ReturnPayment>,
-    pub wallet_db: WalletDb,
-    pub last_block_notified: Block,
+    node: Node,
+    wallet_db: WalletDb,
+    local_events: LocalEventChannel,
+    compute_addr: SocketAddr,
+    api_addr: SocketAddr,
+    assets: Vec<Asset>,
+    trading_peer: Option<(SocketAddr, TokenAmount)>,
+    next_payment: Option<(SocketAddr, Transaction)>,
+    return_payment: Option<ReturnPayment>,
+    last_block_notified: Block,
 }
 
 impl UserNode {
@@ -125,13 +128,14 @@ impl UserNode {
 
         Ok(UserNode {
             node,
+            wallet_db,
+            local_events: Default::default(),
             compute_addr,
             api_addr,
             assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
-            wallet_db,
             last_block_notified: Default::default(),
         })
     }
@@ -292,7 +296,7 @@ impl UserNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -307,13 +311,22 @@ impl UserNode {
                         return res;
                     }
                 }
-                reason = &mut *exit => {
-                    if let Some(res) = self.handle_local_event(reason) {
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
         }
+    }
+
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
     }
 
     ///Handle a local event
@@ -631,6 +644,11 @@ impl UserNode {
     // Get the wallet db
     pub fn get_wallet_db(&self) -> &WalletDb {
         &self.wallet_db
+    }
+
+    // Get the last block notified to us
+    pub fn get_last_block_notified(&self) -> &Block {
+        &self.last_block_notified
     }
 }
 

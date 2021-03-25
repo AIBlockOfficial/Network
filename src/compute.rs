@@ -13,7 +13,7 @@ use crate::unicorn::UnicornShard;
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address, LocalEvent,
-    ResponseResult,
+    LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -116,6 +116,7 @@ pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
+    local_events: LocalEventChannel,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
     druid_pool: BTreeMap<String, DruidDroplet>,
@@ -168,6 +169,7 @@ impl ComputeNode {
             node,
             node_raft,
             db,
+            local_events: Default::default(),
             unicorn_list: Default::default(),
             unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
@@ -216,6 +218,11 @@ impl ComputeNode {
             to_connect.copied().collect(),
             expect_connect.copied().collect(),
         )
+    }
+
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
     }
 
     /// Propose initial block when ready
@@ -571,7 +578,7 @@ impl ComputeNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -606,11 +613,15 @@ impl ComputeNode {
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
                 }
-                reason = &mut *exit => {
-                    if let Some(res) = self.handle_local_event(reason) {
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
         }
     }

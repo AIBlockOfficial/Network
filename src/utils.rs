@@ -22,6 +22,7 @@ use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
@@ -32,7 +33,11 @@ use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+pub type LocalEventSender = MpscTracingSender<LocalEvent>;
+pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
+
 /// Local command event to nodes
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalEvent {
     CoordinatedShutdown(u64),
     Exit(&'static str),
@@ -119,6 +124,25 @@ impl<T> RunningTaskOrResult<T> {
         } else {
             None
         }
+    }
+}
+
+/// Channel for low volume local events
+pub struct LocalEventChannel {
+    pub tx: LocalEventSender,
+    pub rx: LocalEventReceiver,
+}
+
+impl Default for LocalEventChannel {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel(10);
+        LocalEventChannel { tx: tx.into(), rx }
+    }
+}
+
+impl fmt::Debug for LocalEventChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "")
     }
 }
 

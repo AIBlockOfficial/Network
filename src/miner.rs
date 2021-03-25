@@ -8,7 +8,7 @@ use crate::interfaces::{
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
     get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
-    ResponseResult, RunningTaskOrResult,
+    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -112,13 +112,14 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug)]
 pub struct MinerNode {
     node: Node,
-    pub compute_addr: SocketAddr,
-    pub partition_key: Option<Key>,
-    pub rand_num: Vec<u8>,
+    wallet_db: WalletDb,
+    local_events: LocalEventChannel,
+    compute_addr: SocketAddr,
+    partition_key: Option<Key>,
+    rand_num: Vec<u8>,
     current_block: Option<BlockPoWReceived>,
     last_pow: Option<ProofOfWork>,
-    pub partition_list: Vec<ProofOfWork>,
-    wallet_db: WalletDb,
+    partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
@@ -146,13 +147,14 @@ impl MinerNode {
 
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
+            local_events: Default::default(),
+            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             compute_addr,
             partition_list: Default::default(),
             rand_num: Default::default(),
             partition_key: None,
             current_block: None,
             last_pow: None,
-            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             current_coinbase: None,
             current_payment_address: None,
             mining_partition_task: Default::default(),
@@ -191,6 +193,11 @@ impl MinerNode {
             to_connect.copied().collect(),
             expect_connect.copied().collect(),
         )
+    }
+
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
     }
 
     /// Signal to the node listening loop to complete
@@ -277,7 +284,7 @@ impl MinerNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -304,11 +311,15 @@ impl MinerNode {
                         reason: "Block PoW complete",
                     }));
                 }
-                reason = &mut *exit => {
-                    if let Some(res) = self.handle_local_event(reason) {
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
         }
     }

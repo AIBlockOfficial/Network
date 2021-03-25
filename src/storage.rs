@@ -10,7 +10,7 @@ use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
-    ResponseResult,
+    LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -84,6 +84,7 @@ pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
     db: SimpleDb,
+    local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
@@ -124,6 +125,7 @@ impl StorageNode {
             node,
             node_raft,
             db,
+            local_events: Default::default(),
             compute_addr,
             whitelisted: Default::default(),
             shutdown_group,
@@ -159,6 +161,11 @@ impl StorageNode {
             to_connect.copied().collect(),
             expect_connect.copied().collect(),
         )
+    }
+
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
     }
 
     /// Return the raft loop to spawn in it own task.
@@ -255,7 +262,7 @@ impl StorageNode {
 
     /// Listens for new events from peers and handles them.
     /// The future returned from this function should be executed in the runtime. It will block execution.
-    pub async fn handle_next_event<E: Future<Output = LocalEvent> + Unpin>(
+    pub async fn handle_next_event<E: Future<Output = &'static str> + Unpin>(
         &mut self,
         exit: &mut E,
     ) -> Option<Result<Response>> {
@@ -293,11 +300,15 @@ impl StorageNode {
                         self.resend_trigger_message().await;
                     }
                 }
-                reason = &mut *exit => {
-                    if let Some(res) = self.handle_local_event(reason) {
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
         }
     }

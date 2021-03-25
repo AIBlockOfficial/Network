@@ -1206,12 +1206,9 @@ async fn main_loops_raft_1_node_common(
             async move {
                 let mut node = node.lock().await;
                 {
-                    let mut shutdown = test_shutdown(expected_block_num);
-                    let response = node.handle_next_event(&mut shutdown).await.unwrap();
-                    if response.as_ref().unwrap().reason != "Start Coordianted shutdown" {
-                        panic!("Shutdown event not processed")
-                    }
-                    node.handle_next_event_response(response).await;
+                    let mut local_event_tx = node.local_event_tx().clone();
+                    let event = LocalEvent::CoordinatedShutdown(expected_block_num);
+                    local_event_tx.send(event, "test shutdown").await.unwrap();
                 }
                 while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                     panic_on_timeout(&response, &node_name);
@@ -1908,7 +1905,7 @@ async fn compute_all_handle_error(
     }
 }
 
-async fn compute_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
+async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     c: &mut ComputeNode,
     success_val: bool,
     reason_val: &str,
@@ -2323,7 +2320,7 @@ async fn storage_all_handle_event(
     }
 }
 
-async fn storage_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
+async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     s: &mut StorageNode,
     success_val: bool,
     reason_val: &str,
@@ -2365,7 +2362,7 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
 }
 
-async fn user_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
+async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     u: &mut UserNode,
     success_val: bool,
     reason_val: &str,
@@ -2449,7 +2446,7 @@ async fn user_send_block_notification_request(network: &mut Network, user: &str)
 
 async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<String> {
     let u = network.user(user).unwrap().lock().await;
-    u.last_block_notified.transactions.clone()
+    u.get_last_block_notified().transactions.clone()
 }
 
 //
@@ -2466,7 +2463,7 @@ async fn miner_all_handle_event(network: &mut Network, miner_group: &[String], r
     }
 }
 
-async fn miner_handle_event_for_node<E: Future<Output = LocalEvent> + Unpin>(
+async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     m: &mut MinerNode,
     success_val: bool,
     reason_val: &str,
@@ -2577,10 +2574,6 @@ fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetS
         .collect()
 }
 
-fn test_shutdown(b_num: u64) -> impl Future<Output = LocalEvent> + Unpin {
-    Box::pin(async move { LocalEvent::CoordinatedShutdown(b_num) })
-}
-
 fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
     if let Ok(Response {
         success: true,
@@ -2591,18 +2584,18 @@ fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
     }
 }
 
-fn test_timeout() -> impl Future<Output = LocalEvent> + Unpin {
+fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
     Box::pin(async move {
         time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
-        LocalEvent::Exit("Test timeout elapsed")
+        "Test timeout elapsed"
     })
 }
 
-fn test_timeout_barrier(barrier: &'_ Barrier) -> impl Future<Output = LocalEvent> + Unpin + '_ {
+fn test_timeout_barrier(barrier: &'_ Barrier) -> impl Future<Output = &'static str> + Unpin + '_ {
     Box::pin(async move {
         tokio::select! {
             r = test_timeout() => r,
-            _ = barrier.wait() => LocalEvent::Exit("Barrier complete"),
+            _ = barrier.wait() => "Barrier complete",
         }
     })
 }
