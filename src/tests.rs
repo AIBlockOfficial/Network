@@ -1118,6 +1118,152 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11300, 1);
+    main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1, 1_000).await
+}
+
+// Slow: Only run when explicitely specified for performance and large tests
+// `RUST_LOG="info,raft=warn" cargo test --lib --release -- --ignored --nocapture main_loops_many_txs_threaded_raft_1_node`
+#[tokio::test(threaded_scheduler)]
+#[ignore]
+async fn main_loops_many_txs_threaded_raft_1_node() {
+    let mut network_config = complete_network_config_with_n_compute_raft(11310, 1);
+    network_config.test_duration_divider = 1;
+
+    // 5_000 TxIn in transactions of 3 TxIn.
+    // 10_000 TxIn available so we can create full transaction batch even if previous block did
+    // not contain all transactions already created.
+    main_loops_raft_1_node_common(network_config, TokenAmount(1), 1_000_000, 10_000, 5_000 / 3)
+        .await
+}
+
+async fn main_loops_raft_1_node_common(
+    mut network_config: NetworkConfig,
+    initial_amount: TokenAmount,
+    seed_count: i32,
+    seed_wallet_count: i32,
+    tx_max_count: usize,
+) {
+    test_step_start();
+
+    //
+    // Arrange
+    // initial_amount is split into TokenAmount(1) TxOuts for the next round.
+    //
+    network_config.compute_seed_utxo =
+        make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    let mut tx_generator = TransactionGen::new(
+        (0..seed_wallet_count)
+            .map(|i| wallet_seed((i, "000000"), &initial_amount))
+            .collect(),
+    );
+    let setup = UserNodeSetup {
+        user_setup_tx_chunk_size: Some(5),
+        user_setup_tx_in_per_tx: Some(3),
+        user_setup_tx_max_count: tx_max_count,
+        ..Default::default()
+    };
+    let expected_block_num = 5;
+
+    //
+    // Act
+    //
+    user_send_block_notification_request(&mut network, "user1").await;
+
+    let mut handles = Vec::new();
+    handles.push(tokio::spawn({
+        let node = network.compute("compute1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            {
+                let mut shutdown = test_shutdown(expected_block_num);
+                let response = node.handle_next_event(&mut shutdown).await.unwrap();
+                if response.as_ref().unwrap().reason != "Start Coordianted shutdown" {
+                    panic!("Shutdown event not processed")
+                }
+                node.handle_next_event_response(response).await;
+            }
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
+                panic_on_timeout(&response, "compute1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let node = network.storage("storage1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
+                panic_on_timeout(&response, "storage1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let node = network.miner("miner1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let address = node.compute_address();
+            node.send_partition_request(address).await.unwrap();
+
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
+                panic_on_timeout(&response, "miner1");
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
+                }
+            }
+        }
+    }));
+
+    handles.push(tokio::spawn({
+        let node = network.user("user1").unwrap().clone();
+        async move {
+            let mut node = node.lock().await;
+            let address = node.compute_address();
+            node.send_block_notification_request(address).await.unwrap();
+
+            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
+                panic_on_timeout(&response, "user1");
+                if node
+                    .handle_next_event_response(&setup, &mut tx_generator, response)
+                    .await
+                    == ResponseResult::Exit
+                {
+                    break;
+                }
+            }
+        }
+    }));
+
+    join_all(handles).await;
+
+    //
+    // Assert
+    //
+    let last_stored_b_num = {
+        let block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
+        block_stored.map(|bs| bs.block_num)
+    };
+    let last_complete_b_num = {
+        let block_complete = compute_current_mining_block(&mut network, "compute1").await;
+        block_complete.map(|bs| bs.header.b_num)
+    };
+    assert_eq!(last_stored_b_num, Some(expected_block_num));
+    assert_eq!(last_complete_b_num, Some(expected_block_num + 1));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn receive_payment_tx_user() {
     test_step_start();
 
@@ -1344,159 +1490,13 @@ async fn proof_of_work_reject() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn main_loops_few_txs_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(10440, 1);
-    main_loops_raft_1_node_common(network_config, TokenAmount(17), 20, 1, 1_000).await
-}
-
-// Slow: Only run when explicitely specified for performance and large tests
-// `RUST_LOG="info,raft=warn" cargo test --lib --release -- --ignored --nocapture main_loops_many_txs_threaded_raft_1_node`
-#[tokio::test(threaded_scheduler)]
-#[ignore]
-async fn main_loops_many_txs_threaded_raft_1_node() {
-    let mut network_config = complete_network_config_with_n_compute_raft(10450, 1);
-    network_config.test_duration_divider = 1;
-
-    // 5_000 TxIn in transactions of 3 TxIn.
-    // 10_000 TxIn available so we can create full transaction batch even if previous block did
-    // not contain all transactions already created.
-    main_loops_raft_1_node_common(network_config, TokenAmount(1), 1_000_000, 10_000, 5_000 / 3)
-        .await
-}
-
-async fn main_loops_raft_1_node_common(
-    mut network_config: NetworkConfig,
-    initial_amount: TokenAmount,
-    seed_count: i32,
-    seed_wallet_count: i32,
-    tx_max_count: usize,
-) {
-    test_step_start();
-
-    //
-    // Arrange
-    // initial_amount is split into TokenAmount(1) TxOuts for the next round.
-    //
-    network_config.compute_seed_utxo =
-        make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
-    let mut network = Network::create_from_config(&network_config).await;
-
-    let mut tx_generator = TransactionGen::new(
-        (0..seed_wallet_count)
-            .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect(),
-    );
-    let setup = UserNodeSetup {
-        user_setup_tx_chunk_size: Some(5),
-        user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_max_count: tx_max_count,
-        ..Default::default()
-    };
-    let expected_block_num = 5;
-
-    //
-    // Act
-    //
-    user_send_block_notification_request(&mut network, "user1").await;
-
-    let mut handles = Vec::new();
-    handles.push(tokio::spawn({
-        let node = network.compute("compute1").unwrap().clone();
-        async move {
-            let mut node = node.lock().await;
-            {
-                let mut shutdown = test_shutdown(expected_block_num);
-                let response = node.handle_next_event(&mut shutdown).await.unwrap();
-                if response.as_ref().unwrap().reason != "Start Coordianted shutdown" {
-                    panic!("Shutdown event not processed")
-                }
-                node.handle_next_event_response(response).await;
-            }
-            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                panic_on_timeout(&response, "compute1");
-                if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                    break;
-                }
-            }
-        }
-    }));
-
-    handles.push(tokio::spawn({
-        let node = network.storage("storage1").unwrap().clone();
-        async move {
-            let mut node = node.lock().await;
-            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                panic_on_timeout(&response, "storage1");
-                if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                    break;
-                }
-            }
-        }
-    }));
-
-    handles.push(tokio::spawn({
-        let node = network.miner("miner1").unwrap().clone();
-        async move {
-            let mut node = node.lock().await;
-            let address = node.compute_address();
-            node.send_partition_request(address).await.unwrap();
-
-            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                panic_on_timeout(&response, "miner1");
-                if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                    break;
-                }
-            }
-        }
-    }));
-
-    handles.push(tokio::spawn({
-        let node = network.user("user1").unwrap().clone();
-        async move {
-            let mut node = node.lock().await;
-            let address = node.compute_address();
-            node.send_block_notification_request(address).await.unwrap();
-
-            while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                panic_on_timeout(&response, "user1");
-                if node
-                    .handle_next_event_response(&setup, &mut tx_generator, response)
-                    .await
-                    == ResponseResult::Exit
-                {
-                    break;
-                }
-            }
-        }
-    }));
-
-    join_all(handles).await;
-
-    //
-    // Assert
-    //
-    let last_stored_b_num = {
-        let block_stored = storage_get_last_block_stored(&mut network, "storage1").await;
-        block_stored.map(|bs| bs.block_num)
-    };
-    let last_complete_b_num = {
-        let block_complete = compute_current_mining_block(&mut network, "compute1").await;
-        block_complete.map(|bs| bs.header.b_num)
-    };
-    assert_eq!(last_stored_b_num, Some(expected_block_num));
-    assert_eq!(last_complete_b_num, Some(expected_block_num + 1));
-
-    test_step_complete(network).await;
-}
-
-#[tokio::test(basic_scheduler)]
 async fn handle_message_lost_no_restart_no_raft() {
-    handle_message_lost_common(complete_network_config(10460), &[]).await
+    handle_message_lost_common(complete_network_config(10440), &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn handle_message_lost_no_restart_raft_1_node() {
-    handle_message_lost_common(complete_network_config_with_n_compute_raft(10470, 1), &[]).await
+    handle_message_lost_common(complete_network_config_with_n_compute_raft(10450, 1), &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
@@ -1509,7 +1509,7 @@ async fn handle_message_lost_restart_block_stored_raft_1_node() {
         ]),
     )];
 
-    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
+    let network_config = complete_network_config_with_n_compute_raft(10460, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
@@ -1524,7 +1524,7 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
         ]),
     )];
 
-    let network_config = complete_network_config_with_n_compute_raft(10490, 1);
+    let network_config = complete_network_config_with_n_compute_raft(10470, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
