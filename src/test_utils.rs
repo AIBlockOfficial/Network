@@ -346,7 +346,8 @@ impl Network {
     async fn stop_listening(arc_nodes: &BTreeMap<String, ArcNode>) {
         info!("Stop listening arc_nodes");
         for node in arc_nodes.values() {
-            join_all(stop_listening(node).await).await;
+            let (mut node_conn, _, _) = connect_info_peers(node).await;
+            join_all(node_conn.stop_listening().await).await;
         }
     }
 
@@ -513,16 +514,6 @@ async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<Socke
         ArcNode::Compute(n) => n.lock().await.connect_info_peers(),
         ArcNode::Storage(n) => n.lock().await.connect_info_peers(),
         ArcNode::User(n) => n.lock().await.connect_info_peers(),
-    }
-}
-
-///Dispatch to stop_listening_loop
-async fn stop_listening(node: &ArcNode) -> Vec<JoinHandle<()>> {
-    match node {
-        ArcNode::Miner(n) => n.lock().await.stop_listening_loop().await,
-        ArcNode::Compute(n) => n.lock().await.stop_listening_loop().await,
-        ArcNode::Storage(n) => n.lock().await.stop_listening_loop().await,
-        ArcNode::User(n) => n.lock().await.stop_listening_loop().await,
     }
 }
 

@@ -250,11 +250,6 @@ impl ComputeNode {
         self.node_raft.close_raft_loop().await
     }
 
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
-    }
-
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         ExtraNodeParams {

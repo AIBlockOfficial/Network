@@ -3,7 +3,10 @@
 use clap::{App, Arg};
 use system::configurations::StorageNodeConfig;
 use system::StorageNode;
-use system::{loop_wait_connnect_to_peers_async, loops_re_connect_disconnect};
+use system::{
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
+    ResponseResult,
+};
 
 #[tokio::main]
 async fn main() {
@@ -60,11 +63,12 @@ async fn main() {
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+    let local_event_tx = node.local_event_tx().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
         let (re_connect, disconnect_test) =
-            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect);
+            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect, local_event_tx);
 
         (
             (tokio::spawn(re_connect.0), re_connect.1),
@@ -73,7 +77,7 @@ async fn main() {
     };
 
     // Need to connect first so Raft messages can be sent.
-    loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
+    loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
 
     // RAFT HANDLING
     let raft_loop_handle = {
@@ -88,15 +92,20 @@ async fn main() {
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
+        let mut node_conn = node_conn;
 
         async move {
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
-                node.handle_next_event_response(response).await;
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                    break;
+                }
             }
-            node.close_raft_loop().await;
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();
+
+            node.close_raft_loop().await;
+            shutdown_connections(&mut node_conn).await;
         }
     });
 

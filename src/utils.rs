@@ -136,7 +136,7 @@ pub struct LocalEventChannel {
 impl Default for LocalEventChannel {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel(10);
-        LocalEventChannel { tx: tx.into(), rx }
+        Self { tx: tx.into(), rx }
     }
 }
 
@@ -564,15 +564,28 @@ pub fn decode_secret_key(key: &str) -> SecretKey {
     SecretKey::from_slice(&key_slice).unwrap()
 }
 
+/// Stop listening for connection and disconnect existing ones
+/// This will complete sent message in the queues.
+///
+/// ### Arguments
+///
+/// * `node_conn` - Node to use for connections
+pub async fn shutdown_connections(node_conn: &mut Node) {
+    join_all(node_conn.stop_listening().await).await;
+    join_all(node_conn.disconnect_all(None).await).await;
+}
+
 /// Loop reconnect and test disconnect
 ///
 /// ### Arguments
 ///
 /// * `node_conn`         - Node to use for connections
 /// * `addrs_to_connect`  - Addresses to establish connections to
+/// * `local_events_tx`   - Channel for local events
 pub fn loops_re_connect_disconnect(
     node_conn: Node,
     addrs_to_connect: Vec<SocketAddr>,
+    mut local_events_tx: LocalEventSender,
 ) -> (
     (impl Future<Output = ()>, oneshot::Sender<()>),
     (impl Future<Output = ()>, oneshot::Sender<()>),
@@ -595,9 +608,9 @@ pub fn loops_re_connect_disconnect(
     // TEST DIS-CONNECTION HANDLING
     let disconnect_test = {
         let (stop_re_connect_tx, mut stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
-        let disconnect = format!("disconnect_{}", node_conn.address().port());
         let mut node_conn = node_conn;
         let mut paused = true;
+        let mut shutdown_num = None;
         (
             async move {
                 println!("Start mode input check");
@@ -607,35 +620,9 @@ pub fn loops_re_connect_disconnect(
                         _ = &mut stop_re_connect_rx => break,
                     };
 
-                    let path = std::path::Path::new(&disconnect);
-                    match (paused, path.exists()) {
-                        (false, true) => {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            let diconnect_addrs: Vec<_> = content
-                                .split(&[',', '\n'][..])
-                                .filter_map(|v| v.parse::<SocketAddr>().ok())
-                                .collect();
-
-                            warn!(
-                                "disconnect from {:?} all {:?}",
-                                node_conn.address(),
-                                diconnect_addrs
-                            );
-                            node_conn.set_pause_listening(true).await;
-                            if diconnect_addrs.is_empty() {
-                                join_all(node_conn.disconnect_all(None).await).await;
-                            } else {
-                                join_all(node_conn.disconnect_all(Some(&diconnect_addrs)).await)
-                                    .await;
-                            }
-                            paused = true;
-                        }
-                        (true, false) => {
-                            node_conn.set_pause_listening(false).await;
-                            paused = false;
-                        }
-                        _ => (),
-                    };
+                    paused = pause_and_disconnect_on_path(&mut node_conn, paused).await;
+                    shutdown_num =
+                        shutdown_on_path(&mut node_conn, &mut local_events_tx, shutdown_num).await;
                 }
                 println!("Complete mode input check");
             },
@@ -643,4 +630,100 @@ pub fn loops_re_connect_disconnect(
         )
     };
     (re_connect, disconnect_test)
+}
+
+/// Check disconnect path and pause/disconnect requested connections.
+/// Return the new paused state.
+///
+/// ### Arguments
+///
+/// * `node_conn`   - Node to use for connections
+/// * `paused`      - Current paused state
+async fn pause_and_disconnect_on_path(node_conn: &mut Node, paused: bool) -> bool {
+    let disconnect = format!("disconnect_{}", node_conn.address().port());
+    let path = std::path::Path::new(&disconnect);
+    match (paused, path.exists()) {
+        (false, true) => {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            let diconnect_addrs: Vec<_> = content
+                .split(&[',', '\n'][..])
+                .filter_map(|v| v.parse::<SocketAddr>().ok())
+                .collect();
+
+            warn!(
+                "disconnect from {:?} all {:?}",
+                node_conn.address(),
+                diconnect_addrs
+            );
+            node_conn.set_pause_listening(true).await;
+            if diconnect_addrs.is_empty() {
+                join_all(node_conn.disconnect_all(None).await).await;
+            } else {
+                join_all(node_conn.disconnect_all(Some(&diconnect_addrs)).await).await;
+            }
+            true
+        }
+        (true, false) => {
+            node_conn.set_pause_listening(false).await;
+            false
+        }
+        _ => paused,
+    }
+}
+
+/// Check given shutdown path and trigger coordinated or immediate shutdown.
+/// Return the new shutdown block num.
+///
+/// ### Arguments
+///
+/// * `node_conn`       - Node to use for connections
+/// * `local_events_tx` - Channel for local events
+/// * `shutdown_num`    - Current shutdown state
+async fn shutdown_on_path(
+    node_conn: &mut Node,
+    local_events_tx: &mut LocalEventSender,
+    shutdown_num: Option<(u64, bool)>,
+) -> Option<(u64, bool)> {
+    let shutdown_now_one = format!("shutdown_now_{}", node_conn.address().port());
+    let shutdown_now_all = "shutdown_now".to_owned();
+    let shutdown_coord_one = format!("shutdown_coordinated_{}", node_conn.address().port());
+    let shutdown_coord_all = "shutdown_coordinated".to_owned();
+
+    let now = true;
+    let path = Some((std::path::Path::new(&shutdown_now_all), now))
+        .filter(|(p, _)| p.exists())
+        .or_else(|| Some((std::path::Path::new(&shutdown_coord_all), !now)))
+        .filter(|(p, _)| p.exists())
+        .or_else(|| Some((std::path::Path::new(&shutdown_now_one), now)))
+        .filter(|(p, _)| p.exists())
+        .or_else(|| Some((std::path::Path::new(&shutdown_coord_one), !now)))
+        .filter(|(p, _)| p.exists());
+
+    if let Some((path, is_now)) = path {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let block_num = content.trim().parse::<u64>().ok().unwrap_or(0);
+        let result = Some((block_num, is_now));
+
+        if shutdown_num != result {
+            warn!(
+                "shutdown from {:?} at block {:?} now={}",
+                node_conn.address(),
+                block_num,
+                is_now
+            );
+
+            let event = if is_now {
+                LocalEvent::Exit("Shutdown")
+            } else {
+                LocalEvent::CoordinatedShutdown(block_num)
+            };
+            if let Err(e) = local_events_tx.send(event, "file_shutdown").await {
+                warn!("Cound not send {:?} ({:?})", event, e);
+            }
+        }
+
+        result
+    } else {
+        shutdown_num
+    }
 }

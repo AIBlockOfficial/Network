@@ -23,7 +23,6 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -176,11 +175,6 @@ impl StorageNode {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.node_raft.close_raft_loop().await
-    }
-
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
     }
 
     /// Extract persistent dbs
