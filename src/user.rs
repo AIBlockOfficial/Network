@@ -3,7 +3,9 @@ use crate::configurations::{ExtraNodeParams, UserNodeConfig, UserNodeSetup};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
 use crate::transaction_gen::TransactionGen;
-use crate::utils::get_paiments_for_wallet;
+use crate::utils::{
+    get_paiments_for_wallet, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+};
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
@@ -87,15 +89,16 @@ pub struct ReturnPayment {
 /// An instance of a MinerNode
 #[derive(Debug)]
 pub struct UserNode {
-    pub node: Node,
-    pub compute_addr: SocketAddr,
-    pub api_addr: SocketAddr,
-    pub assets: Vec<Asset>,
-    pub trading_peer: Option<(SocketAddr, TokenAmount)>,
-    pub next_payment: Option<(SocketAddr, Transaction)>,
-    pub return_payment: Option<ReturnPayment>,
-    pub wallet_db: WalletDb,
-    pub last_block_notified: Block,
+    node: Node,
+    wallet_db: WalletDb,
+    local_events: LocalEventChannel,
+    compute_addr: SocketAddr,
+    api_addr: SocketAddr,
+    assets: Vec<Asset>,
+    trading_peer: Option<(SocketAddr, TokenAmount)>,
+    next_payment: Option<(SocketAddr, Transaction)>,
+    return_payment: Option<ReturnPayment>,
+    last_block_notified: Block,
 }
 
 impl UserNode {
@@ -125,13 +128,14 @@ impl UserNode {
 
         Ok(UserNode {
             node,
+            wallet_db,
+            local_events: Default::default(),
             compute_addr,
             api_addr,
             assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
             return_payment: None,
-            wallet_db,
             last_block_notified: Default::default(),
         })
     }
@@ -173,11 +177,6 @@ impl UserNode {
         (self.wallet_db.clone(), self.node.clone(), self.api_addr)
     }
 
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
-    }
-
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         ExtraNodeParams {
@@ -187,16 +186,22 @@ impl UserNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was completed.
     pub async fn handle_next_event_response(
         &mut self,
         setup: &UserNodeSetup,
         tx_generator: &mut TransactionGen,
         response: Result<Response>,
-    ) -> bool {
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                warn!("Shutdown now");
+                return ResponseResult::Exit;
+            }
             Ok(Response {
                 success: true,
                 reason: "New address ready to be sent",
@@ -263,8 +268,6 @@ impl UserNode {
                 self.wallet_db
                     .set_db_value(TX_GENERATOR_KEY, tx_generator.snapshot_state())
                     .await;
-
-                return true;
             }
             Ok(Response {
                 success: true,
@@ -283,7 +286,7 @@ impl UserNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -303,13 +306,37 @@ impl UserNode {
                         return res;
                     }
                 }
-                reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
+                        return Some(Ok(res));
+                    }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
+        }
+    }
+
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown(_) => None,
+            LocalEvent::Ignore => None,
         }
     }
 
@@ -373,7 +400,24 @@ impl UserNode {
                 Some(self.make_payment_transactions(peer, address, amount).await)
             }
             BlockMining { block } => Some(self.notified_block_mining(peer, block)),
+            Closing => self.receive_closing(peer),
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Sends the next internal payment transaction to be processed by the connected Compute
@@ -595,6 +639,11 @@ impl UserNode {
     // Get the wallet db
     pub fn get_wallet_db(&self) -> &WalletDb {
         &self.wallet_db
+    }
+
+    // Get the last block notified to us
+    pub fn get_last_block_notified(&self) -> &Block {
+        &self.last_block_notified
     }
 }
 

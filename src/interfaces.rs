@@ -34,6 +34,7 @@ pub struct CommonBlockInfo {
 pub struct MinedBlockExtraInfo {
     pub nonce: Vec<u8>,
     pub mining_tx: (String, Transaction),
+    pub shutdown: bool,
 }
 
 /// Stored block info needed to generate next block
@@ -44,6 +45,7 @@ pub struct BlockStoredInfo {
     pub nonce: Vec<u8>,
     pub merkle_hash: String,
     pub mining_transactions: BTreeMap<String, Transaction>,
+    pub shutdown: bool,
 }
 
 /// PoW structure
@@ -165,6 +167,7 @@ pub enum StorageRequest {
     Store {
         incoming_contract: Contract,
     },
+    Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -186,6 +189,7 @@ impl fmt::Debug for StorageRequest {
             Store {
                 ref incoming_contract,
             } => write!(f, "Store"),
+            Closing => write!(f, "Closing"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -242,6 +246,7 @@ pub enum MineRequest {
     SendPartitionList {
         p_list: Vec<ProofOfWork>,
     },
+    Closing,
 }
 
 impl fmt::Debug for MineRequest {
@@ -258,6 +263,7 @@ impl fmt::Debug for MineRequest {
                 ref win_coinbases,
             } => write!(f, "SendRandomNum"),
             SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
+            Closing => write!(f, "Closing"),
         }
     }
 }
@@ -284,6 +290,7 @@ pub enum ComputeRequest {
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
+    Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -304,6 +311,7 @@ impl fmt::Debug for ComputeRequest {
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            Closing => write!(f, "Closing"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -364,6 +372,7 @@ pub enum UserRequest {
     BlockMining {
         block: Block,
     },
+    Closing,
 }
 
 impl fmt::Debug for UserRequest {
@@ -375,6 +384,7 @@ impl fmt::Debug for UserRequest {
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
             BlockMining { .. } => write!(f, "BlockMining"),
+            Closing => write!(f, "Closing"),
         }
     }
 }

@@ -6,20 +6,23 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MinedBlockExtraInfo, NodeType,
     ProofOfWork, Response, StorageInterface, StorageRequest,
 };
+use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
-use crate::utils::{concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block};
+use crate::utils::{
+    concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult,
+};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::{block::Block, transaction::Transaction};
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sha3::Sha3_256;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -80,8 +83,10 @@ pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
     db: SimpleDb,
+    local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
+    shutdown_group: BTreeSet<SocketAddr>,
 }
 
 impl StorageNode {
@@ -109,13 +114,20 @@ impl StorageNode {
             .db
             .take()
             .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"));
+        let shutdown_group = {
+            let compute = std::iter::once(compute_addr);
+            let raft_peers = node_raft.raft_peer_addrs().copied();
+            raft_peers.chain(compute).collect()
+        };
 
         Ok(StorageNode {
             node,
             node_raft,
             db,
+            local_events: Default::default(),
             compute_addr,
-            whitelisted: HashMap::new(),
+            whitelisted: Default::default(),
+            shutdown_group,
         }
         .load_local_db()?)
     }
@@ -150,6 +162,11 @@ impl StorageNode {
         )
     }
 
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
+    }
+
     /// Return the raft loop to spawn in it own task.
     pub fn raft_loop(&self) -> impl Future<Output = ()> {
         self.node_raft.raft_loop()
@@ -158,11 +175,6 @@ impl StorageNode {
     /// Signal to the raft loop to complete
     pub async fn close_raft_loop(&mut self) {
         self.node_raft.close_raft_loop().await
-    }
-
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
     }
 
     /// Extract persistent dbs
@@ -175,11 +187,34 @@ impl StorageNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was stored.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+    pub async fn handle_next_event_response(
+        &mut self,
+        response: Result<Response>,
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                warn!("Shutdown now");
+                return ResponseResult::Exit;
+            }
+            Ok(Response {
+                success: true,
+                reason: "Compute Shutdown",
+            }) => {
+                debug!("Compute shutdown");
+                if self.flood_closing_events().await.unwrap() {
+                    warn!("Flood closing event shutdown");
+                    return ResponseResult::Exit;
+                }
+            }
+            Ok(Response {
+                success: true,
+                reason: "Shutdown pending",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Block received to be added",
@@ -192,7 +227,6 @@ impl StorageNode {
                 if let Err(e) = self.send_stored_block().await {
                     error!("Block stored not sent {:?}", e);
                 }
-                return true;
             }
             Ok(Response {
                 success: true,
@@ -217,7 +251,7 @@ impl StorageNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -239,23 +273,8 @@ impl StorageNode {
                 }
                 Some(commit_data) = self.node_raft.next_commit() => {
                     trace!("handle_next_event commit {:?}", commit_data);
-                    match self.node_raft.received_commit(commit_data).await {
-                        Some(CommittedItem::Block) => {
-                            let block = self.node_raft.generate_complete_block();
-                            let block_stored = Self::store_complete_block(&mut self.db, block);
-                            self.node_raft.event_processed_generate_snapshot(block_stored);
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Block complete stored",
-                            }));
-                        }
-                        Some(CommittedItem::Snapshot) => {
-                            return Some(Ok(Response{
-                                success: true,
-                                reason: "Snapshot applied",
-                            }));
-                        }
-                        None => (),
+                    if let res @ Some(_) = self.handle_committed_data(commit_data).await {
+                        return res;
                     }
                 }
                 Some((addr, msg)) = self.node_raft.next_msg() => {
@@ -275,13 +294,57 @@ impl StorageNode {
                         self.resend_trigger_message().await;
                     }
                 }
-                reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
+                        return Some(Ok(res));
+                    }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
+        }
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown(_) => None,
+            LocalEvent::Ignore => None,
+        }
+    }
+
+    ///Handle commit data
+    ///
+    /// ### Arguments
+    ///
+    /// * `commit_data` - Commit to process.
+    async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
+        match self.node_raft.received_commit(commit_data).await {
+            Some(CommittedItem::Block) => {
+                let block = self.node_raft.generate_complete_block();
+                let block_stored = Self::store_complete_block(&mut self.db, block);
+                self.node_raft
+                    .event_processed_generate_snapshot(block_stored);
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Block complete stored",
+                }))
+            }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
+            None => None,
         }
     }
 
@@ -341,6 +404,7 @@ impl StorageNode {
             SendPow { pow } => Some(self.receive_pow(pow)),
             SendBlock { common, mined_info } => self.receive_block(peer, common, mined_info).await,
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
+            Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
@@ -360,13 +424,17 @@ impl StorageNode {
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
 
-        let (stored_block, block_txs, mining_transactions, block_num, merkle_hash, nonce) = {
+        let (
+            (stored_block, block_txs, mining_transactions),
+            (block_num, merkle_hash, nonce, shutdown),
+        ) = {
             let CompleteBlock { common, per_node } = complete;
 
             let header = common.block.header.clone();
             let block_num = header.b_num;
             let merkle_hash = header.merkle_root_hash;
             let nonce = header.nonce;
+            let shutdown = per_node.values().all(|v| v.shutdown);
             let stored_block = StoredSerializingBlock {
                 block: common.block,
                 mining_tx_hash_and_nonces: per_node
@@ -378,14 +446,9 @@ impl StorageNode {
             let mining_transactions: BTreeMap<_, _> =
                 per_node.into_iter().map(|(_, v)| v.mining_tx).collect();
 
-            (
-                stored_block,
-                block_txs,
-                mining_transactions,
-                block_num,
-                merkle_hash,
-                nonce,
-            )
+            let to_store = (stored_block, block_txs, mining_transactions);
+            let store_extra_info = (block_num, merkle_hash, nonce, shutdown);
+            (to_store, store_extra_info)
         };
 
         let block_input = serialize(&stored_block).unwrap();
@@ -436,6 +499,7 @@ impl StorageNode {
             merkle_hash,
             nonce,
             mining_transactions,
+            shutdown,
         }
     }
 
@@ -513,6 +577,54 @@ impl StorageNode {
                 error!("Resend block stored failed {:?}", e);
             }
         }
+    }
+
+    /// Floods the closing event to everyone
+    pub async fn flood_closing_events(&mut self) -> Result<bool> {
+        self.node
+            .send_to_all(Some(self.compute_addr).into_iter(), ComputeRequest::Closing)
+            .await
+            .unwrap();
+
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                StorageRequest::Closing,
+            )
+            .await
+            .unwrap();
+
+        Ok(self.shutdown_group.is_empty())
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if !self.shutdown_group.remove(&peer) {
+            return None;
+        }
+
+        if peer == self.compute_addr {
+            return Some(Response {
+                success: true,
+                reason: "Compute Shutdown",
+            });
+        }
+
+        if !self.shutdown_group.is_empty() {
+            return Some(Response {
+                success: true,
+                reason: "Shutdown pending",
+            });
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Receives the new block from the miner with permissions to write

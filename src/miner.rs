@@ -7,7 +7,8 @@ use crate::interfaces::{
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
-    get_partition_entry_key, validate_pow_block, validate_pow_for_address, RunningTaskOrResult,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -111,13 +112,14 @@ impl From<task::JoinError> for MinerError {
 #[derive(Debug)]
 pub struct MinerNode {
     node: Node,
-    pub compute_addr: SocketAddr,
-    pub partition_key: Option<Key>,
-    pub rand_num: Vec<u8>,
+    wallet_db: WalletDb,
+    local_events: LocalEventChannel,
+    compute_addr: SocketAddr,
+    partition_key: Option<Key>,
+    rand_num: Vec<u8>,
     current_block: Option<BlockPoWReceived>,
     last_pow: Option<ProofOfWork>,
-    pub partition_list: Vec<ProofOfWork>,
-    wallet_db: WalletDb,
+    partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
@@ -145,13 +147,14 @@ impl MinerNode {
 
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
+            local_events: Default::default(),
+            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             compute_addr,
             partition_list: Default::default(),
             rand_num: Default::default(),
             partition_key: None,
             current_block: None,
             last_pow: None,
-            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
             current_coinbase: None,
             current_payment_address: None,
             mining_partition_task: Default::default(),
@@ -192,9 +195,9 @@ impl MinerNode {
         )
     }
 
-    /// Signal to the node listening loop to complete
-    pub async fn stop_listening_loop(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.node.stop_listening().await
+    /// Local event channel.
+    pub fn local_event_tx(&self) -> &LocalEventSender {
+        &self.local_events.tx
     }
 
     /// Extract persistent dbs
@@ -206,11 +209,20 @@ impl MinerNode {
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
-    /// Return true when a block was mined.
-    pub async fn handle_next_event_response(&mut self, response: Result<Response>) -> bool {
+    pub async fn handle_next_event_response(
+        &mut self,
+        response: Result<Response>,
+    ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Shutdown",
+            }) => {
+                warn!("Shutdown now");
+                return ResponseResult::Exit;
+            }
             Ok(Response {
                 success: true,
                 reason: "Received random number successfully",
@@ -243,7 +255,6 @@ impl MinerNode {
             }) => {
                 if self.process_found_block_pow().await {
                     info!("Block PoW found and sent");
-                    return true;
                 }
             }
             Ok(Response {
@@ -263,7 +274,7 @@ impl MinerNode {
             }
         };
 
-        false
+        ResponseResult::Continue
     }
 
     /// Listens for new events from peers and handles them.
@@ -295,13 +306,32 @@ impl MinerNode {
                         reason: "Block PoW complete",
                     }));
                 }
-                reason = &mut *exit => {
-                    return Some(Ok(Response {
-                        success: true,
-                        reason,
-                    }));
+                Some(event) = self.local_events.rx.recv() => {
+                    if let Some(res) = self.handle_local_event(event) {
+                        return Some(Ok(res));
+                    }
                 }
+                reason = &mut *exit => return Some(Ok(Response {
+                    success: true,
+                    reason,
+                }))
             }
+        }
+    }
+
+    ///Handle a local event
+    ///
+    /// ### Arguments
+    ///
+    /// * `event` - Event to process.
+    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+        match event {
+            LocalEvent::Exit(reason) => Some(Response {
+                success: true,
+                reason,
+            }),
+            LocalEvent::CoordinatedShutdown(_) => None,
+            LocalEvent::Ignore => None,
         }
     }
 
@@ -362,7 +392,24 @@ impl MinerNode {
                 rnum,
                 win_coinbases,
             } => self.receive_random_number(peer, rnum, win_coinbases).await,
+            Closing => self.receive_closing(peer),
         }
+    }
+
+    /// Handles the receipt of closing event
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`     - Sending peer's socket address
+    fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
+        if peer != self.compute_address() {
+            return None;
+        }
+
+        Some(Response {
+            success: true,
+            reason: "Shutdown",
+        })
     }
 
     /// Handles the receipt of the random number of partitioning
