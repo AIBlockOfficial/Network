@@ -200,6 +200,7 @@ impl UserNode {
                 success: true,
                 reason: "Shutdown",
             }) => {
+                warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {

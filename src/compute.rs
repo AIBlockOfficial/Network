@@ -442,6 +442,7 @@ impl ComputeNode {
                 success: true,
                 reason: "Shutdown",
             }) => {
+                warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {
@@ -509,7 +510,6 @@ impl ComputeNode {
                     self.get_mining_block()
                 );
                 self.flood_closing_events().await.unwrap();
-                return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
@@ -857,6 +857,14 @@ impl ComputeNode {
     pub async fn flood_closing_events(&mut self) -> Result<()> {
         self.node
             .send_to_all(Some(self.storage_addr).into_iter(), StorageRequest::Closing)
+            .await
+            .unwrap();
+
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::Closing,
+            )
             .await
             .unwrap();
 

@@ -218,6 +218,7 @@ impl MinerNode {
                 success: true,
                 reason: "Shutdown",
             }) => {
+                warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {

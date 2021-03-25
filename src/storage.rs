@@ -197,7 +197,7 @@ impl StorageNode {
                 success: true,
                 reason: "Shutdown",
             }) => {
-                info!("Shutdown");
+                warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {
@@ -206,7 +206,7 @@ impl StorageNode {
             }) => {
                 debug!("Compute shutdown");
                 if self.flood_closing_events().await.unwrap() {
-                    info!("Flood closing event shutdown");
+                    warn!("Flood closing event shutdown");
                     return ResponseResult::Exit;
                 }
             }
@@ -576,6 +576,11 @@ impl StorageNode {
 
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<bool> {
+        self.node
+            .send_to_all(Some(self.compute_addr).into_iter(), ComputeRequest::Closing)
+            .await
+            .unwrap();
+
         self.node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
