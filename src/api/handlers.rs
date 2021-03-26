@@ -5,12 +5,13 @@ use crate::wallet::{WalletDb, AddressStore};
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracing::error;
 
-/// All private/public keypairs to send to requester
+/// Private/public keypairs, stored with payment address as key
 #[derive(Debug, Serialize, Deserialize)]
-struct Addresses {
-    addresses: Vec<AddressStore>
+pub struct Addresses {
+    addresses: BTreeMap<String, AddressStore>
 }
 
 /// Information about a wallet to be returned to requester
@@ -48,13 +49,30 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
 /// TODO: This will need to be secured with encryption and a required password
 pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
     let known_addr = wallet_db.get_known_addresses();
-    let addresses: Vec<AddressStore> = known_addr.iter().map(|k| wallet_db.get_address_store(k)).collect();
+    let mut addresses = BTreeMap::new();
+
+    for addr in known_addr {
+        addresses.insert(addr.clone(), wallet_db.get_address_store(&addr));
+    }
 
     Ok(warp::reply::json(&Addresses { addresses }))
 }
 
 
 //======= POST HANDLERS =======//
+
+/// Post to import new keypairs to the connected wallet
+/// TODO: Requires a password
+pub async fn post_import_keypairs(
+    db: WalletDb,
+    keypairs: Addresses
+) -> Result<impl warp::Reply, warp::Rejection> {
+    for (_, address_set) in keypairs.addresses.iter() {
+        db.store_payment_address(address_set.public_key, address_set.secret_key.clone()).await;
+    }
+
+    Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
+}
 
 /// Post a new payment from the connected wallet.
 pub async fn post_make_payment(

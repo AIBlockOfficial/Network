@@ -36,7 +36,7 @@ pub fn wallet_info(
 }
 
 // GET all keypairs
-// TODO: Requires password
+// TODO: Requires password (will move to POST)
 pub fn wallet_keypairs(
     db: WalletDb,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -50,6 +50,29 @@ pub fn wallet_keypairs(
 }
 
 //======= POST ROUTES =======//
+
+// POST save keypair
+// TODO: Requires password
+pub fn import_keypairs(db: WalletDb) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("import_keypairs")
+        .and(warp::post())
+        .and(with_db(db))
+        .and(warp::body::json())
+        .and_then(handlers::post_import_keypairs)
+        .with(cors)
+}
 
 // POST make payment
 pub fn make_payment(
