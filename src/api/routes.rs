@@ -53,7 +53,9 @@ pub fn wallet_keypairs(
 
 // POST save keypair
 // TODO: Requires password
-pub fn import_keypairs(db: WalletDb) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn import_keypairs(
+    db: WalletDb,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
         .allow_headers(vec![

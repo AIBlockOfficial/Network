@@ -1,7 +1,7 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::interfaces::UserRequest;
-use crate::wallet::{WalletDb, AddressStore};
+use crate::wallet::{AddressStore, WalletDb};
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use tracing::error;
 /// Private/public keypairs, stored with payment address as key
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
-    addresses: BTreeMap<String, AddressStore>
+    addresses: BTreeMap<String, AddressStore>,
 }
 
 /// Information about a wallet to be returned to requester
@@ -26,7 +26,6 @@ pub struct PayeeInfo {
     pub address: String,
     pub amount: TokenAmount,
 }
-
 
 //======= GET HANDLERS =======//
 
@@ -58,17 +57,17 @@ pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply
     Ok(warp::reply::json(&Addresses { addresses }))
 }
 
-
 //======= POST HANDLERS =======//
 
 /// Post to import new keypairs to the connected wallet
 /// TODO: Requires a password
 pub async fn post_import_keypairs(
     db: WalletDb,
-    keypairs: Addresses
+    keypairs: Addresses,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     for (_, address_set) in keypairs.addresses.iter() {
-        db.store_payment_address(address_set.public_key, address_set.secret_key.clone()).await;
+        db.store_payment_address(address_set.public_key, address_set.secret_key.clone())
+            .await;
     }
 
     Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))

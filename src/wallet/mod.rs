@@ -274,7 +274,7 @@ impl WalletDb {
     /// Gets the address store based on a provided key
     ///
     /// ### Arguments
-    /// 
+    ///
     ///  * `key_addr` - Key to get the address store for
     pub fn get_address_store(&self, key_addr: &str) -> AddressStore {
         get_address_store(&self.db.lock().unwrap(), key_addr)
