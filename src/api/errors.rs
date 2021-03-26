@@ -5,5 +5,5 @@ impl warp::reject::Reject for ErrorCannotAccessWallet {}
 
 /// API error struct for inability to access user node
 #[derive(Debug)]
-pub struct ErrorCannotUserNode;
-impl warp::reject::Reject for ErrorCannotUserNode {}
+pub struct ErrorCannotAccessUserNode;
+impl warp::reject::Reject for ErrorCannotAccessUserNode {}

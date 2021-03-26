@@ -232,7 +232,11 @@ async fn main() {
 
         async move {
             use warp::Filter;
-            warp::serve(routes::wallet_info(db).or(routes::make_payment(node)))
+            warp::serve(
+                routes::wallet_info(db.clone())
+                .or(routes::make_payment(node))
+                .or(routes::wallet_keypairs(db))
+            )
                 .run(bind_address)
                 .await;
         }

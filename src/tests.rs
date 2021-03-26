@@ -1795,7 +1795,7 @@ async fn node_get_wallet_info(
         _ => panic!("node not found"),
     };
 
-    let addresses = wallet.get_known_address();
+    let addresses = wallet.get_known_addresses();
 
     let fund = wallet.get_fund_store();
     let total = fund.running_total();

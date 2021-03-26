@@ -12,14 +12,21 @@ fn with_db(db: WalletDb) -> impl Filter<Extract = (WalletDb,), Error = Infallibl
     warp::any().map(move || db.clone())
 }
 
+//======= GET ROUTES =======//
+
+// // GET CORS
+fn get_cors() -> warp::cors::Builder {
+    warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec!["*"])
+        .allow_methods(vec!["GET"])
+}
+
 // GET wallet info
 pub fn wallet_info(
     db: WalletDb,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    let cors = warp::cors()
-        .allow_any_origin()
-        .allow_headers(vec!["*"])
-        .allow_methods(vec!["GET"]);
+    let cors = get_cors();
 
     warp::path("wallet_info")
         .and(warp::get())
@@ -27,6 +34,22 @@ pub fn wallet_info(
         .and_then(handlers::get_wallet_info)
         .with(cors)
 }
+
+// GET all keypairs
+// TODO: Requires password
+pub fn wallet_keypairs(
+    db: WalletDb,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("wallet_keypairs")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(handlers::get_wallet_keypairs)
+        .with(cors)
+}
+
+//======= POST ROUTES =======//
 
 // POST make payment
 pub fn make_payment(
@@ -50,6 +73,6 @@ pub fn make_payment(
         .and(warp::post())
         .and(with_peer(peer))
         .and(warp::body::json())
-        .and_then(handlers::make_payment)
+        .and_then(handlers::post_make_payment)
         .with(cors)
 }
