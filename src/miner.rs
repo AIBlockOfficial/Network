@@ -3,7 +3,7 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response, StorageRequest,
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
@@ -124,6 +124,7 @@ pub struct MinerNode {
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
+    specified_block_received: Option<(Vec<u8>, SocketAddr)>,
 }
 
 impl MinerNode {
@@ -163,6 +164,7 @@ impl MinerNode {
             current_payment_address: None,
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
+            specified_block_received: Default::default(),
         }
         .load_local_db()
         .await?)
@@ -227,6 +229,10 @@ impl MinerNode {
                 warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
+            Ok(Response {
+                success: true,
+                reason: "Specified block received",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Received random number successfully",
@@ -390,6 +396,7 @@ impl MinerNode {
         trace!("handle_request: {:?}", req);
 
         match req {
+            SendSpecifiedBlock { block } => Some(self.receive_specified_block(peer, block)),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
             SendRandomNum {
@@ -414,6 +421,25 @@ impl MinerNode {
             success: true,
             reason: "Shutdown",
         })
+    }
+
+    /// Sends a request to retrieve a specific block from storage
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - Key of the block to retrieve from storage
+    /// * `peer` - Storage peer to send the request to
+    pub async fn request_specified_block(&mut self, key: String, peer: SocketAddr) -> Result<()> {
+        self.specified_block_received = None;
+        self.node
+            .send(peer, StorageRequest::GetSpecifiedBlock { key })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_specified_block_received(&mut self) -> &Option<(Vec<u8>, SocketAddr)> {
+        // &self.specified_block_received.map(|(block, peer)| {(block, peer)})
+        &self.specified_block_received
     }
 
     /// Handles the receipt of the random number of partitioning
@@ -820,8 +846,20 @@ impl MinerNode {
     }
 }
 
-impl MinerInterface for MinerNode {}
-
+impl MinerInterface for MinerNode {
+    fn receive_specified_block(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response {
+        //TODO: Do something with received block (success).
+        //TODO: Act on empty block received (failure).
+        match block.is_empty() {
+            true => self.specified_block_received = None,
+            false => self.specified_block_received = Some((block, peer)),
+        }
+        Response {
+            success: true,
+            reason: "Specified block received",
+        }
+    }
+}
 /// Load mining address from wallet
 async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
     Ok(wallet_db

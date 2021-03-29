@@ -5,10 +5,10 @@ use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec}
 use crate::constants::SANC_LIST_TEST;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
-    StorageRequest, UtxoSet,
+    StorageRequest, StoredSerializingBlock, UtxoSet,
 };
 use crate::miner::MinerNode;
-use crate::storage::{StorageNode, StoredSerializingBlock};
+use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
 use crate::transaction_gen::TransactionGen;
@@ -17,7 +17,7 @@ use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
     get_sanction_addresses, validate_pow_block, LocalEvent, ResponseResult,
 };
-use bincode::serialize;
+use bincode::{deserialize, serialize};
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -1641,6 +1641,59 @@ async fn handle_message_lost_common(
     test_step_complete(network).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn request_specified_block_no_raft() {
+    request_specified_block_common(complete_network_config(11360), CfgNum::All).await;
+}
+
+async fn request_specified_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+
+    let mut network = Network::create_from_config(&network_config).await;
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
+    send_block_to_storage_act(&mut network, cfg_num).await;
+    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
+    let block_key = stored0.unwrap().block_hash;
+    let non_existent = "non_existent".to_string();
+
+    //
+    // Act
+    //
+
+    node_connect_to(&mut network, "miner1", "storage1").await;
+    request_specified_block_act(&mut network, "miner1", "storage1", block_key).await;
+    let actual0 = miner_get_specified_block_received_num(&mut network, "miner1").await;
+
+    request_specified_block_act(&mut network, "miner1", "storage1", non_existent).await;
+    let non_existent = miner_get_specified_block_received_num(&mut network, "miner1").await;
+
+    //
+    // Assert
+    //
+
+    assert_eq!(actual0, Some(0));
+    assert_eq!(non_existent, None);
+
+    test_step_complete(network).await;
+}
+
+async fn request_specified_block_act(
+    network: &mut Network,
+    miner_from: &str,
+    storage_to: &str,
+    block_key: String,
+) {
+    miner_request_specified_block(network, &miner_from, &storage_to, block_key).await;
+    storage_handle_event(network, &storage_to, "Specified block fetched from storage").await;
+    storage_send_specified_block(network, &storage_to).await;
+    miner_handle_event(network, &miner_from, "Specified block received").await;
+}
+
 //
 // Node helpers
 //
@@ -2152,6 +2205,11 @@ async fn storage_inject_next_event(
     s.inject_next_event(from_addr, request).unwrap();
 }
 
+async fn storage_send_specified_block(network: &mut Network, from_storage: &str) {
+    let mut s = network.storage(from_storage).unwrap().lock().await;
+    s.send_specified_block().await.unwrap();
+}
+
 async fn storage_inject_send_block_to_storage(
     network: &mut Network,
     compute: &str,
@@ -2452,6 +2510,25 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 // MinerNode helpers
 //
+
+async fn miner_request_specified_block(
+    network: &mut Network,
+    miner_from: &str,
+    storage_to: &str,
+    block_key: String,
+) {
+    let mut m = network.miner(miner_from).unwrap().lock().await;
+    let to_addr = network.get_address(storage_to).await.unwrap();
+    m.request_specified_block(block_key, to_addr).await.unwrap();
+}
+
+async fn miner_get_specified_block_received_num(network: &mut Network, miner: &str) -> Option<u64> {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    let (block, _) = m.get_specified_block_received().await.as_ref()?;
+    let block: StoredSerializingBlock = deserialize(&block).ok()?;
+    Some(block.block.header.b_num)
+}
+
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
     miner_handle_event_for_node(&mut m, true, reason_val, &mut test_timeout()).await;
