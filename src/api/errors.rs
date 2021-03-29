@@ -7,3 +7,8 @@ impl warp::reject::Reject for ErrorCannotAccessWallet {}
 #[derive(Debug)]
 pub struct ErrorCannotAccessUserNode;
 impl warp::reject::Reject for ErrorCannotAccessUserNode {}
+
+/// API error struct for inability to save addresses to wallet
+#[derive(Debug)]
+pub struct ErrorCannotSaveAddressesToWallet;
+impl warp::reject::Reject for ErrorCannotSaveAddressesToWallet {}

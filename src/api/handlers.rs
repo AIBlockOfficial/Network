@@ -1,17 +1,18 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::interfaces::UserRequest;
-use crate::wallet::{AddressStore, WalletDb};
+use crate::wallet::WalletDb;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tracing::error;
 
-/// Private/public keypairs, stored with payment address as key
+/// Private/public keypairs, stored with payment address as key.
+/// Values are encrypted
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
-    addresses: BTreeMap<String, AddressStore>,
+    addresses: BTreeMap<String, Vec<u8>>,
 }
 
 /// Information about a wallet to be returned to requester
@@ -45,13 +46,12 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
 }
 
 /// Gets all present keys and sends them out for export
-/// TODO: This will need to be secured with encryption and a required password
 pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
     let known_addr = wallet_db.get_known_addresses();
     let mut addresses = BTreeMap::new();
 
     for addr in known_addr {
-        addresses.insert(addr.clone(), wallet_db.get_address_store(&addr));
+        addresses.insert(addr.clone(), wallet_db.get_address_store_encrypted(&addr));
     }
 
     Ok(warp::reply::json(&Addresses { addresses }))
@@ -60,14 +60,22 @@ pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply
 //======= POST HANDLERS =======//
 
 /// Post to import new keypairs to the connected wallet
-/// TODO: Requires a password
 pub async fn post_import_keypairs(
     db: WalletDb,
     keypairs: Addresses,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    for (_, address_set) in keypairs.addresses.iter() {
-        db.store_payment_address(address_set.public_key, address_set.secret_key.clone())
-            .await;
+    for (addr, address_set) in keypairs.addresses.iter() {
+        match db
+            .save_encrypted_address_to_wallet(addr.clone(), address_set.clone())
+            .await
+        {
+            Ok(_) => {}
+            Err(_e) => {
+                return Err(warp::reject::custom(
+                    errors::ErrorCannotSaveAddressesToWallet,
+                ))
+            }
+        }
     }
 
     Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
