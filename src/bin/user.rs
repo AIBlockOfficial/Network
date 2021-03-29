@@ -66,6 +66,12 @@ async fn main() {
                 .long("peer_user_connect")
                 .help("connect to a peer user node"),
         )
+        .arg(
+            Arg::with_name("passphrase")
+                .long("passphrase")
+                .help("Enter a password or passphase for the encryption of the Wallet.")
+                .takes_value(true),
+        )
         .get_matches();
 
     let (setup, config) = {
@@ -113,6 +119,10 @@ async fn main() {
 
         if let Some(index) = matches.value_of("peer_user_index") {
             settings.set("peer_user_node_idx", index).unwrap();
+        }
+
+        if let Some(index) = matches.value_of("passphrase") {
+            settings.set("passphrase", index).unwrap();
         }
 
         let setup: UserNodeSetup = settings.clone().try_into().unwrap();

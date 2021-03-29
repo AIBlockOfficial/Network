@@ -122,9 +122,13 @@ impl UserNode {
         let api_addr = SocketAddr::new(addr.ip(), config.api_port);
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
-        let wallet_db = WalletDb::new(config.user_db_mode, extra.wallet_db.take())
-            .with_seed(config.user_node_idx, &config.user_wallet_seeds)
-            .await;
+        let wallet_db = WalletDb::new(
+            config.user_db_mode,
+            extra.wallet_db.take(),
+            config.passphrase,
+        )
+        .with_seed(config.user_node_idx, &config.user_wallet_seeds)
+        .await;
 
         Ok(UserNode {
             node,
@@ -426,7 +430,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `compute_peer`    - Compute peer to send the payment tx to
-    /// /// * `payment_tx`      - Transaction to send
+    /// * `payment_tx`      - Transaction to send
     pub async fn send_next_payment_to_destinations(
         &mut self,
         compute_peer: SocketAddr,

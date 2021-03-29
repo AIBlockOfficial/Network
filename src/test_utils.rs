@@ -685,6 +685,7 @@ async fn init_miner(
         storage_nodes: info.storage_nodes.clone(),
         miner_nodes: info.miner_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
+        passphrase: Some("Test Passphrase".to_owned()),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -793,6 +794,7 @@ async fn init_user(
         user_nodes: info.user_nodes.clone(),
         api_port: 3000,
         user_wallet_seeds: config.user_wallet_seeds.clone(),
+        passphrase: Some("Test Passphrase".to_owned()),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);

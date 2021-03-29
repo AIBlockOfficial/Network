@@ -7,6 +7,8 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::primitives::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
+use sodiumoxide::crypto::pwhash;
+use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +18,9 @@ use tokio::task;
 
 mod fund_store;
 pub use fund_store::FundStore;
+
+///Storage key for a &[u8] of the word 'MasterKeyStore'
+pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
@@ -28,16 +33,27 @@ pub struct TransactionStore {
     pub key_address: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MasterKeyStore {
+    pub salt: pwhash::Salt,
+    pub nonce: secretbox::Nonce,
+    pub enc_master_key: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WalletDb {
     db: Arc<Mutex<SimpleDb>>,
+    encryption_key: secretbox::Key,
 }
 
 impl WalletDb {
-    pub fn new(db_mode: DbMode, db: Option<SimpleDb>) -> Self {
-        let db = db.unwrap_or_else(|| db_utils::new_db(db_mode, WALLET_PATH, ""));
+    pub fn new(db_mode: DbMode, db: Option<SimpleDb>, passphrase: Option<String>) -> Self {
+        let mut db = db.unwrap_or_else(|| db_utils::new_db(db_mode, WALLET_PATH, ""));
+        let passphrase = passphrase.as_deref().unwrap_or("").as_bytes();
+        let masterkey = get_or_save_master_key_store(&mut db, passphrase);
         Self {
             db: Arc::new(Mutex::new(db)),
+            encryption_key: masterkey,
         }
     }
 
@@ -103,6 +119,7 @@ impl WalletDb {
         keys: AddressStore,
     ) -> Result<(), Error> {
         let db = self.db.clone();
+        let encryption_key = self.encryption_key.clone();
         Ok(task::spawn_blocking(move || {
             // Wallet DB handling
             let mut db = db.lock().unwrap();
@@ -111,7 +128,7 @@ impl WalletDb {
             address_list.insert(address.clone());
 
             // Save to disk
-            save_address_store_to_wallet(&mut db, &address, &keys);
+            save_address_store_to_wallet(&mut db, &address, keys, encryption_key);
             set_known_key_address(&mut db, address_list);
         })
         .await?)
@@ -132,6 +149,7 @@ impl WalletDb {
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
             let store = TransactionStore { key_address };
+
             save_transaction_to_wallet(&mut db, &out_p, &store);
         })
         .await?)
@@ -190,9 +208,10 @@ impl WalletDb {
         amount_required: TokenAmount,
     ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
         let db = self.db.clone();
+        let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, amount_required)
+            fetch_inputs_for_payment_from_db(&db, amount_required, encryption_key)
         })
         .await
         .unwrap()
@@ -277,7 +296,11 @@ impl WalletDb {
     ///
     ///  * `key_addr` - Key to get the address store for
     pub fn get_address_store(&self, key_addr: &str) -> AddressStore {
-        get_address_store(&self.db.lock().unwrap(), key_addr)
+        get_address_store(
+            &self.db.lock().unwrap(),
+            key_addr,
+            self.encryption_key.clone(),
+        )
     }
 
     /// Get the wallet addresses
@@ -343,9 +366,20 @@ pub fn set_known_key_address(db: &mut SimpleDb, address_store: BTreeSet<String>)
 }
 
 /// Get the wallet AddressStore
-pub fn get_address_store(db: &SimpleDb, key_addr: &str) -> AddressStore {
+pub fn get_address_store(
+    db: &SimpleDb,
+    key_addr: &str,
+    encryption_key: secretbox::Key,
+) -> AddressStore {
     match db.get(key_addr) {
-        Ok(Some(store)) => deserialize(&store).unwrap(),
+        Ok(Some(store)) => {
+            let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
+            let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
+            match secretbox::open(&output.to_vec(), &nonce, &encryption_key) {
+                Ok(decrypted) => deserialize(&decrypted).unwrap(),
+                _ => panic!("Error accessing wallet"),
+            }
+        }
         Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
@@ -357,8 +391,19 @@ pub fn delete_address_store(db: &mut SimpleDb, key_addr: &str) {
 }
 
 /// Save AddressStore
-pub fn save_address_store_to_wallet(db: &mut SimpleDb, key_addr: &str, store: &AddressStore) {
-    let input = serialize(store).unwrap();
+pub fn save_address_store_to_wallet(
+    db: &mut SimpleDb,
+    key_addr: &str,
+    store: AddressStore,
+    encryption_key: secretbox::Key,
+) {
+    let input = {
+        let store = serialize(&store).unwrap();
+        let nonce = secretbox::gen_nonce();
+        let mut input: Vec<u8> = nonce.as_ref().to_vec();
+        input.append(&mut secretbox::seal(&store, &nonce, &encryption_key));
+        input
+    };
     db.put(key_addr, &input).unwrap();
 }
 
@@ -384,11 +429,63 @@ pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, store: &T
     db.put(&key, &input).unwrap();
 }
 
+/// Get the wallet salt store
+pub fn get_or_save_master_key_store(db: &mut SimpleDb, passphrase: &[u8]) -> secretbox::Key {
+    match db.get(MASTER_KEY_STORE_KEY) {
+        Ok(Some(store)) => {
+            let store: MasterKeyStore = deserialize(&store).unwrap();
+            let pass_key = make_key(passphrase, store.salt);
+            if let Ok(master_key) = secretbox::open(&store.enc_master_key, &store.nonce, &pass_key)
+            {
+                secretbox::Key::from_slice(&master_key).unwrap()
+            } else {
+                panic!("WalletDb: invalid passphrase");
+            }
+        }
+        Ok(None) => {
+            let salt = pwhash::gen_salt();
+            let master_key = secretbox::gen_key();
+            let nonce = secretbox::gen_nonce();
+            let pass_key = make_key(passphrase, salt);
+            let enc_master_key = secretbox::seal(master_key.as_ref(), &nonce, &pass_key);
+            let store = serialize(&MasterKeyStore {
+                salt,
+                nonce,
+                enc_master_key,
+            })
+            .unwrap();
+            db.put(MASTER_KEY_STORE_KEY, &store).unwrap();
+            master_key
+        }
+        Err(e) => panic!("Error accessing wallet: {:?}", e),
+    }
+}
+
+///Creates a secretbox key to be used for encryption and decryption
+///
+/// ### Arguments
+///
+/// * `passphrase` - String used as the password when creating the encryption key
+/// * `salt` - Salt value added to the passphrase to ensure safe encryption
+pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
+    let mut kb = [0; secretbox::KEYBYTES];
+    pwhash::derive_key(
+        &mut kb,
+        passphrase,
+        &salt,
+        pwhash::OPSLIMIT_INTERACTIVE,
+        pwhash::MEMLIMIT_INTERACTIVE,
+    )
+    .unwrap();
+    secretbox::Key(kb)
+}
+
 /// Make TxConstructors from stored TxOut
 /// Also return the used info for db cleanup
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
+    encryption_key: secretbox::Key,
 ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
@@ -402,7 +499,7 @@ pub fn fetch_inputs_for_payment_from_db(
     for (out_p, amount) in fund_store.into_transactions() {
         amount_made += amount;
 
-        let (cons, used) = tx_constructor_from_prev_out(db, out_p);
+        let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key.clone());
         tx_cons.push(cons);
         tx_used.push(used);
 
@@ -482,9 +579,10 @@ pub fn destroy_spent_transactions_and_keys(
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     out_p: OutPoint,
+    encryption_key: secretbox::Key,
 ) -> (TxConstructor, (OutPoint, String)) {
     let key_address = get_transaction_store(db, &out_p).key_address;
-    let needed_store = get_address_store(db, &key_address);
+    let needed_store = get_address_store(db, &key_address, encryption_key);
 
     let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
     let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
@@ -528,6 +626,26 @@ mod tests {
     }
 
     #[tokio::test(basic_scheduler)]
+    #[should_panic(expected = "WalletDb: invalid passphrase")]
+    async fn incorrect_password() {
+        //Arrange
+        let db = WalletDb::new(
+            DbMode::InMemory,
+            None,
+            Some(String::from("Test Passphrase1")),
+        )
+        .take_closed_persistent_store()
+        .await;
+
+        //Act/Panic - Wrong Passphrase
+        let _db = WalletDb::new(
+            DbMode::InMemory,
+            Some(db),
+            Some("Test Passphrase 2".to_owned()),
+        );
+    }
+
+    #[tokio::test(basic_scheduler)]
     async fn wallet_life_cycle() {
         //
         // Arrange
@@ -551,7 +669,7 @@ mod tests {
         //
         // Act
         //
-        let mut wallet = WalletDb::new(DbMode::InMemory, None);
+        let mut wallet = WalletDb::new(DbMode::InMemory, None, Some("Test Passphrase".to_owned()));
 
         // Unlinked keys and transactions
         let (_key_addr_unused, _) = wallet.generate_payment_address().await;
@@ -560,7 +678,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Store paiments
+        // Store payments
         let (key_addr1, _) = wallet.generate_payment_address().await;
         let (key_addr2, _) = wallet.generate_payment_address().await;
         let stored_usable = wallet
