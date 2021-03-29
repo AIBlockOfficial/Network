@@ -35,6 +35,18 @@ async fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("storage_index")
+                .long("storage_index")
+                .help("Endpoint index of a storage node that the miner should connect to")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("request_block")
+                .long("request_block")
+                .help("Hash of the block to request from history")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("passphrase")
                 .long("passphrase")
                 .help("Enter a password or passphase for the encryption of the Wallet.")
@@ -50,6 +62,7 @@ async fn main() {
 
         settings.set_default("miner_node_idx", 0).unwrap();
         settings.set_default("miner_compute_node_idx", 0).unwrap();
+        settings.set_default("miner_storage_node_idx", 0).unwrap();
         settings
             .merge(config::File::with_name(setting_file))
             .unwrap();
@@ -64,15 +77,18 @@ async fn main() {
         if let Some(index) = matches.value_of("compute_index") {
             settings.set("miner_compute_node_idx", index).unwrap();
         }
+        if let Some(index) = matches.value_of("storage_index") {
+            settings.set("miner_storage_node_idx", index).unwrap();
+        }
         if let Some(index) = matches.value_of("passphrase") {
             settings.set("passphrase", index).unwrap();
         }
         let config: MinerNodeConfig = settings.try_into().unwrap();
         config
     };
+
     println!("Start node with config {:?}", config);
     let mut node = MinerNode::new(config, Default::default()).await.unwrap();
-
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
@@ -92,7 +108,16 @@ async fn main() {
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
 
-    // Send any requests to the compute node here
+    // Send any requests here
+    if let Some(value) = matches.value_of("request_block") {
+        let storage_addr = node.storage_address();
+        println!("Connect to storage address: {:?}", storage_addr);
+        node.connect_to(storage_addr).await.unwrap();
+
+        node.request_specified_block(value.to_string())
+            .await
+            .unwrap()
+    };
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());

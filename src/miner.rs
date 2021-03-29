@@ -4,6 +4,7 @@ use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response, StorageRequest,
+    StoredSerializingBlock,
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
@@ -115,6 +116,7 @@ pub struct MinerNode {
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
+    storage_addr: SocketAddr,
     partition_key: Option<Key>,
     rand_num: Vec<u8>,
     current_block: Option<BlockPoWReceived>,
@@ -145,6 +147,11 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
             .address;
+        let storage_addr = config
+            .storage_nodes
+            .get(config.miner_storage_node_idx)
+            .ok_or(MinerError::ConfigError("Invalid storage index"))?
+            .address;
 
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
@@ -155,6 +162,7 @@ impl MinerNode {
                 config.passphrase,
             ),
             compute_addr,
+            storage_addr,
             partition_list: Default::default(),
             rand_num: Default::default(),
             partition_key: None,
@@ -179,6 +187,12 @@ impl MinerNode {
     pub fn compute_address(&self) -> SocketAddr {
         self.compute_addr
     }
+
+    /// Returns the node's storage endpoint.
+    pub fn storage_address(&self) -> SocketAddr {
+        self.storage_addr
+    }
+
     /// Connect to a peer on the network.
     ///
     /// ### Arguments
@@ -232,7 +246,20 @@ impl MinerNode {
             Ok(Response {
                 success: true,
                 reason: "Specified block received",
-            }) => {}
+            }) => {
+                match self
+                    .specified_block_received
+                    .as_ref()
+                    .map(|(v, _)| deserialize::<StoredSerializingBlock>(&v))
+                {
+                    Some(Ok(b)) => info!(
+                        "Successfully received specified block: b_num = {}, previous_hash = {:?}",
+                        b.block.header.b_num, b.block.header.previous_hash
+                    ),
+                    Some(Err(e)) => warn!("Received invalid block {:?}", e),
+                    None => warn!("Failed to retrieve specified block"),
+                };
+            }
             Ok(Response {
                 success: true,
                 reason: "Received random number successfully",
@@ -429,16 +456,15 @@ impl MinerNode {
     ///
     /// * `key` - Key of the block to retrieve from storage
     /// * `peer` - Storage peer to send the request to
-    pub async fn request_specified_block(&mut self, key: String, peer: SocketAddr) -> Result<()> {
+    pub async fn request_specified_block(&mut self, key: String) -> Result<()> {
         self.specified_block_received = None;
         self.node
-            .send(peer, StorageRequest::GetSpecifiedBlock { key })
+            .send(self.storage_addr, StorageRequest::GetSpecifiedBlock { key })
             .await?;
         Ok(())
     }
 
     pub async fn get_specified_block_received(&mut self) -> &Option<(Vec<u8>, SocketAddr)> {
-        // &self.specified_block_received.map(|(block, peer)| {(block, peer)})
         &self.specified_block_received
     }
 
