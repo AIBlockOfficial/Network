@@ -94,10 +94,8 @@ pub struct UserNode {
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     api_addr: SocketAddr,
-    assets: Vec<Asset>,
     trading_peer: Option<(SocketAddr, TokenAmount)>,
     next_payment: Option<(SocketAddr, Transaction)>,
-    return_payment: Option<ReturnPayment>,
     last_block_notified: Block,
 }
 
@@ -136,10 +134,8 @@ impl UserNode {
             local_events: Default::default(),
             compute_addr,
             api_addr,
-            assets: Vec::new(),
             trading_peer: None,
             next_payment: None,
-            return_payment: None,
             last_block_notified: Default::default(),
         })
     }
@@ -538,7 +534,6 @@ impl UserNode {
             .await;
         let payment_tx = construct_payments_tx(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
-        self.return_payment = None;
 
         Response {
             success: true,
