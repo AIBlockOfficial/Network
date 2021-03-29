@@ -348,17 +348,6 @@ impl fmt::Debug for ComputeRequest {
 }
 
 pub trait ComputeInterface {
-    /// Receives a PoW commit for UnicornShard creation
-    ///
-    /// ### Arguments
-    ///
-    /// * `address` - address for the peer providing the PoW
-    /// * `commit`  - PoW commit for potential inclusion
-    fn receive_commit(&mut self, peer: SocketAddr, commit: ProofOfWork) -> Response;
-
-    /// Returns the internal unicorn table
-    fn get_unicorn_table(&self) -> Vec<UnicornShard>;
-
     /// Partitions a set of provided UUIDs for key creation/agreement
     /// TODO: Figure out the correct return type
     fn partition(&self, uuids: Vec<&'static str>) -> Response;

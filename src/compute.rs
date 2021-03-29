@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
-use crate::constants::{DB_PATH, PEER_LIMIT, UNICORN_LIMIT};
+use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
@@ -9,7 +9,6 @@ use crate::interfaces::{
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest, UtxoSet,
 };
 use crate::raft::RaftCommit;
-use crate::unicorn::UnicornShard;
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
     serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address, LocalEvent,
@@ -29,7 +28,6 @@ use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
 use std::collections::{BTreeMap, BTreeSet};
 use std::{
-    collections::HashMap,
     error::Error,
     fmt,
     future::Future,
@@ -120,7 +118,6 @@ pub struct ComputeNode {
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
     druid_pool: BTreeMap<String, DruidDroplet>,
-    unicorn_limit: usize,
     current_random_num: Vec<u8>,
     partition_key: Option<Key>,
     partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
@@ -128,7 +125,6 @@ pub struct ComputeNode {
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
     storage_addr: SocketAddr,
-    unicorn_list: HashMap<SocketAddr, UnicornShard>,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
     coordiated_shudown: u64,
@@ -170,8 +166,6 @@ impl ComputeNode {
             node_raft,
             db,
             local_events: Default::default(),
-            unicorn_list: Default::default(),
-            unicorn_limit: UNICORN_LIMIT,
             current_mined_block: None,
             druid_pool: Default::default(),
             current_random_num: Self::generate_random_num(),
@@ -1161,46 +1155,6 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
-    /// recieves commit of ProofOfWork
-    ///
-    /// ### Arguments
-    ///
-    /// * `address`    - Address of the node commiting the proof of work
-    /// * `commit`     - ProofOfWork for a block coming from address address
-    fn receive_commit(&mut self, address: SocketAddr, commit: ProofOfWork) -> Response {
-        if let Some(entry) = self.unicorn_list.get_mut(&address) {
-            if entry.is_valid(commit.clone()) {
-                self.flood_commit_to_peers(address, &commit);
-                return Response {
-                    success: true,
-                    reason: "Commit received successfully",
-                };
-            }
-
-            return Response {
-                success: false,
-                reason: "Commit not valid. Rejecting...",
-            };
-        }
-
-        Response {
-            success: false,
-            reason: "The node submitting a commit never submitted a promise",
-        }
-    }
-
-    /// Returns the internal unicorn table in a Vector of the UnicornShards from unicorn_list.
-    /// The unicorn_list is a HashMap of the socketAddress and the UnicornShard
-    fn get_unicorn_table(&self) -> Vec<UnicornShard> {
-        let mut unicorn_table = Vec::with_capacity(self.unicorn_list.len());
-
-        for unicorn in self.unicorn_list.values() {
-            unicorn_table.push(unicorn.clone());
-        }
-
-        unicorn_table
-    }
-
     fn partition(&self, _uuids: Vec<&'static str>) -> Response {
         Response {
             success: false,
