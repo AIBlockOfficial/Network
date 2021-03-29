@@ -1,11 +1,18 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::interfaces::UserRequest;
-use crate::wallet::WalletDb;
+use crate::wallet::{AddressStore, WalletDb};
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracing::error;
+
+/// Private/public keypairs, stored with payment address as key
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Addresses {
+    addresses: BTreeMap<String, AddressStore>,
+}
 
 /// Information about a wallet to be returned to requester
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +26,8 @@ pub struct PayeeInfo {
     pub address: String,
     pub amount: TokenAmount,
 }
+
+//======= GET HANDLERS =======//
 
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
@@ -35,8 +44,37 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
     Ok(warp::reply::json(&send_val))
 }
 
+/// Gets all present keys and sends them out for export
+/// TODO: This will need to be secured with encryption and a required password
+pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
+    let known_addr = wallet_db.get_known_addresses();
+    let mut addresses = BTreeMap::new();
+
+    for addr in known_addr {
+        addresses.insert(addr.clone(), wallet_db.get_address_store(&addr));
+    }
+
+    Ok(warp::reply::json(&Addresses { addresses }))
+}
+
+//======= POST HANDLERS =======//
+
+/// Post to import new keypairs to the connected wallet
+/// TODO: Requires a password
+pub async fn post_import_keypairs(
+    db: WalletDb,
+    keypairs: Addresses,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    for (_, address_set) in keypairs.addresses.iter() {
+        db.store_payment_address(address_set.public_key, address_set.secret_key.clone())
+            .await;
+    }
+
+    Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
+}
+
 /// Post a new payment from the connected wallet.
-pub async fn make_payment(
+pub async fn post_make_payment(
     peer: Node,
     payee_info: PayeeInfo,
 ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -47,7 +85,7 @@ pub async fn make_payment(
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:make_payment error: {:?}", e);
-        return Err(warp::reject::custom(errors::ErrorCannotUserNode));
+        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
     }
 
     Ok(warp::reply::json(&"Payment processing".to_owned()))

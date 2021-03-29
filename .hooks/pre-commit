@@ -7,13 +7,6 @@ echo "//-----------------------------//"
 echo " "
 cargo fmt
 git add -A
-echo "\033[0;32mFormatting done...\033[0m"
-echo " "
-echo "//-----------------------------//"
-echo "Running CARGO test suite"
-echo "//-----------------------------//"
-echo " "
-cargo test
 
 if [ $? -ne 0 ]; then
     echo " "
