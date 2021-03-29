@@ -34,6 +34,12 @@ async fn main() {
                 .help("Endpoint index of a compute node that the miner should connect to")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("passphrase")
+                .long("passphrase")
+                .help("Enter a password or passphase for the encryption of the Wallet.")
+                .takes_value(true),
+        )
         .get_matches();
 
     let config = {
@@ -58,7 +64,9 @@ async fn main() {
         if let Some(index) = matches.value_of("compute_index") {
             settings.set("miner_compute_node_idx", index).unwrap();
         }
-
+        if let Some(index) = matches.value_of("passphrase") {
+            settings.set("passphrase", index).unwrap();
+        }
         let config: MinerNodeConfig = settings.try_into().unwrap();
         config
     };

@@ -114,6 +114,8 @@ pub struct MinerNodeConfig {
     pub miner_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
+    /// Option of the passphrase used for encryption
+    pub passphrase: Option<String>,
 }
 
 /// Configuration option for a user node
@@ -139,6 +141,8 @@ pub struct UserNodeConfig {
     pub api_port: u16,
     /// Wallet seeds
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
+    /// Option of the passphrase used for encryption
+    pub passphrase: Option<String>,
 }
 
 /// Configuration option for setup of user node

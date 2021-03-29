@@ -148,7 +148,11 @@ impl MinerNode {
         Ok(MinerNode {
             node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
             local_events: Default::default(),
-            wallet_db: WalletDb::new(config.miner_db_mode, extra.wallet_db.take()),
+            wallet_db: WalletDb::new(
+                config.miner_db_mode,
+                extra.wallet_db.take(),
+                config.passphrase,
+            ),
             compute_addr,
             partition_list: Default::default(),
             rand_num: Default::default(),
