@@ -39,6 +39,7 @@ lint:rustfmt:
     - merge_requests
   script:
     - rustup component add rustfmt
+    - rustc --version && cargo --version  # Print version info for debugging
     - cargo fmt -- --check
 
 lint:clippy:
@@ -50,4 +51,5 @@ lint:clippy:
       prefix: clippy
   script:
     - rustup component add clippy
+    - rustc --version && cargo --version  # Print version info for debugging
     - cargo clippy --all-targets -- -D warnings
