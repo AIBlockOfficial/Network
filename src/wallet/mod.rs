@@ -134,6 +134,30 @@ impl WalletDb {
         .await?)
     }
 
+    /// Saves an AddressStore to wallet in a directly encrypted state
+    ///
+    /// ### Arguments
+    ///
+    /// * `address` - Address to save to wallet
+    /// * `keys`    - Address-related keys in a pre-encrypted state
+    pub async fn save_encrypted_address_to_wallet(
+        &self,
+        address: String,
+        keys: Vec<u8>,
+    ) -> Result<(), Error> {
+        let db = self.db.clone();
+        Ok(task::spawn_blocking(move || {
+            let mut db = db.lock().unwrap();
+
+            let mut address_list = get_known_key_address(&db);
+            address_list.insert(address.clone());
+
+            db.put(address, keys).unwrap();
+            set_known_key_address(&mut db, address_list);
+        })
+        .await?)
+    }
+
     /// Saves an address and the associated transaction with it to the wallet
     ///
     /// ### Arguments
@@ -303,6 +327,16 @@ impl WalletDb {
         )
     }
 
+    /// Gets the address store based on a provided key, but returns
+    /// the result in an encrypted state for external storage
+    ///
+    /// ### Arguments
+    ///
+    ///  * `key_addr` - Key to get the address store for
+    pub fn get_address_store_encrypted(&self, key_addr: &str) -> Vec<u8> {
+        get_address_store_encrypted(&self.db.lock().unwrap(), key_addr)
+    }
+
     /// Get the wallet addresses
     pub fn get_known_addresses(&self) -> Vec<String> {
         get_known_key_address(&self.db.lock().unwrap())
@@ -363,6 +397,15 @@ pub fn get_known_key_address(db: &SimpleDb) -> BTreeSet<String> {
 pub fn set_known_key_address(db: &mut SimpleDb, address_store: BTreeSet<String>) {
     db.put(KNOWN_ADDRESS_KEY, &serialize(&address_store).unwrap())
         .unwrap();
+}
+
+/// Gets the wallet AddressStore in an encrypted state for external storage
+pub fn get_address_store_encrypted(db: &SimpleDb, key_addr: &str) -> Vec<u8> {
+    match db.get(key_addr) {
+        Ok(Some(store)) => store,
+        Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
+        Err(e) => panic!("Error accessing wallet: {:?}", e),
+    }
 }
 
 /// Get the wallet AddressStore
