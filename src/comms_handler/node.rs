@@ -613,7 +613,7 @@ impl Node {
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) -> Result<SocketAddr> {
         while let Some(message) = messages.next().await {
-            trace!(?message);
+            trace!(?message, "handle_peer_recv_handshake");
 
             match message {
                 CommMessage::HandshakeRequest {
@@ -621,8 +621,6 @@ impl Node {
                     node_type: t,
                     public_address,
                 } => {
-                    trace!(?peer_addr, ?public_address, ?v, ?t, "HandshakeRequest");
-
                     match self
                         .handle_handshake_request(peer_addr, public_address, send_tx.clone(), v, t)
                         .await
@@ -635,12 +633,24 @@ impl Node {
                         }
                     }
                 }
-                other => {
-                    warn!(
-                        ?other,
-                        "Received unexpected message while waiting for a handshake; ignoring"
-                    );
+                CommMessage::HandshakeResponse {
+                    network_version,
+                    node_type,
+                    contacts,
+                } => {
+                    match self
+                        .handle_handshake_response(peer_addr, network_version, node_type, contacts)
+                        .await
+                    {
+                        Ok(()) => return Ok(peer_addr),
+                        Err(e) => {
+                            // Drop peer since we don't expect handshake to succeed.
+                            warn!(?peer_addr, "handle_handshake_response: {}", e);
+                            return Err(e);
+                        }
+                    }
                 }
+                other => warn!(?other, "Ignoring unexpected message waiting for handshake"),
             };
         }
 
@@ -660,20 +670,6 @@ impl Node {
         while let Some(message) = messages.next().await {
             trace!(?message, "handle_peer_recv");
             match message {
-                CommMessage::HandshakeResponse {
-                    network_version,
-                    node_type,
-                    contacts,
-                } => {
-                    trace!(?network_version, ?node_type, ?contacts, "HandshakeResponse");
-
-                    if let Err(error) = self
-                        .handle_handshake_response(peer_addr, network_version, node_type, contacts)
-                        .await
-                    {
-                        warn!(?error, "handle_handshake_response");
-                    }
-                }
                 CommMessage::Direct {
                     payload: frame,
                     id: _,
@@ -807,6 +803,10 @@ impl Node {
         peer_type: NodeType,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
+        if network_version != self.network_version {
+            return Err(CommsError::PeerVersionMismatch);
+        }
+
         let mut all_peers = self.peers.write().await;
 
         // Notify the peer about the handshake response if someone's waiting for it.
@@ -902,7 +902,7 @@ impl Node {
             let peers = self.peers.clone();
             async move {
                 let mut messages = messages;
-                let public_address = if is_initiator {
+                let public_address = {
                     match node
                         .handle_peer_recv_handshake(peer_addr, send_tx, &mut messages)
                         .await
@@ -935,8 +935,6 @@ impl Node {
                             return;
                         }
                     }
-                } else {
-                    peer_addr
                 };
 
                 node.handle_peer_recv(public_address, messages).await;
