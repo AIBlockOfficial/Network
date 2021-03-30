@@ -1,6 +1,7 @@
 //! Tests for peer-to-peer communication.
 
 use super::{CommsError, Event, Node};
+use crate::constants::NETWORK_VERSION;
 use crate::interfaces::NodeType;
 use bincode::deserialize;
 use futures::future::join_all;
@@ -274,6 +275,48 @@ async fn connect_full(from_full: bool) {
     complete_compute_nodes(nodes).await;
 }
 
+/// Check 2 nodes with different version cannot establish connections.
+#[tokio::test(basic_scheduler)]
+async fn version_mismatch() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    //
+    // Arrange
+    //
+    let mut nodes = create_compute_nodes(1, 2).await;
+    nodes.push(create_compute_node_version(2, NETWORK_VERSION + 1).await);
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, _) = tail.split_first_mut().unwrap();
+
+    //
+    // Act
+    //
+    let actual_c1_2 = n1.connect_to(n2.address()).await;
+    let actual_c2_1 = n2.connect_to(n1.address()).await;
+    let actual_s2_1 = n2.send(n1.address(), "Hello1").await;
+    let actual_s1_2 = n1.send(n2.address(), "Hello2").await;
+
+    //
+    // Assert
+    //
+    let actual = (actual_c1_2, actual_c2_1, actual_s2_1, actual_s1_2);
+    assert!(
+        matches!(
+            actual,
+            (
+                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound),
+                Err(CommsError::PeerNotFound)
+            )
+        ),
+        "{:?}",
+        actual
+    );
+
+    complete_compute_nodes(nodes).await;
+}
+
 async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
     let mut nodes = Vec::new();
     for _ in 0..num_nodes {
@@ -285,6 +328,13 @@ async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> 
         );
     }
     nodes
+}
+
+async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
+    let addr = "127.0.0.1:0".parse().unwrap();
+    Node::new_with_version(addr, peer_limit, NodeType::Compute, network_version)
+        .await
+        .unwrap()
 }
 
 async fn complete_compute_nodes(nodes: Vec<Node>) {

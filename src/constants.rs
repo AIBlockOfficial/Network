@@ -1,7 +1,7 @@
 use naom::script::OpCodes;
 
 /*------- NETWORK CONSTANTS --------*/
-pub const NETWORK_VERSION: u8 = 0;
+pub const NETWORK_VERSION: u32 = 0;
 
 /*------- BLOCK CONSTANTS --------*/
 

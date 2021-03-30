@@ -81,6 +81,7 @@
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
 use super::{CommsError, Event, Result};
+use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
 use bincode::{deserialize, serialize};
@@ -121,6 +122,8 @@ type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
 /// An abstract communication interface in the network.
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Node network version.
+    network_version: u32,
     /// This node's listener address.
     listener_address: SocketAddr,
     /// Stop channel tx and joining handle for this node listener loop.
@@ -148,6 +151,8 @@ pub struct Node {
 }
 
 pub(crate) struct Peer {
+    /// Node network version.
+    network_version: Option<u32>,
     /// Channel for sending frames to the peer.
     send_tx: ResultBytesSender,
     /// Peer remote address.
@@ -192,6 +197,22 @@ impl Node {
     /// * `peer_limit` - the maximum number of peers that this node will handle.
     /// * `node_type`  - the node type that will be broadcasted on the network.
     pub async fn new(address: SocketAddr, peer_limit: usize, node_type: NodeType) -> Result<Self> {
+        Self::new_with_version(address, peer_limit, node_type, NETWORK_VERSION).await
+    }
+
+    /// Creates a new node.
+    ///
+    /// ### Arguments
+    /// * `address`         - socket address the node listener will use.
+    /// * `peer_limit`      - the maximum number of peers that this node will handle.
+    /// * `node_type`       - the node type that will be broadcasted on the network.
+    /// * `network_version` - The version of the network the node is running.
+    pub async fn new_with_version(
+        address: SocketAddr,
+        peer_limit: usize,
+        node_type: NodeType,
+        network_version: u32,
+    ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // TODO: wrap this socket with TLS 1.3 - https://github.com/tokio-rs/tls
@@ -208,6 +229,7 @@ impl Node {
         let span = info_span!("node", ?listener_address);
 
         Ok(Self {
+            network_version,
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
             listener_and_connect_paused: Arc::new(RwLock::new(false)),
@@ -354,7 +376,7 @@ impl Node {
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         trace!(?peer, "connection attempt");
         self.connect_to_peer(peer).await?;
-        self.send_handshake(peer, self.node_type).await?;
+        self.send_handshake(peer).await?;
 
         // Wait for a handshake response
         let handshake_response = {
@@ -544,11 +566,12 @@ impl Node {
     }
 
     /// Prepares and sends a handshake message to a given peer.
-    async fn send_handshake(&mut self, peer: SocketAddr, node_type: NodeType) -> Result<()> {
+    async fn send_handshake(&mut self, peer: SocketAddr) -> Result<()> {
         self.send_message(
             peer,
             CommMessage::HandshakeRequest {
-                node_type,
+                network_version: self.network_version,
+                node_type: self.node_type,
                 public_address: self.listener_address,
             },
         )
@@ -594,29 +617,22 @@ impl Node {
 
             match message {
                 CommMessage::HandshakeRequest {
-                    node_type,
+                    network_version: v,
+                    node_type: t,
                     public_address,
                 } => {
-                    trace!(?peer_addr, ?public_address, ?node_type, "HandshakeRequest");
+                    trace!(?peer_addr, ?public_address, ?v, ?t, "HandshakeRequest");
 
                     match self
-                        .handle_handshake_request(
-                            peer_addr,
-                            public_address,
-                            send_tx.clone(),
-                            node_type,
-                        )
+                        .handle_handshake_request(peer_addr, public_address, send_tx.clone(), v, t)
                         .await
                     {
-                        Ok(()) => {
-                            return Ok(public_address);
+                        Ok(()) => return Ok(public_address),
+                        Err(e) => {
+                            // Drop peer since we don't expect handshake to succeed.
+                            warn!(?public_address, "handle_handshake_request: {}", e);
+                            return Err(e);
                         }
-                        Err(CommsError::PeerDuplicate) => {
-                            // Drop a duplicate connection.
-                            warn!(?public_address, "duplicate peer");
-                            return Err(CommsError::PeerDuplicate);
-                        }
-                        Err(error) => warn!(?error, "handle_handshake_request"),
                     }
                 }
                 other => {
@@ -644,10 +660,17 @@ impl Node {
         while let Some(message) = messages.next().await {
             trace!(?message, "handle_peer_recv");
             match message {
-                CommMessage::HandshakeResponse { contacts } => {
-                    trace!(?contacts, "HandshakeResponse");
+                CommMessage::HandshakeResponse {
+                    network_version,
+                    node_type,
+                    contacts,
+                } => {
+                    trace!(?network_version, ?node_type, ?contacts, "HandshakeResponse");
 
-                    if let Err(error) = self.handle_handshake_response(peer_addr, contacts).await {
+                    if let Err(error) = self
+                        .handle_handshake_response(peer_addr, network_version, node_type, contacts)
+                        .await
+                    {
                         warn!(?error, "handle_handshake_response");
                     }
                 }
@@ -742,11 +765,14 @@ impl Node {
         peer_out_addr: SocketAddr,
         peer_in_addr: SocketAddr,
         mut send_tx: ResultBytesSender,
+        network_version: u32,
         peer_type: NodeType,
     ) -> Result<()> {
-        let mut all_peers = self.peers.write().await;
+        if network_version != self.network_version {
+            return Err(CommsError::PeerVersionMismatch);
+        }
 
-        // Check if we already have a connection to this peer.
+        let mut all_peers = self.peers.write().await;
         if all_peers.contains_key(&peer_in_addr) {
             return Err(CommsError::PeerDuplicate);
         }
@@ -755,12 +781,17 @@ impl Node {
             .get_mut(&peer_out_addr)
             .ok_or(CommsError::PeerNotFound)?;
 
+        peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);
         peer.public_address = Some(peer_in_addr);
 
         // Send handshake response which will contain contacts of all valid peers within our ring.
-        let contacts = self.ring_peers(&all_peers).collect();
-        let message = Bytes::from(serialize(&CommMessage::HandshakeResponse { contacts })?);
+        let response = CommMessage::HandshakeResponse {
+            network_version: self.network_version,
+            node_type: self.node_type,
+            contacts: self.ring_peers(&all_peers).collect(),
+        };
+        let message = Bytes::from(serialize(&response)?);
         self.send_bytes(peer_out_addr, &mut send_tx, message)
             .await?;
 
@@ -772,6 +803,8 @@ impl Node {
     async fn handle_handshake_response(
         &self,
         peer_addr: SocketAddr,
+        network_version: u32,
+        peer_type: NodeType,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
         let mut all_peers = self.peers.write().await;
@@ -781,6 +814,9 @@ impl Node {
             let peer = all_peers
                 .get_mut(&peer_addr)
                 .ok_or(CommsError::PeerNotFound)?;
+            peer.network_version = Some(network_version);
+            peer.peer_type = Some(peer_type);
+
             if let Some(notify) = peer.notify_handshake_response.0.take() {
                 notify.send(()).unwrap();
             }
@@ -914,6 +950,7 @@ impl Node {
         });
 
         Peer {
+            network_version: None,
             addr: peer_addr,
             send_tx: send_tx.into(),
             peer_type: None,

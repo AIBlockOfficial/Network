@@ -126,13 +126,22 @@ pub type Token = u64;
 pub enum CommMessage {
     /// Handshake request that peers send when they connect to someone.
     HandshakeRequest {
-        /// Type of node that's trying to establish a connection.
+        /// Node network version.
+        network_version: u32,
+        /// Type of node sending the request.
         node_type: NodeType,
         /// Publicly available socket address of the node that can be used for inbound connections.
         public_address: SocketAddr,
     },
-    /// Handshake response containing contacts of ring members.
-    HandshakeResponse { contacts: Vec<SocketAddr> },
+    /// Handshake response.
+    HandshakeResponse {
+        /// Node network version.
+        network_version: u32,
+        /// Type of node sending the response.
+        node_type: NodeType,
+        /// contacts of ring members.
+        contacts: Vec<SocketAddr>,
+    },
     /// Gossip message, multicast to all peers within the same ring.
     Gossip {
         /// Contents of the gossip message. Can encapsulate other message types.
