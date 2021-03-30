@@ -62,11 +62,6 @@ async fn main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("peer_user_connect")
-                .long("peer_user_connect")
-                .help("connect to a peer user node"),
-        )
-        .arg(
             Arg::with_name("passphrase")
                 .long("passphrase")
                 .help("Enter a password or passphase for the encryption of the Wallet.")
@@ -133,26 +128,15 @@ async fn main() {
     println!("Start node with setup {:?}", setup);
     println!();
 
-    let peer_user_node_connected = if matches.is_present("peer_user_connect") {
-        Some(
-            config
-                .user_nodes
-                .get(config.peer_user_node_idx)
-                .unwrap()
-                .address,
-        )
-    } else {
-        None
-    };
-
     // Handle a payment amount
     let amount_to_send = match matches.value_of("amount").map(|a| a.parse::<u64>()) {
-        None => TokenAmount(0),
-        Some(Ok(v)) => TokenAmount(v as u64),
+        None => None,
+        Some(Ok(v)) => Some(TokenAmount(v)),
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
     let user_node_idx = config.user_node_idx;
+    let peer_user_node = *config.user_nodes.get(config.peer_user_node_idx).unwrap();
     let mut node = UserNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
@@ -177,13 +161,10 @@ async fn main() {
 
     // Send any requests here
 
-    if let Some(peer_user_node) = peer_user_node_connected {
-        println!("Connect to user address: {:?}", peer_user_node);
-        // Connect to a peer user node for payment.
-        node.connect_to(peer_user_node).await.unwrap();
-
-        // Request a new payment address from peer user
-        node.send_address_request(peer_user_node, amount_to_send)
+    if let Some(amount_to_send) = amount_to_send {
+        println!("Connect to user address: {:?}", peer_user_node.address);
+        node.connect_to(peer_user_node.address).await.unwrap();
+        node.send_address_request(peer_user_node.address, amount_to_send)
             .await
             .unwrap();
     }

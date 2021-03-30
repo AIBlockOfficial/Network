@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
 
 /// Configuration info for a node
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct NodeSpec {
     pub address: SocketAddr,
 }
