@@ -81,6 +81,7 @@
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
 use super::{CommsError, Event, Result};
+use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
 use bincode::{deserialize, serialize};
@@ -121,6 +122,8 @@ type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
 /// An abstract communication interface in the network.
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Node network version.
+    network_version: u32,
     /// This node's listener address.
     listener_address: SocketAddr,
     /// Stop channel tx and joining handle for this node listener loop.
@@ -148,6 +151,8 @@ pub struct Node {
 }
 
 pub(crate) struct Peer {
+    /// Node network version.
+    network_version: Option<u32>,
     /// Channel for sending frames to the peer.
     send_tx: ResultBytesSender,
     /// Peer remote address.
@@ -192,6 +197,22 @@ impl Node {
     /// * `peer_limit` - the maximum number of peers that this node will handle.
     /// * `node_type`  - the node type that will be broadcasted on the network.
     pub async fn new(address: SocketAddr, peer_limit: usize, node_type: NodeType) -> Result<Self> {
+        Self::new_with_version(address, peer_limit, node_type, NETWORK_VERSION).await
+    }
+
+    /// Creates a new node.
+    ///
+    /// ### Arguments
+    /// * `address`         - socket address the node listener will use.
+    /// * `peer_limit`      - the maximum number of peers that this node will handle.
+    /// * `node_type`       - the node type that will be broadcasted on the network.
+    /// * `network_version` - The version of the network the node is running.
+    pub async fn new_with_version(
+        address: SocketAddr,
+        peer_limit: usize,
+        node_type: NodeType,
+        network_version: u32,
+    ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // TODO: wrap this socket with TLS 1.3 - https://github.com/tokio-rs/tls
@@ -208,6 +229,7 @@ impl Node {
         let span = info_span!("node", ?listener_address);
 
         Ok(Self {
+            network_version,
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
             listener_and_connect_paused: Arc::new(RwLock::new(false)),
@@ -320,7 +342,9 @@ impl Node {
     /// Return collection of unconnected peers.
     pub async fn unconnected_peers(&self, peers: &[SocketAddr]) -> Vec<SocketAddr> {
         let connected = self.peers.read().await;
-        let unconnected = peers.iter().filter(|p| !connected.contains_key(p));
+        let unconnected = peers
+            .iter()
+            .filter(|p| connected.get(p).and_then(|p| p.network_version).is_none());
         unconnected.copied().collect()
     }
 
@@ -354,8 +378,13 @@ impl Node {
     pub async fn connect_to(&mut self, peer: SocketAddr) -> Result<()> {
         trace!(?peer, "connection attempt");
         self.connect_to_peer(peer).await?;
-        self.send_handshake(peer, self.node_type).await?;
+        self.send_handshake(peer).await?;
+        self.wait_handshake_response(peer).await?;
+        Ok(())
+    }
 
+    /// Wait for the handshake response to be received
+    async fn wait_handshake_response(&mut self, peer: SocketAddr) -> Result<()> {
         // Wait for a handshake response
         let handshake_response = {
             let mut peers = self.peers.write().await;
@@ -509,11 +538,7 @@ impl Node {
     }
 
     /// Sends data to a peer.
-    pub(crate) async fn send_message(
-        &mut self,
-        peer_addr: SocketAddr,
-        message: CommMessage,
-    ) -> Result<()> {
+    async fn send_message(&mut self, peer_addr: SocketAddr, message: CommMessage) -> Result<()> {
         let data = Bytes::from(serialize(&message)?);
 
         let peers = self.peers.read().await;
@@ -544,11 +569,12 @@ impl Node {
     }
 
     /// Prepares and sends a handshake message to a given peer.
-    async fn send_handshake(&mut self, peer: SocketAddr, node_type: NodeType) -> Result<()> {
+    async fn send_handshake(&mut self, peer: SocketAddr) -> Result<()> {
         self.send_message(
             peer,
             CommMessage::HandshakeRequest {
-                node_type,
+                network_version: self.network_version,
+                node_type: self.node_type,
                 public_address: self.listener_address,
             },
         )
@@ -590,41 +616,44 @@ impl Node {
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) -> Result<SocketAddr> {
         while let Some(message) = messages.next().await {
-            trace!(?message);
+            trace!(?message, "handle_peer_recv_handshake");
 
             match message {
                 CommMessage::HandshakeRequest {
-                    node_type,
+                    network_version: v,
+                    node_type: t,
                     public_address,
                 } => {
-                    trace!(?peer_addr, ?public_address, ?node_type, "HandshakeRequest");
-
                     match self
-                        .handle_handshake_request(
-                            peer_addr,
-                            public_address,
-                            send_tx.clone(),
-                            node_type,
-                        )
+                        .handle_handshake_request(peer_addr, public_address, send_tx.clone(), v, t)
                         .await
                     {
-                        Ok(()) => {
-                            return Ok(public_address);
+                        Ok(()) => return Ok(public_address),
+                        Err(e) => {
+                            // Drop peer since we don't expect handshake to succeed.
+                            warn!(?public_address, "handle_handshake_request: {}", e);
+                            return Err(e);
                         }
-                        Err(CommsError::PeerDuplicate) => {
-                            // Drop a duplicate connection.
-                            warn!(?public_address, "duplicate peer");
-                            return Err(CommsError::PeerDuplicate);
-                        }
-                        Err(error) => warn!(?error, "handle_handshake_request"),
                     }
                 }
-                other => {
-                    warn!(
-                        ?other,
-                        "Received unexpected message while waiting for a handshake; ignoring"
-                    );
+                CommMessage::HandshakeResponse {
+                    network_version,
+                    node_type,
+                    contacts,
+                } => {
+                    match self
+                        .handle_handshake_response(peer_addr, network_version, node_type, contacts)
+                        .await
+                    {
+                        Ok(()) => return Ok(peer_addr),
+                        Err(e) => {
+                            // Drop peer since we don't expect handshake to succeed.
+                            warn!(?peer_addr, "handle_handshake_response: {}", e);
+                            return Err(e);
+                        }
+                    }
                 }
+                other => warn!(?other, "Ignoring unexpected message waiting for handshake"),
             };
         }
 
@@ -644,13 +673,6 @@ impl Node {
         while let Some(message) = messages.next().await {
             trace!(?message, "handle_peer_recv");
             match message {
-                CommMessage::HandshakeResponse { contacts } => {
-                    trace!(?contacts, "HandshakeResponse");
-
-                    if let Err(error) = self.handle_handshake_response(peer_addr, contacts).await {
-                        warn!(?error, "handle_handshake_response");
-                    }
-                }
                 CommMessage::Direct {
                     payload: frame,
                     id: _,
@@ -742,11 +764,14 @@ impl Node {
         peer_out_addr: SocketAddr,
         peer_in_addr: SocketAddr,
         mut send_tx: ResultBytesSender,
+        network_version: u32,
         peer_type: NodeType,
     ) -> Result<()> {
-        let mut all_peers = self.peers.write().await;
+        if network_version != self.network_version {
+            return Err(CommsError::PeerVersionMismatch);
+        }
 
-        // Check if we already have a connection to this peer.
+        let mut all_peers = self.peers.write().await;
         if all_peers.contains_key(&peer_in_addr) {
             return Err(CommsError::PeerDuplicate);
         }
@@ -755,12 +780,17 @@ impl Node {
             .get_mut(&peer_out_addr)
             .ok_or(CommsError::PeerNotFound)?;
 
+        peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);
         peer.public_address = Some(peer_in_addr);
 
         // Send handshake response which will contain contacts of all valid peers within our ring.
-        let contacts = self.ring_peers(&all_peers).collect();
-        let message = Bytes::from(serialize(&CommMessage::HandshakeResponse { contacts })?);
+        let response = CommMessage::HandshakeResponse {
+            network_version: self.network_version,
+            node_type: self.node_type,
+            contacts: self.ring_peers(&all_peers).collect(),
+        };
+        let message = Bytes::from(serialize(&response)?);
         self.send_bytes(peer_out_addr, &mut send_tx, message)
             .await?;
 
@@ -772,8 +802,14 @@ impl Node {
     async fn handle_handshake_response(
         &self,
         peer_addr: SocketAddr,
+        network_version: u32,
+        peer_type: NodeType,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
+        if network_version != self.network_version {
+            return Err(CommsError::PeerVersionMismatch);
+        }
+
         let mut all_peers = self.peers.write().await;
 
         // Notify the peer about the handshake response if someone's waiting for it.
@@ -781,6 +817,9 @@ impl Node {
             let peer = all_peers
                 .get_mut(&peer_addr)
                 .ok_or(CommsError::PeerNotFound)?;
+            peer.network_version = Some(network_version);
+            peer.peer_type = Some(peer_type);
+
             if let Some(notify) = peer.notify_handshake_response.0.take() {
                 notify.send(()).unwrap();
             }
@@ -866,7 +905,7 @@ impl Node {
             let peers = self.peers.clone();
             async move {
                 let mut messages = messages;
-                let public_address = if is_initiator {
+                let public_address = {
                     match node
                         .handle_peer_recv_handshake(peer_addr, send_tx, &mut messages)
                         .await
@@ -899,8 +938,6 @@ impl Node {
                             return;
                         }
                     }
-                } else {
-                    peer_addr
                 };
 
                 node.handle_peer_recv(public_address, messages).await;
@@ -914,6 +951,7 @@ impl Node {
         });
 
         Peer {
+            network_version: None,
             addr: peer_addr,
             send_tx: send_tx.into(),
             peer_type: None,
@@ -967,4 +1005,82 @@ fn take_join_handles<'a>(peers: impl Iterator<Item = &'a mut Peer>) -> Vec<JoinH
         .map(|p| &mut p.sock_in_out_join_handles)
         .flat_map(|hs| hs.0.take().into_iter().chain(hs.1.take()))
         .collect()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test(basic_scheduler)]
+    async fn handshake_processing() {
+        //
+        // Arrange
+        //
+        let mut n1 = create_compute_node_version(2, 0).await;
+        let mut n2 = create_compute_node_version(2, 0).await;
+        let conn_address_1 = vec![n2.address()];
+        let conn_address_2 = vec![n1.address()];
+
+        //
+        // Act
+        //
+
+        // No handshake
+        n1.connect_to_peer(n2.address()).await.unwrap();
+        let n2_n1_addres = {
+            while n2.sample_peers(1).await.is_empty() {
+                tokio::time::delay_for(Duration::from_millis(10)).await;
+            }
+            n2.sample_peers(1).await.into_iter().next().unwrap()
+        };
+        n1.send(n2.address(), "HelloDropped2").await.unwrap();
+        n2.send(n2_n1_addres, "HelloDropped1").await.unwrap();
+
+        let no_handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
+        let no_handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
+
+        // Send handshake
+        n1.send_handshake(n2.address()).await.unwrap();
+        n1.wait_handshake_response(n2.address()).await.unwrap();
+        n1.send(n2.address(), "Hello2").await.unwrap();
+        n2.send(n1.address(), "Hello1").await.unwrap();
+        let handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
+        let handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
+
+        //
+        // Assert
+        //
+        if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
+            let recv_frame: &str = deserialize(&frame).unwrap();
+            assert_eq!(recv_frame, "Hello1");
+        }
+        if let Some(Event::NewFrame { peer: _, frame }) = n2.next_event().await {
+            let recv_frame: &str = deserialize(&frame).unwrap();
+            assert_eq!(recv_frame, "Hello2");
+        }
+
+        assert_eq!(
+            (
+                (no_handshake_unconn_1, no_handshake_unconn_2),
+                (handshake_unconn_1, handshake_unconn_2)
+            ),
+            ((conn_address_1, conn_address_2), (vec![], vec![]))
+        );
+
+        complete_compute_nodes(vec![n1, n2]).await;
+    }
+
+    async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        Node::new_with_version(addr, peer_limit, NodeType::Compute, network_version)
+            .await
+            .unwrap()
+    }
+
+    async fn complete_compute_nodes(nodes: Vec<Node>) {
+        for mut node in nodes.into_iter() {
+            join_all(node.stop_listening().await).await;
+        }
+    }
 }
