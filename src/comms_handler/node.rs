@@ -342,7 +342,9 @@ impl Node {
     /// Return collection of unconnected peers.
     pub async fn unconnected_peers(&self, peers: &[SocketAddr]) -> Vec<SocketAddr> {
         let connected = self.peers.read().await;
-        let unconnected = peers.iter().filter(|p| !connected.contains_key(p));
+        let unconnected = peers
+            .iter()
+            .filter(|p| connected.get(p).and_then(|p| p.network_version).is_none());
         unconnected.copied().collect()
     }
 
@@ -377,7 +379,12 @@ impl Node {
         trace!(?peer, "connection attempt");
         self.connect_to_peer(peer).await?;
         self.send_handshake(peer).await?;
+        self.wait_handshake_response(peer).await?;
+        Ok(())
+    }
 
+    /// Wait for the handshake response to be received
+    async fn wait_handshake_response(&mut self, peer: SocketAddr) -> Result<()> {
         // Wait for a handshake response
         let handshake_response = {
             let mut peers = self.peers.write().await;
@@ -531,11 +538,7 @@ impl Node {
     }
 
     /// Sends data to a peer.
-    pub(crate) async fn send_message(
-        &mut self,
-        peer_addr: SocketAddr,
-        message: CommMessage,
-    ) -> Result<()> {
+    async fn send_message(&mut self, peer_addr: SocketAddr, message: CommMessage) -> Result<()> {
         let data = Bytes::from(serialize(&message)?);
 
         let peers = self.peers.read().await;
@@ -1002,4 +1005,82 @@ fn take_join_handles<'a>(peers: impl Iterator<Item = &'a mut Peer>) -> Vec<JoinH
         .map(|p| &mut p.sock_in_out_join_handles)
         .flat_map(|hs| hs.0.take().into_iter().chain(hs.1.take()))
         .collect()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test(basic_scheduler)]
+    async fn handshake_processing() {
+        //
+        // Arrange
+        //
+        let mut n1 = create_compute_node_version(2, 0).await;
+        let mut n2 = create_compute_node_version(2, 0).await;
+        let conn_address_1 = vec![n2.address()];
+        let conn_address_2 = vec![n1.address()];
+
+        //
+        // Act
+        //
+
+        // No handshake
+        n1.connect_to_peer(n2.address()).await.unwrap();
+        let n2_n1_addres = {
+            while n2.sample_peers(1).await.is_empty() {
+                tokio::time::delay_for(Duration::from_millis(10)).await;
+            }
+            n2.sample_peers(1).await.into_iter().next().unwrap()
+        };
+        n1.send(n2.address(), "HelloDropped2").await.unwrap();
+        n2.send(n2_n1_addres, "HelloDropped1").await.unwrap();
+
+        let no_handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
+        let no_handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
+
+        // Send handshake
+        n1.send_handshake(n2.address()).await.unwrap();
+        n1.wait_handshake_response(n2.address()).await.unwrap();
+        n1.send(n2.address(), "Hello2").await.unwrap();
+        n2.send(n1.address(), "Hello1").await.unwrap();
+        let handshake_unconn_1 = n1.unconnected_peers(&conn_address_1).await;
+        let handshake_unconn_2 = n2.unconnected_peers(&conn_address_2).await;
+
+        //
+        // Assert
+        //
+        if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
+            let recv_frame: &str = deserialize(&frame).unwrap();
+            assert_eq!(recv_frame, "Hello1");
+        }
+        if let Some(Event::NewFrame { peer: _, frame }) = n2.next_event().await {
+            let recv_frame: &str = deserialize(&frame).unwrap();
+            assert_eq!(recv_frame, "Hello2");
+        }
+
+        assert_eq!(
+            (
+                (no_handshake_unconn_1, no_handshake_unconn_2),
+                (handshake_unconn_1, handshake_unconn_2)
+            ),
+            ((conn_address_1, conn_address_2), (vec![], vec![]))
+        );
+
+        complete_compute_nodes(vec![n1, n2]).await;
+    }
+
+    async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        Node::new_with_version(addr, peer_limit, NodeType::Compute, network_version)
+            .await
+            .unwrap()
+    }
+
+    async fn complete_compute_nodes(nodes: Vec<Node>) {
+        for mut node in nodes.into_iter() {
+            join_all(node.stop_listening().await).await;
+        }
+    }
 }
