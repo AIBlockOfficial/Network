@@ -1688,7 +1688,7 @@ async fn request_specified_block_act(
     storage_to: &str,
     block_key: String,
 ) {
-    miner_request_specified_block(network, &miner_from, &storage_to, block_key).await;
+    miner_request_specified_block(network, &miner_from, block_key).await;
     storage_handle_event(network, &storage_to, "Specified block fetched from storage").await;
     storage_send_specified_block(network, &storage_to).await;
     miner_handle_event(network, &miner_from, "Specified block received").await;
@@ -2511,15 +2511,9 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 // MinerNode helpers
 //
 
-async fn miner_request_specified_block(
-    network: &mut Network,
-    miner_from: &str,
-    storage_to: &str,
-    block_key: String,
-) {
+async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: String) {
     let mut m = network.miner(miner_from).unwrap().lock().await;
-    let to_addr = network.get_address(storage_to).await.unwrap();
-    m.request_specified_block(block_key, to_addr).await.unwrap();
+    m.request_specified_block(block_key).await.unwrap();
 }
 
 async fn miner_get_specified_block_received_num(network: &mut Network, miner: &str) -> Option<u64> {
@@ -2895,6 +2889,5 @@ fn complete_network_config_with_n_compute_miner(
         }
         mapping
     };
-
     cfg
 }

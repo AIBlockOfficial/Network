@@ -681,6 +681,7 @@ async fn init_miner(
         miner_node_idx: node_info.index,
         miner_db_mode: node_info.db_mode,
         miner_compute_node_idx,
+        miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         miner_nodes: info.miner_nodes.clone(),

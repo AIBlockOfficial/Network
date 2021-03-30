@@ -41,6 +41,9 @@ address = "127.0.0.1:12344"
 [[miner_nodes]]
 address = "127.0.0.1:12345"
 
+[[miner_nodes]]
+address = "127.0.0.1:12346"
+
 [[user_nodes]]
 address = "127.0.0.1:12360"
 

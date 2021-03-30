@@ -106,6 +106,8 @@ pub struct MinerNodeConfig {
     pub miner_db_mode: DbMode,
     /// Index of the compute node to use in compute_nodes
     pub miner_compute_node_idx: usize,
+    /// Index of the storage node to use in storage_nodes
+    pub miner_storage_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
