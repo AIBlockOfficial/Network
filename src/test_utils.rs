@@ -605,7 +605,7 @@ fn node_infos(
             (
                 name.clone(),
                 NetworkNodeInfo {
-                    node_spec: node_spec.clone(),
+                    node_spec: *node_spec,
                     node_type,
                     db_mode: if in_memory_db {
                         DbMode::InMemory
