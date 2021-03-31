@@ -1,12 +1,13 @@
 use crate::configurations::DbMode;
 use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST};
 pub use rocksdb::Error as DBError;
-use rocksdb::{DBCompressionType, IteratorMode, Options, DB};
+use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 use std::collections::HashMap;
 use std::fmt;
 use tracing::{debug, warn};
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
+pub type InMemoryWriteBatch = Vec<(Vec<u8>, Option<Vec<u8>>)>;
 
 /// Database that can store in memory or using rocksDB.
 pub enum SimpleDb {
@@ -61,6 +62,40 @@ impl SimpleDb {
             }
             Self::InMemory { .. } => (),
         }
+    }
+
+    pub fn batch_writer(&self) -> SimpleDbWriteBatch {
+        match self {
+            Self::File { .. } => SimpleDbWriteBatch::File {
+                write: Default::default(),
+            },
+            Self::InMemory { .. } => SimpleDbWriteBatch::InMemory {
+                write: Default::default(),
+            },
+        }
+    }
+
+    /// Write batch to database
+    ///
+    /// ### Arguments
+    ///
+    /// * `batch` - batch of put/delete to process
+    pub fn write(&mut self, batch: SimpleDbWriteBatch) -> Result<(), DBError> {
+        match self {
+            Self::File { db, .. } => {
+                db.write(batch.into_file_batch().unwrap())?;
+            }
+            Self::InMemory { key_values } => {
+                for (key, action) in batch.into_in_memory_batch().unwrap() {
+                    if let Some(value) = action {
+                        key_values.insert(key, value);
+                    } else {
+                        key_values.remove(&key);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Add entry to database
@@ -135,8 +170,65 @@ impl SimpleDb {
     }
 }
 
+/// Database Atomic update accross column with performance benefit.
+pub enum SimpleDbWriteBatch {
+    File { write: WriteBatch },
+    InMemory { write: InMemoryWriteBatch },
+}
+
+impl SimpleDbWriteBatch {
+    fn into_file_batch(self) -> Option<WriteBatch> {
+        if let Self::File { write } = self {
+            Some(write)
+        } else {
+            None
+        }
+    }
+
+    fn into_in_memory_batch(self) -> Option<InMemoryWriteBatch> {
+        if let Self::InMemory { write } = self {
+            Some(write)
+        } else {
+            None
+        }
+    }
+
+    /// Add entry to database on write
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - reference to the value in database to when the entry is added
+    /// * `value` - value to be added to the db
+    pub fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) {
+        match self {
+            Self::File { write } => {
+                write.put(key, value);
+            }
+            Self::InMemory { write } => {
+                write.push((key.as_ref().to_vec(), Some(value.as_ref().to_vec())));
+            }
+        }
+    }
+
+    /// Remove entry from database on write
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - position in database to be deleted
+    pub fn delete<K: AsRef<[u8]>>(&mut self, key: K) {
+        match self {
+            Self::File { write } => {
+                write.delete(key);
+            }
+            Self::InMemory { write } => {
+                write.push((key.as_ref().to_vec(), None));
+            }
+        }
+    }
+}
+
 /// Creates a set of DB opening options for rocksDB instances
-pub fn get_db_options() -> Options {
+fn get_db_options() -> Options {
     let mut opts = Options::default();
     opts.create_if_missing(true);
     opts.set_compression_type(DBCompressionType::Snappy);

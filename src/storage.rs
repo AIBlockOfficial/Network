@@ -480,14 +480,16 @@ impl StorageNode {
         );
 
         // Save Block
-        self_db.put(&block_hash, &block_input).unwrap();
+        let mut batch = self_db.batch_writer();
+        batch.put(&block_hash, &block_input);
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            self_db.put(tx_hash, &tx_input).unwrap();
+            batch.put(tx_hash, &tx_input);
         }
+        self_db.write(batch).unwrap();
 
         if block_num == 0 {
             // Celebrate genesis block:
