@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, DbIteratorItem, SimpleDb, SimpleDbSpec};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
     NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
@@ -14,7 +14,6 @@ use crate::utils::{
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::transaction::Transaction;
 use serde::Serialize;
 use sha3::Digest;
 use sha3::Sha3_256;
@@ -558,41 +557,9 @@ impl StorageNode {
         })
     }
 
-    /// Get the stored block at the given key
-    ///
-    /// ### Arguments
-    ///
-    /// * `key` - Given key to find the block.
-    pub fn get_stored_block<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-    ) -> Result<Option<StoredSerializingBlock>> {
-        Ok(self
-            .get_stored_value(key)
-            .map(|v| deserialize::<StoredSerializingBlock>(&v))
-            .transpose()?)
-    }
-
-    /// Get the stored Transaction at the given key
-    ///
-    /// ### Arguments
-    ///
-    /// * `key` - Given key used to find the transaction.
-    pub fn get_stored_tx<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Transaction>> {
-        Ok(self
-            .get_stored_value(key)
-            .map(|v| deserialize::<Transaction>(&v))
-            .transpose()?)
-    }
-
     /// Get count of all the stored values
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count_cf(DB_COL_BC_NOW)
-    }
-
-    /// Get all the stored (key, values)
-    pub fn get_stored_cloned_key_values(&self) -> impl Iterator<Item = DbIteratorItem> + '_ {
-        self.db.iter_cf_clone(DB_COL_BC_NOW)
+        self.db.count_cf(DB_COL_BC_ALL)
     }
 
     /// Sends the latest block to storage

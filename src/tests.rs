@@ -2295,28 +2295,30 @@ async fn storage_get_last_stored_info(
 }
 
 fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str) -> Option<String> {
-    let stored_block = match s.get_stored_block(block_hash) {
-        Err(e) => return Some(format!("error: {:?}", e)),
-        Ok(None) => return None,
-        Ok(Some(v)) => v,
+    let stored_block = {
+        let stored_value = s.get_stored_value(block_hash)?;
+        match deserialize::<StoredSerializingBlock>(&stored_value) {
+            Err(e) => return Some(format!("error: {:?}", e)),
+            Ok(v) => v,
+        }
     };
 
     let mut block_txs = BTreeMap::new();
     for tx_hash in &stored_block.block.transactions {
-        let stored_tx = match s.get_stored_tx(tx_hash) {
+        let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
-            Ok(None) => return Some(format!("error tx not found: {:?}", tx_hash)),
-            Ok(Some(v)) => v,
+            Ok(v) => v,
         };
         block_txs.insert(tx_hash.clone(), stored_tx);
     }
 
     let mut per_node = BTreeMap::new();
     for (idx, (tx_hash, nonce)) in &stored_block.mining_tx_hash_and_nonces {
-        let stored_tx = match s.get_stored_tx(tx_hash) {
+        let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
-            Ok(None) => return Some(format!("error mining tx not found: {:?}", tx_hash)),
-            Ok(Some(v)) => v,
+            Ok(v) => v,
         };
         per_node.insert(
             *idx,
