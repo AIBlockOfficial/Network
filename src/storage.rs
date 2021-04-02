@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, DbIteratorItem, SimpleDb};
+use crate::db_utils::{self, DbIteratorItem, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
     NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
@@ -28,6 +28,24 @@ use tracing_futures::Instrument;
 
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+
+/// Database columns
+const DB_COL_INTERNAL: &str = "internal";
+const DB_COL_BC_ALL: &str = "block_chain_all";
+const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
+const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
+
+/// Database specification
+const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: DB_PATH,
+    suffix: ".storage",
+    columns: &[
+        DB_COL_INTERNAL,
+        DB_COL_BC_ALL,
+        DB_COL_BC_NOW,
+        DB_COL_BC_V0_2_0,
+    ],
+};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -107,7 +125,7 @@ impl StorageNode {
         let db = extra
             .db
             .take()
-            .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage"));
+            .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, &DB_SPEC));
         let shutdown_group = {
             let compute = std::iter::once(compute_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -175,7 +193,10 @@ impl StorageNode {
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         ExtraNodeParams {
-            db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
+            db: Some(std::mem::replace(
+                &mut self.db,
+                SimpleDb::new_in_memory(&[]),
+            )),
             raft_db: Some(self.node_raft.take_closed_persistent_store().await),
             ..Default::default()
         }
@@ -481,14 +502,15 @@ impl StorageNode {
 
         // Save Block
         let mut batch = self_db.batch_writer();
-        batch.put(&block_hash, &block_input);
+        batch.put_cf(DB_COL_DEFAULT, &block_hash, &block_input);
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            batch.put(tx_hash, &tx_input);
+            batch.put_cf(DB_COL_DEFAULT, tx_hash, &tx_input);
         }
+        let batch = batch.done();
         self_db.write(batch).unwrap();
 
         if block_num == 0 {
@@ -530,7 +552,7 @@ impl StorageNode {
     ///
     /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        self.db.get(key).unwrap_or_else(|e| {
+        self.db.get_cf(DB_COL_DEFAULT, key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
             None
         })
@@ -565,12 +587,12 @@ impl StorageNode {
 
     /// Get count of all the stored values
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count()
+        self.db.count_cf(DB_COL_DEFAULT)
     }
 
     /// Get all the stored (key, values)
     pub fn get_stored_cloned_key_values(&self) -> impl Iterator<Item = DbIteratorItem> + '_ {
-        self.db.iter_clone()
+        self.db.iter_cf_clone(DB_COL_DEFAULT)
     }
 
     /// Sends the latest block to storage
@@ -695,13 +717,16 @@ impl StorageNode {
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
         self.node_raft.set_key_run({
-            let key_run = match self.db.get(RAFT_KEY_RUN) {
+            let key_run = match self.db.get_cf(DB_COL_DEFAULT, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
                 Ok(None) => 0,
                 Err(e) => panic!("Error accessing db: {:?}", e),
             };
             debug!("load_local_db: key_run update to {:?}", key_run);
-            if let Err(e) = self.db.put(RAFT_KEY_RUN, &serialize(&key_run)?) {
+            if let Err(e) = self
+                .db
+                .put_cf(DB_COL_DEFAULT, RAFT_KEY_RUN, &serialize(&key_run)?)
+            {
                 panic!("Error accessing db: {:?}", e);
             }
             key_run

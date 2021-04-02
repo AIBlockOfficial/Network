@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::ComputeNodeConfig;
 use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
-use crate::db_utils::{self, SimpleDb};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
@@ -22,6 +22,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, error, trace, warn};
+
+const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: DB_PATH,
+    suffix: ".compute_raft",
+    columns: &[],
+};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -137,9 +143,7 @@ impl ComputeRaft {
             &config.compute_nodes,
             config.compute_raft != 0,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            raft_db.unwrap_or_else(|| {
-                db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute_raft")
-            }),
+            raft_db.unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, &DB_SPEC)),
         );
 
         let propose_transactions_timeout_duration =

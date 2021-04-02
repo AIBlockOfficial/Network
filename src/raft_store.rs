@@ -1,4 +1,6 @@
-use crate::db_utils::{DBError, SimpleDb, SimpleDbWriteBatch};
+use crate::db_utils::{
+    DBError, SimpleDb, SimpleDbWriteBatch, SimpleDbWriteBatchDone, DB_COL_DEFAULT,
+};
 use bincode::{deserialize, serialize, Error as BincodeError};
 use protobuf::Message;
 use raft::prelude::*;
@@ -36,7 +38,7 @@ impl RaftStore {
 
     /// Consume store and return peristent storage
     pub fn take_persistent(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.presistent, SimpleDb::new_in_memory())
+        std::mem::replace(&mut self.presistent, SimpleDb::new_in_memory(&[]))
     }
 
     /// Saves the current HardState.
@@ -64,6 +66,7 @@ impl RaftStore {
             &mut self.persistent_first_entry,
             index,
         );
+        let batch = batch.done();
         batch_write(&mut self.presistent, batch)?;
         Ok(())
     }
@@ -89,6 +92,7 @@ impl RaftStore {
             &mut self.persistent_first_entry,
             idx,
         );
+        let batch = batch.done();
         batch_write(&mut self.presistent, batch)?;
         Ok(())
     }
@@ -124,6 +128,7 @@ impl RaftStore {
             set_persistent_entry(&mut batch, index, ent)?;
             set_last_persistent_entry(&mut batch, index)?;
         }
+        let batch = batch.done();
         batch_write(&mut self.presistent, batch)?;
 
         Ok(())
@@ -233,14 +238,17 @@ fn format_entry_key(index: u64) -> String {
     format!("{}_{}", ENTRY_KEY, index)
 }
 
-fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatch) -> RaftResult<()> {
+fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatchDone) -> RaftResult<()> {
     presistent.write(batch).map_err(from_db_err)?;
     Ok(())
 }
 
 fn get_persistent_entry(presistent: &SimpleDb, index: u64) -> RaftResult<Option<Entry>> {
     let key = format_entry_key(index);
-    if let Some(bytes) = presistent.get(&key).map_err(from_db_err)? {
+    if let Some(bytes) = presistent
+        .get_cf(DB_COL_DEFAULT, &key)
+        .map_err(from_db_err)?
+    {
         Ok(Some(protobuf::parse_from_bytes::<Entry>(&bytes)?))
     } else {
         Ok(None)
@@ -254,7 +262,7 @@ fn set_persistent_entry(
 ) -> RaftResult<()> {
     let key = format_entry_key(index);
     let bytes = ent.write_to_bytes()?;
-    presistent.put(&key, &bytes);
+    presistent.put_cf(DB_COL_DEFAULT, &key, &bytes);
     Ok(())
 }
 
@@ -272,11 +280,14 @@ fn discard_persistent_entries_before_snapshot(
 
 fn discard_persistent_entry(presistent: &mut SimpleDbWriteBatch, index: u64) {
     let key = format_entry_key(index);
-    presistent.delete(&key);
+    presistent.delete_cf(DB_COL_DEFAULT, &key);
 }
 
 fn get_last_persistent_entry(presistent: &SimpleDb) -> RaftResult<Option<u64>> {
-    if let Some(bytes) = presistent.get(LAST_ENTRY_KEY).map_err(from_db_err)? {
+    if let Some(bytes) = presistent
+        .get_cf(DB_COL_DEFAULT, LAST_ENTRY_KEY)
+        .map_err(from_db_err)?
+    {
         Ok(Some(deserialize::<u64>(&bytes).map_err(from_ser_err)?))
     } else {
         Ok(None)
@@ -285,12 +296,15 @@ fn get_last_persistent_entry(presistent: &SimpleDb) -> RaftResult<Option<u64>> {
 
 fn set_last_persistent_entry(presistent: &mut SimpleDbWriteBatch, index: u64) -> RaftResult<()> {
     let bytes = serialize(&index).map_err(from_ser_err)?;
-    presistent.put(LAST_ENTRY_KEY, &bytes);
+    presistent.put_cf(DB_COL_DEFAULT, LAST_ENTRY_KEY, &bytes);
     Ok(())
 }
 
 fn get_persistent_snapshot(presistent: &SimpleDb) -> RaftResult<Option<Snapshot>> {
-    if let Some(bytes) = presistent.get(SNAPSHOT_KEY).map_err(from_db_err)? {
+    if let Some(bytes) = presistent
+        .get_cf(DB_COL_DEFAULT, SNAPSHOT_KEY)
+        .map_err(from_db_err)?
+    {
         Ok(Some(protobuf::parse_from_bytes::<Snapshot>(&bytes)?))
     } else {
         Ok(None)
@@ -298,11 +312,14 @@ fn get_persistent_snapshot(presistent: &SimpleDb) -> RaftResult<Option<Snapshot>
 }
 
 fn set_persistent_snapshot(presistent: &mut SimpleDbWriteBatch, bytes: &[u8]) {
-    presistent.put(SNAPSHOT_KEY, bytes);
+    presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_KEY, bytes);
 }
 
 fn get_persistent_hardstate(presistent: &SimpleDb) -> RaftResult<Option<HardState>> {
-    if let Some(bytes) = presistent.get(HARDSTATE_KEY).map_err(from_db_err)? {
+    if let Some(bytes) = presistent
+        .get_cf(DB_COL_DEFAULT, HARDSTATE_KEY)
+        .map_err(from_db_err)?
+    {
         Ok(Some(protobuf::parse_from_bytes::<HardState>(&bytes)?))
     } else {
         Ok(None)
@@ -310,6 +327,8 @@ fn get_persistent_hardstate(presistent: &SimpleDb) -> RaftResult<Option<HardStat
 }
 
 fn set_persistent_hardstate(presistent: &mut SimpleDb, bytes: &[u8]) -> RaftResult<()> {
-    presistent.put(HARDSTATE_KEY, bytes).map_err(from_db_err)?;
+    presistent
+        .put_cf(DB_COL_DEFAULT, HARDSTATE_KEY, bytes)
+        .map_err(from_db_err)?;
     Ok(())
 }

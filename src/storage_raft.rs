@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::configurations::StorageNodeConfig;
 use crate::constants::DB_PATH;
-use crate::db_utils::{self, SimpleDb};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
@@ -15,6 +15,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, trace, warn};
+
+const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: DB_PATH,
+    suffix: ".storage_raft",
+    columns: &[],
+};
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,9 +112,7 @@ impl StorageRaft {
             &config.storage_nodes,
             config.storage_raft != 0,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
-            raft_db.unwrap_or_else(|| {
-                db_utils::new_db(config.storage_db_mode, DB_PATH, ".storage_raft")
-            }),
+            raft_db.unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, &DB_SPEC)),
         );
 
         let propose_block_timeout_duration =

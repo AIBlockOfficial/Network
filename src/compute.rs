@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, SimpleDb};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
@@ -40,6 +40,12 @@ use tracing_futures::Instrument;
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+
+const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: DB_PATH,
+    suffix: ".compute",
+    columns: &[],
+};
 
 /// Result wrapper for compute errors
 pub type Result<T> = std::result::Result<T, ComputeError>;
@@ -154,7 +160,7 @@ impl ComputeNode {
         let db = extra
             .db
             .take()
-            .unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, DB_PATH, ".compute"));
+            .unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, &DB_SPEC));
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -247,7 +253,10 @@ impl ComputeNode {
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         ExtraNodeParams {
-            db: Some(std::mem::replace(&mut self.db, SimpleDb::new_in_memory())),
+            db: Some(std::mem::replace(
+                &mut self.db,
+                SimpleDb::new_in_memory(&[]),
+            )),
             raft_db: Some(self.node_raft.take_closed_persistent_store().await),
             ..Default::default()
         }
@@ -794,7 +803,11 @@ impl ComputeNode {
     fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
         self.db
-            .put(REQUEST_LIST_KEY, &serialize(&self.request_list).unwrap())
+            .put_cf(
+                DB_COL_DEFAULT,
+                REQUEST_LIST_KEY,
+                &serialize(&self.request_list).unwrap(),
+            )
             .unwrap();
         if self.request_list_first_flood == Some(self.request_list.len()) {
             self.request_list_first_flood = None;
@@ -994,7 +1007,7 @@ impl ComputeNode {
 
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
-        self.request_list = match self.db.get(REQUEST_LIST_KEY) {
+        self.request_list = match self.db.get_cf(DB_COL_DEFAULT, REQUEST_LIST_KEY) {
             Ok(Some(list)) => {
                 let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
                 debug!("load_local_db: request_list {:?}", list);
@@ -1009,13 +1022,16 @@ impl ComputeNode {
             }
         }
         self.node_raft.set_key_run({
-            let key_run = match self.db.get(RAFT_KEY_RUN) {
+            let key_run = match self.db.get_cf(DB_COL_DEFAULT, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
                 Ok(None) => 0,
                 Err(e) => panic!("Error accessing db: {:?}", e),
             };
             debug!("load_local_db: key_run update to {:?}", key_run);
-            if let Err(e) = self.db.put(RAFT_KEY_RUN, &serialize(&key_run)?) {
+            if let Err(e) = self
+                .db
+                .put_cf(DB_COL_DEFAULT, RAFT_KEY_RUN, &serialize(&key_run)?)
+            {
                 panic!("Error accessing db: {:?}", e);
             }
             key_run
