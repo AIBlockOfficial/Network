@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, DbIteratorItem, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
+use crate::db_utils::{self, DbIteratorItem, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
     NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
@@ -502,13 +502,13 @@ impl StorageNode {
 
         // Save Block
         let mut batch = self_db.batch_writer();
-        batch.put_cf(DB_COL_DEFAULT, &block_hash, &block_input);
+        batch.put_cf(DB_COL_BC_NOW, &block_hash, &block_input);
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            batch.put_cf(DB_COL_DEFAULT, tx_hash, &tx_input);
+            batch.put_cf(DB_COL_BC_NOW, tx_hash, &tx_input);
         }
         let batch = batch.done();
         self_db.write(batch).unwrap();
@@ -552,7 +552,7 @@ impl StorageNode {
     ///
     /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        self.db.get_cf(DB_COL_DEFAULT, key).unwrap_or_else(|e| {
+        self.db.get_cf(DB_COL_BC_NOW, key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
             None
         })
@@ -587,12 +587,12 @@ impl StorageNode {
 
     /// Get count of all the stored values
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count_cf(DB_COL_DEFAULT)
+        self.db.count_cf(DB_COL_BC_NOW)
     }
 
     /// Get all the stored (key, values)
     pub fn get_stored_cloned_key_values(&self) -> impl Iterator<Item = DbIteratorItem> + '_ {
-        self.db.iter_cf_clone(DB_COL_DEFAULT)
+        self.db.iter_cf_clone(DB_COL_BC_NOW)
     }
 
     /// Sends the latest block to storage
@@ -717,7 +717,7 @@ impl StorageNode {
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
         self.node_raft.set_key_run({
-            let key_run = match self.db.get_cf(DB_COL_DEFAULT, RAFT_KEY_RUN) {
+            let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
                 Ok(None) => 0,
                 Err(e) => panic!("Error accessing db: {:?}", e),
@@ -725,7 +725,7 @@ impl StorageNode {
             debug!("load_local_db: key_run update to {:?}", key_run);
             if let Err(e) = self
                 .db
-                .put_cf(DB_COL_DEFAULT, RAFT_KEY_RUN, &serialize(&key_run)?)
+                .put_cf(DB_COL_INTERNAL, RAFT_KEY_RUN, &serialize(&key_run)?)
             {
                 panic!("Error accessing db: {:?}", e);
             }
