@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
-use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::constants::{BLOCK_PREPEND, DB_PATH, PEER_LIMIT};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
     NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
@@ -33,6 +33,9 @@ const DB_COL_INTERNAL: &str = "internal";
 const DB_COL_BC_ALL: &str = "block_chain_all";
 const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
 const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
+
+const DB_COLS_BC: &[&str] = &[DB_COL_BC_NOW, DB_COL_BC_V0_2_0];
+const DB_POINTER_SEPARATOR: (&str, u8) = (":", b':');
 
 /// Database specification
 const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -488,7 +491,9 @@ impl StorageNode {
         let block_input = serialize(&stored_block).unwrap();
         let block_hash = {
             let hash_digest = Sha3_256::digest(&block_input);
-            hex::encode(hash_digest)
+            let mut hash_digest = hex::encode(hash_digest);
+            hash_digest.insert(0, BLOCK_PREPEND);
+            hash_digest
         };
 
         info!(
@@ -501,13 +506,13 @@ impl StorageNode {
 
         // Save Block
         let mut batch = self_db.batch_writer();
-        batch.put_cf(DB_COL_BC_NOW, &block_hash, &block_input);
+        put_to_block_chain(&mut batch, &block_hash, &block_input);
 
         // Save each transaction and mining transactions
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
-            batch.put_cf(DB_COL_BC_NOW, tx_hash, &tx_input);
+            put_to_block_chain(&mut batch, tx_hash, &tx_input);
         }
         let batch = batch.done();
         self_db.write(batch).unwrap();
@@ -551,7 +556,12 @@ impl StorageNode {
     ///
     /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        self.db.get_cf(DB_COL_BC_NOW, key).unwrap_or_else(|e| {
+        let pointer = self.db.get_cf(DB_COL_BC_ALL, key).unwrap_or_else(|e| {
+            warn!("get_stored_value error: {}", e);
+            None
+        })?;
+        let (cf, key) = decode_version_pointer(&pointer);
+        self.db.get_cf(cf, key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
             None
         })
@@ -748,4 +758,39 @@ impl StorageInterface for StorageNode {
             reason: "Not implemented yet",
         }
     }
+}
+
+/// Add to the block chain columns
+///
+/// ### Arguments
+///
+/// * `batch` - Database writer
+/// * `key`   - The key for the data
+/// * `value` - The value to store
+fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) {
+    batch.put_cf(DB_COL_BC_NOW, key, value);
+    batch.put_cf(DB_COL_BC_ALL, &key, &version_pointer(DB_COL_BC_NOW, &key));
+}
+
+/// Version pointer for the column:key
+///
+/// ### Arguments
+///
+/// * `cf`  - Column family the data is
+/// * `key` - The key for the data
+fn version_pointer(cf: &'static str, key: &str) -> String {
+    cf.to_owned() + DB_POINTER_SEPARATOR.0 + key
+}
+
+/// Decodes a version pointer
+///
+/// ### Arguments
+///
+/// * `pointer`    - String to be split and decoded
+pub fn decode_version_pointer(pointer: &[u8]) -> (&'static str, &[u8]) {
+    let mut it = pointer.split(|c| c == &DB_POINTER_SEPARATOR.1);
+    let cf = it.next().unwrap();
+    let cf = DB_COLS_BC.iter().find(|v| v.as_bytes() == cf).unwrap();
+    let key = it.next().unwrap();
+    (cf, key)
 }

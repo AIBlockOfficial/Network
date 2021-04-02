@@ -36,6 +36,8 @@ pub const LOCKTIME_THRESHOLD: u32 = 500000000; // Tue Nov 5 00:53:20 1985 UTC
 pub const MAX_OPCODE: u8 = OpCodes::OP_NOP10 as u8;
 
 /*------- STORAGE CONSTANTS -------*/
+/// The constant prepending character for a block hash
+pub const BLOCK_PREPEND: char = 'b';
 
 /// Path to chain DB
 pub const DB_PATH: &str = "src/db/db";

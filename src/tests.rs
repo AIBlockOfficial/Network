@@ -2,7 +2,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::SANC_LIST_TEST;
+use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UtxoSet,
@@ -2794,7 +2794,9 @@ async fn complete_block(
     let hash_key = {
         let hash_input = serialize(&stored).unwrap();
         let hash_digest = Sha3_256::digest(&hash_input);
-        hex::encode(hash_digest)
+        let mut hash_digest = hex::encode(hash_digest);
+        hash_digest.insert(0, BLOCK_PREPEND);
+        hash_digest
     };
     let complete_str = format!("{:?}", complete);
 
