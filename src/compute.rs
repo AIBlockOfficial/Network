@@ -1185,7 +1185,7 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response {
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
@@ -1198,7 +1198,8 @@ impl ComputeInterface for ComputeNode {
             let tx_validator = self.transactions_validator();
             transactions
                 .into_iter()
-                .filter(|(_, tx)| tx_validator(&tx))
+                .filter(|tx| tx_validator(&tx))
+                .map(|tx| (construct_tx_hash(&tx), tx))
                 .collect()
         };
 

@@ -457,11 +457,6 @@ impl UserNode {
         transactions: Vec<Transaction>,
     ) -> Result<()> {
         let _peer_span = info_span!("sending transactions to compute node for processing");
-        let transactions = transactions
-            .into_iter()
-            .map(construct_tx_hash_pair)
-            .collect();
-
         self.node
             .send(
                 compute_peer,
@@ -659,10 +654,4 @@ impl UseInterface for UserNode {
             reason: "New address ready to be sent",
         }
     }
-}
-
-/// Create the pair needed for transactions ordered containers
-fn construct_tx_hash_pair(tx: Transaction) -> (String, Transaction) {
-    let hash = construct_tx_hash(&tx);
-    (hash, tx)
 }
