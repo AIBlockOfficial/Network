@@ -67,6 +67,7 @@ enum Cfg {
     IgnoreStorage,
     IgnoreCompute,
     IgnoreMiner,
+    IgnoreWaitTxComplete,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -534,6 +535,20 @@ async fn add_transactions_raft_1_node() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn add_transactions_restart_tx_raft_1_node() {
+    let tag = "After add local Transactions";
+    let name = "compute1";
+    let modify_cfg = vec![
+        (tag, CfgModif::Drop(name)),
+        (tag, CfgModif::Respawn(name)),
+        (tag, CfgModif::HandleEvents(name, &["Snapshot applied"])),
+    ];
+
+    let network_config = complete_network_config_with_n_compute_raft(10615, 1);
+    add_transactions_common(network_config, &modify_cfg).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn add_transactions_raft_2_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10620, 2)).await;
 }
@@ -549,6 +564,10 @@ async fn add_transactions_raft_15_nodes() {
 }
 
 async fn add_transactions(network_config: NetworkConfig) {
+    add_transactions_common(network_config, &[]).await;
+}
+
+async fn add_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&str, CfgModif)]) {
     test_step_start();
 
     //
@@ -563,7 +582,9 @@ async fn add_transactions(network_config: NetworkConfig) {
     //
     // Act
     //
-    add_transactions_act(&mut network, &transactions).await;
+    add_transactions_act_with(&mut network, &transactions, Cfg::IgnoreWaitTxComplete).await;
+    modify_network(&mut network, "After add local Transactions", &modify_cfg).await;
+    add_transactions_act_with(&mut network, &Default::default(), Cfg::All).await;
 
     //
     // Assert
@@ -576,6 +597,14 @@ async fn add_transactions(network_config: NetworkConfig) {
 }
 
 async fn add_transactions_act(network: &mut Network, txs: &BTreeMap<String, Transaction>) {
+    add_transactions_act_with(network, txs, Cfg::All).await;
+}
+
+async fn add_transactions_act_with(
+    network: &mut Network,
+    txs: &BTreeMap<String, Transaction>,
+    cfg: Cfg,
+) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
 
@@ -586,7 +615,10 @@ async fn add_transactions_act(network: &mut Network, txs: &BTreeMap<String, Tran
     for _tx in txs.values() {
         compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
     }
-    node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
+
+    if cfg != Cfg::IgnoreWaitTxComplete {
+        node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
+    }
 }
 
 #[tokio::test(basic_scheduler)]

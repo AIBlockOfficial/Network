@@ -110,6 +110,8 @@ pub struct ComputeRaft {
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
     local_tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
+    /// Ordered transaction hashes from the last commit.
+    local_tx_hash_last_commited: Vec<String>,
     /// Min duration between each transaction poposal.
     propose_transactions_timeout_duration: Duration,
     /// Timeout expiration time for transactions poposal.
@@ -170,6 +172,7 @@ impl ComputeRaft {
             local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
+            local_tx_hash_last_commited: Default::default(),
             propose_transactions_timeout_duration,
             propose_transactions_timeout_at,
             proposed_in_flight: Default::default(),
@@ -284,6 +287,7 @@ impl ComputeRaft {
                 }
             }
             ComputeRaftItem::Transactions(mut txs) => {
+                self.local_tx_hash_last_commited = txs.keys().cloned().collect();
                 self.consensused.tx_pool.append(&mut txs);
                 return Some(CommittedItem::Transactions);
             }
@@ -484,6 +488,11 @@ impl ComputeRaft {
     /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> (Block, BTreeMap<String, Transaction>) {
         self.consensused.take_mining_block()
+    }
+
+    /// Take all the transactions hashes last commited
+    pub fn take_local_tx_hash_last_commited(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.local_tx_hash_last_commited)
     }
 
     /// Generate a snapshot, needs to happen at the end of the event processing.

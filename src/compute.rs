@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
 use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
+use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
@@ -41,10 +41,14 @@ use tracing_futures::Instrument;
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
+/// Database columns
+const DB_COL_INTERNAL: &str = "internal";
+const DB_COL_TXS: &str = "all_transactions";
+
 const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
     suffix: ".compute",
-    columns: &[],
+    columns: &[DB_COL_INTERNAL, DB_COL_TXS],
 };
 
 /// Result wrapper for compute errors
@@ -660,10 +664,16 @@ impl ComputeNode {
                     reason: "Snapshot applied",
                 }))
             }
-            Some(CommittedItem::Transactions) => Some(Ok(Response {
-                success: true,
-                reason: "Transactions committed",
-            })),
+            Some(CommittedItem::Transactions) => {
+                delete_local_transactions(
+                    &mut self.db,
+                    &self.node_raft.take_local_tx_hash_last_commited(),
+                );
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Transactions committed",
+                }))
+            }
             None => None,
         }
     }
@@ -804,7 +814,7 @@ impl ComputeNode {
         self.request_list.insert(peer);
         self.db
             .put_cf(
-                DB_COL_DEFAULT,
+                DB_COL_INTERNAL,
                 REQUEST_LIST_KEY,
                 &serialize(&self.request_list).unwrap(),
             )
@@ -1007,7 +1017,7 @@ impl ComputeNode {
 
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
-        self.request_list = match self.db.get_cf(DB_COL_DEFAULT, REQUEST_LIST_KEY) {
+        self.request_list = match self.db.get_cf(DB_COL_INTERNAL, REQUEST_LIST_KEY) {
             Ok(Some(list)) => {
                 let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
                 debug!("load_local_db: request_list {:?}", list);
@@ -1022,7 +1032,7 @@ impl ComputeNode {
             }
         }
         self.node_raft.set_key_run({
-            let key_run = match self.db.get_cf(DB_COL_DEFAULT, RAFT_KEY_RUN) {
+            let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
                 Ok(None) => 0,
                 Err(e) => panic!("Error accessing db: {:?}", e),
@@ -1030,12 +1040,14 @@ impl ComputeNode {
             debug!("load_local_db: key_run update to {:?}", key_run);
             if let Err(e) = self
                 .db
-                .put_cf(DB_COL_DEFAULT, RAFT_KEY_RUN, &serialize(&key_run)?)
+                .put_cf(DB_COL_INTERNAL, RAFT_KEY_RUN, &serialize(&key_run)?)
             {
                 panic!("Error accessing db: {:?}", e);
             }
             key_run
         });
+        self.node_raft
+            .append_to_tx_pool(get_local_transactions(&self.db));
 
         Ok(self)
     }
@@ -1205,6 +1217,7 @@ impl ComputeInterface for ComputeNode {
 
         // At this point the tx's are considered valid
         let valid_tx_len = valid_tx.len();
+        store_local_transactions(&mut self.db, &valid_tx);
         self.node_raft.append_to_tx_pool(valid_tx);
 
         if valid_tx_len == 0 {
@@ -1237,4 +1250,48 @@ impl ComputeInterface for ComputeNode {
     fn get_next_block_reward(&self) -> f64 {
         0.0
     }
+}
+
+/// Add pending transactions
+///
+/// ### Arguments
+///
+/// * `db`             - Database
+/// * `transactions`   - Transactions to store
+fn get_local_transactions(db: &SimpleDb) -> BTreeMap<String, Transaction> {
+    db.iter_cf_clone(DB_COL_TXS)
+        .map(|(k, v)| (String::from_utf8(k), deserialize(&v)))
+        .map(|(k, v)| (k.unwrap(), v.unwrap()))
+        .collect()
+}
+
+/// Add pending transactions
+///
+/// ### Arguments
+///
+/// * `db`             - Database
+/// * `transactions`   - Transactions to store
+fn store_local_transactions(db: &mut SimpleDb, transactions: &BTreeMap<String, Transaction>) {
+    let mut batch = db.batch_writer();
+    for (key, value) in transactions {
+        let value = serialize(value).unwrap();
+        batch.put_cf(DB_COL_TXS, key, &value);
+    }
+    let batch = batch.done();
+    db.write(batch).unwrap();
+}
+
+/// Delete no longer relevant transaction
+///
+/// ### Arguments
+///
+/// * `db`     - Database
+/// * `keys`   - Keys to delete
+fn delete_local_transactions(db: &mut SimpleDb, keys: &[String]) {
+    let mut batch = db.batch_writer();
+    for key in keys {
+        batch.delete_cf(DB_COL_TXS, key);
+    }
+    let batch = batch.done();
+    db.write(batch).unwrap();
 }
