@@ -1445,13 +1445,30 @@ async fn reject_payment_txs() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn gen_transactions() {
+async fn gen_transactions_no_restart() {
+    let network_config = complete_network_config(10420);
+    gen_transactions_common(network_config, &[]).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn gen_transactions_restart() {
+    let tag = "After block notification request";
+    let name = "compute1";
+    let modify_cfg = vec![
+        (tag, CfgModif::Drop(name)),
+        (tag, CfgModif::Respawn(name)),
+    ];
+
+    let network_config = complete_network_config(10425);
+    gen_transactions_common(network_config, &modify_cfg).await
+}
+
+async fn gen_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&str, CfgModif)]) {
     test_step_start();
 
     //
     // Arrange
     //
-    let network_config = complete_network_config(10420);
     let mut network = Network::create_from_config(&network_config).await;
     let mut transaction_gen =
         TransactionGen::new(vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]);
@@ -1461,6 +1478,7 @@ async fn gen_transactions() {
     //
     user_send_block_notification_request(&mut network, "user1").await;
     compute_handle_event(&mut network, "compute1", "Received block notification").await;
+    modify_network(&mut network, "After block notification request", &modify_cfg).await;
 
     let mut tx_expected = Vec::new();
     let mut tx_committed = Vec::new();

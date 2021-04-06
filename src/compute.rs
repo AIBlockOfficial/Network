@@ -39,6 +39,7 @@ use tracing_futures::Instrument;
 
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
+pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
@@ -799,6 +800,14 @@ impl ComputeNode {
     /// * `peer` - Sending peer's socket address
     fn receive_block_user_notification_request(&mut self, peer: SocketAddr) -> Response {
         self.user_notification_list.insert(peer);
+        self.db
+            .put_cf(
+                DB_COL_INTERNAL,
+                USER_NOTIFY_LIST_KEY,
+                &serialize(&self.user_notification_list).unwrap(),
+            )
+            .unwrap();
+
         Response {
             success: true,
             reason: "Received block notification",
@@ -1031,6 +1040,17 @@ impl ComputeNode {
                 self.request_list_first_flood = None;
             }
         }
+
+        self.user_notification_list = match self.db.get_cf(DB_COL_INTERNAL, USER_NOTIFY_LIST_KEY) {
+            Ok(Some(list)) => {
+                let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
+                debug!("load_local_db: user_notification_list {:?}", list);
+                list
+            }
+            Ok(None) => self.user_notification_list,
+            Err(e) => panic!("Error accessing db: {:?}", e),
+        };
+
         self.node_raft.set_key_run({
             let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
@@ -1046,6 +1066,7 @@ impl ComputeNode {
             }
             key_run
         });
+
         self.node_raft
             .append_to_tx_pool(get_local_transactions(&self.db));
 
