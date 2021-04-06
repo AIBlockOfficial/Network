@@ -1,6 +1,6 @@
 use crate::configurations::{DbMode, WalletTxSpec};
 use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
-use crate::db_utils::{self, DBError, SimpleDb};
+use crate::db_utils::{self, DBError, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -21,6 +21,12 @@ pub use fund_store::FundStore;
 
 ///Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
+
+const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+    db_path: WALLET_PATH,
+    suffix: "",
+    columns: &[],
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
@@ -48,7 +54,7 @@ pub struct WalletDb {
 
 impl WalletDb {
     pub fn new(db_mode: DbMode, db: Option<SimpleDb>, passphrase: Option<String>) -> Self {
-        let mut db = db.unwrap_or_else(|| db_utils::new_db(db_mode, WALLET_PATH, ""));
+        let mut db = db.unwrap_or_else(|| db_utils::new_db(db_mode, &DB_SPEC));
         let passphrase = passphrase.as_deref().unwrap_or("").as_bytes();
         let masterkey = get_or_save_master_key_store(&mut db, passphrase);
         Self {
@@ -75,7 +81,7 @@ impl WalletDb {
 
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.db.lock().unwrap(), SimpleDb::new_in_memory())
+        std::mem::replace(&mut self.db.lock().unwrap(), SimpleDb::new_in_memory(&[]))
     }
 
     /// Generates a new payment address, saving the related keys to the wallet
@@ -152,7 +158,7 @@ impl WalletDb {
             let mut address_list = get_known_key_address(&db);
             address_list.insert(address.clone());
 
-            db.put(address, keys).unwrap();
+            db.put_cf(DB_COL_DEFAULT, address, keys).unwrap();
             set_known_key_address(&mut db, address_list);
         })
         .await?)
@@ -278,7 +284,7 @@ impl WalletDb {
     /// Get a the serialized value stored at given key
     pub async fn get_db_value(&self, key: &'static str) -> Option<Vec<u8>> {
         let db = self.db.clone();
-        task::spawn_blocking(move || db.lock().unwrap().get(key).unwrap())
+        task::spawn_blocking(move || db.lock().unwrap().get_cf(DB_COL_DEFAULT, key).unwrap())
             .await
             .unwrap()
     }
@@ -286,15 +292,20 @@ impl WalletDb {
     /// Set a the serialized value stored at given key
     pub async fn set_db_value(&self, key: &'static str, value: Vec<u8>) {
         let db = self.db.clone();
-        task::spawn_blocking(move || db.lock().unwrap().put(key, &value).unwrap())
-            .await
-            .unwrap()
+        task::spawn_blocking(move || {
+            db.lock()
+                .unwrap()
+                .put_cf(DB_COL_DEFAULT, key, &value)
+                .unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Delete value stored at given key
     pub async fn delete_db_value(&self, key: &'static str) {
         let db = self.db.clone();
-        task::spawn_blocking(move || db.lock().unwrap().delete(key).unwrap())
+        task::spawn_blocking(move || db.lock().unwrap().delete_cf(DB_COL_DEFAULT, key).unwrap())
             .await
             .unwrap()
     }
@@ -360,7 +371,7 @@ pub fn get_fund_store(db: &SimpleDb) -> FundStore {
 
 /// Get the wallet fund store
 pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
-    match db.get(FUND_KEY) {
+    match db.get_cf(DB_COL_DEFAULT, FUND_KEY) {
         Ok(Some(list)) => Ok(deserialize(&list).unwrap()),
         Ok(None) => Ok(FundStore::default()),
         Err(e) => Err(e),
@@ -369,7 +380,8 @@ pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
 
 /// Set the wallet fund store
 pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
-    db.put(FUND_KEY, &serialize(&fund_store).unwrap()).unwrap();
+    db.put_cf(DB_COL_DEFAULT, FUND_KEY, &serialize(&fund_store).unwrap())
+        .unwrap();
 }
 
 /// Save a payment to fund store
@@ -386,7 +398,7 @@ pub fn save_payment_to_fund_store(
 
 /// Get the wallet known address
 pub fn get_known_key_address(db: &SimpleDb) -> BTreeSet<String> {
-    match db.get(KNOWN_ADDRESS_KEY) {
+    match db.get_cf(DB_COL_DEFAULT, KNOWN_ADDRESS_KEY) {
         Ok(Some(list)) => deserialize(&list).unwrap(),
         Ok(None) => Default::default(),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -395,13 +407,17 @@ pub fn get_known_key_address(db: &SimpleDb) -> BTreeSet<String> {
 
 /// Set the wallet known address
 pub fn set_known_key_address(db: &mut SimpleDb, address_store: BTreeSet<String>) {
-    db.put(KNOWN_ADDRESS_KEY, &serialize(&address_store).unwrap())
-        .unwrap();
+    db.put_cf(
+        DB_COL_DEFAULT,
+        KNOWN_ADDRESS_KEY,
+        &serialize(&address_store).unwrap(),
+    )
+    .unwrap();
 }
 
 /// Gets the wallet AddressStore in an encrypted state for external storage
 pub fn get_address_store_encrypted(db: &SimpleDb, key_addr: &str) -> Vec<u8> {
-    match db.get(key_addr) {
+    match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => store,
         Ok(None) => panic!("Key address not present in wallet: {}", key_addr),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -414,7 +430,7 @@ pub fn get_address_store(
     key_addr: &str,
     encryption_key: secretbox::Key,
 ) -> AddressStore {
-    match db.get(key_addr) {
+    match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
             let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
             let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
@@ -430,7 +446,7 @@ pub fn get_address_store(
 
 /// Delete AddressStore
 pub fn delete_address_store(db: &mut SimpleDb, key_addr: &str) {
-    db.delete(key_addr).unwrap();
+    db.delete_cf(DB_COL_DEFAULT, key_addr).unwrap();
 }
 
 /// Save AddressStore
@@ -447,12 +463,12 @@ pub fn save_address_store_to_wallet(
         input.append(&mut secretbox::seal(&store, &nonce, &encryption_key));
         input
     };
-    db.put(key_addr, &input).unwrap();
+    db.put_cf(DB_COL_DEFAULT, key_addr, &input).unwrap();
 }
 
 /// Get the wallet transaction store
 pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
-    match db.get(&serialize(&out_p).unwrap()) {
+    match db.get_cf(DB_COL_DEFAULT, &serialize(&out_p).unwrap()) {
         Ok(Some(store)) => deserialize(&store).unwrap(),
         Ok(None) => panic!("Transaction not present in wallet: {:?}", out_p),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -462,19 +478,19 @@ pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStor
 /// Delete transaction store
 pub fn delete_transaction_store(db: &mut SimpleDb, out_p: &OutPoint) {
     let key = serialize(&out_p).unwrap();
-    db.delete(&key).unwrap();
+    db.delete_cf(DB_COL_DEFAULT, &key).unwrap();
 }
 
 /// Save transaction
 pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, store: &TransactionStore) {
     let key = serialize(out_p).unwrap();
     let input = serialize(store).unwrap();
-    db.put(&key, &input).unwrap();
+    db.put_cf(DB_COL_DEFAULT, &key, &input).unwrap();
 }
 
 /// Get the wallet salt store
 pub fn get_or_save_master_key_store(db: &mut SimpleDb, passphrase: &[u8]) -> secretbox::Key {
-    match db.get(MASTER_KEY_STORE_KEY) {
+    match db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY) {
         Ok(Some(store)) => {
             let store: MasterKeyStore = deserialize(&store).unwrap();
             let pass_key = make_key(passphrase, store.salt);
@@ -497,7 +513,8 @@ pub fn get_or_save_master_key_store(db: &mut SimpleDb, passphrase: &[u8]) -> sec
                 enc_master_key,
             })
             .unwrap();
-            db.put(MASTER_KEY_STORE_KEY, &store).unwrap();
+            db.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store)
+                .unwrap();
             master_key
         }
         Err(e) => panic!("Error accessing wallet: {:?}", e),

@@ -2,7 +2,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::SANC_LIST_TEST;
+use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UtxoSet,
@@ -320,13 +320,11 @@ async fn full_flow_common(
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
     let expected_block0_db_count = 1 + initial_utxo_txs.len() + stored0_mining_tx_len;
     let expected_block1_db_count = 1 + transactions.len() + stored1_mining_tx_len;
-    let expected_extra_items = 1; // RAFT_KEY_RUN
-
     assert_eq!(
         actual0_db_count,
         node_all(
             storage_nodes,
-            expected_block0_db_count + expected_block1_db_count + expected_extra_items
+            expected_block0_db_count + expected_block1_db_count
         )
     );
 
@@ -517,13 +515,9 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
 
     let actual0_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
-    let expected_extra_items = 1; // RAFT_KEY_RUN
     assert_eq!(
         actual0_db_count,
-        node_all(
-            storage_nodes,
-            1 + initial_utxo_txs.len() + c_mined.len() + expected_extra_items
-        )
+        node_all(storage_nodes, 1 + initial_utxo_txs.len() + c_mined.len())
     );
 
     test_step_complete(network).await;
@@ -2301,28 +2295,30 @@ async fn storage_get_last_stored_info(
 }
 
 fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str) -> Option<String> {
-    let stored_block = match s.get_stored_block(block_hash) {
-        Err(e) => return Some(format!("error: {:?}", e)),
-        Ok(None) => return None,
-        Ok(Some(v)) => v,
+    let stored_block = {
+        let stored_value = s.get_stored_value(block_hash)?;
+        match deserialize::<StoredSerializingBlock>(&stored_value) {
+            Err(e) => return Some(format!("error: {:?}", e)),
+            Ok(v) => v,
+        }
     };
 
     let mut block_txs = BTreeMap::new();
     for tx_hash in &stored_block.block.transactions {
-        let stored_tx = match s.get_stored_tx(tx_hash) {
+        let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
-            Ok(None) => return Some(format!("error tx not found: {:?}", tx_hash)),
-            Ok(Some(v)) => v,
+            Ok(v) => v,
         };
         block_txs.insert(tx_hash.clone(), stored_tx);
     }
 
     let mut per_node = BTreeMap::new();
     for (idx, (tx_hash, nonce)) in &stored_block.mining_tx_hash_and_nonces {
-        let stored_tx = match s.get_stored_tx(tx_hash) {
+        let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
-            Ok(None) => return Some(format!("error mining tx not found: {:?}", tx_hash)),
-            Ok(Some(v)) => v,
+            Ok(v) => v,
         };
         per_node.insert(
             *idx,
@@ -2798,7 +2794,9 @@ async fn complete_block(
     let hash_key = {
         let hash_input = serialize(&stored).unwrap();
         let hash_digest = Sha3_256::digest(&hash_input);
-        hex::encode(hash_digest)
+        let mut hash_digest = hex::encode(hash_digest);
+        hash_digest.insert(0, BLOCK_PREPEND);
+        hash_digest
     };
     let complete_str = format!("{:?}", complete);
 
