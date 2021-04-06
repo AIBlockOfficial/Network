@@ -1454,10 +1454,7 @@ async fn gen_transactions_no_restart() {
 async fn gen_transactions_restart() {
     let tag = "After block notification request";
     let name = "compute1";
-    let modify_cfg = vec![
-        (tag, CfgModif::Drop(name)),
-        (tag, CfgModif::Respawn(name)),
-    ];
+    let modify_cfg = vec![(tag, CfgModif::Drop(name)), (tag, CfgModif::Respawn(name))];
 
     let network_config = complete_network_config(10425);
     gen_transactions_common(network_config, &modify_cfg).await
@@ -1478,7 +1475,12 @@ async fn gen_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&
     //
     user_send_block_notification_request(&mut network, "user1").await;
     compute_handle_event(&mut network, "compute1", "Received block notification").await;
-    modify_network(&mut network, "After block notification request", &modify_cfg).await;
+    modify_network(
+        &mut network,
+        "After block notification request",
+        &modify_cfg,
+    )
+    .await;
 
     let mut tx_expected = Vec::new();
     let mut tx_committed = Vec::new();

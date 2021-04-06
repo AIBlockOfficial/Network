@@ -44,12 +44,12 @@ pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
 const DB_COL_INTERNAL: &str = "internal";
-const DB_COL_TXS: &str = "all_transactions";
+const DB_COL_LOCAL_TXS: &str = "local_transactions";
 
 const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
     suffix: ".compute",
-    columns: &[DB_COL_INTERNAL, DB_COL_TXS],
+    columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
 };
 
 /// Result wrapper for compute errors
@@ -1273,14 +1273,13 @@ impl ComputeInterface for ComputeNode {
     }
 }
 
-/// Add pending transactions
+/// Get pending transactions
 ///
 /// ### Arguments
 ///
 /// * `db`             - Database
-/// * `transactions`   - Transactions to store
 fn get_local_transactions(db: &SimpleDb) -> BTreeMap<String, Transaction> {
-    db.iter_cf_clone(DB_COL_TXS)
+    db.iter_cf_clone(DB_COL_LOCAL_TXS)
         .map(|(k, v)| (String::from_utf8(k), deserialize(&v)))
         .map(|(k, v)| (k.unwrap(), v.unwrap()))
         .collect()
@@ -1296,7 +1295,7 @@ fn store_local_transactions(db: &mut SimpleDb, transactions: &BTreeMap<String, T
     let mut batch = db.batch_writer();
     for (key, value) in transactions {
         let value = serialize(value).unwrap();
-        batch.put_cf(DB_COL_TXS, key, &value);
+        batch.put_cf(DB_COL_LOCAL_TXS, key, &value);
     }
     let batch = batch.done();
     db.write(batch).unwrap();
@@ -1311,7 +1310,7 @@ fn store_local_transactions(db: &mut SimpleDb, transactions: &BTreeMap<String, T
 fn delete_local_transactions(db: &mut SimpleDb, keys: &[String]) {
     let mut batch = db.batch_writer();
     for key in keys {
-        batch.delete_cf(DB_COL_TXS, key);
+        batch.delete_cf(DB_COL_LOCAL_TXS, key);
     }
     let batch = batch.done();
     db.write(batch).unwrap();
