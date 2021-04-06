@@ -325,7 +325,7 @@ pub enum ComputeRequest {
         partition_entry: ProofOfWork,
     },
     SendTransactions {
-        transactions: BTreeMap<String, Transaction>,
+        transactions: Vec<Transaction>,
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
@@ -368,8 +368,8 @@ pub trait ComputeInterface {
     ///
     /// ### Arguments
     ///
-    /// * `transactions` - BTreeMap of transactions to be bundled into blocks.
-    fn receive_transactions(&mut self, transactions: BTreeMap<String, Transaction>) -> Response;
+    /// * `transactions` - Transactions to be added into blocks.
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
 
     /// Executes a received and approved contract
     ///
