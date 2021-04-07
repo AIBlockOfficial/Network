@@ -38,7 +38,7 @@ impl RaftStore {
 
     /// Consume store and return peristent storage
     pub fn take_persistent(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.presistent, SimpleDb::new_in_memory(&[]))
+        self.presistent.take()
     }
 
     /// Saves the current HardState.

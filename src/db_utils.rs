@@ -40,9 +40,23 @@ impl fmt::Debug for SimpleDb {
     }
 }
 
+impl Default for SimpleDb {
+    fn default() -> Self {
+        Self::new_in_memory(&[])
+    }
+}
+
 impl Drop for SimpleDb {
     fn drop(&mut self) {
-        self.destroy();
+        match self {
+            Self::File { options, path, .. } => {
+                if let Err(e) = DB::destroy(options, path.clone()) {
+                    // Note: This seem to always happen.
+                    warn!("Db(path) Failed to destroy: {:?}", e);
+                }
+            }
+            Self::InMemory { .. } => (),
+        }
     }
 }
 
@@ -70,19 +84,22 @@ impl SimpleDb {
         }
     }
 
-    /// Destroys the database in memory
-    fn destroy(&mut self) {
-        match self {
-            Self::File { options, path, .. } => {
-                if let Err(e) = DB::destroy(options, path.clone()) {
-                    // Note: This seem to always happen.
-                    warn!("Db(path) Failed to destroy: {:?}", e);
-                }
-            }
-            Self::InMemory { .. } => (),
+    /// Take the current db and replace with default
+    pub fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
+    /// Return only in memory db
+    pub fn in_memory(self) -> Option<Self> {
+        if let Self::InMemory { .. } = &self {
+            Some(self)
+        } else {
+            // Drop/close file db
+            None
         }
     }
 
+    /// Writter to accumulate batch edits
     pub fn batch_writer(&self) -> SimpleDbWriteBatch {
         match self {
             Self::File { db, .. } => SimpleDbWriteBatch::File {

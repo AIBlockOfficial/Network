@@ -291,9 +291,8 @@ impl Network {
 
         // Store extra params for re-spawn
         for (name, node) in &arc_nodes {
-            if let Some(extra) = take_closed_extra_params(node).await {
-                self.extra_params.insert(name.clone(), extra);
-            }
+            let extra = take_closed_extra_params(node).await;
+            self.extra_params.insert(name.clone(), extra);
         }
 
         // Remove from active nodes
@@ -551,12 +550,12 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
 }
 
 ///Dispatch to take_closed_extra_params
-async fn take_closed_extra_params(node: &ArcNode) -> Option<ExtraNodeParams> {
+async fn take_closed_extra_params(node: &ArcNode) -> ExtraNodeParams {
     match node {
-        ArcNode::Compute(n) => Some(n.lock().await.take_closed_extra_params().await),
-        ArcNode::Storage(n) => Some(n.lock().await.take_closed_extra_params().await),
-        ArcNode::Miner(n) => Some(n.lock().await.take_closed_extra_params().await),
-        ArcNode::User(n) => Some(n.lock().await.take_closed_extra_params().await),
+        ArcNode::Compute(n) => n.lock().await.take_closed_extra_params().await,
+        ArcNode::Storage(n) => n.lock().await.take_closed_extra_params().await,
+        ArcNode::Miner(n) => n.lock().await.take_closed_extra_params().await,
+        ArcNode::User(n) => n.lock().await.take_closed_extra_params().await,
     }
 }
 

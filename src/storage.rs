@@ -194,12 +194,10 @@ impl StorageNode {
 
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        let raft_db = self.node_raft.take_closed_persistent_store().await;
         ExtraNodeParams {
-            db: Some(std::mem::replace(
-                &mut self.db,
-                SimpleDb::new_in_memory(&[]),
-            )),
-            raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+            db: self.db.take().in_memory(),
+            raft_db: raft_db.in_memory(),
             ..Default::default()
         }
     }

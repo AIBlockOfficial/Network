@@ -81,7 +81,7 @@ impl WalletDb {
 
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.db.lock().unwrap(), SimpleDb::new_in_memory(&[]))
+        self.db.lock().unwrap().take()
     }
 
     /// Generates a new payment address, saving the related keys to the wallet
