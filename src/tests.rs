@@ -1594,6 +1594,22 @@ async fn handle_message_lost_no_restart_raft_1_node() {
 
 #[tokio::test(basic_scheduler)]
 async fn handle_message_lost_restart_block_stored_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(10460, 1);
+    handle_message_lost_restart_block_stored_raft_1_node_common(network_config).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_block_stored_raft_real_db_1_node() {
+    let mut network_config = complete_network_config_with_n_compute_raft(10465, 1);
+    network_config.in_memory_db = false;
+
+    remove_all_node_dbs(&network_config);
+    handle_message_lost_restart_block_stored_raft_1_node_common(network_config).await
+}
+
+async fn handle_message_lost_restart_block_stored_raft_1_node_common(
+    network_config: NetworkConfig,
+) {
     let modify_cfg = vec![(
         "After store block 0",
         CfgModif::RestartEventsAll(&[
@@ -1601,8 +1617,6 @@ async fn handle_message_lost_restart_block_stored_raft_1_node() {
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
-
-    let network_config = complete_network_config_with_n_compute_raft(10460, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 

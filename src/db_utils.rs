@@ -64,8 +64,17 @@ impl SimpleDb {
     /// Create rocksDB
     pub fn new_file(path: String, columns: &[&str]) -> Result<Self, DBError> {
         debug!("Open/Create Db at {}", path);
-        let options = get_db_options();
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
+        let mut options = get_db_options();
+
+        if DB::list_cf(&options, &path).is_err() {
+            // Allow create empty db with required column families.
+            // Do not create column families on existing db but error.
+            debug!("Create Db at {}", path);
+            options.create_if_missing(true);
+            options.create_missing_column_families(true);
+        }
+
         let db = DB::open_cf(&options, path.clone(), columns)?;
         Ok(Self::File { options, path, db })
     }
@@ -326,8 +335,6 @@ impl SimpleDbWriteBatch<'_> {
 /// Creates a set of DB opening options for rocksDB instances
 fn get_db_options() -> Options {
     let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.create_missing_column_families(true);
     opts.set_compression_type(DBCompressionType::Snappy);
 
     opts
