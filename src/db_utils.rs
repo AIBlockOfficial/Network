@@ -3,7 +3,7 @@ use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::HashMap;
-use std::fmt;
+use std::{error::Error, fmt};
 use tracing::{debug, warn};
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
@@ -11,11 +11,39 @@ pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
 pub type InMemoryColumns = HashMap<String, usize>;
 pub type InMemoryDb = Vec<HashMap<Vec<u8>, Vec<u8>>>;
 
+/// Result wrapper for SimpleDb errors
+pub type Result<T> = std::result::Result<T, SimpleDbError>;
+
 /// Description for a database
 pub struct SimpleDbSpec {
     pub db_path: &'static str,
     pub suffix: &'static str,
     pub columns: &'static [&'static str],
+}
+
+#[derive(Debug)]
+pub struct SimpleDbError {
+    error: String,
+}
+
+impl Error for SimpleDbError {
+    fn description(&self) -> &str {
+        &self.error
+    }
+}
+
+impl fmt::Display for SimpleDbError {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl From<DBError> for SimpleDbError {
+    fn from(other: DBError) -> Self {
+        Self {
+            error: other.into_string(),
+        }
+    }
 }
 
 /// Database that can store in memory or using rocksDB.
@@ -62,7 +90,7 @@ impl Drop for SimpleDb {
 
 impl SimpleDb {
     /// Create rocksDB
-    pub fn new_file(path: String, columns: &[&str]) -> Result<Self, DBError> {
+    pub fn new_file(path: String, columns: &[&str]) -> Result<Self> {
         debug!("Open/Create Db at {}", path);
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
@@ -127,7 +155,7 @@ impl SimpleDb {
     /// ### Arguments
     ///
     /// * `batch` - batch of put/delete to process
-    pub fn write(&mut self, batch: SimpleDbWriteBatchDone) -> Result<(), DBError> {
+    pub fn write(&mut self, batch: SimpleDbWriteBatchDone) -> Result<()> {
         use SimpleDbWriteBatchDone as Batch;
         match (self, batch) {
             (Self::File { db, .. }, Batch::File { write }) => {
@@ -160,7 +188,7 @@ impl SimpleDb {
         cf: &'static str,
         key: K,
         value: V,
-    ) -> Result<(), DBError> {
+    ) -> Result<()> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
@@ -183,7 +211,7 @@ impl SimpleDb {
     ///
     /// * `cf`  - The column family to use
     /// * `key` - position in database to be deleted
-    pub fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &'static str, key: K) -> Result<(), DBError> {
+    pub fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &'static str, key: K) -> Result<()> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
@@ -206,15 +234,11 @@ impl SimpleDb {
     ///
     /// * `cf`  - The column family to use
     /// * `key` - used to find position in database
-    pub fn get_cf<K: AsRef<[u8]>>(
-        &self,
-        cf: &'static str,
-        key: K,
-    ) -> Result<Option<Vec<u8>>, DBError> {
+    pub fn get_cf<K: AsRef<[u8]>>(&self, cf: &'static str, key: K) -> Result<Option<Vec<u8>>> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
-                db.get_cf(cf, key)
+                Ok(db.get_cf(cf, key)?)
             }
             Self::InMemory {
                 key_values,
