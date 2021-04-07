@@ -2,6 +2,7 @@ use naom::script::OpCodes;
 
 /*------- NETWORK CONSTANTS --------*/
 pub const NETWORK_VERSION: u32 = 1;
+pub const NETWORK_VERSION_SERIALIZED: &[u8] = b"1";
 
 /*------- BLOCK CONSTANTS --------*/
 
@@ -36,6 +37,9 @@ pub const LOCKTIME_THRESHOLD: u32 = 500000000; // Tue Nov 5 00:53:20 1985 UTC
 pub const MAX_OPCODE: u8 = OpCodes::OP_NOP10 as u8;
 
 /*------- STORAGE CONSTANTS -------*/
+/// Key pointing to the current db version.
+pub const DB_VERSION_KEY: &str = "DbVersionKey";
+
 /// The constant prepending character for a block hash
 pub const BLOCK_PREPEND: char = 'b';
 

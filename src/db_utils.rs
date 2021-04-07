@@ -1,5 +1,5 @@
 use crate::configurations::DbMode;
-use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST};
+use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::HashMap;
@@ -86,19 +86,22 @@ impl SimpleDb {
         let mut options = get_db_options();
 
         if let Ok(old_columns) = DB::list_cf(&options, &path) {
-            if !check_have_same_columns(columns.clone().copied(), old_columns.clone()) {
+            if !check_have_same_columns(columns.clone().copied(), old_columns) {
                 return Err(SimpleDbError("Column mismatch while opening".to_owned()));
             }
+
+            let db = DB::open_cf(&options, path.clone(), columns)?;
+            Ok(Self::File { options, path, db })
         } else {
             // Allow create empty db with required column families.
             // Do not create column families on existing db but error.
             debug!("Create Db at {}", path);
             options.create_if_missing(true);
             options.create_missing_column_families(true);
-        }
 
-        let db = DB::open_cf(&options, path.clone(), columns)?;
-        Ok(Self::File { options, path, db })
+            let db = DB::open_cf(&options, path.clone(), columns)?;
+            with_initial_data(Self::File { options, path, db })
+        }
     }
 
     /// Create in memory db
@@ -118,7 +121,7 @@ impl SimpleDb {
             }
             Err(SimpleDbError("Column mismatch while opening".to_owned()))
         } else {
-            Ok(Self::InMemory {
+            with_initial_data(Self::InMemory {
                 key_values,
                 columns,
             })
@@ -366,6 +369,28 @@ impl SimpleDbWriteBatch<'_> {
     }
 }
 
+/// Add initial state to freshly created DB: Version.
+fn with_initial_data(mut db: SimpleDb) -> Result<SimpleDb> {
+    if let Some(version) = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)? {
+        panic!("with_initial_data: version exists {:?}", version);
+    }
+    db.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED)?;
+    Ok(db)
+}
+
+/// Check Version in database is as expected.
+fn check_version(db: &SimpleDb, expected: &[u8]) -> Result<()> {
+    let version = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)?;
+    if let Some(version) = &version {
+        if version == expected {
+            return Ok(());
+        }
+    }
+
+    warn!("DB Version mismatch {:?} != {:?}", version, expected);
+    Err(SimpleDbError("DB Version mismatch".to_owned()))
+}
+
 /// Creates a set of DB opening options for rocksDB instances
 fn get_db_options() -> Options {
     let mut opts = Options::default();
@@ -385,13 +410,32 @@ fn check_have_same_columns<'a>(c1: impl Iterator<Item = &'a str>, c2: Vec<String
     sorted_c1 == sorted_c2
 }
 
-///Creates a new database(db) object in selected mode
+/// Creates a new database(db) object in selected mode
 ///
 /// ### Arguments
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
+/// * `old_db`   - Old in memory Database to try to open.
 pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
+    let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
+    check_version(&db, NETWORK_VERSION_SERIALIZED).unwrap();
+    db
+}
+
+/// Creates a new database(db) object in selected mode.
+/// No version check is performed, new database will use current version.
+///
+/// ### Arguments
+///
+/// * `db_moode` - Mode for the database.
+/// * `db_spec`  - Database specification.
+/// * `old_db`   - Old in memory Database to try to open.
+pub fn new_db_no_version_check(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb> {
     let db_path = db_spec.db_path;
     let suffix = db_spec.suffix;
     let save_path = match db_mode {
@@ -404,8 +448,8 @@ pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>)
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns).unwrap()
+        SimpleDb::new_file(save_path, db_spec.columns)
     } else {
-        SimpleDb::new_in_memory(db_spec.columns, old_db).unwrap()
+        SimpleDb::new_in_memory(db_spec.columns, old_db)
     }
 }
