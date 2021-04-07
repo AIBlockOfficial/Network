@@ -54,7 +54,7 @@ pub struct WalletDb {
 
 impl WalletDb {
     pub fn new(db_mode: DbMode, db: Option<SimpleDb>, passphrase: Option<String>) -> Self {
-        let mut db = db.unwrap_or_else(|| db_utils::new_db(db_mode, &DB_SPEC));
+        let mut db = db_utils::new_db(db_mode, &DB_SPEC, db);
         let passphrase = passphrase.as_deref().unwrap_or("").as_bytes();
         let masterkey = get_or_save_master_key_store(&mut db, passphrase);
         Self {

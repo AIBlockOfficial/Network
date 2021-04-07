@@ -112,7 +112,7 @@ impl StorageRaft {
             &config.storage_nodes,
             config.storage_raft != 0,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
-            raft_db.unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, &DB_SPEC)),
+            db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
         );
 
         let propose_block_timeout_duration =

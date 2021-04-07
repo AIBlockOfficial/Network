@@ -162,10 +162,7 @@ impl ComputeNode {
         let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
-        let db = extra
-            .db
-            .take()
-            .unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, &DB_SPEC));
+        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take());
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();

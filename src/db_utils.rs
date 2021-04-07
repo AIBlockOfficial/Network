@@ -22,27 +22,23 @@ pub struct SimpleDbSpec {
 }
 
 #[derive(Debug)]
-pub struct SimpleDbError {
-    error: String,
-}
+pub struct SimpleDbError(String);
 
 impl Error for SimpleDbError {
     fn description(&self) -> &str {
-        &self.error
+        &self.0
     }
 }
 
 impl fmt::Display for SimpleDbError {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        self.error.fmt(formatter)
+        self.0.fmt(formatter)
     }
 }
 
 impl From<DBError> for SimpleDbError {
     fn from(other: DBError) -> Self {
-        Self {
-            error: other.into_string(),
-        }
+        Self(other.into_string())
     }
 }
 
@@ -68,12 +64,6 @@ impl fmt::Debug for SimpleDb {
     }
 }
 
-impl Default for SimpleDb {
-    fn default() -> Self {
-        Self::new_in_memory(&[])
-    }
-}
-
 impl Drop for SimpleDb {
     fn drop(&mut self) {
         match self {
@@ -95,7 +85,11 @@ impl SimpleDb {
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
 
-        if DB::list_cf(&options, &path).is_err() {
+        if let Ok(old_columns) = DB::list_cf(&options, &path) {
+            if !check_have_same_columns(columns.clone().copied(), old_columns.clone()) {
+                return Err(SimpleDbError("Column mismatch while opening".to_owned()));
+            }
+        } else {
             // Allow create empty db with required column families.
             // Do not create column families on existing db but error.
             debug!("Create Db at {}", path);
@@ -108,22 +102,38 @@ impl SimpleDb {
     }
 
     /// Create in memory db
-    pub fn new_in_memory(columns: &[&str]) -> Self {
+    pub fn new_in_memory(columns: &[&str], old_db: Option<Self>) -> Result<Self> {
         let key_values = vec![Default::default(); columns.len() + 1];
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let columns = columns
             .enumerate()
             .map(|(idx, v)| (v.to_string(), idx))
             .collect();
-        Self::InMemory {
-            key_values,
-            columns,
+
+        if let Some(old_db) = old_db {
+            if let Self::InMemory { columns: old_c, .. } = &old_db {
+                if &columns == old_c {
+                    return Ok(old_db);
+                }
+            }
+            Err(SimpleDbError("Column mismatch while opening".to_owned()))
+        } else {
+            Ok(Self::InMemory {
+                key_values,
+                columns,
+            })
         }
     }
 
     /// Take the current db and replace with default
     pub fn take(&mut self) -> Self {
-        std::mem::take(self)
+        std::mem::replace(
+            self,
+            Self::InMemory {
+                key_values: Default::default(),
+                columns: Default::default(),
+            },
+        )
     }
 
     /// Return only in memory db
@@ -364,23 +374,38 @@ fn get_db_options() -> Options {
     opts
 }
 
+/// Check columns equals when sorted
+fn check_have_same_columns<'a>(c1: impl Iterator<Item = &'a str>, c2: Vec<String>) -> bool {
+    let mut sorted_c1: Vec<_> = c1.collect();
+    sorted_c1.sort_unstable();
+
+    let mut sorted_c2 = c2;
+    sorted_c2.sort_unstable();
+
+    sorted_c1 == sorted_c2
+}
+
 ///Creates a new database(db) object in selected mode
 ///
 /// ### Arguments
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
-pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec) -> SimpleDb {
+pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
+    let db_path = db_spec.db_path;
+    let suffix = db_spec.suffix;
     let save_path = match db_mode {
-        DbMode::Live => format!("{}/{}{}", db_spec.db_path, DB_PATH_LIVE, db_spec.suffix),
-        DbMode::Test(idx) => format!(
-            "{}/{}{}.{}",
-            db_spec.db_path, DB_PATH_TEST, db_spec.suffix, idx
-        ),
-        DbMode::InMemory => {
-            return SimpleDb::new_in_memory(db_spec.columns);
-        }
+        DbMode::Live => Some(format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix)),
+        DbMode::Test(idx) => Some(format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx)),
+        DbMode::InMemory => None,
     };
 
-    SimpleDb::new_file(save_path, db_spec.columns).unwrap()
+    if let Some(save_path) = save_path {
+        if old_db.is_some() {
+            panic!("new_db: Do not provide database, read it from disk");
+        }
+        SimpleDb::new_file(save_path, db_spec.columns).unwrap()
+    } else {
+        SimpleDb::new_in_memory(db_spec.columns, old_db).unwrap()
+    }
 }

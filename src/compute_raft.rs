@@ -145,7 +145,7 @@ impl ComputeRaft {
             &config.compute_nodes,
             config.compute_raft != 0,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            raft_db.unwrap_or_else(|| db_utils::new_db(config.compute_db_mode, &DB_SPEC)),
+            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db),
         );
 
         let propose_transactions_timeout_duration =
