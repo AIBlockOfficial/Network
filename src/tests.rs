@@ -877,6 +877,8 @@ async fn proof_of_work_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
         compute_flood_block_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
         miner_all_handle_event(network, in_miners, "Block PoW complete").await;
+        compute_flood_transactions_to_partition(network, compute).await;
+        miner_all_handle_event(network, in_miners, "Block is valid").await;
 
         if !c_miners.is_empty() {
             let win_miner: &String = &in_miners[0];
@@ -2195,6 +2197,11 @@ async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) 
     c.flood_block_to_partition().await.unwrap();
 }
 
+async fn compute_flood_transactions_to_partition(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.flood_transactions_to_partition().await.unwrap();
+}
+
 async fn compute_flood_block_to_users(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     c.flood_block_to_users().await.unwrap();
@@ -2558,7 +2565,6 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 // MinerNode helpers
 //
-
 async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: String) {
     let mut m = network.miner(miner_from).unwrap().lock().await;
     m.request_specified_block(block_key).await.unwrap();

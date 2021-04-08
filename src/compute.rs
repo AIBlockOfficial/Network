@@ -945,9 +945,9 @@ impl ComputeNode {
         debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
-
         let unicorn = header.previous_hash.unwrap_or_default();
-        let hashblock = HashBlock::new_for_mining(unicorn, header.merkle_root_hash, header.b_num);
+        let hashblock =
+            HashBlock::new_for_mining(unicorn, block.header.merkle_root_hash.clone(), header.b_num);
         let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
 
@@ -957,6 +957,24 @@ impl ComputeNode {
                 MineRequest::SendBlock {
                     block,
                     reward: *reward,
+                },
+            )
+            .await
+            .unwrap();
+
+        Ok(())
+    }
+
+    /// Floods the current block to participants for mining
+    pub async fn flood_transactions_to_partition(&mut self) -> Result<()> {
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+        let tx_merkle_verification = block.transactions.clone();
+
+        self.node
+            .send_to_all(
+                self.partition_list.1.iter().copied(),
+                MineRequest::SendTransactions {
+                    tx_merkle_verification,
                 },
             )
             .await
