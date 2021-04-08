@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::{error::Error, fmt};
 use tracing::{debug, warn};
 
+pub const IN_MEMORY_CLOSED_PREFIX: &str = "IN_MEMORY_CLOSED_PREFIX_";
+
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
 pub type InMemoryColumns = HashMap<String, usize>;
@@ -85,11 +87,7 @@ impl SimpleDb {
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
 
-        if let Ok(old_columns) = DB::list_cf(&options, &path) {
-            if !check_have_same_columns(columns.clone().copied(), old_columns) {
-                return Err(SimpleDbError("Column mismatch while opening".to_owned()));
-            }
-
+        if DB::list_cf(&options, &path).is_ok() {
             let db = DB::open_cf(&options, path.clone(), columns)?;
             Ok(Self::File { options, path, db })
         } else {
@@ -114,12 +112,7 @@ impl SimpleDb {
             .collect();
 
         if let Some(old_db) = old_db {
-            if let Self::InMemory { columns: old_c, .. } = &old_db {
-                if &columns == old_c {
-                    return Ok(old_db);
-                }
-            }
-            Err(SimpleDbError("Column mismatch while opening".to_owned()))
+            in_memory_check_and_open_column(old_db, columns)
         } else {
             with_initial_data(Self::InMemory {
                 key_values,
@@ -379,16 +372,14 @@ fn with_initial_data(mut db: SimpleDb) -> Result<SimpleDb> {
 }
 
 /// Check Version in database is as expected.
-fn check_version(db: &SimpleDb, expected: &[u8]) -> Result<()> {
+pub fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
     let version = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)?;
-    if let Some(version) = &version {
-        if version == expected {
-            return Ok(());
-        }
+    if version.as_deref() == expected {
+        Ok(())
+    } else {
+        warn!("DB Version mismatch {:?} != {:?}", version, expected);
+        Err(SimpleDbError("DB Version mismatch".to_owned()))
     }
-
-    warn!("DB Version mismatch {:?} != {:?}", version, expected);
-    Err(SimpleDbError("DB Version mismatch".to_owned()))
 }
 
 /// Creates a set of DB opening options for rocksDB instances
@@ -399,15 +390,34 @@ fn get_db_options() -> Options {
     opts
 }
 
-/// Check columns equals when sorted
-fn check_have_same_columns<'a>(c1: impl Iterator<Item = &'a str>, c2: Vec<String>) -> bool {
-    let mut sorted_c1: Vec<_> = c1.collect();
-    sorted_c1.sort_unstable();
+/// Check requested columns exists and mark all others as closed.
+/// Error similarly to rocksdb if column are missing.
+fn in_memory_check_and_open_column(
+    mut old_db: SimpleDb,
+    c_new: InMemoryColumns,
+) -> Result<SimpleDb> {
+    if let SimpleDb::InMemory { columns, .. } = &mut old_db {
+        // Start with all closed
+        *columns = columns
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (k.trim_start_matches(IN_MEMORY_CLOSED_PREFIX).to_owned(), v))
+            .map(|(k, v)| (IN_MEMORY_CLOSED_PREFIX.to_owned() + &k, v))
+            .collect();
 
-    let mut sorted_c2 = c2;
-    sorted_c2.sort_unstable();
-
-    sorted_c1 == sorted_c2
+        // Open the new ones, error out if one missing
+        for (k, _) in c_new {
+            let closed_k = IN_MEMORY_CLOSED_PREFIX.to_owned() + &k;
+            if let Some(value) = columns.remove(&closed_k) {
+                columns.insert(k, value);
+            } else {
+                return Err(SimpleDbError("Column missing while opening".to_owned()));
+            }
+        }
+        Ok(old_db)
+    } else {
+        panic!("Try to open an in memory db from a File db");
+    }
 }
 
 /// Creates a new database(db) object in selected mode
@@ -419,7 +429,7 @@ fn check_have_same_columns<'a>(c1: impl Iterator<Item = &'a str>, c2: Vec<String
 /// * `old_db`   - Old in memory Database to try to open.
 pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
     let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
-    check_version(&db, NETWORK_VERSION_SERIALIZED).unwrap();
+    check_version(&db, Some(NETWORK_VERSION_SERIALIZED)).unwrap();
     db
 }
 
