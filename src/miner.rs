@@ -22,7 +22,6 @@ use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_ha
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
-use std::convert::TryFrom;
 use std::{
     error::Error,
     fmt,
@@ -292,9 +291,15 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Merkle Root Valid",
+                reason: "Block is valid",
             }) => {
                 info!("MERKLE ROOT VALID");
+            }
+            Ok(Response {
+                success: false,
+                reason: "Block is invalid",
+            }) => {
+                info!("MERKLE ROOT INVALID");
             }
             Ok(Response {
                 success: true,
@@ -598,16 +603,8 @@ impl MinerNode {
             let (mtree, store) = block::build_merkle_tree(&tx_merkle_verification)
                 .await
                 .unwrap();
-            let random_number: usize = generate_random_num(tx_merkle_verification.len());
-            let check_entry = block::from_slice(&Sha3_256::digest(
-                &tx_merkle_verification[random_number].as_ref(),
-            ));
-            let random_num_u64: u64 = u64::try_from(random_number).unwrap();
-            let proof = mtree
-                .prove(random_num_u64, &check_entry, &store)
-                .await
-                .unwrap();
-            valid = valid && mtree.verify(random_num_u64, &check_entry, &proof);
+            valid = valid
+                && store[&mtree.root_id()] == block::from_slice(&hex::decode(merkle_root).unwrap());
         }
 
         if valid {
