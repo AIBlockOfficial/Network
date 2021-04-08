@@ -1389,7 +1389,7 @@ dependencies = [
  "merkle-log",
  "rand 0.8.3",
  "serde 1.0.123",
- "sha3 0.9.1",
+ "sha3",
  "sodiumoxide",
  "time 0.2.25",
  "tracing",
@@ -2132,19 +2132,6 @@ checksum = "2579985fda508104f7587689507983eadd6a6e84dd35d6d115361f530916fa0d"
 
 [[package]]
 name = "sha3"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd26bc0e7a2e3a7c959bc494caf58b72ee0c71d67704e9520f736ca7e4853ecf"
-dependencies = [
- "block-buffer 0.7.3",
- "byte-tools",
- "digest 0.8.1",
- "keccak",
- "opaque-debug 0.2.3",
-]
-
-[[package]]
-name = "sha3"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f81199417d4e5de3f04b1e871023acea7389672c4135918f05aa9cbf2f2fa809"
@@ -2317,6 +2304,7 @@ dependencies = [
  "config",
  "futures",
  "hex",
+ "merkle-log",
  "merkletree",
  "naom",
  "protobuf",
@@ -2327,7 +2315,7 @@ dependencies = [
  "rust-crypto",
  "serde 1.0.123",
  "serde_json",
- "sha3 0.8.2",
+ "sha3",
  "sodiumoxide",
  "tokio 0.2.25",
  "tokio-util",

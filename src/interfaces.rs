@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::hash_block;
 use crate::raft::RaftMessageWrapper;
 use crate::unicorn::UnicornShard;
 use bytes::Bytes;
@@ -10,8 +11,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-
-use crate::hash_block;
 
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 
@@ -277,6 +276,9 @@ pub enum MineRequest {
     SendSpecifiedBlock {
         block: Vec<u8>,
     },
+    SendTransactions {
+        tx_merkle_verification: Vec<String>,
+    },
     Closing,
 }
 
@@ -295,6 +297,9 @@ impl fmt::Debug for MineRequest {
                 ref win_coinbases,
             } => write!(f, "SendRandomNum"),
             SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
+            SendTransactions {
+                ref tx_merkle_verification,
+            } => write!(f, "SendTransactions"),
             Closing => write!(f, "Closing"),
         }
     }

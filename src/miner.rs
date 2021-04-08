@@ -16,17 +16,20 @@ use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
+use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
 use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
+use std::convert::TryFrom;
 use std::{
     error::Error,
     fmt,
     future::Future,
     net::SocketAddr,
     net::{IpAddr, Ipv4Addr},
+    str,
     time::SystemTime,
 };
 use tokio::task;
@@ -55,7 +58,7 @@ pub struct BlockPoWInfo {
 }
 
 /// Received block
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockPoWReceived {
     hash_block: HashBlock,
     reward: TokenAmount,
@@ -288,6 +291,12 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Merkle Root Valid",
+            }) => {
+                info!("MERKLE ROOT VALID");
+            }
+            Ok(Response {
+                success: true,
                 reason: "Block PoW complete",
             }) => {
                 if self.process_found_block_pow().await {
@@ -430,6 +439,12 @@ impl MinerNode {
                 rnum,
                 win_coinbases,
             } => self.receive_random_number(peer, rnum, win_coinbases).await,
+            SendTransactions {
+                tx_merkle_verification,
+            } => {
+                self.receive_trans_verification(tx_merkle_verification)
+                    .await
+            }
             Closing => self.receive_closing(peer),
         }
     }
@@ -564,6 +579,47 @@ impl MinerNode {
             success: true,
             reason: "Pre-block received successfully",
         })
+    }
+
+    /// Verifies the block by checking the transactions using a merkle tree.
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions`     - Vec<String>. transactions used to build the merkle tree
+    pub async fn receive_trans_verification(
+        &self,
+        tx_merkle_verification: Vec<String>,
+    ) -> Option<Response> {
+        let current_block_info = self.current_block.clone().unwrap();
+        let merkle_root = current_block_info.hash_block.merkle_hash.clone();
+        let mut valid = true;
+        if !merkle_root.is_empty() {
+            let (mtree, store) = block::build_merkle_tree(&tx_merkle_verification)
+                .await
+                .unwrap();
+            let random_number: usize = generate_random_num(tx_merkle_verification.len());
+            let check_entry = block::from_slice(&Sha3_256::digest(
+                &tx_merkle_verification[random_number].as_ref(),
+            ));
+            let random_num_u64: u64 = u64::try_from(random_number).unwrap();
+            let proof = mtree
+                .prove(random_num_u64, &check_entry, &store)
+                .await
+                .unwrap();
+            valid = valid && mtree.verify(random_num_u64, &check_entry, &proof);
+        }
+
+        if valid {
+            Some(Response {
+                success: true,
+                reason: "Block is valid",
+            })
+        } else {
+            Some(Response {
+                success: false,
+                reason: "Block is not valid",
+            })
+        }
     }
 
     /// Util function to get a socket address for PID table checks
@@ -924,4 +980,10 @@ async fn store_last_coinbase(
         wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
     }
     coinbase
+}
+
+///Generates a random number to pick random transations
+fn generate_random_num(upper_limit: usize) -> usize {
+    let mut rng = rand::thread_rng();
+    rng.gen_range(0, upper_limit)
 }
