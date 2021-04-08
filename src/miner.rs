@@ -225,8 +225,9 @@ impl MinerNode {
 
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        let wallet_db = self.wallet_db.take_closed_persistent_store().await;
         ExtraNodeParams {
-            wallet_db: Some(self.wallet_db.take_closed_persistent_store().await),
+            wallet_db: wallet_db.in_memory(),
             ..Default::default()
         }
     }

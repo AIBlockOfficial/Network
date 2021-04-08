@@ -1,21 +1,47 @@
 use crate::configurations::DbMode;
-use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST};
+use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::HashMap;
-use std::fmt;
+use std::{error::Error, fmt};
 use tracing::{debug, warn};
+
+pub const IN_MEMORY_CLOSED_PREFIX: &str = "IN_MEMORY_CLOSED_PREFIX_";
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
 pub type InMemoryColumns = HashMap<String, usize>;
 pub type InMemoryDb = Vec<HashMap<Vec<u8>, Vec<u8>>>;
 
+/// Result wrapper for SimpleDb errors
+pub type Result<T> = std::result::Result<T, SimpleDbError>;
+
 /// Description for a database
 pub struct SimpleDbSpec {
     pub db_path: &'static str,
     pub suffix: &'static str,
     pub columns: &'static [&'static str],
+}
+
+#[derive(Debug)]
+pub struct SimpleDbError(String);
+
+impl Error for SimpleDbError {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SimpleDbError {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl From<DBError> for SimpleDbError {
+    fn from(other: DBError) -> Self {
+        Self(other.into_string())
+    }
 }
 
 /// Database that can store in memory or using rocksDB.
@@ -42,36 +68,6 @@ impl fmt::Debug for SimpleDb {
 
 impl Drop for SimpleDb {
     fn drop(&mut self) {
-        self.destroy();
-    }
-}
-
-impl SimpleDb {
-    /// Create rocksDB
-    pub fn new_file(path: String, columns: &[&str]) -> Result<Self, DBError> {
-        debug!("Open/Create Db at {}", path);
-        let options = get_db_options();
-        let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
-        let db = DB::open_cf(&options, path.clone(), columns)?;
-        Ok(Self::File { options, path, db })
-    }
-
-    /// Create in memory db
-    pub fn new_in_memory(columns: &[&str]) -> Self {
-        let key_values = vec![Default::default(); columns.len() + 1];
-        let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
-        let columns = columns
-            .enumerate()
-            .map(|(idx, v)| (v.to_string(), idx))
-            .collect();
-        Self::InMemory {
-            key_values,
-            columns,
-        }
-    }
-
-    /// Destroys the database in memory
-    fn destroy(&mut self) {
         match self {
             Self::File { options, path, .. } => {
                 if let Err(e) = DB::destroy(options, path.clone()) {
@@ -82,7 +78,71 @@ impl SimpleDb {
             Self::InMemory { .. } => (),
         }
     }
+}
 
+impl SimpleDb {
+    /// Create rocksDB
+    pub fn new_file(path: String, columns: &[&str]) -> Result<Self> {
+        debug!("Open/Create Db at {}", path);
+        let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
+        let mut options = get_db_options();
+
+        if DB::list_cf(&options, &path).is_ok() {
+            let db = DB::open_cf(&options, path.clone(), columns)?;
+            Ok(Self::File { options, path, db })
+        } else {
+            // Allow create empty db with required column families.
+            // Do not create column families on existing db but error.
+            debug!("Create Db at {}", path);
+            options.create_if_missing(true);
+            options.create_missing_column_families(true);
+
+            let db = DB::open_cf(&options, path.clone(), columns)?;
+            with_initial_data(Self::File { options, path, db })
+        }
+    }
+
+    /// Create in memory db
+    pub fn new_in_memory(columns: &[&str], old_db: Option<Self>) -> Result<Self> {
+        let key_values = vec![Default::default(); columns.len() + 1];
+        let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
+        let columns = columns
+            .enumerate()
+            .map(|(idx, v)| (v.to_string(), idx))
+            .collect();
+
+        if let Some(old_db) = old_db {
+            in_memory_check_and_open_column(old_db, columns)
+        } else {
+            with_initial_data(Self::InMemory {
+                key_values,
+                columns,
+            })
+        }
+    }
+
+    /// Take the current db and replace with default
+    pub fn take(&mut self) -> Self {
+        std::mem::replace(
+            self,
+            Self::InMemory {
+                key_values: Default::default(),
+                columns: Default::default(),
+            },
+        )
+    }
+
+    /// Return only in memory db
+    pub fn in_memory(self) -> Option<Self> {
+        if let Self::InMemory { .. } = &self {
+            Some(self)
+        } else {
+            // Drop/close file db
+            None
+        }
+    }
+
+    /// Writter to accumulate batch edits
     pub fn batch_writer(&self) -> SimpleDbWriteBatch {
         match self {
             Self::File { db, .. } => SimpleDbWriteBatch::File {
@@ -101,7 +161,7 @@ impl SimpleDb {
     /// ### Arguments
     ///
     /// * `batch` - batch of put/delete to process
-    pub fn write(&mut self, batch: SimpleDbWriteBatchDone) -> Result<(), DBError> {
+    pub fn write(&mut self, batch: SimpleDbWriteBatchDone) -> Result<()> {
         use SimpleDbWriteBatchDone as Batch;
         match (self, batch) {
             (Self::File { db, .. }, Batch::File { write }) => {
@@ -134,7 +194,7 @@ impl SimpleDb {
         cf: &'static str,
         key: K,
         value: V,
-    ) -> Result<(), DBError> {
+    ) -> Result<()> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
@@ -157,7 +217,7 @@ impl SimpleDb {
     ///
     /// * `cf`  - The column family to use
     /// * `key` - position in database to be deleted
-    pub fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &'static str, key: K) -> Result<(), DBError> {
+    pub fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &'static str, key: K) -> Result<()> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
@@ -180,15 +240,11 @@ impl SimpleDb {
     ///
     /// * `cf`  - The column family to use
     /// * `key` - used to find position in database
-    pub fn get_cf<K: AsRef<[u8]>>(
-        &self,
-        cf: &'static str,
-        key: K,
-    ) -> Result<Option<Vec<u8>>, DBError> {
+    pub fn get_cf<K: AsRef<[u8]>>(&self, cf: &'static str, key: K) -> Result<Option<Vec<u8>>> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
-                db.get_cf(cf, key)
+                Ok(db.get_cf(cf, key)?)
             }
             Self::InMemory {
                 key_values,
@@ -306,33 +362,104 @@ impl SimpleDbWriteBatch<'_> {
     }
 }
 
+/// Add initial state to freshly created DB: Version.
+fn with_initial_data(mut db: SimpleDb) -> Result<SimpleDb> {
+    if let Some(version) = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)? {
+        panic!("with_initial_data: version exists {:?}", version);
+    }
+    db.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED)?;
+    Ok(db)
+}
+
+/// Check Version in database is as expected.
+pub fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
+    let version = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)?;
+    if version.as_deref() == expected {
+        Ok(())
+    } else {
+        warn!("DB Version mismatch {:?} != {:?}", version, expected);
+        Err(SimpleDbError("DB Version mismatch".to_owned()))
+    }
+}
+
 /// Creates a set of DB opening options for rocksDB instances
 fn get_db_options() -> Options {
     let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.create_missing_column_families(true);
     opts.set_compression_type(DBCompressionType::Snappy);
 
     opts
 }
 
-///Creates a new database(db) object in selected mode
+/// Check requested columns exists and mark all others as closed.
+/// Error similarly to rocksdb if column are missing.
+fn in_memory_check_and_open_column(
+    mut old_db: SimpleDb,
+    c_new: InMemoryColumns,
+) -> Result<SimpleDb> {
+    if let SimpleDb::InMemory { columns, .. } = &mut old_db {
+        // Start with all closed
+        *columns = columns
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (k.trim_start_matches(IN_MEMORY_CLOSED_PREFIX).to_owned(), v))
+            .map(|(k, v)| (IN_MEMORY_CLOSED_PREFIX.to_owned() + &k, v))
+            .collect();
+
+        // Open the new ones, error out if one missing
+        for (k, _) in c_new {
+            let closed_k = IN_MEMORY_CLOSED_PREFIX.to_owned() + &k;
+            if let Some(value) = columns.remove(&closed_k) {
+                columns.insert(k, value);
+            } else {
+                return Err(SimpleDbError("Column missing while opening".to_owned()));
+            }
+        }
+        Ok(old_db)
+    } else {
+        panic!("Try to open an in memory db from a File db");
+    }
+}
+
+/// Creates a new database(db) object in selected mode
 ///
 /// ### Arguments
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
-pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec) -> SimpleDb {
+/// * `old_db`   - Old in memory Database to try to open.
+pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
+    let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
+    check_version(&db, Some(NETWORK_VERSION_SERIALIZED)).unwrap();
+    db
+}
+
+/// Creates a new database(db) object in selected mode.
+/// No version check is performed, new database will use current version.
+///
+/// ### Arguments
+///
+/// * `db_moode` - Mode for the database.
+/// * `db_spec`  - Database specification.
+/// * `old_db`   - Old in memory Database to try to open.
+pub fn new_db_no_version_check(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb> {
+    let db_path = db_spec.db_path;
+    let suffix = db_spec.suffix;
     let save_path = match db_mode {
-        DbMode::Live => format!("{}/{}{}", db_spec.db_path, DB_PATH_LIVE, db_spec.suffix),
-        DbMode::Test(idx) => format!(
-            "{}/{}{}.{}",
-            db_spec.db_path, DB_PATH_TEST, db_spec.suffix, idx
-        ),
-        DbMode::InMemory => {
-            return SimpleDb::new_in_memory(db_spec.columns);
-        }
+        DbMode::Live => Some(format!("{}/{}{}", db_path, DB_PATH_LIVE, suffix)),
+        DbMode::Test(idx) => Some(format!("{}/{}{}.{}", db_path, DB_PATH_TEST, suffix, idx)),
+        DbMode::InMemory => None,
     };
 
-    SimpleDb::new_file(save_path, db_spec.columns).unwrap()
+    if let Some(save_path) = save_path {
+        if old_db.is_some() {
+            panic!("new_db: Do not provide database, read it from disk");
+        }
+        SimpleDb::new_file(save_path, db_spec.columns)
+    } else {
+        SimpleDb::new_in_memory(db_spec.columns, old_db)
+    }
 }

@@ -1,6 +1,6 @@
 use crate::configurations::{DbMode, WalletTxSpec};
 use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
-use crate::db_utils::{self, DBError, SimpleDb, SimpleDbSpec, DB_COL_DEFAULT};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -54,7 +54,7 @@ pub struct WalletDb {
 
 impl WalletDb {
     pub fn new(db_mode: DbMode, db: Option<SimpleDb>, passphrase: Option<String>) -> Self {
-        let mut db = db.unwrap_or_else(|| db_utils::new_db(db_mode, &DB_SPEC));
+        let mut db = db_utils::new_db(db_mode, &DB_SPEC, db);
         let passphrase = passphrase.as_deref().unwrap_or("").as_bytes();
         let masterkey = get_or_save_master_key_store(&mut db, passphrase);
         Self {
@@ -81,7 +81,7 @@ impl WalletDb {
 
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.db.lock().unwrap(), SimpleDb::new_in_memory(&[]))
+        self.db.lock().unwrap().take()
     }
 
     /// Generates a new payment address, saving the related keys to the wallet
@@ -316,7 +316,7 @@ impl WalletDb {
     }
 
     /// Get the wallet fund store with errors
-    pub fn get_fund_store_err(&self) -> Result<FundStore, DBError> {
+    pub fn get_fund_store_err(&self) -> Result<FundStore, SimpleDbError> {
         get_fund_store_err(&self.db.lock().unwrap())
     }
 
@@ -370,7 +370,7 @@ pub fn get_fund_store(db: &SimpleDb) -> FundStore {
 }
 
 /// Get the wallet fund store
-pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, DBError> {
+pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, SimpleDbError> {
     match db.get_cf(DB_COL_DEFAULT, FUND_KEY) {
         Ok(Some(list)) => Ok(deserialize(&list).unwrap()),
         Ok(None) => Ok(FundStore::default()),

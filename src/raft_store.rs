@@ -1,5 +1,5 @@
 use crate::db_utils::{
-    DBError, SimpleDb, SimpleDbWriteBatch, SimpleDbWriteBatchDone, DB_COL_DEFAULT,
+    SimpleDb, SimpleDbError, SimpleDbWriteBatch, SimpleDbWriteBatchDone, DB_COL_DEFAULT,
 };
 use bincode::{deserialize, serialize, Error as BincodeError};
 use protobuf::Message;
@@ -38,7 +38,7 @@ impl RaftStore {
 
     /// Consume store and return peristent storage
     pub fn take_persistent(&mut self) -> SimpleDb {
-        std::mem::replace(&mut self.presistent, SimpleDb::new_in_memory(&[]))
+        self.presistent.take()
     }
 
     /// Saves the current HardState.
@@ -223,8 +223,8 @@ impl Storage for RaftStore {
     }
 }
 
-/// Create a generic StorageError from DBError
-fn from_db_err(err: DBError) -> StorageError {
+/// Create a generic StorageError from SimpleDbError
+fn from_db_err(err: SimpleDbError) -> StorageError {
     StorageError::Other(Box::new(err))
 }
 

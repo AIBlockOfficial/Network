@@ -124,10 +124,7 @@ impl StorageNode {
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
-        let db = extra
-            .db
-            .take()
-            .unwrap_or_else(|| db_utils::new_db(config.storage_db_mode, &DB_SPEC));
+        let db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
         let shutdown_group = {
             let compute = std::iter::once(compute_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -194,12 +191,10 @@ impl StorageNode {
 
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
+        let raft_db = self.node_raft.take_closed_persistent_store().await;
         ExtraNodeParams {
-            db: Some(std::mem::replace(
-                &mut self.db,
-                SimpleDb::new_in_memory(&[]),
-            )),
-            raft_db: Some(self.node_raft.take_closed_persistent_store().await),
+            db: self.db.take().in_memory(),
+            raft_db: raft_db.in_memory(),
             ..Default::default()
         }
     }

@@ -1077,7 +1077,7 @@ mod tests {
                 peers: peers.to_owned(),
                 ..Default::default()
             },
-            SimpleDb::new_in_memory(&[]),
+            SimpleDb::new_in_memory(&[], None).unwrap(),
             Duration::from_millis(1),
         );
 
