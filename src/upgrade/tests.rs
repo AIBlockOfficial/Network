@@ -1,8 +1,8 @@
 use super::{get_upgrade_compute_db, old, upgrade_compute_db};
-use crate::configurations::ExtraNodeParams;
+use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::DB_VERSION_KEY;
-use crate::db_utils::new_db_no_version_check;
 use crate::db_utils::DB_COL_DEFAULT;
+use crate::db_utils::{new_db_no_version_check, SimpleDb};
 use crate::test_utils::{
     init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
     NetworkInstanceInfo, NodeType,
@@ -10,31 +10,27 @@ use crate::test_utils::{
 use std::collections::BTreeSet;
 
 #[tokio::test(basic_scheduler)]
-async fn upgrade_node_im_memory() {
+async fn upgrade_compute_real_db() {
     let config = complete_network_config(20000, false);
     let info = init_instance_info(&config);
     remove_all_node_dbs_in_info(&info);
 
-    upgrade_node_common(config, info).await;
+    upgrade_compute_common(config, info).await;
 }
 
 #[tokio::test(basic_scheduler)]
-async fn upgrade_node_real_db() {
+async fn upgrade_compute_in_memory() {
     let config = complete_network_config(20010, true);
     let info = init_instance_info(&config);
-    upgrade_node_common(config, info).await;
+    upgrade_compute_common(config, info).await;
 }
 
-async fn upgrade_node_common(config: NetworkConfig, info: NetworkInstanceInfo) {
+async fn upgrade_compute_common(config: NetworkConfig, info: NetworkInstanceInfo) {
     //
     // Arrange
     //
     let db_mode = info.node_infos.get("compute1").as_ref().unwrap().db_mode;
-    let old_db = {
-        let mut old_db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, None).unwrap();
-        old_db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
-        old_db.in_memory()
-    };
+    let old_db = create_old_compute_db(db_mode).in_memory();
 
     //
     // Act
@@ -55,6 +51,47 @@ async fn upgrade_node_common(config: NetworkConfig, info: NetworkInstanceInfo) {
     // Assert
     //
     assert_eq!(actual_req_list, &BTreeSet::new());
+}
+
+#[tokio::test(basic_scheduler)]
+async fn open_upgrade_started_compute_real_db() {
+    let config = complete_network_config(20100, false);
+    let info = init_instance_info(&config);
+    remove_all_node_dbs_in_info(&info);
+
+    open_upgrade_started_compute_common(info).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn open_upgrade_started_compute_in_memory() {
+    let config = complete_network_config(20110, true);
+    let info = init_instance_info(&config);
+    open_upgrade_started_compute_common(info).await;
+}
+
+async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
+    //
+    // Arrange
+    //
+    let db_mode = info.node_infos.get("compute1").as_ref().unwrap().db_mode;
+    let old_db = create_old_compute_db(db_mode).in_memory();
+
+    //
+    // Act
+    //
+    let db = get_upgrade_compute_db(db_mode, old_db).unwrap().in_memory();
+    let db = get_upgrade_compute_db(db_mode, db);
+
+    //
+    // Assert
+    //
+    db.unwrap();
+}
+
+fn create_old_compute_db(db_mode: DbMode) -> SimpleDb {
+    let mut old_db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, true, None).unwrap();
+    old_db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
+    old_db
 }
 
 fn complete_network_config(initial_port: u16, in_memory_db: bool) -> NetworkConfig {
