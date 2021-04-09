@@ -1,6 +1,6 @@
 use super::{get_upgrade_compute_db, old, upgrade_compute_db};
 use crate::configurations::{DbMode, ExtraNodeParams};
-use crate::constants::DB_VERSION_KEY;
+use crate::constants::{DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{new_db, new_db_with_version, SimpleDb, SimpleDbError, DB_COL_DEFAULT};
 use crate::test_utils::{
     init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
@@ -29,20 +29,22 @@ async fn upgrade_compute_common(config: NetworkConfig, info: NetworkInstanceInfo
     // Arrange
     //
     let db_mode = info.node_infos.get("compute1").as_ref().unwrap().db_mode;
-    let old_db = create_old_compute_db(db_mode).in_memory();
+    let db = create_old_compute_db(db_mode);
 
     //
     // Act
     //
-    let extra = {
-        let db = get_upgrade_compute_db(db_mode, old_db).unwrap();
-        let db = upgrade_compute_db(db).unwrap();
-        ExtraNodeParams {
+    let db = get_upgrade_compute_db(db_mode, db.in_memory()).unwrap();
+    let db = upgrade_compute_db(db).unwrap();
+    let db = open_as_new_compute_db(db_mode, db.in_memory()).unwrap();
+
+    let compute = {
+        let extra = ExtraNodeParams {
             db: db.in_memory(),
             ..Default::default()
-        }
+        };
+        init_arc_node("compute1", &config, &info, extra).await
     };
-    let compute = init_arc_node("compute1", &config, &info, extra).await;
     let compute = compute.compute().unwrap().lock().await;
     let actual_req_list = compute.get_request_list();
 
@@ -73,20 +75,25 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
     // Arrange
     //
     let db_mode = info.node_infos.get("compute1").as_ref().unwrap().db_mode;
-    let db = create_old_compute_db(db_mode).in_memory();
+    let db = create_old_compute_db(db_mode);
 
     //
     // Act
     //
-    let db = open_as_old_compute_db(db_mode, db).unwrap().in_memory();
-    let db = get_upgrade_compute_db(db_mode, db).unwrap().in_memory();
-    let db = open_as_old_compute_db(db_mode, db).unwrap().in_memory();
-    let db = get_upgrade_compute_db(db_mode, db);
+    let err_new_1 = open_as_new_compute_db(db_mode, db.cloned_in_memory()).err();
+    let db = open_as_old_compute_db(db_mode, db.in_memory()).unwrap();
+
+    let db = get_upgrade_compute_db(db_mode, db.in_memory()).unwrap();
+    let db = open_as_old_compute_db(db_mode, db.in_memory()).unwrap();
+    let db = get_upgrade_compute_db(db_mode, db.in_memory()).unwrap();
+
+    let err_new_2 = open_as_new_compute_db(db_mode, db.cloned_in_memory()).err();
 
     //
     // Assert
     //
-    db.unwrap();
+    assert!(err_new_1.is_some());
+    assert!(err_new_2.is_some());
 }
 
 fn create_old_compute_db(db_mode: DbMode) -> SimpleDb {
@@ -102,6 +109,15 @@ fn open_as_old_compute_db(
 ) -> Result<SimpleDb, SimpleDbError> {
     let spec = &old::compute::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
+    new_db_with_version(db_mode, spec, version, old_db)
+}
+
+fn open_as_new_compute_db(
+    db_mode: DbMode,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb, SimpleDbError> {
+    let spec = &old::compute::DB_SPEC;
+    let version = Some(NETWORK_VERSION_SERIALIZED);
     new_db_with_version(db_mode, spec, version, old_db)
 }
 

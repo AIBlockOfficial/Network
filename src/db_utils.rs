@@ -152,6 +152,23 @@ impl SimpleDb {
         }
     }
 
+    /// Return only in memory db cloned
+    pub fn cloned_in_memory(&self) -> Option<Self> {
+        if let Self::InMemory {
+            columns,
+            key_values,
+        } = &self
+        {
+            Some(Self::InMemory {
+                columns: columns.clone(),
+                key_values: key_values.clone(),
+            })
+        } else {
+            // Drop/close file db
+            None
+        }
+    }
+
     /// Create a column as part of an upgrade if not already open
     pub fn upgrade_create_missing_cf(&mut self, name: &'static str) -> Result<()> {
         match self {
