@@ -1,8 +1,7 @@
 use super::{get_upgrade_compute_db, old, upgrade_compute_db};
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::DB_VERSION_KEY;
-use crate::db_utils::DB_COL_DEFAULT;
-use crate::db_utils::{new_db_no_version_check, SimpleDb};
+use crate::db_utils::{new_db, new_db_with_version, SimpleDb, SimpleDbError, DB_COL_DEFAULT};
 use crate::test_utils::{
     init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
     NetworkInstanceInfo, NodeType,
@@ -74,12 +73,14 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
     // Arrange
     //
     let db_mode = info.node_infos.get("compute1").as_ref().unwrap().db_mode;
-    let old_db = create_old_compute_db(db_mode).in_memory();
+    let db = create_old_compute_db(db_mode).in_memory();
 
     //
     // Act
     //
-    let db = get_upgrade_compute_db(db_mode, old_db).unwrap().in_memory();
+    let db = open_as_old_compute_db(db_mode, db).unwrap().in_memory();
+    let db = get_upgrade_compute_db(db_mode, db).unwrap().in_memory();
+    let db = open_as_old_compute_db(db_mode, db).unwrap().in_memory();
     let db = get_upgrade_compute_db(db_mode, db);
 
     //
@@ -89,9 +90,19 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
 }
 
 fn create_old_compute_db(db_mode: DbMode) -> SimpleDb {
-    let mut old_db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, None).unwrap();
-    old_db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
-    old_db
+    let spec = &old::compute::DB_SPEC;
+    let mut db = new_db(db_mode, spec, None);
+    db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
+    db
+}
+
+fn open_as_old_compute_db(
+    db_mode: DbMode,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb, SimpleDbError> {
+    let spec = &old::compute::DB_SPEC;
+    let version = old::constants::NETWORK_VERSION_SERIALIZED;
+    new_db_with_version(db_mode, spec, version, old_db)
 }
 
 fn complete_network_config(initial_port: u16, in_memory_db: bool) -> NetworkConfig {

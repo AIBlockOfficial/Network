@@ -403,7 +403,7 @@ fn with_initial_data(mut db: SimpleDb) -> Result<SimpleDb> {
 }
 
 /// Check Version in database is as expected.
-pub fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
+fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
     let version = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)?;
     if version.as_deref() == expected {
         Ok(())
@@ -443,22 +443,21 @@ fn check_old_includes_new<'a>(
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
 pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
-    let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
-    check_version(&db, Some(NETWORK_VERSION_SERIALIZED)).unwrap();
-    db
+    new_db_with_version(db_mode, db_spec, Some(NETWORK_VERSION_SERIALIZED), old_db).unwrap()
 }
 
-/// Creates a new database(db) object in selected mode.
-/// No version check is performed, new database will use current version.
+/// Creates a new database(db) object in selected mode
 ///
 /// ### Arguments
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
+/// * `version`  - Database exact version to use (if none check key absent).
 /// * `old_db`   - Old in memory Database to try to open.
-pub fn new_db_no_version_check(
+pub fn new_db_with_version(
     db_mode: DbMode,
     db_spec: &SimpleDbSpec,
+    version: Option<&[u8]>,
     old_db: Option<SimpleDb>,
 ) -> Result<SimpleDb> {
     let db_path = db_spec.db_path;
@@ -469,12 +468,15 @@ pub fn new_db_no_version_check(
         DbMode::InMemory => None,
     };
 
-    if let Some(save_path) = save_path {
+    let db = if let Some(save_path) = save_path {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns)
+        SimpleDb::new_file(save_path, db_spec.columns)?
     } else {
-        SimpleDb::new_in_memory(db_spec.columns, old_db)
-    }
+        SimpleDb::new_in_memory(db_spec.columns, old_db)?
+    };
+
+    check_version(&db, version)?;
+    Ok(db)
 }
