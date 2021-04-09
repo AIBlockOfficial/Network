@@ -93,15 +93,6 @@ pub struct NetworkInstanceInfo {
     pub user_nodes: Vec<NodeSpec>,
 }
 
-/// Nodes of any type
-#[derive(Clone)]
-pub enum ArcNode {
-    Miner(ArcMinerNode),
-    Compute(ArcComputeNode),
-    Storage(ArcStorageNode),
-    User(ArcUserNode),
-}
-
 /// Types of nodes to create
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NodeType {
@@ -356,13 +347,7 @@ impl Network {
     ///
     /// * `name` - &str of the miner node's name to be found.
     pub fn miner(&self, name: &str) -> Option<&ArcMinerNode> {
-        self.arc_nodes.get(name).and_then(|v| {
-            if let ArcNode::Miner(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        })
+        self.arc_nodes.get(name).and_then(|v| v.miner())
     }
 
     ///returns a mutable reference to the compute node with the matching name.
@@ -371,13 +356,7 @@ impl Network {
     ///
     /// * `name` - &str of the compute node's name to be found.
     pub fn compute(&self, name: &str) -> Option<&ArcComputeNode> {
-        self.arc_nodes.get(name).and_then(|v| {
-            if let ArcNode::Compute(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        })
+        self.arc_nodes.get(name).and_then(|v| v.compute())
     }
 
     ///returns a mutable reference to the storage node with the matching name.
@@ -386,13 +365,7 @@ impl Network {
     ///
     /// * `name` - &str of the storage node's name to be found.
     pub fn storage(&self, name: &str) -> Option<&ArcStorageNode> {
-        self.arc_nodes.get(name).and_then(|v| {
-            if let ArcNode::Storage(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        })
+        self.arc_nodes.get(name).and_then(|v| v.storage())
     }
 
     ///returns a mutable reference to the user node with the matching name.
@@ -401,13 +374,7 @@ impl Network {
     ///
     /// * `name` - &str of the user node's name to be found.
     pub fn user(&self, name: &str) -> Option<&ArcUserNode> {
-        self.arc_nodes.get(name).and_then(|v| {
-            if let ArcNode::User(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        })
+        self.arc_nodes.get(name).and_then(|v| v.user())
     }
 
     ///Searches all node types and returns an address to the node with the matching name.
@@ -495,6 +462,52 @@ impl Network {
             .collect()
     }
 }
+/// Nodes of any type
+#[derive(Clone)]
+pub enum ArcNode {
+    Miner(ArcMinerNode),
+    Compute(ArcComputeNode),
+    Storage(ArcStorageNode),
+    User(ArcUserNode),
+}
+
+impl ArcNode {
+    /// Get miner from node
+    pub fn miner(&self) -> Option<&ArcMinerNode> {
+        if let Self::Miner(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Get compute from node
+    pub fn compute(&self) -> Option<&ArcComputeNode> {
+        if let Self::Compute(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Get storage from node
+    pub fn storage(&self) -> Option<&ArcStorageNode> {
+        if let Self::Storage(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Get user from node
+    pub fn user(&self) -> Option<&ArcUserNode> {
+        if let Self::User(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
 
 ///Dispatch to address
 async fn address(node: &ArcNode) -> SocketAddr {
@@ -564,7 +577,7 @@ async fn take_closed_extra_params(node: &ArcNode) -> ExtraNodeParams {
 /// ### Arguments
 ///
 /// * `config` - &NetworkConfig object containing parameters for the NetworkInstanceInfo object creation.
-fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
+pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
     let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     let mut first_port = config.initial_port;
 
@@ -638,7 +651,7 @@ fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeS
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
 /// * `extra`  - additional parameter for construction
-async fn init_arc_node(
+pub async fn init_arc_node(
     name: &str,
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
@@ -807,8 +820,12 @@ async fn init_user(
 /// Remove all db for the given config
 pub fn remove_all_node_dbs(config: &NetworkConfig) {
     let info = init_instance_info(config);
+    remove_all_node_dbs_in_info(&info);
+}
 
-    for (_name, node) in info.node_infos {
+/// Remove all db for the given instance info
+pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
+    for node in info.node_infos.values() {
         let port = node.node_spec.address.port();
         use NodeType::*;
         let db_paths = match node.node_type {

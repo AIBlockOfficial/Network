@@ -26,6 +26,7 @@ mod test_utils;
 mod tests;
 mod transaction_gen;
 mod unicorn;
+pub mod upgrade;
 mod user;
 mod utils;
 mod wallet;

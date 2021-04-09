@@ -2,11 +2,9 @@ use crate::configurations::DbMode;
 use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{error::Error, fmt};
 use tracing::{debug, warn};
-
-pub const IN_MEMORY_CLOSED_PREFIX: &str = "IN_MEMORY_CLOSED_PREFIX_";
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
@@ -87,8 +85,12 @@ impl SimpleDb {
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
 
-        if DB::list_cf(&options, &path).is_ok() {
-            let db = DB::open_cf(&options, path.clone(), columns)?;
+        if let Ok(old_columns) = DB::list_cf(&options, &path) {
+            let c_old = old_columns.iter().map(|k| k.as_str());
+            let c_new = columns.copied();
+
+            check_old_includes_new(c_old, c_new)?;
+            let db = DB::open_cf(&options, path.clone(), old_columns)?;
             Ok(Self::File { options, path, db })
         } else {
             // Allow create empty db with required column families.
@@ -106,14 +108,22 @@ impl SimpleDb {
     pub fn new_in_memory(columns: &[&str], old_db: Option<Self>) -> Result<Self> {
         let key_values = vec![Default::default(); columns.len() + 1];
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
-        let columns = columns
-            .enumerate()
-            .map(|(idx, v)| (v.to_string(), idx))
-            .collect();
 
         if let Some(old_db) = old_db {
-            in_memory_check_and_open_column(old_db, columns)
+            let c_old = if let SimpleDb::InMemory { columns, .. } = &old_db {
+                columns.keys().map(|k| k.as_str())
+            } else {
+                panic!("Try to open an in memory db from a File db");
+            };
+            let c_new = columns.copied();
+
+            check_old_includes_new(c_old, c_new)?;
+            Ok(old_db)
         } else {
+            let columns = columns
+                .enumerate()
+                .map(|(idx, v)| (v.to_string(), idx))
+                .collect();
             with_initial_data(Self::InMemory {
                 key_values,
                 columns,
@@ -140,6 +150,44 @@ impl SimpleDb {
             // Drop/close file db
             None
         }
+    }
+
+    /// Return only in memory db cloned
+    pub fn cloned_in_memory(&self) -> Option<Self> {
+        if let Self::InMemory {
+            columns,
+            key_values,
+        } = &self
+        {
+            Some(Self::InMemory {
+                columns: columns.clone(),
+                key_values: key_values.clone(),
+            })
+        } else {
+            // Drop/close file db
+            None
+        }
+    }
+
+    /// Create a column as part of an upgrade if not already open
+    pub fn upgrade_create_missing_cf(&mut self, name: &'static str) -> Result<()> {
+        match self {
+            Self::File { db, options, .. } => {
+                if db.cf_handle(name).is_none() {
+                    db.create_cf(name, options)?;
+                }
+            }
+            Self::InMemory {
+                columns,
+                key_values,
+            } => {
+                if !columns.contains_key(name) {
+                    columns.insert(name.to_owned(), key_values.len());
+                    key_values.push(Default::default());
+                }
+            }
+        };
+        Ok(())
     }
 
     /// Writter to accumulate batch edits
@@ -372,7 +420,7 @@ fn with_initial_data(mut db: SimpleDb) -> Result<SimpleDb> {
 }
 
 /// Check Version in database is as expected.
-pub fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
+fn check_version(db: &SimpleDb, expected: Option<&[u8]>) -> Result<()> {
     let version = db.get_cf(DB_COL_DEFAULT, DB_VERSION_KEY)?;
     if version.as_deref() == expected {
         Ok(())
@@ -390,33 +438,17 @@ fn get_db_options() -> Options {
     opts
 }
 
-/// Check requested columns exists and mark all others as closed.
-/// Error similarly to rocksdb if column are missing.
-fn in_memory_check_and_open_column(
-    mut old_db: SimpleDb,
-    c_new: InMemoryColumns,
-) -> Result<SimpleDb> {
-    if let SimpleDb::InMemory { columns, .. } = &mut old_db {
-        // Start with all closed
-        *columns = columns
-            .clone()
-            .into_iter()
-            .map(|(k, v)| (k.trim_start_matches(IN_MEMORY_CLOSED_PREFIX).to_owned(), v))
-            .map(|(k, v)| (IN_MEMORY_CLOSED_PREFIX.to_owned() + &k, v))
-            .collect();
-
-        // Open the new ones, error out if one missing
-        for (k, _) in c_new {
-            let closed_k = IN_MEMORY_CLOSED_PREFIX.to_owned() + &k;
-            if let Some(value) = columns.remove(&closed_k) {
-                columns.insert(k, value);
-            } else {
-                return Err(SimpleDbError("Column missing while opening".to_owned()));
-            }
-        }
-        Ok(old_db)
+/// Check iterators are equals when sorted
+fn check_old_includes_new<'a>(
+    old: impl Iterator<Item = &'a str>,
+    new: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let old: HashSet<_> = old.collect();
+    let new: HashSet<_> = new.collect();
+    if new.is_subset(&old) {
+        Ok(())
     } else {
-        panic!("Try to open an in memory db from a File db");
+        Err(SimpleDbError("Column mismatch while opening".to_owned()))
     }
 }
 
@@ -428,22 +460,21 @@ fn in_memory_check_and_open_column(
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
 pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
-    let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
-    check_version(&db, Some(NETWORK_VERSION_SERIALIZED)).unwrap();
-    db
+    new_db_with_version(db_mode, db_spec, Some(NETWORK_VERSION_SERIALIZED), old_db).unwrap()
 }
 
-/// Creates a new database(db) object in selected mode.
-/// No version check is performed, new database will use current version.
+/// Creates a new database(db) object in selected mode
 ///
 /// ### Arguments
 ///
 /// * `db_moode` - Mode for the database.
 /// * `db_spec`  - Database specification.
+/// * `version`  - Database exact version to use (if none check key absent).
 /// * `old_db`   - Old in memory Database to try to open.
-pub fn new_db_no_version_check(
+pub fn new_db_with_version(
     db_mode: DbMode,
     db_spec: &SimpleDbSpec,
+    version: Option<&[u8]>,
     old_db: Option<SimpleDb>,
 ) -> Result<SimpleDb> {
     let db_path = db_spec.db_path;
@@ -454,12 +485,15 @@ pub fn new_db_no_version_check(
         DbMode::InMemory => None,
     };
 
-    if let Some(save_path) = save_path {
+    let db = if let Some(save_path) = save_path {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns)
+        SimpleDb::new_file(save_path, db_spec.columns)?
     } else {
-        SimpleDb::new_in_memory(db_spec.columns, old_db)
-    }
+        SimpleDb::new_in_memory(db_spec.columns, old_db)?
+    };
+
+    check_version(&db, version)?;
+    Ok(db)
 }

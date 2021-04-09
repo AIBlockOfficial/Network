@@ -43,10 +43,10 @@ pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
-const DB_COL_INTERNAL: &str = "internal";
-const DB_COL_LOCAL_TXS: &str = "local_transactions";
+pub const DB_COL_INTERNAL: &str = "internal";
+pub const DB_COL_LOCAL_TXS: &str = "local_transactions";
 
-const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
     suffix: ".compute",
     columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
@@ -240,6 +240,10 @@ impl ComputeNode {
     /// The current tx_pool that will be used to generate next block
     pub fn get_committed_tx_pool(&self) -> &BTreeMap<String, Transaction> {
         self.node_raft.get_committed_tx_pool()
+    }
+
+    pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
+        &self.request_list
     }
 
     /// Return the raft loop to spawn in it own task.
@@ -486,14 +490,6 @@ impl ComputeNode {
                     error!("Block not sent to storage {:?}", e);
                 }
             }
-            Ok(Response {
-                success: true,
-                reason: "Block is valid",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Block is invalid",
-            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Transactions added to tx pool",

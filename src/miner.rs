@@ -297,7 +297,7 @@ impl MinerNode {
             }
             Ok(Response {
                 success: false,
-                reason: "Block is invalid",
+                reason: "Block is not valid",
             }) => {
                 info!("MERKLE ROOT INVALID");
             }
