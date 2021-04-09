@@ -80,7 +80,7 @@ impl Drop for SimpleDb {
 
 impl SimpleDb {
     /// Create rocksDB
-    pub fn new_file(path: String, columns: &[&str], force_equal_columns: bool) -> Result<Self> {
+    pub fn new_file(path: String, columns: &[&str]) -> Result<Self> {
         debug!("Open/Create Db at {}", path);
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
         let mut options = get_db_options();
@@ -89,7 +89,7 @@ impl SimpleDb {
             let c_old = old_columns.iter().map(|k| k.as_str());
             let c_new = columns.copied();
 
-            check_old_includes_new(c_old, c_new, force_equal_columns)?;
+            check_old_includes_new(c_old, c_new)?;
             let db = DB::open_cf(&options, path.clone(), old_columns)?;
             Ok(Self::File { options, path, db })
         } else {
@@ -105,11 +105,7 @@ impl SimpleDb {
     }
 
     /// Create in memory db
-    pub fn new_in_memory(
-        columns: &[&str],
-        old_db: Option<Self>,
-        force_equal_columns: bool,
-    ) -> Result<Self> {
+    pub fn new_in_memory(columns: &[&str], old_db: Option<Self>) -> Result<Self> {
         let key_values = vec![Default::default(); columns.len() + 1];
         let columns = [DB_COL_DEFAULT].iter().chain(columns.iter());
 
@@ -121,7 +117,7 @@ impl SimpleDb {
             };
             let c_new = columns.copied();
 
-            check_old_includes_new(c_old, c_new, force_equal_columns)?;
+            check_old_includes_new(c_old, c_new)?;
             Ok(old_db)
         } else {
             let columns = columns
@@ -429,11 +425,10 @@ fn get_db_options() -> Options {
 fn check_old_includes_new<'a>(
     old: impl Iterator<Item = &'a str>,
     new: impl Iterator<Item = &'a str>,
-    force_equal: bool,
 ) -> Result<()> {
     let old: HashSet<_> = old.collect();
     let new: HashSet<_> = new.collect();
-    if new.is_subset(&old) && (!force_equal || new == old) {
+    if new.is_subset(&old) {
         Ok(())
     } else {
         Err(SimpleDbError("Column mismatch while opening".to_owned()))
@@ -448,7 +443,7 @@ fn check_old_includes_new<'a>(
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
 pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>) -> SimpleDb {
-    let db = new_db_no_version_check(db_mode, db_spec, true, old_db).unwrap();
+    let db = new_db_no_version_check(db_mode, db_spec, old_db).unwrap();
     check_version(&db, Some(NETWORK_VERSION_SERIALIZED)).unwrap();
     db
 }
@@ -464,7 +459,6 @@ pub fn new_db(db_mode: DbMode, db_spec: &SimpleDbSpec, old_db: Option<SimpleDb>)
 pub fn new_db_no_version_check(
     db_mode: DbMode,
     db_spec: &SimpleDbSpec,
-    force_equal_columns: bool,
     old_db: Option<SimpleDb>,
 ) -> Result<SimpleDb> {
     let db_path = db_spec.db_path;
@@ -479,8 +473,8 @@ pub fn new_db_no_version_check(
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns, force_equal_columns)
+        SimpleDb::new_file(save_path, db_spec.columns)
     } else {
-        SimpleDb::new_in_memory(db_spec.columns, old_db, force_equal_columns)
+        SimpleDb::new_in_memory(db_spec.columns, old_db)
     }
 }

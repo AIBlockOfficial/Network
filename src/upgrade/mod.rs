@@ -64,7 +64,7 @@ impl From<bincode::Error> for UpgradeError {
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
 pub fn get_upgrade_compute_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
-    let mut db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, false, old_db)?;
+    let mut db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, old_db)?;
     check_version(&db, old::constants::NETWORK_VERSION_SERIALIZED)?;
 
     db.upgrade_create_missing_cf(compute::DB_COL_INTERNAL)?;

@@ -89,7 +89,7 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
 }
 
 fn create_old_compute_db(db_mode: DbMode) -> SimpleDb {
-    let mut old_db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, true, None).unwrap();
+    let mut old_db = new_db_no_version_check(db_mode, &old::compute::DB_SPEC, None).unwrap();
     old_db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
     old_db
 }
