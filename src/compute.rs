@@ -488,14 +488,6 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block is valid",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Block is invalid",
-            }) => {}
-            Ok(Response {
-                success: true,
                 reason: "Transactions added to tx pool",
             }) => {
                 debug!("Transactions received and processed successfully");
