@@ -142,6 +142,24 @@ impl SimpleDb {
         }
     }
 
+    /// Create a column as part of an upgrade
+    pub fn upgrade_open_or_create_cf(&mut self, name: &'static str) -> Result<()> {
+        match self {
+            Self::File { db, options, .. } => {
+                //if db.open_cf(name, options)
+                db.create_cf(name, options)?;
+            }
+            Self::InMemory {
+                columns,
+                key_values,
+            } => {
+                columns.insert(name.to_owned(), key_values.len());
+                key_values.push(Default::default());
+            }
+        };
+        Ok(())
+    }
+
     /// Writter to accumulate batch edits
     pub fn batch_writer(&self) -> SimpleDbWriteBatch {
         match self {
