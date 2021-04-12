@@ -12,7 +12,7 @@ use naom::primitives::{
     block::{build_merkle_tree, Block},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
     transaction_utils::{
-        construct_address, construct_payment_tx_ins, construct_payments_tx, construct_tx_hash,
+        construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
         get_tx_out_with_out_point,
     },
 };
@@ -443,7 +443,7 @@ pub fn create_valid_transaction_with_ins_outs(
         tx_outs
     };
 
-    let payment_tx = construct_payments_tx(tx_ins, tx_outs);
+    let payment_tx = construct_tx_core(tx_ins, tx_outs);
     let t_hash = construct_tx_hash(&payment_tx);
 
     (t_hash, payment_tx)

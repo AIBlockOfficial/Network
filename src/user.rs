@@ -12,7 +12,7 @@ use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use naom::primitives::transaction_utils::{construct_payments_tx, construct_tx_hash};
+use naom::primitives::transaction_utils::{construct_tx_core, construct_tx_hash};
 use std::{error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
@@ -528,7 +528,7 @@ impl UserNode {
             .wallet_db
             .consume_inputs_for_payment(tx_cons, tx_used)
             .await;
-        let payment_tx = construct_payments_tx(tx_ins, tx_outs);
+        let payment_tx = construct_tx_core(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
 
         Response {
