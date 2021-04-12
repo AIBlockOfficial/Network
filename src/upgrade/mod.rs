@@ -5,12 +5,15 @@
 mod frozen_last_version;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_last_version_db;
 
 use crate::compute;
 use crate::configurations::DbMode;
-use crate::constants::{DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
+use crate::constants::{DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, WALLET_PATH};
 use crate::db_utils::{
-    new_db_with_version, SimpleDb, SimpleDbError, SimpleDbWriteBatch, DB_COL_DEFAULT,
+    new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
+    SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
 use bincode::deserialize;
 use frozen_last_version as old;
@@ -19,8 +22,48 @@ use std::error::Error;
 use std::fmt;
 use std::net::SocketAddr;
 
+pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
+    DbSpecInfo {
+        node_type: "compute",
+        db_path: DB_PATH,
+        suffix: ".compute",
+    },
+    DbSpecInfo {
+        node_type: "compute",
+        db_path: DB_PATH,
+        suffix: ".compute_raft",
+    },
+    DbSpecInfo {
+        node_type: "storage",
+        db_path: DB_PATH,
+        suffix: ".storage",
+    },
+    DbSpecInfo {
+        node_type: "storage",
+        db_path: DB_PATH,
+        suffix: ".storage_raft",
+    },
+    DbSpecInfo {
+        node_type: "miner",
+        db_path: WALLET_PATH,
+        suffix: "",
+    },
+    DbSpecInfo {
+        node_type: "user",
+        db_path: WALLET_PATH,
+        suffix: "",
+    },
+];
+
 /// Result wrapper for upgrade errors
 pub type Result<T> = std::result::Result<T, UpgradeError>;
+
+#[derive(Debug)]
+pub struct DbSpecInfo {
+    pub node_type: &'static str,
+    pub db_path: &'static str,
+    pub suffix: &'static str,
+}
 
 #[derive(Debug)]
 pub enum UpgradeError {
@@ -93,4 +136,41 @@ pub fn upgrade_compute_db_batch<'a>(
         batch.put_cf(compute::DB_COL_INTERNAL, compute::REQUEST_LIST_KEY, value);
     }
     Ok(batch)
+}
+
+/// Open a database for dump doing no checks on validity
+pub fn get_db_to_dump_no_checks(
+    db_mode: DbMode,
+    db_info: &DbSpecInfo,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb> {
+    let spec = SimpleDbSpec {
+        db_path: db_info.db_path,
+        suffix: db_info.suffix,
+        columns: &[],
+    };
+    Ok(new_db_no_check_version(db_mode, &spec, old_db)?)
+}
+
+/// Dump the database as string
+pub fn dump_db(db: &'_ SimpleDb) -> impl Iterator<Item = String> + '_ {
+    db.iter_all_cf_clone()
+        .into_iter()
+        .flat_map(|(c, it)| it.map(move |(k, v)| (c.clone(), k, v)))
+        .map(|(c, k, v)| (c, to_u8_array_literal(&k), v))
+        .map(|(c, k, v)| (c, k, to_u8_array_literal(&v)))
+        .map(|(c, k, v)| format!("b\"{}\", b\"{}\", b\"{}\"", c, k, v))
+}
+
+/// Convert to a valid array literal displaying ASCII nicely
+fn to_u8_array_literal(value: &[u8]) -> String {
+    let mut result = String::with_capacity(value.len());
+    for v in value {
+        if v.is_ascii_alphanumeric() || v == &b'_' {
+            result.push(*v as char);
+        } else {
+            result.push_str(&format!("\\x{:02X}", v));
+        }
+    }
+    result
 }

@@ -1,12 +1,16 @@
+use super::tests_last_version_db;
 use super::{get_upgrade_compute_db, old, upgrade_compute_db};
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
-use crate::db_utils::{new_db, new_db_with_version, SimpleDb, SimpleDbError, DB_COL_DEFAULT};
+use crate::db_utils::{
+    new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
+};
 use crate::test_utils::{
     init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
     NetworkInstanceInfo, NodeType,
 };
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_compute_real_db() {
@@ -51,7 +55,9 @@ async fn upgrade_compute_common(config: NetworkConfig, info: NetworkInstanceInfo
     //
     // Assert
     //
-    assert_eq!(actual_req_list, &BTreeSet::new());
+    let expected_req_list: BTreeSet<SocketAddr> =
+        std::iter::once("127.0.0.1:12340".parse().unwrap()).collect();
+    assert_eq!(actual_req_list, &expected_req_list);
 }
 
 #[tokio::test(basic_scheduler)]
@@ -99,7 +105,15 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo) {
 fn create_old_compute_db(db_mode: DbMode) -> SimpleDb {
     let spec = &old::compute::DB_SPEC;
     let mut db = new_db(db_mode, spec, None);
-    db.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY).unwrap();
+
+    let mut batch = db.batch_writer();
+    batch.delete_cf(DB_COL_DEFAULT, DB_VERSION_KEY);
+    for (_column, key, value) in tests_last_version_db::COMPUTE_DB_V0_2_0 {
+        batch.put_cf(DB_COL_DEFAULT, key, value);
+    }
+    let batch = batch.done();
+    db.write(batch).unwrap();
+
     db
 }
 
@@ -143,4 +157,12 @@ fn complete_network_config(initial_port: u16, in_memory_db: bool) -> NetworkConf
         compute_to_miner_mapping: Default::default(),
         test_duration_divider: 1,
     }
+}
+
+fn get_static_column(spec: SimpleDbSpec, name: &str) -> &'static str {
+    [DB_COL_DEFAULT]
+        .iter()
+        .chain(spec.columns.iter())
+        .find(|sn| **sn == name)
+        .unwrap()
 }
