@@ -2,13 +2,13 @@ use crate::configurations::DbMode;
 use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::{error::Error, fmt};
 use tracing::{debug, warn};
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
-pub type InMemoryColumns = HashMap<String, usize>;
+pub type InMemoryColumns = BTreeMap<String, usize>;
 pub type InMemoryDb = Vec<HashMap<Vec<u8>, Vec<u8>>>;
 
 /// Result wrapper for SimpleDb errors
@@ -47,6 +47,7 @@ pub enum SimpleDb {
     File {
         options: Options,
         path: String,
+        columns: BTreeSet<String>,
         db: DB,
     },
     InMemory {
@@ -90,8 +91,13 @@ impl SimpleDb {
             let c_new = columns.copied();
 
             check_old_includes_new(c_old, c_new)?;
-            let db = DB::open_cf(&options, path.clone(), old_columns)?;
-            Ok(Self::File { options, path, db })
+            let db = DB::open_cf(&options, path.clone(), &old_columns)?;
+            Ok(Self::File {
+                columns: old_columns.into_iter().collect(),
+                options,
+                path,
+                db,
+            })
         } else {
             // Allow create empty db with required column families.
             // Do not create column families on existing db but error.
@@ -99,8 +105,13 @@ impl SimpleDb {
             options.create_if_missing(true);
             options.create_missing_column_families(true);
 
-            let db = DB::open_cf(&options, path.clone(), columns)?;
-            with_initial_data(Self::File { options, path, db })
+            let db = DB::open_cf(&options, path.clone(), columns.clone())?;
+            with_initial_data(Self::File {
+                columns: columns.map(|k| k.to_string()).collect(),
+                options,
+                path,
+                db,
+            })
         }
     }
 
@@ -172,9 +183,15 @@ impl SimpleDb {
     /// Create a column as part of an upgrade if not already open
     pub fn upgrade_create_missing_cf(&mut self, name: &'static str) -> Result<()> {
         match self {
-            Self::File { db, options, .. } => {
+            Self::File {
+                db,
+                options,
+                columns,
+                ..
+            } => {
                 if db.cf_handle(name).is_none() {
                     db.create_cf(name, options)?;
+                    columns.insert(name.to_owned());
                 }
             }
             Self::InMemory {
@@ -323,6 +340,21 @@ impl SimpleDb {
 
     /// Get entries from database as iterable db items
     pub fn iter_cf_clone(&self, cf: &'static str) -> Box<dyn Iterator<Item = DbIteratorItem> + '_> {
+        self.iter_cf_clone_pvt(cf)
+    }
+
+    /// Get entries from database as iterable db items for all opened columns
+    pub fn iter_all_cf_clone(
+        &self,
+    ) -> Vec<(String, Box<dyn Iterator<Item = DbIteratorItem> + '_>)> {
+        self.open_columns()
+            .iter()
+            .map(|cf| (cf.clone(), self.iter_cf_clone_pvt(cf)))
+            .collect()
+    }
+
+    /// Get entries from database as iterable db items
+    fn iter_cf_clone_pvt(&self, cf: &str) -> Box<dyn Iterator<Item = DbIteratorItem> + '_> {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
@@ -339,6 +371,14 @@ impl SimpleDb {
                 let iter = key_values[*cf].iter().map(|(k, v)| (k.clone(), v.clone()));
                 Box::new(iter)
             }
+        }
+    }
+
+    /// Return all open columns
+    fn open_columns(&self) -> Vec<String> {
+        match self {
+            Self::InMemory { columns, .. } => columns.keys().cloned().collect(),
+            Self::File { columns, .. } => columns.iter().cloned().collect(),
         }
     }
 }
@@ -477,6 +517,23 @@ pub fn new_db_with_version(
     version: Option<&[u8]>,
     old_db: Option<SimpleDb>,
 ) -> Result<SimpleDb> {
+    let db = new_db_no_check_version(db_mode, db_spec, old_db)?;
+    check_version(&db, version)?;
+    Ok(db)
+}
+
+/// Creates a new database(db) object in selected mode
+///
+/// ### Arguments
+///
+/// * `db_moode` - Mode for the database.
+/// * `db_spec`  - Database specification.
+/// * `old_db`   - Old in memory Database to try to open.
+pub fn new_db_no_check_version(
+    db_mode: DbMode,
+    db_spec: &SimpleDbSpec,
+    old_db: Option<SimpleDb>,
+) -> Result<SimpleDb> {
     let db_path = db_spec.db_path;
     let suffix = db_spec.suffix;
     let save_path = match db_mode {
@@ -485,15 +542,12 @@ pub fn new_db_with_version(
         DbMode::InMemory => None,
     };
 
-    let db = if let Some(save_path) = save_path {
+    if let Some(save_path) = save_path {
         if old_db.is_some() {
             panic!("new_db: Do not provide database, read it from disk");
         }
-        SimpleDb::new_file(save_path, db_spec.columns)?
+        SimpleDb::new_file(save_path, db_spec.columns)
     } else {
-        SimpleDb::new_in_memory(db_spec.columns, old_db)?
-    };
-
-    check_version(&db, version)?;
-    Ok(db)
+        SimpleDb::new_in_memory(db_spec.columns, old_db)
+    }
 }

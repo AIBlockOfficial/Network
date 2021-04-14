@@ -94,12 +94,9 @@ async fn main() {
             settings.set("user_node_idx", index).unwrap();
             let mut db_mode = settings.get_table("user_db_mode").unwrap();
             if let Some(test_idx) = db_mode.get_mut("Test") {
-                let index = {
-                    let user_index_offset = 1000;
-                    let index = index.parse::<usize>().unwrap() + user_index_offset;
-                    index.to_string()
-                };
-                *test_idx = config::Value::new(None, index);
+                let index = index.parse::<usize>().unwrap();
+                let index = index + test_idx.clone().try_into::<usize>().unwrap();
+                *test_idx = config::Value::new(None, index.to_string());
                 settings.set("user_db_mode", db_mode).unwrap();
             }
         }
