@@ -2079,6 +2079,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42f6109f0506e20f7e0f910e51a0079acf41da8e0694e6442527c4ddf5a2b158"
+dependencies = [
+ "serde 1.0.123",
+]
+
+[[package]]
 name = "serde_test"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2315,6 +2324,7 @@ dependencies = [
  "rust-crypto",
  "serde 1.0.123",
  "serde_json",
+ "serde_path_to_error",
  "sha3",
  "sodiumoxide",
  "tokio 0.2.25",
