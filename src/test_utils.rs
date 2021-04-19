@@ -594,12 +594,13 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         .flat_map(|(node_type, infos)| node_infos(*node_type, infos, mem_db))
         .collect();
 
+    let mut nodes: BTreeMap<_, _> = nodes.into_iter().map(|(k, (_, v))| (k, v)).collect();
     NetworkInstanceInfo {
         node_infos,
-        miner_nodes: nodes.remove(&NodeType::Miner).unwrap().1,
-        compute_nodes: nodes.remove(&NodeType::Compute).unwrap().1,
-        storage_nodes: nodes.remove(&NodeType::Storage).unwrap().1,
-        user_nodes: nodes.remove(&NodeType::User).unwrap().1,
+        miner_nodes: nodes.remove(&NodeType::Miner).unwrap_or_default(),
+        compute_nodes: nodes.remove(&NodeType::Compute).unwrap_or_default(),
+        storage_nodes: nodes.remove(&NodeType::Storage).unwrap_or_default(),
+        user_nodes: nodes.remove(&NodeType::User).unwrap_or_default(),
     }
 }
 
