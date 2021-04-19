@@ -290,30 +290,7 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
     value: &'a [u8],
 ) -> Result<T> {
     Ok(match deserialize(value) {
-        Ok(TrackedSer(v)) => Ok(v),
+        Ok(v) => Ok(v),
         Err(e) => Err(log_key_value_error(e, tag, key, value)),
     }?)
-}
-
-/// Provide tracked deserialization for better error logs
-pub struct TrackedSer<T>(T);
-
-impl<'a, T> serde::Deserialize<'a> for TrackedSer<T>
-where
-    T: serde::Deserialize<'a>,
-{
-    fn deserialize<D: serde::Deserializer<'a>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let result: std::result::Result<T, _> = serde_path_to_error::deserialize(deserializer);
-        match result {
-            Ok(v) => Ok(TrackedSer(v)),
-            Err(err) => {
-                let path = err.path().to_string();
-                let err = err.into_inner();
-                error!("TrackedSer at: {} -> {:?}", path, err);
-                Err(err)
-            }
-        }
-    }
 }
