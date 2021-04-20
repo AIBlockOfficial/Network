@@ -1,11 +1,12 @@
 use crate::db_utils::SimpleDbSpec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, Signature};
-use std::collections::BTreeMap;
+use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey, Signature};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
     pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = None;
     pub const DB_PATH: &str = "src/db/db";
+    pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
 
 pub mod naom {
@@ -166,10 +167,46 @@ pub mod storage {
     };
 }
 
+pub mod wallet {
+    use super::naom::{OutPoint, TokenAmount};
+    use super::*;
+
+    pub const KNOWN_ADDRESS_KEY: &str = "a";
+    pub const FUND_KEY: &str = "f";
+
+    // New but compatible with 0.2.0
+    pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+        db_path: constants::WALLET_PATH,
+        suffix: "",
+        columns: &[],
+    };
+
+    #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+    pub struct FundStore {
+        running_total: TokenAmount,
+        transactions: BTreeMap<OutPoint, TokenAmount>,
+        spent_transactions: BTreeMap<OutPoint, TokenAmount>,
+    }
+
+    pub type KnownAddresses = BTreeSet<String>;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AddressStore {
+        pub public_key: PublicKey,
+        pub secret_key: SecretKey,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct TransactionStore {
+        pub key_address: String,
+    }
+}
+
 pub mod convert {
     mod old {
         pub use super::super::*;
     }
+    use crate::wallet;
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
@@ -251,6 +288,13 @@ pub mod convert {
 
     pub fn convert_token_amount(old: old::naom::TokenAmount) -> TokenAmount {
         TokenAmount(old.0)
+    }
+
+    pub fn convert_address_store(old: old::wallet::AddressStore) -> wallet::AddressStore {
+        wallet::AddressStore {
+            public_key: old.public_key,
+            secret_key: old.secret_key,
+        }
     }
 }
 pub use convert::*;

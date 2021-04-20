@@ -24,7 +24,7 @@ pub use fund_store::FundStore;
 ///Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
 
-const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: WALLET_PATH,
     suffix: "",
     columns: &[],
@@ -142,7 +142,7 @@ impl WalletDb {
             address_list.insert(address.clone());
 
             // Save to disk
-            save_address_store_to_wallet(&mut batch, &address, keys, encryption_key);
+            save_address_store_to_wallet(&mut batch, &address, keys, &encryption_key);
             set_known_key_address(&mut batch, address_list);
             let batch = batch.done();
             db.write(batch).unwrap();
@@ -250,14 +250,14 @@ impl WalletDb {
     ///
     /// * `amount_required` - Amount needed
     pub async fn fetch_inputs_for_payment(
-        &mut self,
+        &self,
         amount_required: TokenAmount,
     ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, amount_required, encryption_key)
+            fetch_inputs_for_payment_from_db(&db, amount_required, &encryption_key)
         })
         .await
         .unwrap()
@@ -357,11 +357,7 @@ impl WalletDb {
     ///
     ///  * `key_addr` - Key to get the address store for
     pub fn get_address_store(&self, key_addr: &str) -> AddressStore {
-        get_address_store(
-            &self.db.lock().unwrap(),
-            key_addr,
-            self.encryption_key.clone(),
-        )
+        get_address_store(&self.db.lock().unwrap(), key_addr, &self.encryption_key)
     }
 
     /// Gets the address store based on a provided key, but returns
@@ -440,13 +436,13 @@ pub fn get_address_store_encrypted(db: &SimpleDb, key_addr: &str) -> Vec<u8> {
 pub fn get_address_store(
     db: &SimpleDb,
     key_addr: &str,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> AddressStore {
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
             let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
             let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
-            match secretbox::open(&output.to_vec(), &nonce, &encryption_key) {
+            match secretbox::open(&output.to_vec(), &nonce, encryption_key) {
                 Ok(decrypted) => deserialize(&decrypted).unwrap(),
                 _ => panic!("Error accessing wallet"),
             }
@@ -466,13 +462,13 @@ pub fn save_address_store_to_wallet(
     db: &mut SimpleDbWriteBatch,
     key_addr: &str,
     store: AddressStore,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) {
     let input = {
         let store = serialize(&store).unwrap();
         let nonce = secretbox::gen_nonce();
         let mut input: Vec<u8> = nonce.as_ref().to_vec();
-        input.append(&mut secretbox::seal(&store, &nonce, &encryption_key));
+        input.append(&mut secretbox::seal(&store, &nonce, encryption_key));
         input
     };
     db.put_cf(DB_COL_DEFAULT, key_addr, &input);
@@ -564,7 +560,7 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
@@ -572,13 +568,16 @@ pub fn fetch_inputs_for_payment_from_db(
 
     let fund_store = get_fund_store(db);
     if fund_store.running_total() < amount_required {
-        panic!("Not enough funds available for payment!");
+        panic!(
+            "Not enough funds available for payment!: {:?}",
+            fund_store.running_total()
+        );
     }
 
     for (out_p, amount) in fund_store.into_transactions() {
         amount_made += amount;
 
-        let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key.clone());
+        let (cons, used) = tx_constructor_from_prev_out(db, out_p, &encryption_key);
         tx_cons.push(cons);
         tx_used.push(used);
 
@@ -646,7 +645,7 @@ pub fn destroy_spent_transactions_and_keys(
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     out_p: OutPoint,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> (TxConstructor, (OutPoint, String)) {
     let key_address = get_transaction_store(db, &out_p).key_address;
     let needed_store = get_address_store(db, &key_address, encryption_key);

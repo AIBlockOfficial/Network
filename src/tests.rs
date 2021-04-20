@@ -2920,6 +2920,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .into_iter()
             .collect(),
         test_duration_divider: TEST_DURATION_DIVIDER,
+        passphrase: Some("Test Passphrase".to_owned()),
     }
 }
 

@@ -4,7 +4,8 @@ use clap::{App, Arg};
 use system::configurations::DbMode;
 use system::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
-    upgrade_compute_db, upgrade_storage_db, DbSpecInfo, UpgradeError, DB_SPEC_INFOS,
+    get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
+    UpgradeError, DB_SPEC_INFOS,
 };
 
 const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
@@ -38,7 +39,7 @@ async fn main() {
         .arg(
             Arg::with_name("type")
                 .long("type")
-                .help("Run the upgrade for the given node type (all or compute, storage, user, miner)")
+                .help("Run the upgrade for type (all or compute, storage, user, miner)")
                 .takes_value(true)
                 .required(true),
         )
@@ -49,9 +50,15 @@ async fn main() {
                 .takes_value(true)
                 .required(true),
         )
+        .arg(
+            Arg::with_name("passphrase")
+                .long("passphrase")
+                .help("Enter a password or passphase for the encryption of the Wallet.")
+                .takes_value(true),
+        )
         .get_matches();
 
-    let (processing, db_modes) = {
+    let (processing, db_modes, passphrase) = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
@@ -61,6 +68,10 @@ async fn main() {
             .merge(config::File::with_name(setting_file))
             .unwrap();
 
+        let passphrase = matches
+            .value_of("passphrase")
+            .unwrap_or_default()
+            .to_owned();
         let node_type = matches.value_of("type").unwrap();
         let processing = match matches.value_of("processing").unwrap() {
             "read" => Processing::Read,
@@ -99,7 +110,7 @@ async fn main() {
             panic!("type must be one of all or {}", NODE_TYPES.join(", "));
         };
 
-        (processing, db_modes)
+        (processing, db_modes, passphrase)
     };
 
     match processing {
@@ -109,7 +120,7 @@ async fn main() {
             }
         }
         Processing::Upgrade => {
-            if let Err(e) = process_upgrade(db_modes) {
+            if let Err(e) = process_upgrade(db_modes, passphrase) {
                 println!("Upgrade error, aborting: {:?}", e);
             }
         }
@@ -144,14 +155,19 @@ fn process_read(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
 }
 
 /// Process reading databases, format in a rust ready constants.
-fn process_upgrade(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
+fn process_upgrade(
+    db_modes: Vec<(String, DbMode)>,
+    passphrase: String,
+) -> Result<(), UpgradeError> {
     println!("Upgrade with config {:?}", db_modes);
     for (node_type, mode) in db_modes {
         println!("Upgrade Database {}, {:?}", node_type, mode);
         match node_type.as_str() {
             "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, None)?)?,
             "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, None)?)?,
-            _ => return Err(UpgradeError::ConfigError("Not implemented for this type")),
+            "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, None)?, &passphrase)?,
+            "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, None)?, &passphrase)?,
+            _ => return Err(UpgradeError::ConfigError("Type does not exists")),
         };
         println!("Done Upgrade Database {}, {:?}", node_type, mode);
     }

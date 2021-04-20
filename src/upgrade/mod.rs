@@ -15,14 +15,14 @@ use crate::db_utils::{
     SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
 use crate::interfaces::BlockStoredInfo;
-use crate::{compute, storage};
+use crate::{compute, storage, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::net::SocketAddr;
-use tracing::error;
+use tracing::{error, trace};
 
 pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
     DbSpecInfo {
@@ -229,10 +229,79 @@ pub fn upgrade_storage_db_batch<'a>(
     Ok(batch)
 }
 
+/// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
+pub fn get_upgrade_wallet_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+    let spec = &old::wallet::DB_SPEC;
+    let version = old::constants::NETWORK_VERSION_SERIALIZED;
+    let db = new_db_with_version(db_mode, spec, version, old_db)?;
+    Ok(db)
+}
+
+/// Upgrade DB: upgrade ready given db  .
+pub fn upgrade_wallet_db(mut db: SimpleDb, passphrase: &str) -> Result<SimpleDb> {
+    let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), passphrase)?.done();
+    db.write(batch)?;
+    Ok(db)
+}
+
+/// Upgrade DB: all columns new and old are expected to be opened
+pub fn upgrade_wallet_db_batch<'a>(
+    db: &SimpleDb,
+    mut batch: SimpleDbWriteBatch<'a>,
+    passphrase: &str,
+) -> Result<SimpleDbWriteBatch<'a>> {
+    batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
+
+    let masterkey = wallet::get_or_save_master_key_store(&db, &mut batch, passphrase.as_bytes());
+
+    for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
+        if key == old::wallet::FUND_KEY.as_bytes() {
+            // Keep as is
+            let f: old::wallet::FundStore =
+                tracked_deserialize("FundStore deserialize", &key, &value)?;
+            trace!("FundStore: {:?}", f);
+        } else if key == old::wallet::KNOWN_ADDRESS_KEY.as_bytes() {
+            // Keep as is
+            let _: old::wallet::KnownAddresses =
+                tracked_deserialize("Known Addresses deserialize", &key, &value)?;
+        } else if is_wallet_transaction_store_key(&key) {
+            // Keep as is
+            let _: old::wallet::TransactionStore =
+                tracked_deserialize("Tx Store deserialize", &key, &value)?;
+        } else if is_wallet_address_store_key(&key) {
+            let addr: old::wallet::AddressStore =
+                tracked_deserialize("Addr Store deserialize", &key, &value)?;
+
+            let key =
+                String::from_utf8(key).map_err(|_| UpgradeError::ConfigError("Non UTF-8 key"))?;
+            let addr = old::convert_address_store(addr);
+
+            batch.delete_cf(DB_COL_DEFAULT, &key);
+            wallet::save_address_store_to_wallet(&mut batch, &key, addr, &masterkey);
+        } else {
+            let e = UpgradeError::ConfigError("Key not recognized");
+            return Err(log_key_value_error(e, "", &key, &value));
+        }
+    }
+
+    Ok(batch)
+}
+
 /// whether it is a transaction key
 pub fn is_transaction_key(key: &[u8]) -> bool {
     // special genesis block transactions had 6 digits and missed prefix
     key.get(0) == Some(&b'g') || key.len() == 6
+}
+
+/// Wallet AddressStore key
+fn is_wallet_address_store_key(key: &[u8]) -> bool {
+    key.len() == 32
+}
+
+/// Wallet TransactionStore key
+fn is_wallet_transaction_store_key(key: &[u8]) -> bool {
+    // special genesis block transactions had 6 digits and missed prefix
+    key.len() == 44 || key.len() == 18
 }
 
 /// whether it is a block key
