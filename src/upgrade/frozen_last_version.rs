@@ -171,7 +171,7 @@ pub mod convert {
         pub use super::super::*;
     }
     use naom::primitives::{
-        asset::{Asset, TokenAmount},
+        asset::{Asset, DataAsset, TokenAmount},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
     use naom::script::{lang::Script, OpCodes, StackEntry};
@@ -181,11 +181,7 @@ pub mod convert {
             inputs: old.inputs.into_iter().map(convert_txin).collect(),
             outputs: old.outputs.into_iter().map(convert_txout).collect(),
             version: old.version,
-            druid: None,
-            druid_participants: None,
-            expect_value: None,
-            expect_value_amount: None,
-            expect_address: None,
+            druid_info: None,
         }
     }
 
@@ -231,8 +227,7 @@ pub mod convert {
 
     pub fn convert_txout(old: old::naom::TxOut) -> TxOut {
         TxOut {
-            value: old.value.map(convert_asset),
-            amount: convert_token_amount(old.amount),
+            value: convert_asset(old.value, old.amount),
             locktime: old.locktime,
             drs_block_hash: None,
             drs_tx_hash: None,
@@ -240,10 +235,17 @@ pub mod convert {
         }
     }
 
-    pub fn convert_asset(old: old::naom::Asset) -> Asset {
-        match old {
-            old::naom::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
-            old::naom::Asset::Data(v) => Asset::Data(v),
+    pub fn convert_asset(
+        old_val: Option<old::naom::Asset>,
+        old_amount: old::naom::TokenAmount,
+    ) -> Asset {
+        match old_val {
+            Some(old::naom::Asset::Token(v)) => Asset::Token(convert_token_amount(v)),
+            Some(old::naom::Asset::Data(v)) => Asset::Data(DataAsset {
+                data: v,
+                amount: old_amount.0,
+            }),
+            None => Asset::Token(convert_token_amount(old_amount)),
         }
     }
 
