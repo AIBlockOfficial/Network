@@ -10,7 +10,7 @@ use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{
+use naom::utils::transaction_utils::{
     get_inputs_previous_out_point, get_tx_out_with_out_point_cloned,
 };
 use serde::{Deserialize, Serialize};

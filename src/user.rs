@@ -12,7 +12,7 @@ use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-use naom::primitives::transaction_utils::{construct_tx_core, construct_tx_hash};
+use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use std::{error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};

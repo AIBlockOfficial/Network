@@ -18,7 +18,7 @@ use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;

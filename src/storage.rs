@@ -544,7 +544,9 @@ impl StorageNode {
                     if let Some(key) = &tx_out.script_public_key {
                         info!(
                             "Genesis entry: Index:{}, Key:{} -> Tokens:{}",
-                            idx, key, tx_out.amount
+                            idx,
+                            key,
+                            tx_out.value.token_amount()
                         );
                     }
                 }

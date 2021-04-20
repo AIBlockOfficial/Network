@@ -3,7 +3,7 @@ use crate::utils::{create_valid_transaction_with_ins_outs, make_wallet_tx_info};
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, Transaction};
-use naom::primitives::transaction_utils::{construct_address, get_tx_out_with_out_point};
+use naom::utils::transaction_utils::{construct_address, get_tx_out_with_out_point};
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 
@@ -79,7 +79,7 @@ impl TransactionGen {
             read_txs.extend(
                 get_tx_out_with_out_point(txs.iter().map(|(o, t)| (o, t)))
                     .filter(|(_, tx_out)| Some(addr) == tx_out.script_public_key.as_ref())
-                    .map(|(out_p, tx_out)| (out_p, tx_out.amount)),
+                    .map(|(out_p, tx_out)| (out_p, tx_out.value.token_amount())),
             );
         }
     }
