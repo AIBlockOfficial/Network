@@ -5,7 +5,7 @@ use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
-use naom::primitives::transaction_utils::{construct_address, construct_payment_tx_ins};
+use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::pwhash;
 use sodiumoxide::crypto::secretbox;

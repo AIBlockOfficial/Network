@@ -22,10 +22,10 @@ use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
-use naom::primitives::transaction_utils::{
+use naom::script::StackEntry;
+use naom::utils::transaction_utils::{
     construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
 };
-use naom::script::StackEntry;
 use rand::{self, Rng};
 use sha3::Digest;
 use sha3::Sha3_256;
@@ -1978,7 +1978,7 @@ fn node_all_combined_expected_wallet_info(
     let txs_to_address_and_ammount = {
         let mining_tx_out = get_tx_out_with_out_point_cloned(mining_txs.iter().copied());
         mining_tx_out
-            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.amount)))
+            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.value.token_amount())))
             .map(|(k, (addr, amount))| (k, (addr.unwrap(), amount)))
             .collect()
     };

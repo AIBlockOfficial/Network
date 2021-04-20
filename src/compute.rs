@@ -20,8 +20,8 @@ use bytes::Bytes;
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::primitives::transaction_utils::construct_tx_hash;
-use naom::script::utils::tx_is_valid;
+use naom::utils::script_utils::tx_is_valid;
+use naom::utils::transaction_utils::construct_tx_hash;
 
 use rand::{self, Rng};
 use serde::Serialize;
@@ -270,7 +270,9 @@ impl ComputeNode {
     /// ### Arguments
     /// * `transaction` - Transaction to process
     pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
-        if let Some(druid) = transaction.clone().druid {
+        if let Some(druid_info) = transaction.clone().druid_info {
+            let druid = druid_info.druid;
+
             // If this transaction is meant to join others
             #[allow(clippy::map_entry)]
             if self.druid_pool.contains_key(&druid) {
@@ -285,7 +287,7 @@ impl ComputeNode {
             // If we haven't seen this DRUID yet
             } else {
                 let mut droplet = DruidDroplet {
-                    participants: transaction.druid_participants.unwrap(),
+                    participants: druid_info.participants,
                     tx: BTreeMap::new(),
                 };
 
@@ -1132,7 +1134,7 @@ impl ComputeNode {
 
         // Check coinbase amount and structure
         let coinbase_amount = self.node_raft.get_current_reward();
-        if !coinbase.is_coinbase() || coinbase.outputs[0].amount != *coinbase_amount {
+        if !coinbase.is_coinbase() || coinbase.outputs[0].value.token_amount() != *coinbase_amount {
             return Response {
                 success: false,
                 reason: "Coinbase transaction invalid",

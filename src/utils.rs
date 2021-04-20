@@ -11,12 +11,12 @@ use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
-    transaction_utils::{
-        construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
-        get_tx_out_with_out_point,
-    },
 };
 use naom::script::{lang::Script, StackEntry};
+use naom::utils::transaction_utils::{
+    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
+    get_tx_out_with_out_point,
+};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
@@ -316,7 +316,7 @@ pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
 pub fn get_total_coinbase_tokens(coinbase_tx: &BTreeMap<String, Transaction>) -> TokenAmount {
     let mut total = TokenAmount(0);
     for tx_ind in coinbase_tx.values() {
-        total += tx_ind.outputs.iter().map(|x| x.amount).sum();
+        total += tx_ind.outputs.iter().map(|x| x.value.token_amount()).sum();
     }
     total
 }
@@ -379,7 +379,13 @@ pub fn get_paiments_for_wallet<'a>(
     txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
 ) -> Vec<(OutPoint, TokenAmount, String)> {
     get_tx_out_with_out_point(txs)
-        .map(|(out_p, tx_out)| (out_p, tx_out.amount, &tx_out.script_public_key))
+        .map(|(out_p, tx_out)| {
+            (
+                out_p,
+                tx_out.value.token_amount(),
+                &tx_out.script_public_key,
+            )
+        })
         .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
         .collect()
 }
@@ -432,8 +438,7 @@ pub fn create_valid_transaction_with_ins_outs(
 
         for addr in receiver_addr_hexs {
             tx_outs.push(TxOut {
-                value: Some(Asset::Token(amount)),
-                amount,
+                value: Asset::Token(amount),
                 locktime: 0,
                 script_public_key: Some(addr.to_string()),
                 drs_block_hash: None,
