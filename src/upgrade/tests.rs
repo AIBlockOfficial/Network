@@ -21,6 +21,11 @@ use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 
+enum Specs {
+    Db(SimpleDbSpec),
+    Wallet(SimpleDbSpec),
+}
+
 #[tokio::test(basic_scheduler)]
 async fn upgrade_compute_real_db() {
     let config = real_db(complete_network_config(20000));
@@ -70,12 +75,12 @@ async fn upgrade_common(config: NetworkConfig, info: NetworkInstanceInfo, name: 
     //
     // Act
     //
-    let db = get_upgrade_node_db(n_info, db.in_memory()).unwrap();
+    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
     let db = upgrade_node_db(n_info, db).unwrap();
-    let db = open_as_new_node_db(n_info, db.in_memory()).unwrap();
+    let db = open_as_new_node_db(n_info, in_memory(db)).unwrap();
 
     let node = {
-        let extra = as_extra_params(n_info, db);
+        let extra = in_memory(db);
         init_arc_node(name, &config, &info, extra).await
     };
 
@@ -178,14 +183,14 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo, name: &s
     //
     // Act
     //
-    let err_new_1 = open_as_new_node_db(n_info, db.cloned_in_memory()).err();
-    let db = open_as_old_node_db(n_info, db.in_memory()).unwrap();
+    let err_new_1 = open_as_new_node_db(n_info, cloned_in_memory(&db)).err();
+    let db = open_as_old_node_db(n_info, in_memory(db)).unwrap();
 
-    let db = get_upgrade_node_db(n_info, db.in_memory()).unwrap();
-    let db = open_as_old_node_db(n_info, db.in_memory()).unwrap();
-    let db = get_upgrade_node_db(n_info, db.in_memory()).unwrap();
+    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
+    let db = open_as_old_node_db(n_info, in_memory(db)).unwrap();
+    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
 
-    let err_new_2 = open_as_new_node_db(n_info, db.cloned_in_memory()).err();
+    let err_new_2 = open_as_new_node_db(n_info, cloned_in_memory(&db)).err();
 
     //
     // Assert
@@ -194,26 +199,41 @@ async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo, name: &s
     assert!(err_new_2.is_some());
 }
 
-fn create_old_node_db(info: &NetworkNodeInfo) -> SimpleDb {
-    let (spec, entries) = match info.node_type {
-        NodeType::Compute => (
-            &old::compute::DB_SPEC,
-            &tests_last_version_db::COMPUTE_DB_V0_2_0,
-        ),
-        NodeType::Storage => (
-            &old::storage::DB_SPEC,
-            &tests_last_version_db::STORAGE_DB_V0_2_0,
-        ),
-        NodeType::User => (
-            &old::wallet::DB_SPEC,
-            &tests_last_version_db::USER_DB_V0_2_0,
-        ),
-        NodeType::Miner => (
-            &old::wallet::DB_SPEC,
-            &tests_last_version_db::MINER_DB_V0_2_0,
-        ),
-    };
-    create_old_db(spec, info.db_mode, entries)
+fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
+    match info.node_type {
+        NodeType::Compute => ExtraNodeParams {
+            db: Some(create_old_db(
+                &old::compute::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::COMPUTE_DB_V0_2_0,
+            )),
+            ..Default::default()
+        },
+        NodeType::Storage => ExtraNodeParams {
+            db: Some(create_old_db(
+                &old::storage::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::STORAGE_DB_V0_2_0,
+            )),
+            ..Default::default()
+        },
+        NodeType::User => ExtraNodeParams {
+            wallet_db: Some(create_old_db(
+                &old::wallet::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::USER_DB_V0_2_0,
+            )),
+            ..Default::default()
+        },
+        NodeType::Miner => ExtraNodeParams {
+            wallet_db: Some(create_old_db(
+                &old::wallet::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::MINER_DB_V0_2_0,
+            )),
+            ..Default::default()
+        },
+    }
 }
 
 fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) -> SimpleDb {
@@ -232,71 +252,77 @@ fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) 
 
 fn open_as_old_node_db(
     info: &NetworkNodeInfo,
-    old_db: Option<SimpleDb>,
-) -> Result<SimpleDb, SimpleDbError> {
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let spec = match info.node_type {
-        NodeType::Compute => &old::compute::DB_SPEC,
-        NodeType::Storage => &old::storage::DB_SPEC,
-        NodeType::User => &old::wallet::DB_SPEC,
-        NodeType::Miner => &old::wallet::DB_SPEC,
+    let specs = match info.node_type {
+        NodeType::Compute => Specs::Db(old::compute::DB_SPEC),
+        NodeType::Storage => Specs::Db(old::storage::DB_SPEC),
+        NodeType::User => Specs::Wallet(old::wallet::DB_SPEC),
+        NodeType::Miner => Specs::Wallet(old::wallet::DB_SPEC),
     };
-    new_db_with_version(info.db_mode, spec, version, old_db)
+    open_as_version_node_db(info, &specs, version, old_dbs)
 }
 
 fn open_as_new_node_db(
     info: &NetworkNodeInfo,
-    old_db: Option<SimpleDb>,
-) -> Result<SimpleDb, SimpleDbError> {
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = Some(NETWORK_VERSION_SERIALIZED);
-    let spec = match info.node_type {
-        NodeType::Compute => &compute::DB_SPEC,
-        NodeType::Storage => &storage::DB_SPEC,
-        NodeType::User => &wallet::DB_SPEC,
-        NodeType::Miner => &wallet::DB_SPEC,
+    let specs = match info.node_type {
+        NodeType::Compute => Specs::Db(compute::DB_SPEC),
+        NodeType::Storage => Specs::Db(storage::DB_SPEC),
+        NodeType::User => Specs::Wallet(wallet::DB_SPEC),
+        NodeType::Miner => Specs::Wallet(wallet::DB_SPEC),
     };
-    new_db_with_version(info.db_mode, spec, version, old_db)
+    open_as_version_node_db(info, &specs, version, old_dbs)
 }
 
-fn as_extra_params(info: &NetworkNodeInfo, db: SimpleDb) -> ExtraNodeParams {
-    match info.node_type {
-        NodeType::Compute => ExtraNodeParams {
-            db: db.in_memory(),
-            ..Default::default()
-        },
-        NodeType::Storage => ExtraNodeParams {
-            db: db.in_memory(),
-            ..Default::default()
-        },
-        NodeType::User => ExtraNodeParams {
-            wallet_db: db.in_memory(),
-            ..Default::default()
-        },
-        NodeType::Miner => ExtraNodeParams {
-            wallet_db: db.in_memory(),
-            ..Default::default()
-        },
+fn open_as_version_node_db(
+    info: &NetworkNodeInfo,
+    specs: &Specs,
+    version: Option<&[u8]>,
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams, SimpleDbError> {
+    match specs {
+        Specs::Db(spec) => {
+            let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db)?;
+            Ok(ExtraNodeParams {
+                db: Some(db),
+                ..Default::default()
+            })
+        }
+        Specs::Wallet(spec) => {
+            let wallet_db = new_db_with_version(info.db_mode, spec, version, old_dbs.wallet_db)?;
+            Ok(ExtraNodeParams {
+                wallet_db: Some(wallet_db),
+                ..Default::default()
+            })
+        }
     }
 }
 
 pub fn get_upgrade_node_db(
     info: &NetworkNodeInfo,
-    old_db: Option<SimpleDb>,
-) -> Result<SimpleDb, UpgradeError> {
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams, UpgradeError> {
     match info.node_type {
-        NodeType::Compute => get_upgrade_compute_db(info.db_mode, old_db),
-        NodeType::Storage => get_upgrade_storage_db(info.db_mode, old_db),
-        NodeType::User => get_upgrade_wallet_db(info.db_mode, old_db),
-        NodeType::Miner => get_upgrade_wallet_db(info.db_mode, old_db),
+        NodeType::Compute => get_upgrade_compute_db(info.db_mode, old_dbs),
+        NodeType::Storage => get_upgrade_storage_db(info.db_mode, old_dbs),
+        NodeType::User => get_upgrade_wallet_db(info.db_mode, old_dbs),
+        NodeType::Miner => get_upgrade_wallet_db(info.db_mode, old_dbs),
     }
 }
 
-pub fn upgrade_node_db(info: &NetworkNodeInfo, db: SimpleDb) -> Result<SimpleDb, UpgradeError> {
+pub fn upgrade_node_db(
+    info: &NetworkNodeInfo,
+    dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams, UpgradeError> {
     match info.node_type {
-        NodeType::Compute => upgrade_compute_db(db),
-        NodeType::Storage => upgrade_storage_db(db),
-        NodeType::User => upgrade_wallet_db(db, WALLET_PASSWORD),
-        NodeType::Miner => upgrade_wallet_db(db, WALLET_PASSWORD),
+        NodeType::Compute => upgrade_compute_db(dbs),
+        NodeType::Storage => upgrade_storage_db(dbs),
+        NodeType::User => upgrade_wallet_db(dbs, WALLET_PASSWORD),
+        NodeType::Miner => upgrade_wallet_db(dbs, WALLET_PASSWORD),
     }
 }
 
@@ -383,5 +409,21 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
         ))
         .collect(),
         shutdown: false,
+    }
+}
+
+fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
+    ExtraNodeParams {
+        db: dbs.db.and_then(|v| v.in_memory()),
+        raft_db: dbs.raft_db.and_then(|v| v.in_memory()),
+        wallet_db: dbs.wallet_db.and_then(|v| v.in_memory()),
+    }
+}
+
+fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
+    ExtraNodeParams {
+        db: dbs.db.as_ref().and_then(|v| v.cloned_in_memory()),
+        raft_db: dbs.raft_db.as_ref().and_then(|v| v.cloned_in_memory()),
+        wallet_db: dbs.wallet_db.as_ref().and_then(|v| v.cloned_in_memory()),
     }
 }

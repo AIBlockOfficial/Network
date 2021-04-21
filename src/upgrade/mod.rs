@@ -8,7 +8,7 @@ mod tests;
 #[cfg(test)]
 mod tests_last_version_db;
 
-use crate::configurations::DbMode;
+use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, WALLET_PATH};
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
@@ -107,21 +107,28 @@ impl From<bincode::Error> for UpgradeError {
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_compute_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_compute_db(
+    db_mode: DbMode,
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams> {
     let spec = &old::compute::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
 
     db.upgrade_create_missing_cf(compute::DB_COL_INTERNAL)?;
     db.upgrade_create_missing_cf(compute::DB_COL_LOCAL_TXS)?;
-    Ok(db)
+    Ok(ExtraNodeParams {
+        db: Some(db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_compute_db(mut db: SimpleDb) -> Result<SimpleDb> {
-    let batch = upgrade_compute_db_batch(&db, db.batch_writer())?.done();
+pub fn upgrade_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
+    let batch = upgrade_compute_db_batch(db, db.batch_writer())?.done();
     db.write(batch)?;
-    Ok(db)
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -141,23 +148,30 @@ pub fn upgrade_compute_db_batch<'a>(
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_storage_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_storage_db(
+    db_mode: DbMode,
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams> {
     let spec = &old::storage::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
 
     db.upgrade_create_missing_cf(storage::DB_COL_INTERNAL)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_ALL)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_V0_2_0)?;
-    Ok(db)
+    Ok(ExtraNodeParams {
+        db: Some(db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_storage_db(mut db: SimpleDb) -> Result<SimpleDb> {
+pub fn upgrade_storage_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
     let batch = upgrade_storage_db_batch(&db, db.batch_writer())?.done();
     db.write(batch)?;
-    Ok(db)
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -230,18 +244,22 @@ pub fn upgrade_storage_db_batch<'a>(
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_wallet_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
     let spec = &old::wallet::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_db)?;
-    Ok(db)
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db)?;
+    Ok(ExtraNodeParams {
+        wallet_db: Some(db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_wallet_db(mut db: SimpleDb, passphrase: &str) -> Result<SimpleDb> {
+pub fn upgrade_wallet_db(mut dbs: ExtraNodeParams, passphrase: &str) -> Result<ExtraNodeParams> {
+    let db = dbs.wallet_db.as_mut().unwrap();
     let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), passphrase)?.done();
     db.write(batch)?;
-    Ok(db)
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened

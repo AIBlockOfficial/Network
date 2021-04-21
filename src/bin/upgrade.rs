@@ -162,11 +162,12 @@ fn process_upgrade(
     println!("Upgrade with config {:?}", db_modes);
     for (node_type, mode) in db_modes {
         println!("Upgrade Database {}, {:?}", node_type, mode);
+        let extra = Default::default();
         match node_type.as_str() {
-            "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, None)?)?,
-            "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, None)?)?,
-            "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, None)?, &passphrase)?,
-            "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, None)?, &passphrase)?,
+            "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, extra)?)?,
+            "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, extra)?)?,
+            "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &passphrase)?,
+            "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &passphrase)?,
             _ => return Err(UpgradeError::ConfigError("Type does not exists")),
         };
         println!("Done Upgrade Database {}, {:?}", node_type, mode);
