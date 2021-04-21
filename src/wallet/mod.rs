@@ -1,6 +1,8 @@
 use crate::configurations::{DbMode, WalletTxSpec};
 use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
-use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT};
+use crate::db_utils::{
+    self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch, DB_COL_DEFAULT,
+};
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -22,7 +24,7 @@ pub use fund_store::FundStore;
 ///Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
 
-const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: WALLET_PATH,
     suffix: "",
     columns: &[],
@@ -55,8 +57,13 @@ pub struct WalletDb {
 impl WalletDb {
     pub fn new(db_mode: DbMode, db: Option<SimpleDb>, passphrase: Option<String>) -> Self {
         let mut db = db_utils::new_db(db_mode, &DB_SPEC, db);
+        let mut batch = db.batch_writer();
+
         let passphrase = passphrase.as_deref().unwrap_or("").as_bytes();
-        let masterkey = get_or_save_master_key_store(&mut db, passphrase);
+        let masterkey = get_or_save_master_key_store(&db, &mut batch, passphrase);
+
+        let batch = batch.done();
+        db.write(batch).unwrap();
         Self {
             db: Arc::new(Mutex::new(db)),
             encryption_key: masterkey,
@@ -129,13 +136,16 @@ impl WalletDb {
         Ok(task::spawn_blocking(move || {
             // Wallet DB handling
             let mut db = db.lock().unwrap();
+            let mut batch = db.batch_writer();
 
             let mut address_list = get_known_key_address(&db);
             address_list.insert(address.clone());
 
             // Save to disk
-            save_address_store_to_wallet(&mut db, &address, keys, encryption_key);
-            set_known_key_address(&mut db, address_list);
+            save_address_store_to_wallet(&mut batch, &address, keys, &encryption_key);
+            set_known_key_address(&mut batch, address_list);
+            let batch = batch.done();
+            db.write(batch).unwrap();
         })
         .await?)
     }
@@ -154,12 +164,16 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
+            let mut batch = db.batch_writer();
 
             let mut address_list = get_known_key_address(&db);
             address_list.insert(address.clone());
 
-            db.put_cf(DB_COL_DEFAULT, address, keys).unwrap();
-            set_known_key_address(&mut db, address_list);
+            batch.put_cf(DB_COL_DEFAULT, address, keys);
+            set_known_key_address(&mut batch, address_list);
+
+            let batch = batch.done();
+            db.write(batch).unwrap();
         })
         .await?)
     }
@@ -178,9 +192,13 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            let store = TransactionStore { key_address };
+            let mut batch = db.batch_writer();
 
-            save_transaction_to_wallet(&mut db, &out_p, &store);
+            let store = TransactionStore { key_address };
+            save_transaction_to_wallet(&mut batch, &out_p, &store);
+
+            let batch = batch.done();
+            db.write(batch).unwrap();
         })
         .await?)
     }
@@ -197,28 +215,26 @@ impl WalletDb {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
+            let mut batch = db.batch_writer();
+            let mut fund_store = get_fund_store(&db);
+            let addresses = get_known_key_address(&db);
 
-            let usable_payments: Vec<_> = {
-                let addresses = get_known_key_address(&db);
-                payments
-                    .into_iter()
-                    .filter(|(_, _, address)| addresses.contains(address))
-                    .collect()
-            };
+            let usable_payments: Vec<_> = payments
+                .into_iter()
+                .filter(|(_, _, a)| addresses.contains(a))
+                .collect();
 
-            for (out_p, _, key_address) in &usable_payments {
+            for (out_p, amount, key_address) in &usable_payments {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
-                save_transaction_to_wallet(&mut db, out_p, &store);
+                fund_store.store_tx(out_p.clone(), *amount);
+                save_transaction_to_wallet(&mut batch, out_p, &store);
             }
-            save_payment_to_fund_store(
-                &mut db,
-                usable_payments
-                    .clone()
-                    .into_iter()
-                    .map(|(out_p, amount, _)| (out_p, amount)),
-            );
 
+            set_fund_store(&mut batch, fund_store);
+
+            let batch = batch.done();
+            db.write(batch).unwrap();
             usable_payments
         })
         .await?)
@@ -234,14 +250,14 @@ impl WalletDb {
     ///
     /// * `amount_required` - Amount needed
     pub async fn fetch_inputs_for_payment(
-        &mut self,
+        &self,
         amount_required: TokenAmount,
     ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, amount_required, encryption_key)
+            fetch_inputs_for_payment_from_db(&db, amount_required, &encryption_key)
         })
         .await
         .unwrap()
@@ -261,7 +277,17 @@ impl WalletDb {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
-            consume_inputs_for_payment_to_wallet(&mut db, tx_cons, tx_used)
+            let mut batch = db.batch_writer();
+            let mut fund_store = get_fund_store(&db);
+
+            for (out_p, _) in tx_used {
+                fund_store.spend_tx(&out_p);
+            }
+            set_fund_store(&mut batch, fund_store);
+            let batch = batch.done();
+            db.write(batch).unwrap();
+
+            construct_payment_tx_ins(tx_cons)
         })
         .await
         .unwrap()
@@ -331,11 +357,7 @@ impl WalletDb {
     ///
     ///  * `key_addr` - Key to get the address store for
     pub fn get_address_store(&self, key_addr: &str) -> AddressStore {
-        get_address_store(
-            &self.db.lock().unwrap(),
-            key_addr,
-            self.encryption_key.clone(),
-        )
+        get_address_store(&self.db.lock().unwrap(), key_addr, &self.encryption_key)
     }
 
     /// Gets the address store based on a provided key, but returns
@@ -379,21 +401,8 @@ pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, SimpleDbError> {
 }
 
 /// Set the wallet fund store
-pub fn set_fund_store(db: &mut SimpleDb, fund_store: FundStore) {
+pub fn set_fund_store(db: &mut SimpleDbWriteBatch, fund_store: FundStore) {
     db.put_cf(DB_COL_DEFAULT, FUND_KEY, &serialize(&fund_store).unwrap())
-        .unwrap();
-}
-
-/// Save a payment to fund store
-pub fn save_payment_to_fund_store(
-    db: &mut SimpleDb,
-    payments: impl Iterator<Item = (OutPoint, TokenAmount)>,
-) {
-    let mut fund_store = get_fund_store(db);
-    for (out_p, amount) in payments {
-        fund_store.store_tx(out_p, amount);
-    }
-    set_fund_store(db, fund_store);
 }
 
 /// Get the wallet known address
@@ -406,13 +415,12 @@ pub fn get_known_key_address(db: &SimpleDb) -> BTreeSet<String> {
 }
 
 /// Set the wallet known address
-pub fn set_known_key_address(db: &mut SimpleDb, address_store: BTreeSet<String>) {
+pub fn set_known_key_address(db: &mut SimpleDbWriteBatch, address_store: BTreeSet<String>) {
     db.put_cf(
         DB_COL_DEFAULT,
         KNOWN_ADDRESS_KEY,
         &serialize(&address_store).unwrap(),
-    )
-    .unwrap();
+    );
 }
 
 /// Gets the wallet AddressStore in an encrypted state for external storage
@@ -428,13 +436,13 @@ pub fn get_address_store_encrypted(db: &SimpleDb, key_addr: &str) -> Vec<u8> {
 pub fn get_address_store(
     db: &SimpleDb,
     key_addr: &str,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> AddressStore {
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
             let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
             let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
-            match secretbox::open(&output.to_vec(), &nonce, &encryption_key) {
+            match secretbox::open(&output.to_vec(), &nonce, encryption_key) {
                 Ok(decrypted) => deserialize(&decrypted).unwrap(),
                 _ => panic!("Error accessing wallet"),
             }
@@ -445,25 +453,25 @@ pub fn get_address_store(
 }
 
 /// Delete AddressStore
-pub fn delete_address_store(db: &mut SimpleDb, key_addr: &str) {
-    db.delete_cf(DB_COL_DEFAULT, key_addr).unwrap();
+pub fn delete_address_store(db: &mut SimpleDbWriteBatch, key_addr: &str) {
+    db.delete_cf(DB_COL_DEFAULT, key_addr);
 }
 
 /// Save AddressStore
 pub fn save_address_store_to_wallet(
-    db: &mut SimpleDb,
+    db: &mut SimpleDbWriteBatch,
     key_addr: &str,
     store: AddressStore,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) {
     let input = {
         let store = serialize(&store).unwrap();
         let nonce = secretbox::gen_nonce();
         let mut input: Vec<u8> = nonce.as_ref().to_vec();
-        input.append(&mut secretbox::seal(&store, &nonce, &encryption_key));
+        input.append(&mut secretbox::seal(&store, &nonce, encryption_key));
         input
     };
-    db.put_cf(DB_COL_DEFAULT, key_addr, &input).unwrap();
+    db.put_cf(DB_COL_DEFAULT, key_addr, &input);
 }
 
 /// Get the wallet transaction store
@@ -476,20 +484,28 @@ pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStor
 }
 
 /// Delete transaction store
-pub fn delete_transaction_store(db: &mut SimpleDb, out_p: &OutPoint) {
+pub fn delete_transaction_store(db: &mut SimpleDbWriteBatch, out_p: &OutPoint) {
     let key = serialize(&out_p).unwrap();
-    db.delete_cf(DB_COL_DEFAULT, &key).unwrap();
+    db.delete_cf(DB_COL_DEFAULT, &key);
 }
 
 /// Save transaction
-pub fn save_transaction_to_wallet(db: &mut SimpleDb, out_p: &OutPoint, store: &TransactionStore) {
+pub fn save_transaction_to_wallet(
+    db: &mut SimpleDbWriteBatch,
+    out_p: &OutPoint,
+    store: &TransactionStore,
+) {
     let key = serialize(out_p).unwrap();
     let input = serialize(store).unwrap();
-    db.put_cf(DB_COL_DEFAULT, &key, &input).unwrap();
+    db.put_cf(DB_COL_DEFAULT, &key, &input);
 }
 
 /// Get the wallet salt store
-pub fn get_or_save_master_key_store(db: &mut SimpleDb, passphrase: &[u8]) -> secretbox::Key {
+pub fn get_or_save_master_key_store(
+    db: &SimpleDb,
+    batch: &mut SimpleDbWriteBatch,
+    passphrase: &[u8],
+) -> secretbox::Key {
     match db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY) {
         Ok(Some(store)) => {
             let store: MasterKeyStore = deserialize(&store).unwrap();
@@ -513,8 +529,7 @@ pub fn get_or_save_master_key_store(db: &mut SimpleDb, passphrase: &[u8]) -> sec
                 enc_master_key,
             })
             .unwrap();
-            db.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store)
-                .unwrap();
+            batch.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store);
             master_key
         }
         Err(e) => panic!("Error accessing wallet: {:?}", e),
@@ -545,7 +560,7 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     amount_required: TokenAmount,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
@@ -553,13 +568,16 @@ pub fn fetch_inputs_for_payment_from_db(
 
     let fund_store = get_fund_store(db);
     if fund_store.running_total() < amount_required {
-        panic!("Not enough funds available for payment!");
+        panic!(
+            "Not enough funds available for payment!: {:?}",
+            fund_store.running_total()
+        );
     }
 
     for (out_p, amount) in fund_store.into_transactions() {
         amount_made += amount;
 
-        let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key.clone());
+        let (cons, used) = tx_constructor_from_prev_out(db, out_p, &encryption_key);
         tx_cons.push(cons);
         tx_used.push(used);
 
@@ -571,27 +589,12 @@ pub fn fetch_inputs_for_payment_from_db(
     (tx_cons, amount_made, tx_used)
 }
 
-/// Consume the used transactions updating the wallet and produce TxIn
-/// Non destructive operation: key material and data will still be present in wallet
-pub fn consume_inputs_for_payment_to_wallet(
-    db: &mut SimpleDb,
-    tx_cons: Vec<TxConstructor>,
-    tx_used: Vec<(OutPoint, String)>,
-) -> Vec<TxIn> {
-    let mut fund_store = get_fund_store(db);
-    for (out_p, _) in tx_used {
-        fund_store.spend_tx(&out_p);
-    }
-    set_fund_store(db, fund_store);
-
-    construct_payment_tx_ins(tx_cons)
-}
-
 /// Destroy the used transactions with keys purging them from the wallet
 /// Handle the case where same address is reused for multiple transactions
 pub fn destroy_spent_transactions_and_keys(
     db: &mut SimpleDb,
 ) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
+    let mut batch = db.batch_writer();
     let mut fund_store = get_fund_store(db);
     let mut address_store = get_known_key_address(db);
 
@@ -622,14 +625,17 @@ pub fn destroy_spent_transactions_and_keys(
     //
     // Update database
     //
-    set_fund_store(db, fund_store);
-    set_known_key_address(db, address_store);
+    set_fund_store(&mut batch, fund_store);
+    set_known_key_address(&mut batch, address_store);
     for keys_address in &remove_key_addresses {
-        delete_address_store(db, keys_address);
+        delete_address_store(&mut batch, keys_address);
     }
     for out_p in spent_txs.keys() {
-        delete_transaction_store(db, out_p);
+        delete_transaction_store(&mut batch, out_p);
     }
+
+    let batch = batch.done();
+    db.write(batch).unwrap();
 
     (remove_key_addresses, spent_txs)
 }
@@ -639,7 +645,7 @@ pub fn destroy_spent_transactions_and_keys(
 pub fn tx_constructor_from_prev_out(
     db: &SimpleDb,
     out_p: OutPoint,
-    encryption_key: secretbox::Key,
+    encryption_key: &secretbox::Key,
 ) -> (TxConstructor, (OutPoint, String)) {
     let key_address = get_transaction_store(db, &out_p).key_address;
     let needed_store = get_address_store(db, &key_address, encryption_key);
