@@ -14,8 +14,8 @@ use naom::primitives::{
 };
 use naom::script::{lang::Script, StackEntry};
 use naom::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
-    get_tx_out_with_out_point,
+    construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
+    construct_tx_hash, get_tx_out_with_out_point,
 };
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
@@ -407,7 +407,19 @@ pub fn create_valid_transaction(
     )
 }
 
-/// Create a valid transaction from givent info
+/// Creates a valid DDE transaction from given info
+pub fn create_valid_create_transaction_with_ins_outs(
+    drs: Vec<u8>,
+    pub_key: PublicKey,
+    secret_key: &SecretKey,
+) -> (String, Transaction) {
+    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1);
+    let ct_hash = construct_tx_hash(&create_tx);
+
+    (ct_hash, create_tx)
+}
+
+/// Create a valid transaction from given info
 pub fn create_valid_transaction_with_ins_outs(
     tx_in: &[(i32, &str)],
     receiver_addr_hexs: &[&str],
@@ -546,7 +558,7 @@ pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
 ///
 /// * `key`    - key to be decoded to give the public key
 pub fn decode_pub_key_as_address(key: &str) -> String {
-    construct_address(decode_pub_key(key))
+    construct_address(&decode_pub_key(key))
 }
 
 /// Decodes the public key

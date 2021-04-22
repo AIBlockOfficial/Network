@@ -599,12 +599,12 @@ impl MinerNode {
         let current_block_info = self.current_block.clone().unwrap();
         let merkle_root = current_block_info.hash_block.merkle_hash.clone();
         let mut valid = true;
+
         if !merkle_root.is_empty() {
-            let (mtree, store) = block::build_merkle_tree(&tx_merkle_verification)
+            let (mtree, _) = block::build_merkle_tree(&tx_merkle_verification)
                 .await
                 .unwrap();
-            valid = valid
-                && store[&mtree.root_id()] == block::from_slice(&hex::decode(merkle_root).unwrap());
+            valid = hex::encode(mtree.root()) == merkle_root;
         }
 
         if valid {

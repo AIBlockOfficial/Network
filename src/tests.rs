@@ -14,8 +14,9 @@ use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
 use crate::transaction_gen::TransactionGen;
 use crate::user::UserNode;
 use crate::utils::{
-    calculate_reward, concat_merkle_coinbase, create_valid_transaction_with_ins_outs,
-    get_sanction_addresses, validate_pow_block, LocalEvent, ResponseResult,
+    calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
+    create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
+    ResponseResult,
 };
 use bincode::{deserialize, serialize};
 use futures::future::join_all;
@@ -2693,6 +2694,11 @@ fn valid_transactions_with(fixed: bool, amount: TokenAmount) -> BTreeMap<String,
             create_valid_transaction_with_ins_outs(ins, outs, &pk, &sk, amount);
         transactions.insert(t_hash, payment_tx);
     }
+
+    // Add one create tx
+    let drs = vec![0, 1, 2, 3, 4, 5];
+    let (create_hash, create_tx) = create_valid_create_transaction_with_ins_outs(drs, pk, &sk);
+    transactions.insert(create_hash, create_tx);
 
     transactions
 }

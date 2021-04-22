@@ -30,7 +30,7 @@ impl TransactionGen {
         let infos: Vec<_> = tx_specs
             .iter()
             .map(|s| make_wallet_tx_info(s))
-            .map(|(out_p, pk, sk, amount)| ((out_p, amount), (pk, sk, construct_address(pk))))
+            .map(|(out_p, pk, sk, amount)| ((out_p, amount), (pk, sk, construct_address(&pk))))
             .collect();
 
         let addr_to_keys = infos
