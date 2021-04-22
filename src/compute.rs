@@ -392,7 +392,10 @@ impl ComputeNode {
 
         move |tx| {
             if tx.is_create_tx() {
-                return self.create_tx_is_valid(tx);
+                return tx_has_valid_create_script(
+                    &tx.inputs[0].script_signature,
+                    &tx.outputs[0].value,
+                );
             }
 
             !tx.is_coinbase()
@@ -403,16 +406,6 @@ impl ComputeNode {
                         .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
         }
-    }
-
-    /// Validates a create transaction specifically
-    ///
-    /// ### Arguments
-    ///
-    /// * `tx`  - Create transaction to validate
-    fn create_tx_is_valid(&self, tx: &Transaction) -> bool {
-        let asset_hash = hex::encode(Sha3_256::digest(&serialize(&tx.outputs[0].value).unwrap()));
-        tx_has_valid_create_script(&tx.inputs[0].script_signature, &asset_hash)
     }
 
     /// Sends the latest block to storage
