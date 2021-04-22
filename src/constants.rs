@@ -61,6 +61,9 @@ pub const KNOWN_ADDRESS_KEY: &str = "a";
 /// Key for a running total of wallet funds
 pub const FUND_KEY: &str = "f";
 
+///Key for storing encapsulation details
+pub const DATA_ENCAPSULATION_KEY: &str = "e";
+
 /// Path to sanction list
 pub const SANC_LIST_PROD: &str = "src/db/sanc_list.json";
 
