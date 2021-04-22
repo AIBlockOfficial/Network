@@ -20,7 +20,8 @@ use bytes::Bytes;
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::utils::script_utils::tx_is_valid;
+use naom::utils::druid_utils::druid_expectations_are_met;
+use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 
 use rand::{self, Rng};
@@ -319,7 +320,7 @@ impl ComputeNode {
 
         // Execute the tx if it's ready
         if current_droplet.tx.len() == current_droplet.participants {
-            self.execute_dde_tx(current_droplet);
+            self.execute_dde_tx(current_droplet, &druid);
             let _removal = self.druid_pool.remove(&druid);
         }
     }
@@ -327,13 +328,14 @@ impl ComputeNode {
     /// Executes a waiting dual double entry transaction that is ready to execute
     /// ### Arguments
     /// * `droplet`  - DRUID droplet of transactions to execute
-    pub fn execute_dde_tx(&mut self, droplet: DruidDroplet) {
+    /// * `druid`    -
+    pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
         let txs_valid = {
             let tx_validator = self.transactions_validator();
             droplet.tx.values().all(|tx| tx_validator(&tx))
         };
 
-        if txs_valid {
+        if txs_valid && druid_expectations_are_met(druid, droplet.tx.values()) {
             self.node_raft.append_to_tx_druid_pool(droplet.tx);
 
             trace!(
@@ -388,6 +390,13 @@ impl ComputeNode {
         let sanction_list = &self.sanction_list;
 
         move |tx| {
+            if tx.is_create_tx() {
+                return tx_has_valid_create_script(
+                    &tx.inputs[0].script_signature,
+                    &tx.outputs[0].value,
+                );
+            }
+
             !tx.is_coinbase()
                 && tx_is_valid(&tx, |v| {
                     utxo_set

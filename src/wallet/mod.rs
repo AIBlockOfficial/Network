@@ -104,7 +104,7 @@ impl WalletDb {
         public_key: PublicKey,
         secret_key: SecretKey,
     ) -> (String, AddressStore) {
-        let final_address = construct_address(public_key);
+        let final_address = construct_address(&public_key);
         let address_keys = AddressStore {
             public_key,
             secret_key,
@@ -674,7 +674,7 @@ mod tests {
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
         ]);
-        let addr = construct_address(pk);
+        let addr = construct_address(&pk);
 
         assert_eq!(addr, "197e990a0e00fd6ae13daecc18180df6".to_string(),);
     }
@@ -686,7 +686,7 @@ mod tests {
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
         ]);
-        let addr = construct_address(pk);
+        let addr = construct_address(&pk);
 
         assert_eq!(addr.len(), 32);
     }
