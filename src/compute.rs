@@ -391,17 +391,17 @@ impl ComputeNode {
         let sanction_list = &self.sanction_list;
 
         move |tx| {
-            if !tx.is_create_tx() {
-                return !tx.is_coinbase()
-                    && tx_is_valid(&tx, |v| {
-                        utxo_set
-                            .get(&v)
-                            .filter(|_| !sanction_list.contains(&v.t_hash))
-                            .filter(|tx_out| lock_expired >= tx_out.locktime)
-                    });
+            if tx.is_create_tx() {
+                return self.create_tx_is_valid(tx);
             }
-            // Handle create tx validation via script
-            self.create_tx_is_valid(tx)
+
+            !tx.is_coinbase()
+                && tx_is_valid(&tx, |v| {
+                    utxo_set
+                        .get(&v)
+                        .filter(|_| !sanction_list.contains(&v.t_hash))
+                        .filter(|tx_out| lock_expired >= tx_out.locktime)
+                })
         }
     }
 
@@ -1263,8 +1263,6 @@ impl ComputeInterface for ComputeNode {
             };
         }
 
-        println!("Transaction received: {:?}", transactions);
-
         let valid_tx: BTreeMap<_, _> = {
             let tx_validator = self.transactions_validator();
             transactions
@@ -1273,9 +1271,6 @@ impl ComputeInterface for ComputeNode {
                 .map(|tx| (construct_tx_hash(&tx), tx))
                 .collect()
         };
-
-        println!("Transaction valid: {:?}", valid_tx);
-        println!();
 
         // At this point the tx's are considered valid
         let valid_tx_len = valid_tx.len();
