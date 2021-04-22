@@ -17,7 +17,6 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use sha3::{Digest, Sha3_256};
 
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
