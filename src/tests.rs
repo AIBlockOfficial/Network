@@ -1410,11 +1410,11 @@ async fn reject_payment_txs() {
     let valid_txs = valid_transactions(true);
     let invalid_txs = vec![
         // New keys not matching utxo_set
-        valid_transactions(false),
+        valid_transactions_with(false, DEFAULT_SEED_AMOUNT, false),
         // Too much output amount for given inputs
-        valid_transactions_with(true, DEFAULT_SEED_AMOUNT + TokenAmount(1)),
+        valid_transactions_with(true, DEFAULT_SEED_AMOUNT + TokenAmount(1), false),
         // Too little output amount for given inputs
-        valid_transactions_with(true, DEFAULT_SEED_AMOUNT - TokenAmount(1)),
+        valid_transactions_with(true, DEFAULT_SEED_AMOUNT - TokenAmount(1), false),
         // Invalid script
         {
             let (k, v) = valid_txs.iter().next().unwrap();
@@ -2667,10 +2667,14 @@ async fn test_step_complete(network: Network) {
 }
 
 fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
-    valid_transactions_with(fixed, DEFAULT_SEED_AMOUNT)
+    valid_transactions_with(fixed, DEFAULT_SEED_AMOUNT, true)
 }
 
-fn valid_transactions_with(fixed: bool, amount: TokenAmount) -> BTreeMap<String, Transaction> {
+fn valid_transactions_with(
+    fixed: bool,
+    amount: TokenAmount,
+    with_create: bool,
+) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
         println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
@@ -2696,9 +2700,11 @@ fn valid_transactions_with(fixed: bool, amount: TokenAmount) -> BTreeMap<String,
     }
 
     // Add one create tx
-    let drs = vec![0, 1, 2, 3, 4, 5];
-    let (create_hash, create_tx) = create_valid_create_transaction_with_ins_outs(drs, pk, &sk);
-    transactions.insert(create_hash, create_tx);
+    if with_create {
+        let drs = vec![0, 1, 2, 3, 4, 5];
+        let (create_hash, create_tx) = create_valid_create_transaction_with_ins_outs(drs, pk, &sk);
+        transactions.insert(create_hash, create_tx);
+    }
 
     transactions
 }
