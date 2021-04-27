@@ -1064,7 +1064,7 @@ impl ComputeNode {
             Err(e) => panic!("Error accessing db: {:?}", e),
         };
         if let Some(first) = self.request_list_first_flood {
-            if first < self.request_list.len() {
+            if first <= self.request_list.len() {
                 self.request_list_first_flood = None;
             }
         }
