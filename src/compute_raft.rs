@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, error, trace, warn};
 
-const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
     suffix: ".compute_raft",
     columns: &[],
@@ -54,6 +54,15 @@ pub enum AccumulatingBlockStoredInfo {
     FirstBlock(BTreeMap<String, Transaction>),
     /// Accumulating other blocks BlockStoredInfo
     Block(BlockStoredInfo),
+}
+
+/// Accumulated previous block info
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum SpecialHandling {
+    /// Shutting down on this block.
+    Shutdown,
+    /// Waiting for first block after an upgrade.
+    FirstUpgradeBlock,
 }
 
 /// All fields that are consensused between the RAFT group.
@@ -92,8 +101,19 @@ pub struct ComputeConsensused {
     current_reward: TokenAmount,
     /// The last mining rewards.
     last_mining_transaction_hashes: Vec<String>,
-    /// Shutting down on this block.
-    shutdown: bool,
+    /// Special handling for processing blocks.
+    special_handling: Option<SpecialHandling>,
+}
+
+/// Consensused info to apply on start up after upgrade.
+pub struct ComputeConsensusedImport {
+    pub unanimous_majority: usize,
+    pub sufficient_majority: usize,
+    pub tx_current_block_num: Option<u64>,
+    pub utxo_set: UtxoSet,
+    pub last_committed_raft_idx_and_term: (u64, u64),
+    pub current_circulation: TokenAmount,
+    pub special_handling: Option<SpecialHandling>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -536,11 +556,43 @@ impl ComputeRaft {
 
     /// Whether to shutdown when block committed
     pub fn is_shutdown_on_commit(&self) -> bool {
-        self.consensused.shutdown
+        self.consensused.special_handling == Some(SpecialHandling::Shutdown)
     }
 }
 
 impl ComputeConsensused {
+    /// Create ComputeConsensused from imported data in upgrade
+    pub fn from_import(consensused: ComputeConsensusedImport) -> Self {
+        let ComputeConsensusedImport {
+            unanimous_majority,
+            sufficient_majority,
+            tx_current_block_num,
+            utxo_set,
+            last_committed_raft_idx_and_term,
+            current_circulation,
+            special_handling,
+        } = consensused;
+
+        Self {
+            unanimous_majority,
+            sufficient_majority,
+            tx_pool: Default::default(),
+            tx_druid_pool: Default::default(),
+            tx_current_block_previous_hash: Default::default(),
+            tx_current_block_num,
+            current_block: Default::default(),
+            current_block_tx: Default::default(),
+            initial_utxo_txs: Default::default(),
+            utxo_set,
+            current_block_stored_info: Default::default(),
+            last_committed_raft_idx_and_term,
+            current_circulation,
+            current_reward: Default::default(),
+            last_mining_transaction_hashes: Default::default(),
+            special_handling,
+        }
+    }
+
     /// Set consensused committed block to mine.
     /// Internal call, public for test only.
     /// ### Arguments
@@ -817,6 +869,15 @@ impl ComputeConsensused {
                 self.initial_utxo_txs = Some(utxo_set);
             }
             AccumulatingBlockStoredInfo::Block(info) => {
+                if self.special_handling == Some(SpecialHandling::FirstUpgradeBlock) {
+                    self.current_circulation -=
+                        get_total_coinbase_tokens(&info.mining_transactions);
+                    for (k, _) in get_tx_out_with_out_point_cloned(info.mining_transactions.iter())
+                    {
+                        self.utxo_set.remove(&k).unwrap();
+                    }
+                }
+
                 self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
@@ -825,7 +886,7 @@ impl ComputeConsensused {
                 ));
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
-                self.shutdown = info.shutdown;
+                self.special_handling = info.shutdown.then(|| SpecialHandling::Shutdown);
             }
         }
 

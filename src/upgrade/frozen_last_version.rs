@@ -15,6 +15,7 @@ pub mod naom {
     //
     // Block
     //
+    pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct StoredSerializingBlock {
@@ -143,6 +144,27 @@ pub mod naom {
     }
 }
 
+pub mod interfaces {
+    use super::naom::Transaction;
+    use super::*;
+
+    #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+    pub struct BlockStoredInfo {
+        pub block_hash: String,
+        pub block_num: u64,
+        pub nonce: Vec<u8>,
+        pub merkle_hash: String,
+        pub mining_transactions: BTreeMap<String, Transaction>,
+    }
+}
+
+pub mod raft_store {
+    pub const HARDSTATE_KEY: &str = "HardStateKey";
+    pub const SNAPSHOT_KEY: &str = "SnaphotKey";
+    pub const ENTRY_KEY: &str = "EntryKey";
+    pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
+}
+
 pub mod compute {
     use super::*;
 
@@ -156,6 +178,43 @@ pub mod compute {
     };
 }
 
+pub mod compute_raft {
+    use super::naom::*;
+    use super::*;
+
+    // New but compatible with 0.2.0
+    pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+        db_path: constants::DB_PATH,
+        suffix: ".compute_raft",
+        columns: &[],
+    };
+
+    /// Stub AccumulatingBlockStoredInfo that should not be present in upgrade
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AccumulatingBlockStoredInfo {}
+
+    /// All fields that are consensused between the RAFT group.
+    /// These fields need to be written and read from a committed log event.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    pub struct ComputeConsensused {
+        pub unanimous_majority: usize,
+        pub sufficient_majority: usize,
+        pub tx_pool: BTreeMap<String, Transaction>,
+        pub tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
+        pub tx_current_block_previous_hash: Option<String>,
+        pub tx_current_block_num: Option<u64>,
+        pub current_block: Option<Block>,
+        pub current_block_tx: BTreeMap<String, Transaction>,
+        pub initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
+        pub utxo_set: UtxoSet,
+        pub current_block_stored_info:
+            BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+        pub last_committed_raft_idx_and_term: (u64, u64),
+        pub current_circulation: TokenAmount,
+        pub current_reward: TokenAmount,
+    }
+}
+
 pub mod storage {
     use super::*;
 
@@ -165,6 +224,32 @@ pub mod storage {
         suffix: ".storage",
         columns: &[],
     };
+}
+
+pub mod storage_raft {
+    use super::*;
+
+    // New but compatible with 0.2.0
+    pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+        db_path: constants::DB_PATH,
+        suffix: ".storage_raft",
+        columns: &[],
+    };
+
+    /// Stub CompleteBlock that should not be present in upgrade
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct CompleteBlock {}
+
+    /// All fields that are consensused between the RAFT group.
+    /// These fields need to be written and read from a committed log event.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    pub struct StorageConsensused {
+        pub sufficient_majority: usize,
+        pub current_block_num: u64,
+        pub current_block_complete_timeout_peer_ids: BTreeSet<u64>,
+        pub current_block_completed_parts: BTreeMap<Vec<u8>, CompleteBlock>,
+        pub last_committed_raft_idx_and_term: (u64, u64),
+    }
 }
 
 pub mod wallet {
@@ -206,12 +291,13 @@ pub mod convert {
     mod old {
         pub use super::super::*;
     }
-    use crate::wallet;
+    use crate::{compute_raft, interfaces, storage_raft, wallet};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
     use naom::script::{lang::Script, OpCodes, StackEntry};
+    use std::collections::BTreeMap;
 
     pub fn convert_transaction(old: old::naom::Transaction) -> Transaction {
         Transaction {
@@ -295,6 +381,60 @@ pub mod convert {
             public_key: old.public_key,
             secret_key: old.secret_key,
         }
+    }
+
+    pub fn convert_compute_consensused(
+        old: old::compute_raft::ComputeConsensused,
+        special_handling: Option<compute_raft::SpecialHandling>,
+    ) -> compute_raft::ComputeConsensused {
+        compute_raft::ComputeConsensused::from_import(compute_raft::ComputeConsensusedImport {
+            unanimous_majority: old.unanimous_majority,
+            sufficient_majority: old.sufficient_majority,
+            tx_current_block_num: old.tx_current_block_num,
+            utxo_set: convert_utxoset(old.utxo_set),
+            last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
+            current_circulation: convert_token_amount(old.current_circulation),
+            special_handling,
+        })
+    }
+
+    pub fn convert_utxoset(old: old::naom::UtxoSet) -> interfaces::UtxoSet {
+        old.into_iter()
+            .map(|(op, out)| (convert_outpoint(op), convert_txout(out)))
+            .collect()
+    }
+
+    pub fn convert_storage_consensused(
+        old: old::storage_raft::StorageConsensused,
+        last_block_stored: Option<interfaces::BlockStoredInfo>,
+    ) -> storage_raft::StorageConsensused {
+        storage_raft::StorageConsensused::from_import(storage_raft::StorageConsensusedImport {
+            sufficient_majority: old.sufficient_majority,
+            current_block_num: old.current_block_num,
+            last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
+            last_block_stored,
+        })
+    }
+
+    pub fn convert_block_stored_info(
+        old: old::interfaces::BlockStoredInfo,
+    ) -> interfaces::BlockStoredInfo {
+        interfaces::BlockStoredInfo {
+            block_hash: old.block_hash,
+            block_num: old.block_num,
+            nonce: old.nonce,
+            merkle_hash: old.merkle_hash,
+            mining_transactions: convert_transactions(old.mining_transactions),
+            shutdown: false,
+        }
+    }
+
+    pub fn convert_transactions(
+        old: BTreeMap<String, old::naom::Transaction>,
+    ) -> BTreeMap<String, Transaction> {
+        old.into_iter()
+            .map(|(k, v)| (k, convert_transaction(v)))
+            .collect()
     }
 }
 pub use convert::*;

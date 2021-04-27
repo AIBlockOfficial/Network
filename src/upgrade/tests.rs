@@ -13,7 +13,7 @@ use crate::test_utils::{
     init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
     NetworkInstanceInfo, NetworkNodeInfo, NodeType,
 };
-use crate::{compute, storage, wallet};
+use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ use tracing::info;
 const WALLET_PASSWORD: &str = "TestPassword";
 
 enum Specs {
-    Db(SimpleDbSpec),
+    Db(SimpleDbSpec, SimpleDbSpec),
     Wallet(SimpleDbSpec),
 }
 
@@ -207,6 +207,11 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
                 info.db_mode,
                 &tests_last_version_db::COMPUTE_DB_V0_2_0,
             )),
+            raft_db: Some(create_old_db(
+                &old::compute_raft::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0,
+            )),
             ..Default::default()
         },
         NodeType::Storage => ExtraNodeParams {
@@ -214,6 +219,11 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
                 &old::storage::DB_SPEC,
                 info.db_mode,
                 &tests_last_version_db::STORAGE_DB_V0_2_0,
+            )),
+            raft_db: Some(create_old_db(
+                &old::storage_raft::DB_SPEC,
+                info.db_mode,
+                &tests_last_version_db::STORAGE_RAFT_DB_V0_2_0,
             )),
             ..Default::default()
         },
@@ -256,8 +266,8 @@ fn open_as_old_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
     let specs = match info.node_type {
-        NodeType::Compute => Specs::Db(old::compute::DB_SPEC),
-        NodeType::Storage => Specs::Db(old::storage::DB_SPEC),
+        NodeType::Compute => Specs::Db(old::compute::DB_SPEC, old::compute_raft::DB_SPEC),
+        NodeType::Storage => Specs::Db(old::storage::DB_SPEC, old::storage_raft::DB_SPEC),
         NodeType::User => Specs::Wallet(old::wallet::DB_SPEC),
         NodeType::Miner => Specs::Wallet(old::wallet::DB_SPEC),
     };
@@ -270,8 +280,8 @@ fn open_as_new_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = Some(NETWORK_VERSION_SERIALIZED);
     let specs = match info.node_type {
-        NodeType::Compute => Specs::Db(compute::DB_SPEC),
-        NodeType::Storage => Specs::Db(storage::DB_SPEC),
+        NodeType::Compute => Specs::Db(compute::DB_SPEC, compute_raft::DB_SPEC),
+        NodeType::Storage => Specs::Db(storage::DB_SPEC, storage_raft::DB_SPEC),
         NodeType::User => Specs::Wallet(wallet::DB_SPEC),
         NodeType::Miner => Specs::Wallet(wallet::DB_SPEC),
     };
@@ -285,10 +295,12 @@ fn open_as_version_node_db(
     old_dbs: ExtraNodeParams,
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     match specs {
-        Specs::Db(spec) => {
+        Specs::Db(spec, raft_spec) => {
             let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db)?;
+            let raft_db = new_db_with_version(info.db_mode, raft_spec, version, old_dbs.raft_db)?;
             Ok(ExtraNodeParams {
                 db: Some(db),
+                raft_db: Some(raft_db),
                 ..Default::default()
             })
         }

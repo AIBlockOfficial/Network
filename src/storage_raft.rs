@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, trace, warn};
 
-const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
+pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
     suffix: ".storage_raft",
     columns: &[],
@@ -75,6 +75,14 @@ pub struct StorageConsensused {
     last_committed_raft_idx_and_term: (u64, u64),
     /// The last block stored by ours and other node in consensus.
     last_block_stored: Option<BlockStoredInfo>,
+}
+
+/// Consensused info to apply on start up after upgrade.
+pub struct StorageConsensusedImport {
+    pub sufficient_majority: usize,
+    pub current_block_num: u64,
+    pub last_committed_raft_idx_and_term: (u64, u64),
+    pub last_block_stored: Option<BlockStoredInfo>,
 }
 
 /// Consensused Compute fields and consensus managment.
@@ -381,6 +389,25 @@ impl StorageRaft {
 }
 
 impl StorageConsensused {
+    /// Create ComputeConsensused from imported data in upgrade
+    pub fn from_import(consensused: StorageConsensusedImport) -> Self {
+        let StorageConsensusedImport {
+            sufficient_majority,
+            current_block_num,
+            last_committed_raft_idx_and_term,
+            last_block_stored,
+        } = consensused;
+
+        Self {
+            sufficient_majority,
+            current_block_num,
+            current_block_complete_timeout_peer_ids: Default::default(),
+            current_block_completed_parts: Default::default(),
+            last_committed_raft_idx_and_term,
+            last_block_stored,
+        }
+    }
+
     ///Returns a bool variable of whether or not the input value matches the current block number
     ///
     /// ### Arguments
