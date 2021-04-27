@@ -9,10 +9,11 @@ use raft::{Result as RaftResult, StorageError};
 use std::collections::HashMap;
 use tracing::{error, info};
 
-const HARDSTATE_KEY: &str = "HardStateKey";
-const SNAPSHOT_KEY: &str = "SnaphotKey";
-const ENTRY_KEY: &str = "EntryKey";
-const LAST_ENTRY_KEY: &str = "LastEntryKey";
+pub const HARDSTATE_KEY: &str = "HardStateKey";
+pub const SNAPSHOT_DATA_KEY: &str = "SnaphotDataKey";
+pub const SNAPSHOT_META_KEY: &str = "SnaphotMetaKey";
+pub const ENTRY_KEY: &str = "EntryKey";
+pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
 
 pub struct RaftStore {
     /// In memory storage used during normal operation
@@ -53,13 +54,11 @@ impl RaftStore {
 
     /// Overwrites the contents of this Storage object with those of the given snapshot.
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()> {
-        let bytes = snapshot.write_to_bytes()?;
+        self.in_memory.wl().apply_snapshot(snapshot.clone())?;
         let index = snapshot.get_metadata().get_index();
 
-        self.in_memory.wl().apply_snapshot(snapshot)?;
-
         let mut batch = self.presistent.batch_writer();
-        set_persistent_snapshot(&mut batch, &bytes);
+        set_persistent_snapshot(&mut batch, &snapshot)?;
         set_last_persistent_entry(&mut batch, index)?;
         discard_persistent_entries_before_snapshot(
             &mut batch,
@@ -79,14 +78,11 @@ impl RaftStore {
         pending_membership_change: Option<ConfChange>,
         data: Vec<u8>,
     ) -> RaftResult<()> {
-        let bytes = self
-            .in_memory
-            .wl()
-            .create_snapshot(idx, cs, pending_membership_change, data)?
-            .write_to_bytes()?;
+        let mut wl = self.in_memory.wl();
+        let snapshot = wl.create_snapshot(idx, cs, pending_membership_change, data)?;
 
         let mut batch = self.presistent.batch_writer();
-        set_persistent_snapshot(&mut batch, &bytes);
+        set_persistent_snapshot(&mut batch, snapshot)?;
         discard_persistent_entries_before_snapshot(
             &mut batch,
             &mut self.persistent_first_entry,
@@ -180,6 +176,11 @@ impl RaftStore {
 
         if let Some(hs) = get_persistent_hardstate(presistent)? {
             info!("load hard_state commit={}", hs.get_commit());
+            in_memory.wl().set_hardstate(hs);
+        } else {
+            // Snapshot only, every thing else discarded on upgrade.
+            let mut hs = HardState::default();
+            hs.set_commit(self.persistent_first_entry);
             in_memory.wl().set_hardstate(hs);
         }
 
@@ -301,18 +302,32 @@ fn set_last_persistent_entry(presistent: &mut SimpleDbWriteBatch, index: u64) ->
 }
 
 fn get_persistent_snapshot(presistent: &SimpleDb) -> RaftResult<Option<Snapshot>> {
-    if let Some(bytes) = presistent
-        .get_cf(DB_COL_DEFAULT, SNAPSHOT_KEY)
-        .map_err(from_db_err)?
-    {
-        Ok(Some(protobuf::parse_from_bytes::<Snapshot>(&bytes)?))
+    let data = presistent
+        .get_cf(DB_COL_DEFAULT, SNAPSHOT_DATA_KEY)
+        .map_err(from_db_err)?;
+    let meta = presistent
+        .get_cf(DB_COL_DEFAULT, SNAPSHOT_META_KEY)
+        .map_err(from_db_err)?;
+
+    if let (Some(data), Some(meta)) = (data, meta) {
+        let mut snapshot = Snapshot::new();
+        snapshot.set_data(data);
+        snapshot.set_metadata(protobuf::parse_from_bytes::<SnapshotMetadata>(&meta)?);
+        Ok(Some(snapshot))
     } else {
         Ok(None)
     }
 }
 
-fn set_persistent_snapshot(presistent: &mut SimpleDbWriteBatch, bytes: &[u8]) {
-    presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_KEY, bytes);
+fn set_persistent_snapshot(
+    presistent: &mut SimpleDbWriteBatch,
+    snapshot: &Snapshot,
+) -> RaftResult<()> {
+    let data = snapshot.get_data();
+    let meta = snapshot.get_metadata().write_to_bytes()?;
+    presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_DATA_KEY, data);
+    presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_META_KEY, meta);
+    Ok(())
 }
 
 fn get_persistent_hardstate(presistent: &SimpleDb) -> RaftResult<Option<HardState>> {
