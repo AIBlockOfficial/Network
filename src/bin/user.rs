@@ -222,9 +222,10 @@ async fn main() {
             use warp::Filter;
             warp::serve(
                 routes::wallet_info(db.clone())
-                    .or(routes::make_payment(node))
+                    .or(routes::make_payment(db.clone(), node.clone()))
                     .or(routes::wallet_keypairs(db.clone()))
-                    .or(routes::import_keypairs(db)),
+                    .or(routes::import_keypairs(db.clone()))
+                    .or(routes::wallet_encapsulation_data(db)),
             )
             .run(bind_address)
             .await;

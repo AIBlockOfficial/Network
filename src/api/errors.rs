@@ -1,3 +1,23 @@
+/// API error struct for invalid passphrase entered
+#[derive(Debug)]
+pub struct ErrorInvalidPassphrase;
+impl warp::reject::Reject for ErrorInvalidPassphrase {}
+
+/// API error struct for inability to access encapsulation data
+#[derive(Debug)]
+pub struct ErrorCannotAccessEncapsulationData;
+impl warp::reject::Reject for ErrorCannotAccessEncapsulationData {}
+
+/// API error struct for inability to generate encapsulation data
+#[derive(Debug)]
+pub struct ErrorCannotGenerateEncapsulationData;
+impl warp::reject::Reject for ErrorCannotGenerateEncapsulationData {}
+
+/// API error struct for inability to decrypt data encapsulated by client
+#[derive(Debug)]
+pub struct ErrorCannotDecryptEncapsulatedData;
+impl warp::reject::Reject for ErrorCannotDecryptEncapsulatedData {}
+
 /// API error struct for inability to access wallet
 #[derive(Debug)]
 pub struct ErrorCannotAccessWallet;

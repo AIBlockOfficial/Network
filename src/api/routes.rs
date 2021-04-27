@@ -49,6 +49,19 @@ pub fn wallet_keypairs(
         .with(cors)
 }
 
+// GET information needed to encapsulate data
+pub fn wallet_encapsulation_data(
+    db: WalletDb,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("wallet_encapsulation_data")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(handlers::get_wallet_encapsulation_data)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST save keypair
@@ -78,6 +91,7 @@ pub fn import_keypairs(
 
 // POST make payment
 pub fn make_payment(
+    db: WalletDb,
     peer: Node,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
@@ -96,6 +110,7 @@ pub fn make_payment(
 
     warp::path("make_payment")
         .and(warp::post())
+        .and(with_db(db))
         .and(with_peer(peer))
         .and(warp::body::json())
         .and_then(handlers::post_make_payment)
