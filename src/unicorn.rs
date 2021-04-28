@@ -98,7 +98,7 @@ impl Unicorn {
     /// * `modulus` - Modulus to divide the UNiCORN by. Optional
     pub fn get_unicorn(&self, modulus: Option<Integer>) -> Integer {
         match modulus {
-            Some(p) => self.witness.clone().div_floor(p),
+            Some(p) => self.witness.clone().div_rem_floor(p).1,
             None => self.witness.clone(),
         }
     }
@@ -107,5 +107,41 @@ impl Unicorn {
     fn is_valid_modulus(&self) -> bool {
         self.modulus >= 2u64.pow(2 * self.security_level)
             && !matches!(self.modulus.is_probably_prime(MR_PRIME_ITERS), IsPrime::No)
+    }
+}
+
+/*---- TESTS ----*/
+
+#[cfg(test)]
+mod unicorn_tests {
+    use super::*;
+
+    #[test]
+    fn should_generate_valid_unicorn() {
+        const TEST_HASH: &str = "1eeb30c7163271850b6d018e8282093ac6755a771da6267edf6c9b4fce9242ba";
+        const WITNESS: &str = "3519722601447054908751517254890810869415446534615259770378249754169022895693105944708707316137352415946228979178396400856098248558222287197711860247275230167";
+
+        let modulus_str: &str = "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151";
+        let modulus = Integer::from_str_radix(modulus_str, 10).unwrap();
+
+        let mut uni = Unicorn {
+            modulus,
+            iterations: 1_000,
+            security_level: 1,
+            seed: Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            ..Default::default()
+        };
+
+        let (w, g) = uni.eval().unwrap();
+
+        assert_eq!(w, Integer::from_str_radix(WITNESS, 10).unwrap());
+        assert_eq!(
+            g,
+            "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0".to_string()
+        );
+        assert!(uni.verify(
+            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            Integer::from_str_radix(WITNESS, 10).unwrap()
+        ));
     }
 }
