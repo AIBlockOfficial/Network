@@ -8,18 +8,18 @@ use crate::constants::{DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
-use crate::interfaces::BlockStoredInfo;
-use crate::test_utils::{
-    init_arc_node, init_instance_info, remove_all_node_dbs_in_info, NetworkConfig,
-    NetworkInstanceInfo, NetworkNodeInfo, NodeType,
-};
+use crate::interfaces::{BlockStoredInfo, Response};
+use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
+const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 enum Specs {
     Db(SimpleDbSpec, SimpleDbSpec),
@@ -29,74 +29,68 @@ enum Specs {
 #[tokio::test(basic_scheduler)]
 async fn upgrade_compute_real_db() {
     let config = real_db(complete_network_config(20000));
-    let info = init_instance_info(&config);
-    remove_all_node_dbs_in_info(&info);
-
-    upgrade_common(config, info, "compute1").await;
+    remove_all_node_dbs(&config);
+    upgrade_common(config, "compute1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_compute_in_memory() {
     let config = complete_network_config(20010);
-    let info = init_instance_info(&config);
-    upgrade_common(config, info, "compute1").await;
+    upgrade_common(config, "compute1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_storage_in_memory() {
     let config = complete_network_config(20020);
-    let info = init_instance_info(&config);
-    upgrade_common(config, info, "storage1").await;
+    upgrade_common(config, "storage1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_miner_in_memory() {
     let config = complete_network_config(20030);
-    let info = init_instance_info(&config);
-    upgrade_common(config, info, "miner1").await;
+    upgrade_common(config, "miner1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_user_in_memory() {
     let config = complete_network_config(20040);
-    let info = init_instance_info(&config);
-    upgrade_common(config, info, "user1").await;
+    upgrade_common(config, "user1").await;
 }
 
-async fn upgrade_common(config: NetworkConfig, info: NetworkInstanceInfo, name: &str) {
+async fn upgrade_common(config: NetworkConfig, name: &str) {
     test_step_start();
 
     //
     // Arrange
     //
-    let n_info = info.node_infos.get(name).unwrap();
-    let db = create_old_node_db(n_info);
+    let mut network = Network::create_stopped_from_config(&config);
+    let n_info = network.get_node_info(name).unwrap().clone();
+    let db = create_old_node_db(&n_info);
 
     //
     // Act
     //
-    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
-    let db = upgrade_node_db(n_info, db).unwrap();
-    let db = open_as_new_node_db(n_info, in_memory(db)).unwrap();
+    let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
+    let db = upgrade_node_db(&n_info, db).unwrap();
+    let db = open_as_new_node_db(&n_info, in_memory(db)).unwrap();
 
-    let node = {
-        let extra = in_memory(db);
-        init_arc_node(name, &config, &info, extra).await
-    };
+    network.add_extra_params(name, in_memory(db));
+    network.re_spawn_dead_nodes().await;
+    raft_node_handle_event(&mut network, name, "Snapshot applied").await;
 
     //
     // Assert
     //
     match n_info.node_type {
         NodeType::Compute => {
-            let compute = node.compute().unwrap().lock().await;
+            let compute = network.compute(name).unwrap().lock().await;
 
             let expected_req_list: BTreeSet<SocketAddr> =
                 std::iter::once("127.0.0.1:12340".parse().unwrap()).collect();
             assert_eq!(compute.get_request_list(), &expected_req_list);
         }
         NodeType::Storage => {
-            let storage = node.storage().unwrap().lock().await;
+            let storage = network.storage(name).unwrap().lock().await;
 
             {
                 let mut expected = Vec::new();
@@ -114,7 +108,7 @@ async fn upgrade_common(config: NetworkConfig, info: NetworkInstanceInfo, name: 
             }
         }
         NodeType::User => {
-            let user = node.user().unwrap().lock().await;
+            let user = network.user(name).unwrap().lock().await;
             let wallet = user.get_wallet_db();
             let payment = wallet.fetch_inputs_for_payment(TokenAmount(123)).await;
             assert_eq!(
@@ -123,7 +117,7 @@ async fn upgrade_common(config: NetworkConfig, info: NetworkInstanceInfo, name: 
             );
         }
         NodeType::Miner => {
-            let miner = node.miner().unwrap().lock().await;
+            let miner = network.miner(name).unwrap().lock().await;
             let wallet = miner.get_wallet_db();
             let payment = wallet.fetch_inputs_for_payment(TokenAmount(15020370)).await;
             assert_eq!(
@@ -132,71 +126,70 @@ async fn upgrade_common(config: NetworkConfig, info: NetworkInstanceInfo, name: 
             );
         }
     }
+
+    test_step_complete(network).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_compute_real_db() {
     let config = real_db(complete_network_config(20100));
-    let info = init_instance_info(&config);
-    remove_all_node_dbs_in_info(&info);
-
-    open_upgrade_started_compute_common(info, "compute1").await;
+    remove_all_node_dbs(&config);
+    open_upgrade_started_compute_common(config, "compute1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_compute_in_memory() {
     let config = complete_network_config(20110);
-    let info = init_instance_info(&config);
-    open_upgrade_started_compute_common(info, "compute1").await;
+    open_upgrade_started_compute_common(config, "compute1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_storage_in_memory() {
     let config = complete_network_config(20120);
-    let info = init_instance_info(&config);
-    open_upgrade_started_compute_common(info, "storage1").await;
+    open_upgrade_started_compute_common(config, "storage1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_miner_in_memory() {
     let config = complete_network_config(20130);
-    let info = init_instance_info(&config);
-    open_upgrade_started_compute_common(info, "miner1").await;
+    open_upgrade_started_compute_common(config, "miner1").await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_user_in_memory() {
     let config = complete_network_config(20140);
-    let info = init_instance_info(&config);
-    open_upgrade_started_compute_common(info, "user1").await;
+    open_upgrade_started_compute_common(config, "user1").await;
 }
 
-async fn open_upgrade_started_compute_common(info: NetworkInstanceInfo, name: &str) {
+async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str) {
     test_step_start();
 
     //
     // Arrange
     //
-    let n_info = info.node_infos.get(name).unwrap();
-    let db = create_old_node_db(n_info);
+    let mut network = Network::create_stopped_from_config(&config);
+    let n_info = network.get_node_info(name).unwrap().clone();
+    let db = create_old_node_db(&n_info);
 
     //
     // Act
     //
-    let err_new_1 = open_as_new_node_db(n_info, cloned_in_memory(&db)).err();
-    let db = open_as_old_node_db(n_info, in_memory(db)).unwrap();
+    let err_new_1 = open_as_new_node_db(&n_info, cloned_in_memory(&db)).err();
+    let db = open_as_old_node_db(&n_info, in_memory(db)).unwrap();
 
-    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
-    let db = open_as_old_node_db(n_info, in_memory(db)).unwrap();
-    let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
+    let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
+    let db = open_as_old_node_db(&n_info, in_memory(db)).unwrap();
+    let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
 
-    let err_new_2 = open_as_new_node_db(n_info, cloned_in_memory(&db)).err();
+    let err_new_2 = open_as_new_node_db(&n_info, cloned_in_memory(&db)).err();
 
     //
     // Assert
     //
     assert!(err_new_1.is_some());
     assert!(err_new_2.is_some());
+
+    test_step_complete(network).await;
 }
 
 fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
@@ -347,11 +340,16 @@ fn test_step_start() {
     info!("Test Step start");
 }
 
+async fn test_step_complete(network: Network) {
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
+}
+
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
-        compute_raft: false,
-        storage_raft: false,
+        compute_raft: true,
+        storage_raft: true,
         in_memory_db: true,
         compute_partition_full_size: 1,
         compute_minimum_miner_pool_len: 1,
@@ -437,5 +435,28 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
         db: dbs.db.as_ref().and_then(|v| v.cloned_in_memory()),
         raft_db: dbs.raft_db.as_ref().and_then(|v| v.cloned_in_memory()),
         wallet_db: dbs.wallet_db.as_ref().and_then(|v| v.cloned_in_memory()),
+    }
+}
+
+fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
+    Box::pin(async move {
+        tokio::time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
+        "Test timeout elapsed"
+    })
+}
+
+async fn raft_node_handle_event(network: &mut Network, node: &str, reason_val: &str) {
+    if let Some(n) = network.compute(node) {
+        let mut n = n.lock().await;
+        match n.handle_next_event(&mut test_timeout()).await {
+            Some(Ok(Response { success, reason })) if success && reason == reason_val => {}
+            other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        }
+    } else if let Some(n) = network.storage(node) {
+        let mut n = n.lock().await;
+        match n.handle_next_event(&mut test_timeout()).await {
+            Some(Ok(Response { success, reason })) if success && reason == reason_val => {}
+            other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        }
     }
 }

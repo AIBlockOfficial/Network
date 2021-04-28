@@ -78,6 +78,7 @@ impl NetworkConfig {
 }
 
 /// Node info to create node
+#[derive(Clone)]
 pub struct NetworkNodeInfo {
     pub node_spec: NodeSpec,
     pub node_type: NodeType,
@@ -110,27 +111,29 @@ impl Network {
     ///
     /// * `config` - Holds the values to instanciate a Network object
     pub async fn create_from_config(config: &NetworkConfig) -> Self {
+        let mut value = Self::create_stopped_from_config(config);
+        value.re_spawn_dead_nodes().await;
+        value
+    }
+
+    ///Creates a Network instance using a config object
+    ///
+    /// ###Arguments
+    ///
+    /// * `config` - Holds the values to instanciate a Network object
+    pub fn create_stopped_from_config(config: &NetworkConfig) -> Self {
         let info = init_instance_info(config);
-
-        let mut arc_nodes = BTreeMap::new();
-        for name in info.node_infos.keys() {
-            let extra = Default::default();
-            let arc_node = init_arc_node(name, &config, &info, extra).await;
-            arc_nodes.insert(name.to_owned(), arc_node);
-        }
-
-        connect_all_nodes(&arc_nodes, &BTreeSet::new()).await;
-        let raft_loop_handles = spawn_raft_loops(&arc_nodes).await;
+        let dead = info.node_infos.keys().cloned().collect();
 
         Self {
             config: config.clone(),
             active_nodes: config.nodes.clone(),
             active_compute_to_miner_mapping: config.compute_to_miner_mapping.clone(),
             instance_info: info,
-            arc_nodes,
-            raft_loop_handles,
-            dead_nodes: BTreeSet::new(),
-            extra_params: BTreeMap::new(),
+            arc_nodes: Default::default(),
+            raft_loop_handles: Default::default(),
+            dead_nodes: dead,
+            extra_params: Default::default(),
         }
     }
 
@@ -139,6 +142,11 @@ impl Network {
         close_raft_loops(&self.arc_nodes, &mut self.raft_loop_handles).await;
         stop_listening(&self.arc_nodes).await;
         disconnect_all_nodes(&self.arc_nodes).await;
+    }
+
+    /// Add extra params to use
+    pub fn add_extra_params(&mut self, name: &str, value: ExtraNodeParams) {
+        self.extra_params.insert(name.to_owned(), value);
     }
 
     /// Re-connect specified nodes.
@@ -176,6 +184,12 @@ impl Network {
         // Remove from active nodes
         self.dead_nodes.extend(names.iter().cloned());
         self.update_active_nodes();
+    }
+
+    /// Re-spawn specified nodes.
+    pub async fn re_spawn_dead_nodes(&mut self) {
+        let dead: Vec<String> = self.dead_nodes.iter().cloned().collect();
+        self.re_spawn_nodes_named(&dead).await;
     }
 
     /// Re-spawn specified nodes.
@@ -312,6 +326,15 @@ impl Network {
     /// * `name` - &str of the name of the node found.
     pub fn get_position(&mut self, name: &str) -> Option<usize> {
         self.instance_info.node_infos.get(name).map(|i| i.index)
+    }
+
+    ///Get the requested node info
+    ///
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the name of the node found.
+    pub fn get_node_info(&mut self, name: &str) -> Option<&NetworkNodeInfo> {
+        self.instance_info.node_infos.get(name)
     }
 
     ///Returns a list of initial transactions
