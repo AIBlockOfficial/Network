@@ -85,6 +85,10 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
         NodeType::Compute => {
             let compute = network.compute(name).unwrap().lock().await;
 
+            let block = compute.get_mining_block();
+            assert_eq!(block.as_ref().map(|bs| bs.header.b_num), None);
+            assert_eq!(compute.get_committed_current_block_num(), Some(2));
+
             let expected_req_list: BTreeSet<SocketAddr> =
                 std::iter::once("127.0.0.1:12340".parse().unwrap()).collect();
             assert_eq!(compute.get_request_list(), &expected_req_list);

@@ -351,6 +351,11 @@ impl ComputeNode {
         self.node_raft.get_mining_block()
     }
 
+    ///Returns last generated block number from the node_raft
+    pub fn get_committed_current_block_num(&self) -> Option<u64> {
+        self.node_raft.get_committed_current_block_num()
+    }
+
     /// Sets the commited mining block to the given block and transaction BTreeMap
     /// ### Arguments
     /// * `block`  - Block to be set to commited mining block
