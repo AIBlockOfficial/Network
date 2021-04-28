@@ -733,14 +733,10 @@ impl MinerNode {
     }
 
     /// Sends a request to partition to a Compute node
-    ///
-    /// ### Arguments
-    ///
-    /// * `compute`   - Socket address of recipient
-    pub async fn send_partition_request(&mut self, compute: SocketAddr) -> Result<()> {
+    pub async fn send_partition_request(&mut self) -> Result<()> {
         let peer_span = error_span!("sending partition participation request");
         self.node
-            .send(compute, ComputeRequest::SendPartitionRequest {})
+            .send(self.compute_addr, ComputeRequest::SendPartitionRequest {})
             .instrument(peer_span)
             .await?;
 

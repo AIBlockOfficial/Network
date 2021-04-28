@@ -9,11 +9,13 @@ use crate::configurations::{
     UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec, WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
+use crate::interfaces::Response;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::user::UserNode;
 use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
+    LocalEventSender, ResponseResult,
 };
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -22,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::error_span;
@@ -248,6 +251,13 @@ impl Network {
         self.update_active_nodes();
     }
 
+    pub async fn spawn_main_node_loops(
+        &mut self,
+        timeout: Duration,
+    ) -> BTreeMap<String, JoinHandle<()>> {
+        spawn_main_node_loops(&self.arc_nodes, timeout).await
+    }
+
     /// Restore from config and Remove all dead nodes
     fn update_active_nodes(&mut self) {
         let mut active_nodes = self.config.nodes.clone();
@@ -315,6 +325,19 @@ impl Network {
     pub async fn get_address(&self, name: &str) -> Option<SocketAddr> {
         if let Some(node) = self.arc_nodes.get(name) {
             Some(address(node).await)
+        } else {
+            None
+        }
+    }
+
+    ///Get the requested node local event tx
+    ///
+    /// ### Arguments
+    ///
+    /// * `name` - &str of the name of the node found.
+    pub async fn get_local_event_tx(&self, name: &str) -> Option<LocalEventSender> {
+        if let Some(node) = self.arc_nodes.get(name) {
+            Some(local_event_tx(node).await)
         } else {
             None
         }
@@ -401,6 +424,7 @@ impl Network {
             .collect()
     }
 }
+
 /// Nodes of any type
 #[derive(Clone)]
 pub enum ArcNode {
@@ -458,6 +482,15 @@ async fn address(node: &ArcNode) -> SocketAddr {
     }
 }
 
+async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
+    match node {
+        ArcNode::Miner(v) => v.lock().await.local_event_tx().clone(),
+        ArcNode::Compute(v) => v.lock().await.local_event_tx().clone(),
+        ArcNode::Storage(v) => v.lock().await.local_event_tx().clone(),
+        ArcNode::User(v) => v.lock().await.local_event_tx().clone(),
+    }
+}
+
 ///Dispatch to connect_info_peers
 async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
     match node {
@@ -508,6 +541,45 @@ async fn take_closed_extra_params(node: &ArcNode) -> ExtraNodeParams {
         ArcNode::Storage(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::Miner(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::User(n) => n.lock().await.take_closed_extra_params().await,
+    }
+}
+
+///Dispatch processing next event and response
+async fn handle_next_event_and_response(
+    node: &ArcNode,
+    timeout: Duration,
+) -> Result<ResponseResult, String> {
+    let mut test_timeout = test_timeout(timeout);
+
+    match node {
+        ArcNode::Compute(n) => {
+            let mut n = n.lock().await;
+            if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
+                return Ok(n.handle_next_event_response(response).await);
+            }
+            Ok(ResponseResult::Exit)
+        }
+        ArcNode::Storage(n) => {
+            let mut n = n.lock().await;
+            if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
+                return Ok(n.handle_next_event_response(response).await);
+            }
+            Ok(ResponseResult::Exit)
+        }
+        ArcNode::Miner(n) => {
+            let mut n = n.lock().await;
+            if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
+                return Ok(n.handle_next_event_response(response).await);
+            }
+            Ok(ResponseResult::Exit)
+        }
+        ArcNode::User(n) => {
+            let mut n = n.lock().await;
+            if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
+                return Ok(n.handle_next_event_response(response).await);
+            }
+            Ok(ResponseResult::Exit)
+        }
     }
 }
 
@@ -581,6 +653,43 @@ fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeS
             })
             .collect(),
     )
+}
+
+/// Run main loops
+///
+/// ### Arguments
+///
+/// * `arc_nodes`   - Nodes to initialize.
+/// * `timeout`     - Event timeout.
+pub async fn spawn_main_node_loops(
+    arc_nodes: &BTreeMap<String, ArcNode>,
+    timeout: Duration,
+) -> BTreeMap<String, JoinHandle<()>> {
+    let mut main_loop_handles = BTreeMap::new();
+
+    for (name, node) in arc_nodes.clone() {
+        let addr = address(&node).await;
+        let peer_span = error_span!("main_loop", ?name, ?addr);
+        main_loop_handles.insert(
+            name.clone(),
+            tokio::spawn(
+                async move {
+                    info!("Start main loop");
+                    loop {
+                        match handle_next_event_and_response(&node, timeout).await {
+                            Err(e) => panic!("{} - {}", e, &name),
+                            Ok(ResponseResult::Continue) => (),
+                            Ok(ResponseResult::Exit) => break,
+                        }
+                    }
+                    info!("main loop complete");
+                }
+                .instrument(peer_span),
+            ),
+        );
+    }
+
+    main_loop_handles
 }
 
 /// Run raft loops
@@ -898,5 +1007,47 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
                 info!("Not removed local db: {}, {:?}", to_remove, e);
             }
         }
+    }
+}
+
+/// Future timeout to use for handle_next_event
+fn test_timeout(timeout: Duration) -> impl Future<Output = &'static str> + Unpin {
+    Box::pin(async move {
+        tokio::time::delay_for(timeout).await;
+        "Test timeout elapsed"
+    })
+}
+
+/// Wrap response in result, erroring if timed out
+fn check_timeout<E>(
+    response: Option<Result<Response, E>>,
+) -> Result<Option<Result<Response, E>>, String> {
+    if let Some(Ok(Response {
+        success: true,
+        reason: "Test timeout elapsed",
+    })) = response
+    {
+        Err("Test timeout elapsed".to_owned())
+    } else {
+        Ok(response)
+    }
+}
+
+/// join all handles panic if any error and provide helpful message
+pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
+    join_handles: BTreeMap<String, JoinHandle<T>>,
+    extra: &E,
+) {
+    let (node_group, join_handles): (Vec<_>, Vec<_>) = join_handles.into_iter().unzip();
+    let join_result: Vec<_> = join_all(join_handles).await;
+    let join_result = join_result.iter().zip(&node_group);
+    let failed_join = join_result.filter(|(r, _)| r.is_err());
+    let failed_join: Vec<_> = failed_join.map(|(_, name)| name).collect();
+
+    if !failed_join.is_empty() {
+        panic!(
+            "Failed joined {:?}, out of {:?} (extra: {:?})",
+            failed_join, node_group, extra
+        );
     }
 }

@@ -121,9 +121,7 @@ async fn main() {
 
     // Send partition request
     println!("MINER ADDRESS: {:?}", node.address());
-    node.send_partition_request(node.compute_address())
-        .await
-        .unwrap();
+    node.send_partition_request().await.unwrap();
 
     let main_loop_handle = tokio::spawn({
         let mut node = node;
