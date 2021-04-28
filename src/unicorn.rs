@@ -75,7 +75,7 @@ impl Unicorn {
     /// * `witness` - Witness value for trapdoor verification
     pub fn verify(&self, seed: Integer, witness: Integer) -> bool {
         let square: Integer = 2u64.into();
-        let mut result = witness.clone();
+        let mut result = witness;
 
         for _ in 0..self.iterations {
             result.pow_mod_mut(&square, &self.modulus).unwrap();
@@ -88,7 +88,7 @@ impl Unicorn {
                 result ^= 1;
             }
         }
-        result == seed.clone().div_rem_floor(self.modulus.clone()).1
+        result == seed.div_rem_floor(self.modulus.clone()).1
     }
 
     /// Gets the calculated UNiCORN value, with an optional modulus division
