@@ -165,9 +165,7 @@ async fn main() {
 
     // send notification request
     if node.is_test_auto_gen_tx_active() {
-        node.send_block_notification_request(node.compute_address())
-            .await
-            .unwrap();
+        node.send_block_notification_request().await.unwrap();
     }
 
     // REQUEST HANDLING

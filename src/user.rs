@@ -550,15 +550,14 @@ impl UserNode {
     }
 
     /// Sends a block notification request to a Compute node
-    ///
-    /// ### Arguments
-    ///
-    /// * `compute`   - Socket address of recipient
-    pub async fn send_block_notification_request(&mut self, compute: SocketAddr) -> Result<()> {
+    pub async fn send_block_notification_request(&mut self) -> Result<()> {
         let _peer_span = info_span!("sending block notification request");
 
         self.node
-            .send(compute, ComputeRequest::SendUserBlockNotificationRequest)
+            .send(
+                self.compute_addr,
+                ComputeRequest::SendUserBlockNotificationRequest,
+            )
             .await?;
 
         Ok(())

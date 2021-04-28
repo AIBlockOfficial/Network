@@ -556,6 +556,5 @@ async fn miner_send_partition_request(network: &mut Network, from_miner: &str) {
 
 async fn user_send_block_notification_request(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    let address = u.compute_address();
-    u.send_block_notification_request(address).await.unwrap();
+    u.send_block_notification_request().await.unwrap();
 }

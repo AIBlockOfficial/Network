@@ -2472,8 +2472,7 @@ async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
 
 async fn user_send_block_notification_request(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    let address = u.compute_address();
-    u.send_block_notification_request(address).await.unwrap();
+    u.send_block_notification_request().await.unwrap();
 }
 
 async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<String> {
