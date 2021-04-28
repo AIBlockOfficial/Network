@@ -3,12 +3,12 @@
 use clap::{App, Arg};
 use naom::primitives::asset::TokenAmount;
 use std::net::SocketAddr;
-use system::configurations::{UserNodeConfig, UserNodeSetup};
+use system::configurations::UserNodeConfig;
 use system::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
     ResponseResult,
 };
-use system::{routes, TransactionGen, UserNode};
+use system::{routes, UserNode};
 
 #[tokio::main]
 async fn main() {
@@ -69,7 +69,7 @@ async fn main() {
         )
         .get_matches();
 
-    let (setup, config) = {
+    let config = {
         let mut settings = config::Config::default();
         let setting_file = matches
             .value_of("config")
@@ -117,12 +117,10 @@ async fn main() {
             settings.set("passphrase", index).unwrap();
         }
 
-        let setup: UserNodeSetup = settings.clone().try_into().unwrap();
         let config: UserNodeConfig = settings.try_into().unwrap();
-        (setup, config)
+        config
     };
     println!("Starting node with config: {:?}", config);
-    println!("Start node with setup {:?}", setup);
     println!();
 
     // Handle a payment amount
@@ -132,7 +130,6 @@ async fn main() {
         Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
     };
 
-    let user_node_idx = config.user_node_idx;
     let peer_user_node = *config.user_nodes.get(config.peer_user_node_idx).unwrap();
     let mut node = UserNode::new(config, Default::default()).await.unwrap();
 
@@ -166,21 +163,8 @@ async fn main() {
             .unwrap();
     }
 
-    // Generate automatic transactions
-    let (tx_generator_active, tx_generator) = {
-        let initial_transactions = setup
-            .user_initial_transactions
-            .get(user_node_idx)
-            .cloned()
-            .unwrap_or_default();
-        (
-            !initial_transactions.is_empty() && setup.user_setup_tx_max_count != 0,
-            TransactionGen::new(initial_transactions),
-        )
-    };
-
     // send notification request
-    if tx_generator_active {
+    if node.is_test_auto_gen_tx_active() {
         node.send_block_notification_request(node.compute_address())
             .await
             .unwrap();
@@ -189,17 +173,12 @@ async fn main() {
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
-        let mut tx_generator = tx_generator;
         let mut node_conn = node_conn;
 
         async move {
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
-                if node
-                    .handle_next_event_response(&setup, &mut tx_generator, response)
-                    .await
-                    == ResponseResult::Exit
-                {
+                if node.handle_next_event_response(response).await == ResponseResult::Exit {
                     break;
                 }
             }

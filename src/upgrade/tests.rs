@@ -373,6 +373,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .collect(),
         test_duration_divider: 1,
         passphrase: Some(WALLET_PASSWORD.to_owned()),
+        test_auto_gen_setup: Default::default(),
     }
 }
 

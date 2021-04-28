@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
@@ -1203,22 +1203,18 @@ async fn main_loops_raft_1_node_common(
     //
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
+    network_config.test_auto_gen_setup = UserAutoGenTxSetup {
+        user_initial_transactions: vec![(0..seed_wallet_count)
+            .map(|i| wallet_seed((i, "000000"), &initial_amount))
+            .collect()],
+        user_setup_tx_chunk_size: Some(5),
+        user_setup_tx_in_per_tx: Some(3),
+        user_setup_tx_max_count: tx_max_count,
+    };
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
-
-    let mut tx_generator = TransactionGen::new(
-        (0..seed_wallet_count)
-            .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect(),
-    );
-    let setup = UserNodeSetup {
-        user_setup_tx_chunk_size: Some(5),
-        user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_max_count: tx_max_count,
-        ..Default::default()
-    };
 
     //
     // Act
@@ -1302,11 +1298,7 @@ async fn main_loops_raft_1_node_common(
 
                 while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
                     panic_on_timeout(&response, &node_name);
-                    if node
-                        .handle_next_event_response(&setup, &mut tx_generator, response)
-                        .await
-                        == ResponseResult::Exit
-                    {
+                    if node.handle_next_event_response(response).await == ResponseResult::Exit {
                         break;
                     }
                 }
@@ -2933,6 +2925,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .collect(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
+        test_auto_gen_setup: Default::default(),
     }
 }
 
