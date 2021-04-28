@@ -28,7 +28,6 @@ use tracing_futures::Instrument;
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 pub const LAST_BLOCK_STORED_KEY: &str = "LastBlockStoredKey";
-pub const LAST_BLOCK_STORED_INIT_KEY: &str = "LastBlockStoredInitKey";
 
 /// Database columns
 pub const DB_COL_INTERNAL: &str = "internal";
@@ -524,7 +523,6 @@ impl StorageNode {
 
         {
             let last = serialize(&last_block_stored_info).unwrap();
-            batch.delete_cf(DB_COL_INTERNAL, LAST_BLOCK_STORED_INIT_KEY);
             batch.put_cf(DB_COL_INTERNAL, LAST_BLOCK_STORED_KEY, &last);
         }
 
@@ -719,14 +717,6 @@ impl StorageNode {
             }
             key_run
         });
-
-        self.node_raft.set_initial_last_block_stored(
-            match self.db.get_cf(DB_COL_INTERNAL, LAST_BLOCK_STORED_INIT_KEY) {
-                Ok(Some(info)) => Some(deserialize::<BlockStoredInfo>(&info)?),
-                Ok(None) => None,
-                Err(e) => panic!("Error accessing db: {:?}", e),
-            },
-        );
 
         Ok(self)
     }

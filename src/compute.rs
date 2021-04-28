@@ -351,6 +351,11 @@ impl ComputeNode {
         self.node_raft.get_mining_block()
     }
 
+    ///Returns last generated block number from the node_raft
+    pub fn get_committed_current_block_num(&self) -> Option<u64> {
+        self.node_raft.get_committed_current_block_num()
+    }
+
     /// Sets the commited mining block to the given block and transaction BTreeMap
     /// ### Arguments
     /// * `block`  - Block to be set to commited mining block
@@ -1064,7 +1069,7 @@ impl ComputeNode {
             Err(e) => panic!("Error accessing db: {:?}", e),
         };
         if let Some(first) = self.request_list_first_flood {
-            if first < self.request_list.len() {
+            if first <= self.request_list.len() {
                 self.request_list_first_flood = None;
             }
         }

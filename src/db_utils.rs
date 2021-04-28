@@ -15,6 +15,7 @@ pub type InMemoryDb = Vec<HashMap<Vec<u8>, Vec<u8>>>;
 pub type Result<T> = std::result::Result<T, SimpleDbError>;
 
 /// Description for a database
+#[derive(Clone, Copy)]
 pub struct SimpleDbSpec {
     pub db_path: &'static str,
     pub suffix: &'static str,

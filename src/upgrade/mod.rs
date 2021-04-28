@@ -8,14 +8,14 @@ mod tests;
 #[cfg(test)]
 mod tests_last_version_db;
 
-use crate::configurations::DbMode;
+use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, WALLET_PATH};
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
     SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
 use crate::interfaces::BlockStoredInfo;
-use crate::{compute, storage, wallet};
+use crate::{compute, compute_raft, raft_store, storage, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
 use std::collections::{BTreeMap, BTreeSet};
@@ -107,29 +107,46 @@ impl From<bincode::Error> for UpgradeError {
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_compute_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_compute_db(
+    db_mode: DbMode,
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams> {
     let spec = &old::compute::DB_SPEC;
+    let raft_spec = &old::compute_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
 
     db.upgrade_create_missing_cf(compute::DB_COL_INTERNAL)?;
     db.upgrade_create_missing_cf(compute::DB_COL_LOCAL_TXS)?;
-    Ok(db)
+    Ok(ExtraNodeParams {
+        db: Some(db),
+        raft_db: Some(raft_db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_compute_db(mut db: SimpleDb) -> Result<SimpleDb> {
-    let batch = upgrade_compute_db_batch(&db, db.batch_writer())?.done();
+pub fn upgrade_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
+    let raft_db = dbs.raft_db.as_mut().unwrap();
+
+    let (batch, raft_batch) =
+        upgrade_compute_db_batch((&db, &raft_db), (db.batch_writer(), raft_db.batch_writer()))?;
+    let (batch, raft_batch) = (batch.done(), raft_batch.done());
+
     db.write(batch)?;
-    Ok(db)
+    raft_db.write(raft_batch)?;
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
 pub fn upgrade_compute_db_batch<'a>(
-    db: &SimpleDb,
-    mut batch: SimpleDbWriteBatch<'a>,
-) -> Result<SimpleDbWriteBatch<'a>> {
+    (db, raft_db): (&SimpleDb, &SimpleDb),
+    (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
+) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
+    raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     if let Some(value) = db.get_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY)? {
         batch.delete_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY);
@@ -137,35 +154,67 @@ pub fn upgrade_compute_db_batch<'a>(
         deserialize::<BTreeSet<SocketAddr>>(&value)?;
         batch.put_cf(compute::DB_COL_INTERNAL, compute::REQUEST_LIST_KEY, value);
     }
-    Ok(batch)
+
+    clean_raft_db(raft_db, &mut raft_batch, |k, v| {
+        let mut consensus: old::compute_raft::ComputeConsensused =
+            tracked_deserialize("ComputeConsensused", &k, &v)?;
+        if let Some(v) = &mut consensus.tx_current_block_num {
+            // Force re-process block
+            *v -= 1;
+        }
+        let consensus = old::convert_compute_consensused(
+            consensus,
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+        );
+        Ok(serialize(&consensus)?)
+    })?;
+
+    Ok((batch, raft_batch))
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_storage_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_storage_db(
+    db_mode: DbMode,
+    old_dbs: ExtraNodeParams,
+) -> Result<ExtraNodeParams> {
     let spec = &old::storage::DB_SPEC;
+    let raft_spec = &old::storage_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
 
     db.upgrade_create_missing_cf(storage::DB_COL_INTERNAL)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_ALL)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_V0_2_0)?;
-    Ok(db)
+    Ok(ExtraNodeParams {
+        db: Some(db),
+        raft_db: Some(raft_db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_storage_db(mut db: SimpleDb) -> Result<SimpleDb> {
-    let batch = upgrade_storage_db_batch(&db, db.batch_writer())?.done();
+pub fn upgrade_storage_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
+    let raft_db = dbs.raft_db.as_mut().unwrap();
+
+    let (batch, raft_batch) =
+        upgrade_storage_db_batch((&db, &raft_db), (db.batch_writer(), raft_db.batch_writer()))?;
+    let (batch, raft_batch) = (batch.done(), raft_batch.done());
+
     db.write(batch)?;
-    Ok(db)
+    raft_db.write(raft_batch)?;
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
 pub fn upgrade_storage_db_batch<'a>(
-    db: &SimpleDb,
-    mut batch: SimpleDbWriteBatch<'a>,
-) -> Result<SimpleDbWriteBatch<'a>> {
+    (db, raft_db): (&SimpleDb, &SimpleDb),
+    (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
+) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
+    raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let mut max_block = None;
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
@@ -187,7 +236,7 @@ pub fn upgrade_storage_db_batch<'a>(
         }
     }
 
-    if let Some((_, key)) = max_block {
+    let last_block_stored = if let Some((_, key)) = max_block {
         let value = db.get_cf(DB_COL_DEFAULT, &key)?;
         let value = value.ok_or(UpgradeError::ConfigError("Missing last block"))?;
         let stored_block: old::naom::StoredSerializingBlock =
@@ -208,40 +257,70 @@ pub fn upgrade_storage_db_batch<'a>(
 
         let header = stored_block.block.header;
 
-        let last_block_stored = BlockStoredInfo {
+        BlockStoredInfo {
             block_hash,
             block_num: header.b_num,
             merkle_hash: header.merkle_root_hash,
             nonce: header.nonce,
             mining_transactions,
             shutdown: false,
-        };
-        let last_block_stored_ser = serialize(&last_block_stored)?;
-        batch.put_cf(
-            storage::DB_COL_INTERNAL,
-            storage::LAST_BLOCK_STORED_INIT_KEY,
-            &last_block_stored_ser,
-        );
+        }
     } else {
         return Err(UpgradeError::ConfigError("No last block"));
-    }
+    };
 
-    Ok(batch)
+    clean_raft_db(raft_db, &mut raft_batch, |k, v| {
+        let consensus: old::storage_raft::StorageConsensused =
+            tracked_deserialize("StorageConsensused", &k, &v)?;
+        let consensus =
+            old::convert_storage_consensused(consensus, Some(last_block_stored.clone()));
+        Ok(serialize(&consensus)?)
+    })?;
+
+    Ok((batch, raft_batch))
+}
+
+fn clean_raft_db(
+    raft_db: &SimpleDb,
+    raft_batch: &mut SimpleDbWriteBatch,
+    convert: impl Fn(&[u8], Vec<u8>) -> Result<Vec<u8>>,
+) -> Result<()> {
+    for (key, value) in raft_db.iter_cf_clone(DB_COL_DEFAULT) {
+        raft_batch.delete_cf(DB_COL_DEFAULT, &key);
+        if key == old::raft_store::SNAPSHOT_KEY.as_bytes() {
+            let (data, meta) = get_old_persistent_snapshot_data_and_metadata(&value)?;
+            let data = convert(&key, data)?;
+
+            raft_batch.put_cf(DB_COL_DEFAULT, raft_store::SNAPSHOT_META_KEY, &meta);
+            raft_batch.put_cf(DB_COL_DEFAULT, raft_store::SNAPSHOT_DATA_KEY, data);
+        } else if !(key.starts_with(old::raft_store::ENTRY_KEY.as_bytes())
+            || key == old::raft_store::HARDSTATE_KEY.as_bytes()
+            || key == old::raft_store::LAST_ENTRY_KEY.as_bytes())
+        {
+            let e = UpgradeError::ConfigError("Unexpected raft key");
+            return Err(log_key_value_error(e, "Unexpected raft key", &key, &value));
+        }
+    }
+    Ok(())
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_wallet_db(db_mode: DbMode, old_db: Option<SimpleDb>) -> Result<SimpleDb> {
+pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
     let spec = &old::wallet::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_db)?;
-    Ok(db)
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db)?;
+    Ok(ExtraNodeParams {
+        wallet_db: Some(db),
+        ..Default::default()
+    })
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_wallet_db(mut db: SimpleDb, passphrase: &str) -> Result<SimpleDb> {
+pub fn upgrade_wallet_db(mut dbs: ExtraNodeParams, passphrase: &str) -> Result<ExtraNodeParams> {
+    let db = dbs.wallet_db.as_mut().unwrap();
     let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), passphrase)?.done();
     db.write(batch)?;
-    Ok(db)
+    Ok(dbs)
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -362,4 +441,17 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
         Ok(v) => Ok(v),
         Err(e) => Err(log_key_value_error(e, tag, key, value)),
     }?)
+}
+
+fn get_old_persistent_snapshot_data_and_metadata(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    use protobuf::Message;
+    use raft::prelude::Snapshot;
+    let mut snapshot = protobuf::parse_from_bytes::<Snapshot>(snapshot)
+        .map_err(|e| UpgradeError::Serialization(serde::de::Error::custom(e)))?;
+    let data = snapshot.take_data();
+    let meta = snapshot
+        .get_metadata()
+        .write_to_bytes()
+        .map_err(|e| UpgradeError::Serialization(serde::ser::Error::custom(e)))?;
+    Ok((data, meta))
 }
