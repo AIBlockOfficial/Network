@@ -150,14 +150,6 @@ impl StorageRaft {
         self.proposed_in_flight.set_key_run(key_run)
     }
 
-    /// Set the last_block_stored (load from db before first proposal).
-    pub fn set_initial_last_block_stored(&mut self, block_stored: Option<BlockStoredInfo>) {
-        if block_stored.is_some() {
-            self.consensused.last_block_stored = block_stored;
-            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        }
-    }
-
     /// All the peers to connect to when using raft.
     pub fn raft_peer_to_connect(&self) -> impl Iterator<Item = &SocketAddr> {
         self.raft_active.raft_peer_to_connect()

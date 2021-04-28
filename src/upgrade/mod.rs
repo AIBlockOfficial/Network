@@ -257,21 +257,14 @@ pub fn upgrade_storage_db_batch<'a>(
 
         let header = stored_block.block.header;
 
-        let last_block_stored = BlockStoredInfo {
+        BlockStoredInfo {
             block_hash,
             block_num: header.b_num,
             merkle_hash: header.merkle_root_hash,
             nonce: header.nonce,
             mining_transactions,
             shutdown: false,
-        };
-        let last_block_stored_ser = serialize(&last_block_stored)?;
-        batch.put_cf(
-            storage::DB_COL_INTERNAL,
-            storage::LAST_BLOCK_STORED_INIT_KEY,
-            &last_block_stored_ser,
-        );
-        last_block_stored
+        }
     } else {
         return Err(UpgradeError::ConfigError("No last block"));
     };
