@@ -2,6 +2,15 @@
 //! paper (https://eprint.iacr.org/2015/366.pdf). The eval-verify processes use modular
 //! square root (sloth) with swapped neighbours, but this particular implementation may
 //! need to be optimised in future given certain seed or modulus sizes.
+//!
+//! The goal of a UNiCORN is to provide an uncontestable randomly generated number. The source
+//! of the uncontestability is the seed, which is meant to be generated from multiple, random
+//! oracle sources (eg. tweets). In the sloth implementation the seed is then run through a
+//! function which is slow to compute but quick to verify (VDF, or Verifiable Delay Function)
+//! and produces a witness value (for trapdoor verification) and the hash of the witness `g`.
+//!
+//! Given the seed and witness values, anybody is able to verify the authenticity of the number
+//! generated.
 
 use crate::constants::MR_PRIME_ITERS;
 use bincode::serialize;
@@ -20,7 +29,8 @@ pub struct Unicorn {
 }
 
 impl Unicorn {
-    /// Sets the seed for the UNiCORN. Returns the commitment value `c`
+    /// Sets the seed for the UNiCORN. Returns the commitment value `c`, as per
+    /// Lenstra and Wesolowski recommendations
     ///
     /// ### Arguments
     ///
@@ -34,13 +44,8 @@ impl Unicorn {
         c
     }
 
-    /// Evaluation of the Sloth VDF given internal params (swapped neighbours). Returns the
-    /// raw witness value and hash `g`
-    ///
-    /// ### Arguments
-    ///
-    /// * `seed`        - Aggregated seed value
-    /// * `iterations`  - Number of iterations to slow the function by
+    /// Evaluation of the Sloth VDF given internal params and a seed value,
+    /// producing an uncontestable random number. Returns the raw witness value and hash `g`
     pub fn eval(&mut self) -> Option<(Integer, String)> {
         if !self.is_valid_modulus() {
             error!("Modulus for UNiCORN eval invalid");
@@ -51,11 +56,7 @@ impl Unicorn {
         let exponent = (self.modulus.clone() + 1) / 4;
 
         for _ in 0..self.iterations {
-            x ^= 1;
-
-            while x >= self.modulus || x == 0 {
-                x ^= 1;
-            }
+            self.xor_x(&mut x);
 
             x.pow_mod_mut(&exponent, &self.modulus).unwrap();
         }
@@ -66,13 +67,14 @@ impl Unicorn {
         Some((x, g))
     }
 
-    /// Verifies a particular unicorn given a witness value
+    /// Verifies a particular unicorn given a witness value. This is the "trapdoor"
+    /// function for public use
     ///
     /// ### Arguments
     ///
     /// * `seed`    - Seed to verify
     /// * `witness` - Witness value for trapdoor verification
-    pub fn verify(&self, seed: Integer, witness: Integer) -> bool {
+    pub fn verify(&mut self, seed: Integer, witness: Integer) -> bool {
         let square: Integer = 2u64.into();
         let mut result = witness;
 
@@ -81,12 +83,9 @@ impl Unicorn {
 
             let inv_result = -result;
             result = inv_result.div_rem_floor(self.modulus.clone()).1;
-            result ^= 1;
-
-            while result >= self.modulus || result == 0 {
-                result ^= 1;
-            }
+            self.xor_x(&mut result);
         }
+
         result == seed.div_rem_floor(self.modulus.clone()).1
     }
 
@@ -102,10 +101,28 @@ impl Unicorn {
         }
     }
 
-    /// Predicate for a valid modulus
+    /// Predicate for a valid modulus `p`
+    ///
+    /// As per Lenstra and Wesolowski, requirements are as follows:
+    /// - `p` must be large and prime
+    /// - `p >= 2^2k` where `k` is a chosen security level
     fn is_valid_modulus(&self) -> bool {
         self.modulus >= 2u64.pow(2 * self.security_level)
             && !matches!(self.modulus.is_probably_prime(MR_PRIME_ITERS), IsPrime::No)
+    }
+
+    /// Performs a XOR of the input `x` as a basic secure permutation
+    /// against modulus overflow
+    ///
+    /// ### Arguments
+    ///
+    /// * `x` - Input to XOR
+    fn xor_x(&mut self, x: &mut Integer) {
+        *x ^= 1;
+
+        while *x >= self.modulus || *x == 0 {
+            *x ^= 1;
+        }
     }
 }
 
@@ -139,7 +156,7 @@ mod unicorn_tests {
         assert_eq!(w, Integer::from_str_radix(WITNESS, 10).unwrap());
         assert_eq!(
             g,
-            "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0".to_string()
+            "5d53469f20fef4f8eab52b88044ede69c77a6a68a60728609fc4a65ff531e7d0"
         );
         assert!(uni.verify(
             Integer::from_str_radix(TEST_HASH, 16).unwrap(),
