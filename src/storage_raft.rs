@@ -117,10 +117,11 @@ impl StorageRaft {
     /// * `config`  - Configuration option for a storage node.
     /// * `raft_db` - Override raft db to use.
     pub fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
+        let use_raft = config.storage_raft != 0;
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
             &config.storage_nodes,
-            config.storage_raft != 0,
+            use_raft,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
         );
@@ -141,7 +142,7 @@ impl StorageRaft {
             first_raft_peer,
             raft_active,
             consensused,
-            consensused_snapshot_applied: false,
+            consensused_snapshot_applied: !use_raft,
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
@@ -176,6 +177,11 @@ impl StorageRaft {
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
         self.raft_active.take_closed_persistent_store().await
+    }
+
+    /// Check if we are waiting for initial state
+    pub fn need_initial_state(&self) -> bool {
+        !self.consensused_snapshot_applied
     }
 
     /// Blocks & waits for a next commit from a peer.

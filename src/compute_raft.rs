@@ -162,10 +162,11 @@ impl ComputeRaft {
     /// * `config`  - Configuration option for a computer node.
     /// * `raft_db` - Override raft db to use.
     pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
+        let use_raft = config.compute_raft != 0;
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
-            config.compute_raft != 0,
+            use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
             db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db),
         );
@@ -191,7 +192,7 @@ impl ComputeRaft {
             first_raft_peer,
             raft_active,
             consensused,
-            consensused_snapshot_applied: false,
+            consensused_snapshot_applied: !use_raft,
             local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
@@ -233,6 +234,11 @@ impl ComputeRaft {
     /// Extract persistent storage of a closed raft
     pub async fn take_closed_persistent_store(&mut self) -> SimpleDb {
         self.raft_active.take_closed_persistent_store().await
+    }
+
+    /// Check if we are waiting for initial state
+    pub fn need_initial_state(&self) -> bool {
+        !self.consensused_snapshot_applied
     }
 
     /// Blocks & waits for a next commit from a peer.

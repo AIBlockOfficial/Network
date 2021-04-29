@@ -282,11 +282,13 @@ impl StorageNode {
         exit: &mut E,
     ) -> Option<Result<Response>> {
         loop {
+            let ready = !self.node_raft.need_initial_state();
+
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
             // i.e they should only await a channel.
             tokio::select! {
-                event = self.node.next_event() => {
+                event = self.node.next_event(), if ready => {
                     trace!("handle_next_event evt {:?}", event);
                     if let res @ Some(_) = self.handle_event(event?).await.transpose() {
                         return res;
@@ -298,7 +300,7 @@ impl StorageNode {
                         return res;
                     }
                 }
-                Some((addr, msg)) = self.node_raft.next_msg() => {
+                Some((addr, msg)) = self.node_raft.next_msg(), if ready => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     match self.node.send(
                         addr,
@@ -308,14 +310,14 @@ impl StorageNode {
                         };
 
                 }
-                Some(_) = self.node_raft.timeout_propose_block() => {
+                Some(_) = self.node_raft.timeout_propose_block(), if ready => {
                     trace!("handle_next_event timeout block");
                     if !self.node_raft.propose_block_at_timeout().await {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
                         self.resend_trigger_message().await;
                     }
                 }
-                Some(event) = self.local_events.rx.recv() => {
+                Some(event) = self.local_events.rx.recv(), if ready => {
                     if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
