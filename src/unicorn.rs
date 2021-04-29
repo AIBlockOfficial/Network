@@ -9,6 +9,10 @@
 //! function which is slow to compute but quick to verify (VDF, or Verifiable Delay Function)
 //! and produces a witness value (for trapdoor verification) and the hash of the witness `g`.
 //!
+//! Although sloths have the extra ability to be slowed by a specific time length (through setting
+//! the iterations, or `l`), any function that has slow evaluation and quick verification will
+//! suffice for UNiCORN needs.
+//!
 //! Given the seed and witness values, anybody is able to verify the authenticity of the number
 //! generated.
 
@@ -46,29 +50,49 @@ impl Unicorn {
 
     /// Evaluation of the Sloth VDF given internal params and a seed value,
     /// producing an uncontestable random number. Returns the raw witness value and hash `g`
+    ///
+    /// Mentioned in Section 3.3 of Lenstra et al's "Random Zoo", the modulus must be congruent
+    /// to 3 % 4, so we can use this requirement to implement a slow modular square root through the
+    /// exponent of `w`, the iterated value which will eventually become the witness.
+    ///
+    /// The general process as per Lenstra et al:
+    /// - Let w0 ∈ Fp be such that ̂w0 = s
+    ///    (note that 0 ≤ int(u) < 2^2k ≤ p).
+    /// - For i = 1,2,...,l in succession let wi ← τ(wi−1).
+    /// - Let g ← h(hex(̂wl)) and w ← wl.
+    /// - Return g and w as the output and quit.
     pub fn eval(&mut self) -> Option<(Integer, String)> {
         if !self.is_valid_modulus() {
             error!("Modulus for UNiCORN eval invalid");
             return None;
         }
 
-        let mut x = self.seed.clone().div_rem_floor(self.modulus.clone()).1;
+        let mut w = self.seed.clone().div_rem_floor(self.modulus.clone()).1;
+
+        // The slow modular square root
         let exponent = (self.modulus.clone() + 1) / 4;
 
         for _ in 0..self.iterations {
-            self.xor_x(&mut x);
+            self.xor_for_overflow(&mut w);
 
-            x.pow_mod_mut(&exponent, &self.modulus).unwrap();
+            w.pow_mod_mut(&exponent, &self.modulus).unwrap();
         }
 
-        self.witness = x.clone();
-        let g = hex::encode(Sha3_256::digest(&serialize(&x.to_u64()).unwrap()));
+        self.witness = w.clone();
+        let g = hex::encode(Sha3_256::digest(&serialize(&w.to_u64()).unwrap()));
 
-        Some((x, g))
+        Some((w, g))
     }
 
     /// Verifies a particular unicorn given a witness value. This is the "trapdoor"
-    /// function for public use
+    /// function for public use. This process is quick in comparison to `eval`, as the
+    /// process is a simple power raise with a modulo
+    ///
+    /// The general process as per Lenstra et al:
+    /// - If g != h(hex(w)) then return “false” and quit.
+    /// - Replace w by (τ^−1)^l (w).
+    /// - If w != int(u) then return “false” and quit.
+    /// - Return “true” and quit.
     ///
     /// ### Arguments
     ///
@@ -76,17 +100,18 @@ impl Unicorn {
     /// * `witness` - Witness value for trapdoor verification
     pub fn verify(&mut self, seed: Integer, witness: Integer) -> bool {
         let square: Integer = 2u64.into();
-        let mut result = witness;
+        let mut w = witness;
 
         for _ in 0..self.iterations {
-            result.pow_mod_mut(&square, &self.modulus).unwrap();
+            // Fast squaring modulo
+            w.pow_mod_mut(&square, &self.modulus).unwrap();
 
-            let inv_result = -result;
-            result = inv_result.div_rem_floor(self.modulus.clone()).1;
-            self.xor_x(&mut result);
+            let inv_w = -w;
+            w = inv_w.div_rem_floor(self.modulus.clone()).1;
+            self.xor_for_overflow(&mut w);
         }
 
-        result == seed.div_rem_floor(self.modulus.clone()).1
+        w == seed.div_rem_floor(self.modulus.clone()).1
     }
 
     /// Gets the calculated UNiCORN value, with an optional modulus division
@@ -103,7 +128,7 @@ impl Unicorn {
 
     /// Predicate for a valid modulus `p`
     ///
-    /// As per Lenstra and Wesolowski, requirements are as follows:
+    /// As per Lenstra et al, requirements are as follows:
     /// - `p` must be large and prime
     /// - `p >= 2^2k` where `k` is a chosen security level
     fn is_valid_modulus(&self) -> bool {
@@ -116,12 +141,12 @@ impl Unicorn {
     ///
     /// ### Arguments
     ///
-    /// * `x` - Input to XOR
-    fn xor_x(&mut self, x: &mut Integer) {
-        *x ^= 1;
+    /// * `w` - Input to XOR
+    fn xor_for_overflow(&mut self, w: &mut Integer) {
+        *w ^= 1;
 
-        while *x >= self.modulus || *x == 0 {
-            *x ^= 1;
+        while *w >= self.modulus || *w == 0 {
+            *w ^= 1;
         }
     }
 }
