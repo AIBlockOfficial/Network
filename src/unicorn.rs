@@ -6,7 +6,6 @@
 use crate::constants::MR_PRIME_ITERS;
 use bincode::serialize;
 use rug::integer::IsPrime;
-use rug::ops::DivRounding;
 use rug::Integer;
 use sha3::{Digest, Sha3_256};
 use tracing::error;
@@ -115,23 +114,26 @@ impl Unicorn {
 #[cfg(test)]
 mod unicorn_tests {
     use super::*;
+    const TEST_HASH: &str = "1eeb30c7163271850b6d018e8282093ac6755a771da6267edf6c9b4fce9242ba";
+    const WITNESS: &str = "3519722601447054908751517254890810869415446534615259770378249754169022895693105944708707316137352415946228979178396400856098248558222287197711860247275230167";
 
-    #[test]
-    fn should_generate_valid_unicorn() {
-        const TEST_HASH: &str = "1eeb30c7163271850b6d018e8282093ac6755a771da6267edf6c9b4fce9242ba";
-        const WITNESS: &str = "3519722601447054908751517254890810869415446534615259770378249754169022895693105944708707316137352415946228979178396400856098248558222287197711860247275230167";
-
+    fn create_unicorn() -> Unicorn {
         let modulus_str: &str = "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151";
         let modulus = Integer::from_str_radix(modulus_str, 10).unwrap();
 
-        let mut uni = Unicorn {
+        Unicorn {
             modulus,
             iterations: 1_000,
             security_level: 1,
             seed: Integer::from_str_radix(TEST_HASH, 16).unwrap(),
             ..Default::default()
-        };
+        }
+    }
 
+    #[test]
+    /// Checks that a valid unicorn can be constructed from a seed hash
+    fn should_generate_valid_unicorn() {
+        let mut uni = create_unicorn();
         let (w, g) = uni.eval().unwrap();
 
         assert_eq!(w, Integer::from_str_radix(WITNESS, 10).unwrap());
@@ -143,5 +145,30 @@ mod unicorn_tests {
             Integer::from_str_radix(TEST_HASH, 16).unwrap(),
             Integer::from_str_radix(WITNESS, 10).unwrap()
         ));
+        assert_eq!(uni.get_unicorn(Some(Integer::from(20))), Integer::from(7));
+    }
+
+    #[test]
+    /// Checks that an invalid unicorn is failed
+    fn should_fail_invalid_unicorn() {
+        let mut uni = create_unicorn();
+        let _ = uni.eval();
+
+        assert_eq!(
+            uni.verify(
+                Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+                Integer::from(8)
+            ),
+            false
+        );
+    }
+
+    #[test]
+    /// Checks that an invalid modulus is returned None
+    fn should_fail_invalid_modulus() {
+        let mut uni = create_unicorn();
+        uni.modulus = Integer::from(2);
+
+        assert_eq!(uni.eval(), None);
     }
 }
