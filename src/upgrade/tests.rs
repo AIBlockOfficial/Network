@@ -9,7 +9,9 @@ use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
 use crate::interfaces::{BlockStoredInfo, Response};
-use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType};
+use crate::test_utils::{
+    node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType,
+};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
 use std::collections::BTreeSet;
@@ -19,6 +21,7 @@ use std::time::Duration;
 use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
+const LAST_BLOCK_STORED_NUM: u64 = 2;
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 enum Specs {
@@ -87,7 +90,9 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
 
             let block = compute.get_mining_block();
             assert_eq!(block.as_ref().map(|bs| bs.header.b_num), None);
-            assert_eq!(compute.get_committed_current_block_num(), Some(2));
+
+            let b_num = compute.get_committed_current_block_num();
+            assert_eq!(b_num, Some(LAST_BLOCK_STORED_NUM));
 
             let expected_req_list: BTreeSet<SocketAddr> =
                 std::iter::once("127.0.0.1:12340".parse().unwrap()).collect();
@@ -196,6 +201,81 @@ async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str) 
     test_step_complete(network).await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn upgrade_restart_network_real_db() {
+    let config = real_db(complete_network_config(20200));
+    remove_all_node_dbs(&config);
+    upgrade_restart_network_common(config).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn upgrade_restart_network_in_memory() {
+    let config = complete_network_config(20210);
+    upgrade_restart_network_common(config).await;
+}
+
+async fn upgrade_restart_network_common(config: NetworkConfig) {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network = Network::create_stopped_from_config(&config);
+    let compute_nodes = &config.nodes[&NodeType::Compute];
+    let miner_nodes = &config.nodes[&NodeType::Miner];
+    let expected_block_num = LAST_BLOCK_STORED_NUM + 2;
+
+    for name in network.dead_nodes().clone() {
+        let n_info = network.get_node_info(&name).unwrap();
+        let db = create_old_node_db(n_info);
+        let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
+        let db = upgrade_node_db(n_info, db).unwrap();
+        network.add_extra_params(&name, in_memory(db));
+    }
+
+    //
+    // Act
+    //
+    network.re_spawn_dead_nodes().await;
+    for node_name in compute_nodes {
+        node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+    }
+    for node_name in miner_nodes {
+        // Stored request ip invalid in tests:
+        // Probably should not keep them on upgrade anyway since they need to re-connect.
+        miner_send_partition_request(&mut network, &node_name).await;
+    }
+    user_send_block_notification_request(&mut network, "user1").await;
+
+    let handles = network
+        .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+        .await;
+    node_join_all_checked(handles, &"").await;
+
+    //
+    // Assert
+    //
+    {
+        let compute = network.compute("compute1").unwrap().lock().await;
+        let b_num = compute.get_committed_current_block_num();
+        assert_eq!(b_num, Some(expected_block_num + 1));
+    }
+    {
+        let storage = network.storage("storage1").unwrap().lock().await;
+        let count = storage.get_stored_values_count();
+        assert_eq!(count, tests_last_version_db::STORAGE_DB_V0_2_0.len() + 4);
+
+        let block_stored = storage.get_last_block_stored().as_ref();
+        assert_eq!(block_stored.map(|b| b.block_num), Some(expected_block_num));
+    }
+
+    test_step_complete(network).await;
+}
+
+//
+// Test helpers
+//
+
 fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
     match info.node_type {
         NodeType::Compute => ExtraNodeParams {
@@ -241,6 +321,16 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             ..Default::default()
         },
     }
+}
+
+fn test_step_start() {
+    let _ = tracing_subscriber::fmt::try_init();
+    info!("Test Step start");
+}
+
+async fn test_step_complete(network: Network) {
+    network.close_raft_loops_and_drop().await;
+    info!("Test Step complete")
 }
 
 fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) -> SimpleDb {
@@ -335,20 +425,6 @@ pub fn upgrade_node_db(
     }
 }
 
-//
-// Test helpers
-//
-
-fn test_step_start() {
-    let _ = tracing_subscriber::fmt::try_init();
-    info!("Test Step start");
-}
-
-async fn test_step_complete(network: Network) {
-    network.close_raft_loops_and_drop().await;
-    info!("Test Step complete")
-}
-
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
@@ -373,6 +449,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .collect(),
         test_duration_divider: 1,
         passphrase: Some(WALLET_PASSWORD.to_owned()),
+        test_auto_gen_setup: Default::default(),
     }
 }
 
@@ -398,7 +475,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
 
     BlockStoredInfo {
         block_hash: "f628017bb00472a33a5070bce18ef68320c558f999350e1a3164f319ba9b5c00".to_owned(),
-        block_num: 2,
+        block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
         merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),
         mining_transactions: std::iter::once((
@@ -407,7 +484,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                 inputs: vec![TxIn {
                     previous_out: None,
                     script_signature: Script {
-                        stack: vec![StackEntry::Num(2)],
+                        stack: vec![StackEntry::Num(LAST_BLOCK_STORED_NUM as usize)],
                     },
                 }],
                 outputs: vec![TxOut {
@@ -463,4 +540,21 @@ async fn raft_node_handle_event(network: &mut Network, node: &str, reason_val: &
             other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
         }
     }
+}
+
+async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_block: u64) {
+    use crate::utils::LocalEvent;
+    let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
+    let event = LocalEvent::CoordinatedShutdown(at_block);
+    event_tx.send(event, "test shutdown").await.unwrap();
+}
+
+async fn miner_send_partition_request(network: &mut Network, from_miner: &str) {
+    let mut m = network.miner(from_miner).unwrap().lock().await;
+    m.send_partition_request().await.unwrap();
+}
+
+async fn user_send_block_notification_request(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.send_block_notification_request().await.unwrap();
 }

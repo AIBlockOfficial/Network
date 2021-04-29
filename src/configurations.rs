@@ -145,11 +145,13 @@ pub struct UserNodeConfig {
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
+    /// Configuration options for auto generating transactions for test
+    pub test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
 /// Configuration option for setup of user node
 #[derive(Default, Debug, Clone, Deserialize)]
-pub struct UserNodeSetup {
+pub struct UserAutoGenTxSetup {
     /// Transaction seeds, for each users
     pub user_initial_transactions: Vec<Vec<WalletTxSpec>>,
     /// How many transaction to group in each requests

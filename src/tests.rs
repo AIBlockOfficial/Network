@@ -1,7 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{TxOutSpec, UserNodeSetup, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
@@ -10,16 +10,16 @@ use crate::interfaces::{
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
-use crate::test_utils::{remove_all_node_dbs, Network, NetworkConfig, NodeType};
+use crate::test_utils::{
+    node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
+};
 use crate::transaction_gen::TransactionGen;
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
     create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
-    ResponseResult,
 };
 use bincode::{deserialize, serialize};
-use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
@@ -38,7 +38,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error_span, info, warn};
 use tracing_futures::Instrument;
@@ -424,7 +423,7 @@ async fn create_first_block_act(network: &mut Network) {
     for compute in compute_nodes {
         let miners = &config.compute_to_miner_mapping[compute];
         for (idx, miner) in miners.iter().enumerate() {
-            miner_send_partition_request(network, miner, compute).await;
+            miner_send_partition_request(network, miner).await;
             let evt = if idx == first_request_size - 1 {
                 "Received first full partition request"
             } else {
@@ -1203,119 +1202,35 @@ async fn main_loops_raft_1_node_common(
     //
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
+    network_config.test_auto_gen_setup = UserAutoGenTxSetup {
+        user_initial_transactions: vec![(0..seed_wallet_count)
+            .map(|i| wallet_seed((i, "000000"), &initial_amount))
+            .collect()],
+        user_setup_tx_chunk_size: Some(5),
+        user_setup_tx_in_per_tx: Some(3),
+        user_setup_tx_max_count: tx_max_count,
+    };
+
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let miner_nodes = &network_config.nodes[&NodeType::Miner];
 
-    let mut tx_generator = TransactionGen::new(
-        (0..seed_wallet_count)
-            .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect(),
-    );
-    let setup = UserNodeSetup {
-        user_setup_tx_chunk_size: Some(5),
-        user_setup_tx_in_per_tx: Some(3),
-        user_setup_tx_max_count: tx_max_count,
-        ..Default::default()
-    };
-
     //
     // Act
     //
+    for node_name in compute_nodes {
+        node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+    }
+    for node_name in miner_nodes {
+        miner_send_partition_request(&mut network, &node_name).await;
+    }
     user_send_block_notification_request(&mut network, "user1").await;
-    let mut handles = Vec::new();
-    let mut node_names = Vec::new();
 
-    for node_name in compute_nodes.clone() {
-        node_names.push(node_name.clone());
-        handles.push(tokio::spawn({
-            let node = network.compute(&node_name).unwrap().clone();
-            let peer_span = error_span!("peer", ?node_name);
-            async move {
-                let mut node = node.lock().await;
-                {
-                    let mut local_event_tx = node.local_event_tx().clone();
-                    let event = LocalEvent::CoordinatedShutdown(expected_block_num);
-                    local_event_tx.send(event, "test shutdown").await.unwrap();
-                }
-                while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                    panic_on_timeout(&response, &node_name);
-                    if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                        break;
-                    }
-                }
-            }
-            .instrument(peer_span)
-        }));
-    }
-
-    for node_name in storage_nodes.clone() {
-        node_names.push(node_name.clone());
-        handles.push(tokio::spawn({
-            let node = network.storage(&node_name).unwrap().clone();
-            let peer_span = error_span!("peer", ?node_name);
-            async move {
-                let mut node = node.lock().await;
-                while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                    panic_on_timeout(&response, &node_name);
-                    if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                        break;
-                    }
-                }
-            }
-            .instrument(peer_span)
-        }));
-    }
-
-    for node_name in miner_nodes.clone() {
-        node_names.push(node_name.clone());
-        handles.push(tokio::spawn({
-            let node = network.miner(&node_name).unwrap().clone();
-            let peer_span = error_span!("peer", ?node_name);
-            async move {
-                let mut node = node.lock().await;
-                let address = node.compute_address();
-                node.send_partition_request(address).await.unwrap();
-
-                while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                    panic_on_timeout(&response, &node_name);
-                    if node.handle_next_event_response(response).await == ResponseResult::Exit {
-                        break;
-                    }
-                }
-            }
-            .instrument(peer_span)
-        }));
-    }
-
-    {
-        let node_name = "user1".to_owned();
-        node_names.push(node_name.clone());
-        handles.push(tokio::spawn({
-            let node = network.user(&node_name).unwrap().clone();
-            let peer_span = error_span!("peer", ?node_name);
-            async move {
-                let mut node = node.lock().await;
-                let address = node.compute_address();
-                node.send_block_notification_request(address).await.unwrap();
-
-                while let Some(response) = node.handle_next_event(&mut test_timeout()).await {
-                    panic_on_timeout(&response, &node_name);
-                    if node
-                        .handle_next_event_response(&setup, &mut tx_generator, response)
-                        .await
-                        == ResponseResult::Exit
-                    {
-                        break;
-                    }
-                }
-            }
-            .instrument(peer_span)
-        }));
-    }
-
-    node_join_all_checked(handles, &node_names, &"").await;
+    let handles = network
+        .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+        .await;
+    node_join_all_checked(handles, &"").await;
 
     //
     // Assert
@@ -1811,26 +1726,6 @@ fn node_select_len(nodes: &[String], cfg_num: CfgNum) -> usize {
     }
 }
 
-async fn node_join_all_checked<T, E: std::fmt::Debug>(
-    join_handles: Vec<JoinHandle<T>>,
-    node_group: &[String],
-    extra: &E,
-) {
-    let failed_join: Vec<_> = join_all(join_handles)
-        .await
-        .into_iter()
-        .zip(node_group)
-        .filter(|(r, _)| r.is_err())
-        .map(|(_, name)| name)
-        .collect();
-    if !failed_join.is_empty() {
-        panic!(
-            "Failed joined {:?}, out of {:?} (extra: {:?})",
-            failed_join, node_group, extra
-        );
-    }
-}
-
 async fn node_connect_to(network: &mut Network, from: &str, to: &str) {
     let to_addr = network.get_address(to).await.unwrap();
     if let Some(u) = network.user(from) {
@@ -1856,7 +1751,7 @@ async fn node_all_handle_different_event<'a>(
     node_group: &[String],
     all_raisons: &BTreeMap<String, Vec<String>>,
 ) {
-    let mut join_handles = Vec::new();
+    let mut join_handles = BTreeMap::new();
     let barrier = Arc::new(Barrier::new(node_group.len()));
     for node_name in node_group {
         let barrier = barrier.clone();
@@ -1868,25 +1763,28 @@ async fn node_all_handle_different_event<'a>(
         let user = network.user(&node_name).cloned();
 
         let peer_span = error_span!("peer", ?node_name);
-        join_handles.push(tokio::spawn(
-            async move {
-                if let Some(compute) = compute {
-                    compute_one_handle_event(&compute, &barrier, &reason_str).await;
-                } else if let Some(storage) = storage {
-                    storage_one_handle_event(&storage, &barrier, &reason_str).await;
-                } else if let Some(miner) = miner {
-                    miner_one_handle_event(&miner, &barrier, &reason_str).await;
-                } else if let Some(user) = user {
-                    user_one_handle_event(&user, &barrier, &reason_str).await;
-                } else {
-                    panic!("Node not found");
+        join_handles.insert(
+            node_name.clone(),
+            tokio::spawn(
+                async move {
+                    if let Some(compute) = compute {
+                        compute_one_handle_event(&compute, &barrier, &reason_str).await;
+                    } else if let Some(storage) = storage {
+                        storage_one_handle_event(&storage, &barrier, &reason_str).await;
+                    } else if let Some(miner) = miner {
+                        miner_one_handle_event(&miner, &barrier, &reason_str).await;
+                    } else if let Some(user) = user {
+                        user_one_handle_event(&user, &barrier, &reason_str).await;
+                    } else {
+                        panic!("Node not found");
+                    }
                 }
-            }
-            .instrument(peer_span),
-        ));
+                .instrument(peer_span),
+            ),
+        );
     }
 
-    node_join_all_checked(join_handles, node_group, all_raisons).await;
+    node_join_all_checked(join_handles, all_raisons).await;
 }
 
 async fn node_get_wallet_info(
@@ -1985,6 +1883,12 @@ fn node_all_combined_expected_wallet_info(
     };
 
     (total, addresses, txs_to_address_and_ammount)
+}
+
+async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_block: u64) {
+    let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
+    let event = LocalEvent::CoordinatedShutdown(at_block);
+    event_tx.send(event, "test shutdown").await.unwrap();
 }
 
 //
@@ -2568,8 +2472,7 @@ async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
 
 async fn user_send_block_notification_request(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
-    let address = u.compute_address();
-    u.send_block_notification_request(address).await.unwrap();
+    u.send_block_notification_request().await.unwrap();
 }
 
 async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<String> {
@@ -2636,10 +2539,9 @@ async fn miner_one_handle_event(
     debug!("Stop wait for event");
 }
 
-async fn miner_send_partition_request(network: &mut Network, from_miner: &str, to_compute: &str) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+async fn miner_send_partition_request(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
-    m.send_partition_request(compute_node_addr).await.unwrap();
+    m.send_partition_request().await.unwrap();
 }
 
 async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &str) {
@@ -2933,6 +2835,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .collect(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
+        test_auto_gen_setup: Default::default(),
     }
 }
 
