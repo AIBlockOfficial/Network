@@ -14,9 +14,7 @@ use crate::test_utils::{
 };
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
-use std::collections::BTreeSet;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::time::Duration;
 use tracing::info;
 
@@ -94,10 +92,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
 
             let b_num = compute.get_committed_current_block_num();
             assert_eq!(b_num, Some(LAST_BLOCK_STORED_NUM));
-
-            let expected_req_list: BTreeSet<SocketAddr> =
-                std::iter::once("127.0.0.1:12340".parse().unwrap()).collect();
-            assert_eq!(compute.get_request_list(), &expected_req_list);
+            assert_eq!(compute.get_request_list(), &Default::default());
         }
         NodeType::Storage => {
             let storage = network.storage(name).unwrap().lock().await;
@@ -259,7 +254,7 @@ async fn upgrade_restart_network_common(config: NetworkConfig) {
     let handles = network
         .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
         .await;
-    node_join_all_checked(handles, &"").await;
+    node_join_all_checked(handles, &"").await.unwrap();
 
     //
     // Assert

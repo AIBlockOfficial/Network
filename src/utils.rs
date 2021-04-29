@@ -22,6 +22,7 @@ use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::future::Future;
@@ -143,6 +144,27 @@ impl Default for LocalEventChannel {
 impl fmt::Debug for LocalEventChannel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "")
+    }
+}
+
+/// A trivial error to output
+pub struct StringError(pub String);
+
+impl Error for StringError {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

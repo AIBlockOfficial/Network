@@ -1230,7 +1230,7 @@ async fn main_loops_raft_1_node_common(
     let handles = network
         .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
         .await;
-    node_join_all_checked(handles, &"").await;
+    node_join_all_checked(handles, &"").await.unwrap();
 
     //
     // Assert
@@ -1786,7 +1786,9 @@ async fn node_all_handle_different_event<'a>(
         );
     }
 
-    node_join_all_checked(join_handles, all_raisons).await;
+    node_join_all_checked(join_handles, all_raisons)
+        .await
+        .unwrap();
 }
 
 async fn node_get_wallet_info(
@@ -2099,7 +2101,7 @@ async fn compute_inject_next_event(
 
 async fn compute_propose_initial_uxto_set(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.propose_initial_uxto_set().await;
+    c.propose_initial_item().await;
 }
 
 async fn compute_all_propose_initial_uxto_set(network: &mut Network, compute_group: &[String]) {

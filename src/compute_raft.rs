@@ -65,6 +65,17 @@ pub enum SpecialHandling {
     FirstUpgradeBlock,
 }
 
+/// Initial proposal state: Need both miner ready and block info ready
+#[derive(Clone, Debug, PartialEq)]
+pub enum InitialProposal {
+    PendingAll,
+    PendingAuthorized,
+    PendingItem {
+        item: ComputeRaftItem,
+        dedup_b_num: Option<u64>,
+    },
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -126,8 +137,8 @@ pub struct ComputeRaft {
     consensused: ComputeConsensused,
     /// Whether consensused received initial snapshot
     consensused_snapshot_applied: bool,
-    /// Initial utxo_set to propose when ready.
-    local_initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
+    /// Initial item to propose when ready.
+    local_initial_proposal: Option<InitialProposal>,
     /// Local transaction pool.
     local_tx_pool: BTreeMap<String, Transaction>,
     /// Local DRUID transaction pool.
@@ -188,12 +199,17 @@ impl ComputeRaft {
             ..ComputeConsensused::default()
         };
 
+        let local_initial_proposal = Some(InitialProposal::PendingItem {
+            item: ComputeRaftItem::FirstBlock(utxo_set),
+            dedup_b_num: None,
+        });
+
         Self {
             first_raft_peer,
             raft_active,
             consensused,
             consensused_snapshot_applied: !use_raft,
-            local_initial_utxo_txs: Some(utxo_set),
+            local_initial_proposal,
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
             local_tx_hash_last_commited: Default::default(),
@@ -209,6 +225,11 @@ impl ComputeRaft {
     /// Set the key run for all proposals (load from db before first proposal).
     pub fn set_key_run(&mut self, key_run: u64) {
         self.proposed_in_flight.set_key_run(key_run)
+    }
+
+    /// Mark the initial proposal as done (first block after start or upgrade).
+    pub fn set_initial_proposal_done(&mut self) {
+        self.local_initial_proposal = None;
     }
 
     /// All the peers to connect to when using raft.
@@ -277,6 +298,9 @@ impl ComputeRaft {
             // Non empty snapshot
             warn!("apply_snapshot called self.consensused updated");
             self.consensused = deserialize(&consensused_ser).unwrap();
+            if let Some(proposal) = &mut self.local_initial_proposal {
+                *proposal = InitialProposal::PendingAll;
+            }
             Some(CommittedItem::Snapshot)
         }
     }
@@ -377,17 +401,41 @@ impl ComputeRaft {
 
     /// Append new transaction to our local pool from which to propose
     /// consensused transactions.
-    pub async fn propose_initial_uxto_set(&mut self) {
-        let utxo_set = self.local_initial_utxo_txs.take().unwrap();
-        self.propose_item(&ComputeRaftItem::FirstBlock(utxo_set))
-            .await;
+    pub async fn propose_initial_item(&mut self) {
+        self.local_initial_proposal = match self.local_initial_proposal.take() {
+            Some(InitialProposal::PendingAll) => Some(InitialProposal::PendingAuthorized),
+            Some(InitialProposal::PendingItem { item, dedup_b_num }) => {
+                if let Some(b_num) = dedup_b_num {
+                    self.propose_item_dedup(&item, b_num).await.unwrap();
+                } else {
+                    self.propose_item(&item).await;
+                }
+                None
+            }
+            Some(InitialProposal::PendingAuthorized) | None => {
+                panic!("propose_initial_item called again")
+            }
+        };
     }
 
     /// Process as received block info necessary for new block to be generated.
     pub async fn propose_block_with_last_info(&mut self, block: BlockStoredInfo) -> bool {
         let b_num = block.block_num;
         let item = ComputeRaftItem::Block(block);
-        self.propose_item_dedup(&item, b_num).await.is_some()
+
+        match self.local_initial_proposal {
+            None | Some(InitialProposal::PendingAuthorized) => {
+                self.local_initial_proposal = None;
+                self.propose_item_dedup(&item, b_num).await.is_some()
+            }
+            Some(InitialProposal::PendingAll) | Some(InitialProposal::PendingItem { .. }) => {
+                let dedup_b_num = Some(b_num);
+                let proposal = Some(InitialProposal::PendingItem { item, dedup_b_num });
+
+                let old = std::mem::replace(&mut self.local_initial_proposal, proposal);
+                old != self.local_initial_proposal
+            }
+        }
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -967,7 +1015,7 @@ mod test {
         //
         // Act
         //
-        node.propose_initial_uxto_set().await;
+        node.propose_initial_item().await;
         node.propose_local_transactions_at_timeout().await;
         node.propose_local_druid_transactions().await;
 
@@ -1016,7 +1064,7 @@ mod test {
         let mut expected_block_addr_to_hashes = BTreeMap::new();
         let mut expected_unused_utxo_hashes = Vec::<&str>::new();
 
-        node.propose_initial_uxto_set().await;
+        node.propose_initial_item().await;
         let commit = node.next_commit().await.unwrap();
         let _first_block = node.received_commit(commit).await.unwrap();
         node.generate_first_block();
@@ -1148,7 +1196,7 @@ mod test {
         let mut node = new_test_node(&[]).await;
         node.proposed_and_consensused_tx_pool_len_max = 3;
         node.proposed_tx_pool_len_max = 2;
-        node.propose_initial_uxto_set().await;
+        node.propose_initial_item().await;
         let commit = node.next_commit().await;
         node.received_commit(commit.unwrap()).await.unwrap();
         node.generate_first_block();

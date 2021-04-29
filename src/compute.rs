@@ -229,8 +229,8 @@ impl ComputeNode {
     }
 
     /// Propose initial block when ready
-    pub async fn propose_initial_uxto_set(&mut self) {
-        self.node_raft.propose_initial_uxto_set().await;
+    pub async fn propose_initial_item(&mut self) {
+        self.node_raft.propose_initial_item().await;
     }
 
     /// The current utxo_set including block being mined and previous block mining txs.
@@ -486,7 +486,7 @@ impl ComputeNode {
                 success: true,
                 reason: "Received first full partition request",
             }) => {
-                self.propose_initial_uxto_set().await;
+                self.propose_initial_item().await;
             }
             Ok(Response {
                 success: true,
@@ -1073,6 +1073,7 @@ impl ComputeNode {
         if let Some(first) = self.request_list_first_flood {
             if first <= self.request_list.len() {
                 self.request_list_first_flood = None;
+                self.node_raft.set_initial_proposal_done();
             }
         }
 

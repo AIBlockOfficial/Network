@@ -15,7 +15,7 @@ use crate::storage::StorageNode;
 use crate::user::UserNode;
 use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
-    LocalEventSender, ResponseResult,
+    LocalEventSender, ResponseResult, StringError,
 };
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -1037,7 +1037,7 @@ fn check_timeout<E>(
 pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
     join_handles: BTreeMap<String, JoinHandle<T>>,
     extra: &E,
-) {
+) -> Result<(), StringError> {
     let (node_group, join_handles): (Vec<_>, Vec<_>) = join_handles.into_iter().unzip();
     let join_result: Vec<_> = join_all(join_handles).await;
     let join_result = join_result.iter().zip(&node_group);
@@ -1045,9 +1045,11 @@ pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
     let failed_join: Vec<_> = failed_join.map(|(_, name)| name).collect();
 
     if !failed_join.is_empty() {
-        panic!(
+        Err(StringError(format!(
             "Failed joined {:?}, out of {:?} (extra: {:?})",
             failed_join, node_group, extra
-        );
+        )))
+    } else {
+        Ok(())
     }
 }

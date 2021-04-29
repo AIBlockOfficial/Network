@@ -21,10 +21,9 @@ use crate::interfaces::BlockStoredInfo;
 use crate::{compute, compute_raft, raft_store, storage, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::net::SocketAddr;
 use tracing::{error, trace};
 
 pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
@@ -151,11 +150,15 @@ pub fn upgrade_compute_db_batch<'a>(
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
-    if let Some(value) = db.get_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY)? {
-        batch.delete_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY);
+    for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
+        batch.delete_cf(DB_COL_DEFAULT, &key);
 
-        deserialize::<BTreeSet<SocketAddr>>(&value)?;
-        batch.put_cf(compute::DB_COL_INTERNAL, compute::REQUEST_LIST_KEY, value);
+        if key == old::compute::REQUEST_LIST_KEY.as_bytes() {
+            // Drop known keys
+        } else {
+            let e = UpgradeError::ConfigError("Unexpected key");
+            return Err(log_key_value_error(e, "Unexpected key", &key, &value));
+        }
     }
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
