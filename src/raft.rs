@@ -374,8 +374,10 @@ impl RaftNode {
         let mut committed = Vec::new();
 
         {
-            let snapshot = snap_overwrite.unwrap_or_else(|| ready.snapshot());
-            if !raft::is_empty_snap(snapshot) {
+            let snapshot = snap_overwrite
+                .or_else(|| Some(ready.snapshot()).filter(|s| !raft::is_empty_snap(s)));
+
+            if let Some(snapshot) = snapshot {
                 committed.push(RaftCommit {
                     term: snapshot.get_metadata().term,
                     index: snapshot.get_metadata().index,
@@ -480,6 +482,7 @@ mod tests {
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let idx_1 = cmp::min(1, num_peers - 1) as usize;
 
         all_recv_send_proposed_data(&mut test_nodes, 0, vec![17]).await;
@@ -515,6 +518,7 @@ mod tests {
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
 
         all_recv_send_proposed_data(&mut test_nodes, 0, vec![17]).await;
         all_snapshot(&mut test_nodes, vec![12]).await;
@@ -531,6 +535,7 @@ mod tests {
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
 
         info!("Process with majority ignoring unresponsive node");
@@ -554,6 +559,7 @@ mod tests {
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
         let snapshot = vec![12];
 
@@ -579,6 +585,7 @@ mod tests {
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
         let (snapshot1, snapshot2) = (vec![12], vec![13]);
 
@@ -608,6 +615,7 @@ mod tests {
         let peer_msg_lost_set: HashSet<u64> = Some(3).into_iter().collect();
         let peer_msg_lost = Arc::new(Mutex::new(peer_msg_lost_set.clone()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (last_test_node, majority_test_nodes) = test_nodes.split_last_mut().unwrap();
         let (snapshot1, snapshot2) = (vec![12], vec![13]);
 
@@ -644,6 +652,7 @@ mod tests {
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
             spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let kill_id = 3;
 
         info!("Process with majority ignoring unresponsive node and catch up");
@@ -666,10 +675,10 @@ mod tests {
             &peer_msg_lost,
         )
         .await;
-        let commits = one_recv_commiteds(&mut test_nodes[node_index], 3).await;
+        let commits = one_recv_commiteds(&mut test_nodes[node_index], 4).await;
         assert_eq!(
             commits,
-            vec![vec![vec![17]], vec![vec![18]], vec![vec![33]]],
+            vec![vec![vec![]], vec![vec![17]], vec![vec![18]], vec![vec![33]]],
             "Should process loaded db entries before new received entries"
         );
 
@@ -686,6 +695,7 @@ mod tests {
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
             spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (snapshot1, snapshot2) = (vec![12], vec![13]);
         let kill_id = 3;
 
@@ -713,10 +723,15 @@ mod tests {
             &peer_msg_lost,
         )
         .await;
-        let commits = one_recv_commiteds(&mut test_nodes[node_index], 3).await;
+        let commits = one_recv_commiteds(&mut test_nodes[node_index], 4).await;
         assert_eq!(
             commits,
-            vec![vec![vec![17]], vec![snapshot1], vec![vec![33]]],
+            vec![
+                vec![vec![]],
+                vec![vec![17]],
+                vec![snapshot1],
+                vec![vec![33]]
+            ],
             "Should process loaded db entries before new received entries"
         );
 
@@ -733,6 +748,7 @@ mod tests {
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
             spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (snapshot1, snapshot2) = (vec![12], vec![13]);
         let kill_id = 3;
 
@@ -784,6 +800,7 @@ mod tests {
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
             spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
+        all_recv_initial_snapshot(&mut test_nodes).await;
         let (snapshot1, snapshot2, snapshot3) = (vec![12], vec![13], vec![14]);
         let kill_id = 3;
 
@@ -946,6 +963,13 @@ mod tests {
 
         let commited_data = recv_commited(test_nodes).await;
         let expected = expected_commited(test_nodes, &[proposed_data]);
+        assert_eq!(commited_data, expected);
+    }
+
+    // Wait for initial snapshot to be commited.
+    async fn all_recv_initial_snapshot(test_nodes: &mut [TestNode]) {
+        let commited_data = recv_commited(test_nodes).await;
+        let expected = expected_commited(test_nodes, &[Default::default()]);
         assert_eq!(commited_data, expected);
     }
 

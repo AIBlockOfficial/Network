@@ -124,6 +124,8 @@ pub struct ComputeRaft {
     raft_active: ActiveRaft,
     /// Consensused fields.
     consensused: ComputeConsensused,
+    /// Whether consensused received initial snapshot
+    consensused_snapshot_applied: bool,
     /// Initial utxo_set to propose when ready.
     local_initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
     /// Local transaction pool.
@@ -189,6 +191,7 @@ impl ComputeRaft {
             first_raft_peer,
             raft_active,
             consensused,
+            consensused_snapshot_applied: false,
             local_initial_utxo_txs: Some(utxo_set),
             local_tx_pool: Default::default(),
             local_tx_druid_pool: Default::default(),
@@ -247,7 +250,7 @@ impl ComputeRaft {
             RaftCommitData::Proposed(data, context) => {
                 self.received_commit_poposal(data, context).await
             }
-            RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
+            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
                 self.proposed_in_flight
                     .re_propose_all_items(&mut self.raft_active)
@@ -258,10 +261,18 @@ impl ComputeRaft {
     }
 
     /// Apply snapshot
-    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> CommittedItem {
-        warn!("apply_snapshot called self.consensused updated");
-        self.consensused = deserialize(&consensused_ser).unwrap();
-        CommittedItem::Snapshot
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
+        self.consensused_snapshot_applied = true;
+
+        if consensused_ser.is_empty() {
+            // Empty initial snapshot
+            None
+        } else {
+            // Non empty snapshot
+            warn!("apply_snapshot called self.consensused updated");
+            self.consensused = deserialize(&consensused_ser).unwrap();
+            Some(CommittedItem::Snapshot)
+        }
     }
 
     /// Process data in RaftData.

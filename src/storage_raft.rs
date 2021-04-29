@@ -93,6 +93,8 @@ pub struct StorageRaft {
     raft_active: ActiveRaft,
     /// Consensused fields.
     consensused: StorageConsensused,
+    /// Whether consensused received initial snapshot
+    consensused_snapshot_applied: bool,
     /// Min duration between each block poposal.
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
@@ -139,6 +141,7 @@ impl StorageRaft {
             first_raft_peer,
             raft_active,
             consensused,
+            consensused_snapshot_applied: false,
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
@@ -192,7 +195,7 @@ impl StorageRaft {
             RaftCommitData::Proposed(data, context) => {
                 self.received_commit_poposal(data, context).await
             }
-            RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
+            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
                 self.proposed_in_flight
                     .re_propose_all_items(&mut self.raft_active)
@@ -203,11 +206,18 @@ impl StorageRaft {
     }
 
     /// Apply snapshot
-    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> CommittedItem {
-        warn!("apply_snapshot called self.consensused updated");
-        self.consensused = deserialize(&consensused_ser).unwrap();
-        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        CommittedItem::Snapshot
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
+        self.consensused_snapshot_applied = true;
+
+        if consensused_ser.is_empty() {
+            // Empty initial snapshot
+            None
+        } else {
+            warn!("apply_snapshot called self.consensused updated");
+            self.consensused = deserialize(&consensused_ser).unwrap();
+            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+            Some(CommittedItem::Snapshot)
+        }
     }
 
     /// Checks a commit of the RaftData for validity
