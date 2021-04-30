@@ -9,7 +9,9 @@ mod tests;
 mod tests_last_version_db;
 
 use crate::configurations::{DbMode, ExtraNodeParams};
-use crate::constants::{DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, WALLET_PATH};
+use crate::constants::{
+    DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
+};
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
     SimpleDbWriteBatch, DB_COL_DEFAULT,
@@ -369,7 +371,7 @@ pub fn upgrade_wallet_db_batch<'a>(
 /// whether it is a transaction key
 pub fn is_transaction_key(key: &[u8]) -> bool {
     // special genesis block transactions had 6 digits and missed prefix
-    key.get(0) == Some(&b'g') || key.len() == 6
+    key.get(0) == Some(&TX_PREPEND) || key.len() == 6
 }
 
 /// Wallet AddressStore key
