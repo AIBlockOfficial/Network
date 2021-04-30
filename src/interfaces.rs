@@ -1,7 +1,6 @@
 #![allow(unused)]
 use crate::hash_block;
 use crate::raft::RaftMessageWrapper;
-use crate::unicorn::UnicornShard;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;

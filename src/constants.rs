@@ -89,3 +89,6 @@ pub const BLOCK_SIZE: usize = 1_000_000;
 
 /// The size of the block in transactions (approx)
 pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
+
+/// Number of rounds for Miller Rabin primality testing
+pub const MR_PRIME_ITERS: u32 = 15;
