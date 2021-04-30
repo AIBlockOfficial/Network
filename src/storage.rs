@@ -1,6 +1,6 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
-use crate::constants::{BLOCK_PREPEND, DB_PATH, PEER_LIMIT};
+use crate::constants::{BLOCK_PREPEND, DB_PATH, LAST_BLOCK_HASH_KEY, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
@@ -27,7 +27,6 @@ use tracing_futures::Instrument;
 
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
-pub const LAST_BLOCK_STORED_KEY: &str = "LastBlockStoredKey";
 
 /// Database columns
 pub const DB_COL_INTERNAL: &str = "internal";
@@ -488,7 +487,7 @@ impl StorageNode {
         let block_hash = {
             let hash_digest = Sha3_256::digest(&block_input);
             let mut hash_digest = hex::encode(hash_digest);
-            hash_digest.insert(0, BLOCK_PREPEND);
+            hash_digest.insert(0, BLOCK_PREPEND as char);
             hash_digest
         };
 
@@ -513,17 +512,13 @@ impl StorageNode {
         // Store to database
         //
         let mut batch = self_db.batch_writer();
-        put_to_block_chain(&mut batch, &block_hash, &block_input);
+        let pointer = put_to_block_chain(&mut batch, &block_hash, &block_input);
+        batch.put_cf(DB_COL_BC_ALL, LAST_BLOCK_HASH_KEY, &pointer);
 
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
             let tx_input = serialize(tx_value).unwrap();
             put_to_block_chain(&mut batch, tx_hash, &tx_input);
-        }
-
-        {
-            let last = serialize(&last_block_stored_info).unwrap();
-            batch.put_cf(DB_COL_INTERNAL, LAST_BLOCK_STORED_KEY, &last);
         }
 
         let batch = batch.done();
@@ -577,8 +572,9 @@ impl StorageNode {
     }
 
     /// Get count of all the stored values
+    /// Do not count LAST_BLOCK_HASH_KEY.
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count_cf(DB_COL_BC_ALL)
+        self.db.count_cf(DB_COL_BC_ALL).saturating_sub(1)
     }
 
     /// Sends the latest block to storage
@@ -776,7 +772,7 @@ impl StorageInterface for StorageNode {
 /// * `batch` - Database writer
 /// * `key`   - The key for the data
 /// * `value` - The value to store
-fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) {
+fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) -> Vec<u8> {
     put_to_block_chain_at(batch, DB_COL_BC_NOW, key, value)
 }
 
@@ -793,11 +789,13 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     cf: &'static str,
     key: K,
     value: V,
-) {
+) -> Vec<u8> {
     let key = key.as_ref();
     let value = value.as_ref();
+    let pointer = version_pointer(cf, key);
     batch.put_cf(cf, key, value);
-    batch.put_cf(DB_COL_BC_ALL, key, &version_pointer(cf, key));
+    batch.put_cf(DB_COL_BC_ALL, key, &pointer);
+    pointer
 }
 
 /// Version pointer for the column:key

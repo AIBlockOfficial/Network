@@ -15,7 +15,13 @@ pub const REWARD_ISSUANCE_VAL: u8 = 25;
 pub const DB_VERSION_KEY: &str = "DbVersionKey";
 
 /// The constant prepending character for a block hash
-pub const BLOCK_PREPEND: char = 'b';
+pub const BLOCK_PREPEND: u8 = b'b';
+
+/// The constant prepending character for named value
+pub const NAMED_CONSTANT_PREPEND: u8 = b'n';
+
+/// The constant for the named last block hash with NAMED_CONSTANT_PREPEND.
+pub const LAST_BLOCK_HASH_KEY: &str = "nLastBlockHashKey";
 
 /// Path to chain DB
 pub const DB_PATH: &str = "src/db/db";
@@ -66,3 +72,62 @@ pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
 
 /// Number of rounds for Miller Rabin primality testing
 pub const MR_PRIME_ITERS: u32 = 15;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn validate_key_prefixes_ordering() {
+        //
+        // Arrange
+        //
+        let first_possible_v2_block =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+        let last_possible_v2_block =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let first_possible_v3_block =
+            "b0000000000000000000000000000000000000000000000000000000000000000";
+        let last_possible_v3_block =
+            "bffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+        let first_v2_initial_tx = "000001";
+        let last_v2_initial_tx = "000009";
+        let first_possible_v2_tx = "g0000000000000000000000000000000";
+        let last_possible_v2_tx = "gfffffffffffffffffffffffffffffff";
+
+        let expected_ordered_keys = vec![
+            first_possible_v2_block,
+            // Careful: Is within block range, outside normal Tx range
+            first_v2_initial_tx,
+            last_v2_initial_tx,
+            // V3 block are within the range of v2 blocks
+            first_possible_v3_block,
+            last_possible_v3_block,
+            last_possible_v2_block,
+            // Normal transaction are after last block with different prefix
+            first_possible_v2_tx,
+            last_possible_v2_tx,
+            // Named constants with same prefix
+            LAST_BLOCK_HASH_KEY,
+        ];
+
+        //
+        // Assert
+        // Verify that some condition holds for the constant
+        // so we can manipulate sorted collection of keys to iterate
+        // over blocks or transactions.
+        //
+        assert_eq!(first_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
+        assert_eq!(last_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
+        assert_eq!(LAST_BLOCK_HASH_KEY.as_bytes()[0], NAMED_CONSTANT_PREPEND);
+        assert_eq!(first_possible_v2_tx.as_bytes()[0], TX_PREPEND);
+        assert_eq!(last_possible_v2_tx.as_bytes()[0], TX_PREPEND);
+
+        assert_eq!(&expected_ordered_keys, &{
+            let mut v = expected_ordered_keys.clone();
+            v.sort_unstable();
+            v
+        });
+    }
+}

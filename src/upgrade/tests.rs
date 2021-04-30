@@ -4,7 +4,7 @@ use super::{
     upgrade_storage_db, upgrade_wallet_db, UpgradeError,
 };
 use crate::configurations::{DbMode, ExtraNodeParams};
-use crate::constants::{DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
+use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
@@ -22,6 +22,7 @@ use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
+const LAST_BLOCK_HASH: &str = "f628017bb00472a33a5070bce18ef68320c558f999350e1a3164f319ba9b5c00";
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 enum Specs {
@@ -102,14 +103,22 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
             let storage = network.storage(name).unwrap().lock().await;
 
             {
+                let mut expected_last_block = Vec::new();
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
                 for (_, k, v) in tests_last_version_db::STORAGE_DB_V0_2_0 {
+                    if *k == LAST_BLOCK_HASH.as_bytes() {
+                        expected_last_block = v.to_vec();
+                    }
                     expected.push(Some(v.to_vec()));
                     actual.push(storage.get_stored_value(k));
                 }
                 assert_eq!(actual, expected);
                 assert_eq!(storage.get_stored_values_count(), expected.len());
+                assert_eq!(
+                    storage.get_stored_value(LAST_BLOCK_HASH_KEY),
+                    Some(expected_last_block)
+                );
                 assert_eq!(
                     storage.get_last_block_stored(),
                     &Some(get_expected_last_block_stored())
@@ -474,7 +483,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
     use naom::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
-        block_hash: "f628017bb00472a33a5070bce18ef68320c558f999350e1a3164f319ba9b5c00".to_owned(),
+        block_hash: LAST_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
         merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),

@@ -2,7 +2,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
+use crate::constants::{BLOCK_PREPEND, LAST_BLOCK_HASH_KEY, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UtxoSet,
@@ -1636,25 +1636,27 @@ async fn request_specified_block_common(network_config: NetworkConfig, cfg_num: 
     proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
-    let block_key = stored0.unwrap().block_hash;
-    let non_existent = "non_existent".to_string();
+    let block_key = &stored0.as_ref().unwrap().block_hash;
 
     //
     // Act
     //
-
     node_connect_to(&mut network, "miner1", "storage1").await;
+
     request_specified_block_act(&mut network, "miner1", "storage1", block_key).await;
     let actual0 = miner_get_specified_block_received_num(&mut network, "miner1").await;
 
-    request_specified_block_act(&mut network, "miner1", "storage1", non_existent).await;
+    request_specified_block_act(&mut network, "miner1", "storage1", LAST_BLOCK_HASH_KEY).await;
+    let actual_last = miner_get_specified_block_received_num(&mut network, "miner1").await;
+
+    request_specified_block_act(&mut network, "miner1", "storage1", "non_existent").await;
     let non_existent = miner_get_specified_block_received_num(&mut network, "miner1").await;
 
     //
     // Assert
     //
-
     assert_eq!(actual0, Some(0));
+    assert_eq!(actual_last, Some(0));
     assert_eq!(non_existent, None);
 
     test_step_complete(network).await;
@@ -1664,7 +1666,7 @@ async fn request_specified_block_act(
     network: &mut Network,
     miner_from: &str,
     storage_to: &str,
-    block_key: String,
+    block_key: &str,
 ) {
     miner_request_specified_block(network, &miner_from, block_key).await;
     storage_handle_event(network, &storage_to, "Specified block fetched from storage").await;
@@ -2483,9 +2485,11 @@ async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<
 //
 // MinerNode helpers
 //
-async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: String) {
+async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: &str) {
     let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_specified_block(block_key).await.unwrap();
+    m.request_specified_block(block_key.to_owned())
+        .await
+        .unwrap();
 }
 
 async fn miner_get_specified_block_received_num(network: &mut Network, miner: &str) -> Option<u64> {
@@ -2781,7 +2785,7 @@ async fn complete_block(
         let hash_input = serialize(&stored).unwrap();
         let hash_digest = Sha3_256::digest(&hash_input);
         let mut hash_digest = hex::encode(hash_digest);
-        hash_digest.insert(0, BLOCK_PREPEND);
+        hash_digest.insert(0, BLOCK_PREPEND as char);
         hash_digest
     };
     let complete_str = format!("{:?}", complete);

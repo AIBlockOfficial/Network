@@ -10,7 +10,8 @@ mod tests_last_version_db;
 
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{
-    DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
+    DB_PATH, DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND,
+    WALLET_PATH,
 };
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
@@ -230,15 +231,18 @@ pub fn upgrade_storage_db_batch<'a>(
                 tracked_deserialize("Block deserialize", &key, &value)?;
             let b_num = stored_block.block.header.b_num;
 
-            max_block = std::cmp::max(max_block, Some((b_num, key.clone())));
-            storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
+            let pointer =
+                storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
+            max_block = std::cmp::max(max_block, Some((b_num, key, pointer)));
         } else {
             let e = UpgradeError::ConfigError("Unexpected key");
             return Err(log_key_value_error(e, "Unexpected key", &key, &value));
         }
     }
 
-    let last_block_stored = if let Some((_, key)) = max_block {
+    let last_block_stored = if let Some((_, key, pointer)) = max_block {
+        batch.put_cf(storage::DB_COL_BC_ALL, LAST_BLOCK_HASH_KEY, &pointer);
+
         let value = db.get_cf(DB_COL_DEFAULT, &key)?;
         let value = value.ok_or(UpgradeError::ConfigError("Missing last block"))?;
         let stored_block: old::naom::StoredSerializingBlock =
@@ -258,7 +262,6 @@ pub fn upgrade_storage_db_batch<'a>(
             String::from_utf8(key).map_err(|_| UpgradeError::ConfigError("Non UTF-8 block key"))?;
 
         let header = stored_block.block.header;
-
         BlockStoredInfo {
             block_hash,
             block_num: header.b_num,
