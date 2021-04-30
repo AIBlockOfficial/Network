@@ -23,6 +23,13 @@ use rug::Integer;
 use sha3::{Digest, Sha3_256};
 use tracing::error;
 
+/// UNiCORN struct, with the following fields:
+///
+/// - modulus (`p`)
+/// - iterations (`l`)
+/// - seed (`s`)
+/// - witness (`w`)
+/// - security_level (`k`)
 #[derive(Default, Debug, Clone)]
 pub struct Unicorn {
     pub modulus: Integer,
@@ -56,10 +63,9 @@ impl Unicorn {
     /// exponent of `w`, the iterated value which will eventually become the witness.
     ///
     /// The general process as per Lenstra et al:
-    /// - Let w0 ∈ Fp be such that ̂w0 = s
-    ///    (note that 0 ≤ int(u) < 2^2k ≤ p).
+    /// - Let w0 be such that ̂w0 = seed (note that 0 ≤ w < 2^2k ≤ p).
     /// - For i = 1,2,...,l in succession let wi ← τ(wi−1).
-    /// - Let g ← h(hex(̂wl)) and w ← wl.
+    /// - Let g ← hash(wl) and w ← wl.
     /// - Return g and w as the output and quit.
     pub fn eval(&mut self) -> Option<(Integer, String)> {
         if !self.is_valid_modulus() {
@@ -89,7 +95,6 @@ impl Unicorn {
     /// process is a simple power raise with a modulo
     ///
     /// The general process as per Lenstra et al:
-    /// - If g != h(hex(w)) then return “false” and quit.
     /// - Replace w by (τ^−1)^l (w).
     /// - If w != int(u) then return “false” and quit.
     /// - Return “true” and quit.
