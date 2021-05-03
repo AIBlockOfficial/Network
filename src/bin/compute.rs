@@ -12,70 +12,9 @@ use system::{
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let matches = App::new("Zenotta Compute Node")
-        .about("Runs a basic compute node.")
-        .arg(
-            Arg::with_name("config")
-                .long("config")
-                .short("c")
-                .help("Run the compute node using the given config file.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("initial_block_config")
-                .long("initial_block_config")
-                .help("Run the compute node using the given initial block config file.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("index")
-                .short("i")
-                .long("index")
-                .help("Run the specified compute node index from config file")
-                .takes_value(true),
-        )
-        .get_matches();
+    let matches = clap_app().get_matches();
+    let mut config = configuration(load_settings(&matches));
 
-    let mut config = {
-        let mut settings = config::Config::default();
-        let setting_file = matches
-            .value_of("config")
-            .unwrap_or("src/bin/node_settings.toml");
-        let intial_block_setting_file = matches
-            .value_of("initial_block_config")
-            .unwrap_or("src/bin/initial_block.json");
-
-        settings
-            .set_default("sanction_list", Vec::<String>::new())
-            .unwrap();
-        settings.set_default("jurisdiction", "US").unwrap();
-        settings.set_default("compute_node_idx", 0).unwrap();
-        settings.set_default("compute_raft", 0).unwrap();
-        settings
-            .set_default("compute_raft_tick_timeout", 10)
-            .unwrap();
-        settings
-            .set_default("compute_transaction_timeout", 100)
-            .unwrap();
-
-        settings
-            .merge(config::File::with_name(setting_file))
-            .unwrap();
-        settings
-            .merge(config::File::with_name(intial_block_setting_file))
-            .unwrap();
-        if let Some(index) = matches.value_of("index") {
-            settings.set("compute_node_idx", index).unwrap();
-            let mut db_mode = settings.get_table("compute_db_mode").unwrap();
-            if let Some(test_idx) = db_mode.get_mut("Test") {
-                *test_idx = config::Value::new(None, index);
-                settings.set("compute_db_mode", db_mode).unwrap();
-            }
-        }
-
-        let config: ComputeNodeConfig = settings.try_into().unwrap();
-        config
-    };
     println!("Start node with config {:?}", config);
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
@@ -141,4 +80,136 @@ async fn main() {
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
+}
+
+fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("Zenotta Compute Node")
+        .about("Runs a basic compute node.")
+        .arg(
+            Arg::with_name("config")
+                .long("config")
+                .short("c")
+                .help("Run the compute node using the given config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("initial_block_config")
+                .long("initial_block_config")
+                .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the specified compute node index from config file")
+                .takes_value(true),
+        )
+}
+
+fn load_settings(matches: &clap::ArgMatches) -> config::Config {
+    let mut settings = config::Config::default();
+    let setting_file = matches
+        .value_of("config")
+        .unwrap_or("src/bin/node_settings.toml");
+    let intial_block_setting_file = matches
+        .value_of("initial_block_config")
+        .unwrap_or("src/bin/initial_block.json");
+
+    settings
+        .set_default("sanction_list", Vec::<String>::new())
+        .unwrap();
+    settings.set_default("jurisdiction", "US").unwrap();
+    settings.set_default("compute_node_idx", 0).unwrap();
+    settings.set_default("compute_raft", 0).unwrap();
+    settings
+        .set_default("compute_raft_tick_timeout", 10)
+        .unwrap();
+    settings
+        .set_default("compute_transaction_timeout", 100)
+        .unwrap();
+
+    settings
+        .merge(config::File::with_name(setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(intial_block_setting_file))
+        .unwrap();
+    if let Some(index) = matches.value_of("index") {
+        settings.set("compute_node_idx", index).unwrap();
+        let mut db_mode = settings.get_table("compute_db_mode").unwrap();
+        if let Some(test_idx) = db_mode.get_mut("Test") {
+            *test_idx = config::Value::new(None, index);
+            settings.set("compute_db_mode", db_mode).unwrap();
+        }
+    }
+
+    settings
+}
+
+fn configuration(settings: config::Config) -> ComputeNodeConfig {
+    settings.try_into().unwrap()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use system::configurations::DbMode;
+
+    #[test]
+    fn validate_startup_no_args() {
+        let args = vec!["bin_name"];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+        ];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_2_index_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_2.toml",
+            "--index=1",
+        ];
+        let expected = DbMode::Test(1);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_3() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+        ];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    fn validate_startup_common(args: Vec<&str>, expected: DbMode) {
+        //
+        // Act
+        //
+        let app = clap_app();
+        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let settings = load_settings(&matches);
+        let config = configuration(settings);
+
+        //
+        // Assert
+        //
+        assert_eq!(config.compute_db_mode, expected);
+    }
 }

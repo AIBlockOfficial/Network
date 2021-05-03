@@ -20,98 +20,8 @@ enum Processing {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let matches = App::new("Zenotta Database Upgrade")
-        .about("Runs database upgrade.")
-        .arg(
-            Arg::with_name("config")
-                .long("config")
-                .short("c")
-                .help("Run the upgrade using the given config file.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("index")
-                .short("i")
-                .long("index")
-                .help("Run the upgrade for the specified node index from config file")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("type")
-                .long("type")
-                .help("Run the upgrade for type (all or compute, storage, user, miner)")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("processing")
-                .long("processing")
-                .help("Type of processing to do: read or upgrade")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("passphrase")
-                .long("passphrase")
-                .help("Enter a password or passphase for the encryption of the Wallet.")
-                .takes_value(true),
-        )
-        .get_matches();
-
-    let (processing, db_modes, passphrase) = {
-        let mut settings = config::Config::default();
-        let setting_file = matches
-            .value_of("config")
-            .unwrap_or("src/bin/node_settings.toml");
-
-        settings
-            .merge(config::File::with_name(setting_file))
-            .unwrap();
-
-        let passphrase = matches
-            .value_of("passphrase")
-            .unwrap_or_default()
-            .to_owned();
-        let node_type = matches.value_of("type").unwrap();
-        let processing = match matches.value_of("processing").unwrap() {
-            "read" => Processing::Read,
-            "upgrade" => Processing::Upgrade,
-            _ => panic!("expect processing to be read or upgrade"),
-        };
-
-        let db_modes = if node_type == "all" {
-            let mut upgrades = Vec::new();
-            for node_type in NODE_TYPES {
-                let db_mode_name = format!("{}_db_mode", node_type);
-                let node_specs_name = format!("{}_nodes", node_type);
-                let node_specs = settings.get_array(&node_specs_name).unwrap();
-                for node_index in 0..node_specs.len() {
-                    if let DbMode::Test(index) = settings.get(&db_mode_name).unwrap() {
-                        let db_mode = DbMode::Test(index + node_index);
-                        upgrades.push((node_type.to_string(), db_mode));
-                    }
-                }
-            }
-            upgrades
-        } else if NODE_TYPES.contains(&node_type) {
-            let db_mode_name = format!("{}_db_mode", node_type);
-            if let Some(index) = matches.value_of("index") {
-                let mut db_mode = settings.get_table(&db_mode_name).unwrap();
-                if let Some(test_idx) = db_mode.get_mut("Test") {
-                    let index = index.parse::<usize>().unwrap();
-                    let index = index + test_idx.clone().try_into::<usize>().unwrap();
-                    *test_idx = config::Value::new(None, index.to_string());
-                    settings.set(&db_mode_name, db_mode).unwrap();
-                }
-            }
-            let db_mode: DbMode = settings.get(&db_mode_name).unwrap();
-            vec![(node_type.to_string(), db_mode)]
-        } else {
-            panic!("type must be one of all or {}", NODE_TYPES.join(", "));
-        };
-
-        (processing, db_modes, passphrase)
-    };
+    let matches = clap_app().get_matches();
+    let (processing, db_modes, passphrase) = configuration(load_settings(&matches), &matches);
 
     match processing {
         Processing::Read => {
@@ -181,5 +91,170 @@ fn raft_for_spec(spec: &DbSpecInfo) -> &str {
         "_raft"
     } else {
         ""
+    }
+}
+
+fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("Zenotta Database Upgrade")
+        .about("Runs database upgrade.")
+        .arg(
+            Arg::with_name("config")
+                .long("config")
+                .short("c")
+                .help("Run the upgrade using the given config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the upgrade for the specified node index from config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("type")
+                .long("type")
+                .help("Run the upgrade for type (all or compute, storage, user, miner)")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("processing")
+                .long("processing")
+                .help("Type of processing to do: read or upgrade")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("passphrase")
+                .long("passphrase")
+                .help("Enter a password or passphase for the encryption of the Wallet.")
+                .takes_value(true),
+        )
+}
+
+fn load_settings(matches: &clap::ArgMatches) -> config::Config {
+    let mut settings = config::Config::default();
+    let setting_file = matches
+        .value_of("config")
+        .unwrap_or("src/bin/node_settings.toml");
+
+    settings
+        .merge(config::File::with_name(setting_file))
+        .unwrap();
+
+    settings
+}
+
+fn configuration(
+    mut settings: config::Config,
+    matches: &clap::ArgMatches,
+) -> (Processing, Vec<(String, DbMode)>, String) {
+    let passphrase = matches
+        .value_of("passphrase")
+        .unwrap_or_default()
+        .to_owned();
+    let node_type = matches.value_of("type").unwrap();
+    let processing = match matches.value_of("processing").unwrap() {
+        "read" => Processing::Read,
+        "upgrade" => Processing::Upgrade,
+        _ => panic!("expect processing to be read or upgrade"),
+    };
+
+    let db_modes = if node_type == "all" {
+        let mut upgrades = Vec::new();
+        for node_type in NODE_TYPES {
+            let db_mode_name = format!("{}_db_mode", node_type);
+            let node_specs_name = format!("{}_nodes", node_type);
+            let node_specs = settings.get_array(&node_specs_name).unwrap();
+            for node_index in 0..node_specs.len() {
+                if let DbMode::Test(index) = settings.get(&db_mode_name).unwrap() {
+                    let db_mode = DbMode::Test(index + node_index);
+                    upgrades.push((node_type.to_string(), db_mode));
+                }
+            }
+        }
+        upgrades
+    } else if NODE_TYPES.contains(&node_type) {
+        let db_mode_name = format!("{}_db_mode", node_type);
+        if let Some(index) = matches.value_of("index") {
+            let mut db_mode = settings.get_table(&db_mode_name).unwrap();
+            if let Some(test_idx) = db_mode.get_mut("Test") {
+                let index = index.parse::<usize>().unwrap();
+                let index = index + test_idx.clone().try_into::<usize>().unwrap();
+                *test_idx = config::Value::new(None, index.to_string());
+                settings.set(&db_mode_name, db_mode).unwrap();
+            }
+        }
+        let db_mode: DbMode = settings.get(&db_mode_name).unwrap();
+        vec![(node_type.to_string(), db_mode)]
+    } else {
+        panic!("type must be one of all or {}", NODE_TYPES.join(", "));
+    };
+
+    (processing, db_modes, passphrase)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use system::configurations::DbMode;
+
+    #[test]
+    fn validate_startup_read_all_raft_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+            "--processing=read",
+            "--type=all",
+        ];
+        let expected = (
+            Processing::Read,
+            vec![
+                ("compute".to_owned(), DbMode::Test(0)),
+                ("storage".to_owned(), DbMode::Test(0)),
+                ("user".to_owned(), DbMode::Test(1000)),
+                ("miner".to_owned(), DbMode::Test(0)),
+            ],
+            String::new(),
+        );
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_read_user_raft_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+            "--processing=read",
+            "--type=user",
+            "--passphrase=TestPassPhrase",
+        ];
+        let expected = (
+            Processing::Read,
+            vec![("user".to_owned(), DbMode::Test(1000))],
+            "TestPassPhrase".to_owned(),
+        );
+
+        validate_startup_common(args, expected);
+    }
+
+    fn validate_startup_common(
+        args: Vec<&str>,
+        expected: (Processing, Vec<(String, DbMode)>, String),
+    ) {
+        //
+        // Act
+        //
+        let app = clap_app();
+        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let settings = load_settings(&matches);
+        let config = configuration(settings, &matches);
+
+        //
+        // Assert
+        //
+        assert_eq!(config, expected);
     }
 }

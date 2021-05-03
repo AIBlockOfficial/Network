@@ -12,51 +12,9 @@ use system::{
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let matches = App::new("Zenotta Storage Node")
-        .about("Runs a basic storage node.")
-        .arg(
-            Arg::with_name("config")
-                .long("config")
-                .short("c")
-                .help("Run the storage node using the given config file.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("index")
-                .short("i")
-                .long("index")
-                .help("Run the specified storage node index from config file")
-                .takes_value(true),
-        )
-        .get_matches();
+    let matches = clap_app().get_matches();
+    let config = configuration(load_settings(&matches));
 
-    let config = {
-        let mut settings = config::Config::default();
-        let setting_file = matches
-            .value_of("config")
-            .unwrap_or("src/bin/node_settings.toml");
-
-        settings.set_default("storage_node_idx", 0).unwrap();
-        settings.set_default("storage_raft", 0).unwrap();
-        settings
-            .set_default("storage_raft_tick_timeout", 10)
-            .unwrap();
-        settings.set_default("storage_block_timeout", 1000).unwrap();
-        settings
-            .merge(config::File::with_name(setting_file))
-            .unwrap();
-        if let Some(index) = matches.value_of("index") {
-            settings.set("storage_node_idx", index).unwrap();
-            let mut db_mode = settings.get_table("storage_db_mode").unwrap();
-            if let Some(test_idx) = db_mode.get_mut("Test") {
-                *test_idx = config::Value::new(None, index);
-                settings.set("storage_db_mode", db_mode).unwrap();
-            }
-        }
-
-        let config: StorageNodeConfig = settings.try_into().unwrap();
-        config
-    };
     println!("Start node with config {:?}", config);
     let node = StorageNode::new(config, Default::default()).await.unwrap();
 
@@ -119,4 +77,117 @@ async fn main() {
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
+}
+
+fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("Zenotta Storage Node")
+        .about("Runs a basic storage node.")
+        .arg(
+            Arg::with_name("config")
+                .long("config")
+                .short("c")
+                .help("Run the storage node using the given config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("index")
+                .short("i")
+                .long("index")
+                .help("Run the specified storage node index from config file")
+                .takes_value(true),
+        )
+}
+
+fn load_settings(matches: &clap::ArgMatches) -> config::Config {
+    let mut settings = config::Config::default();
+    let setting_file = matches
+        .value_of("config")
+        .unwrap_or("src/bin/node_settings.toml");
+
+    settings.set_default("storage_node_idx", 0).unwrap();
+    settings.set_default("storage_raft", 0).unwrap();
+    settings
+        .set_default("storage_raft_tick_timeout", 10)
+        .unwrap();
+    settings.set_default("storage_block_timeout", 1000).unwrap();
+    settings
+        .merge(config::File::with_name(setting_file))
+        .unwrap();
+    if let Some(index) = matches.value_of("index") {
+        settings.set("storage_node_idx", index).unwrap();
+        let mut db_mode = settings.get_table("storage_db_mode").unwrap();
+        if let Some(test_idx) = db_mode.get_mut("Test") {
+            *test_idx = config::Value::new(None, index);
+            settings.set("storage_db_mode", db_mode).unwrap();
+        }
+    }
+
+    settings
+}
+
+fn configuration(settings: config::Config) -> StorageNodeConfig {
+    settings.try_into().unwrap()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use system::configurations::DbMode;
+
+    #[test]
+    fn validate_startup_no_args() {
+        let args = vec!["bin_name"];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+        ];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_2_index_1() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_2.toml",
+            "--index=1",
+        ];
+        let expected = DbMode::Test(1);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_3() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+        ];
+        let expected = DbMode::Test(0);
+
+        validate_startup_common(args, expected);
+    }
+
+    fn validate_startup_common(args: Vec<&str>, expected: DbMode) {
+        //
+        // Act
+        //
+        let app = clap_app();
+        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let settings = load_settings(&matches);
+        let config = configuration(settings);
+
+        //
+        // Assert
+        //
+        assert_eq!(config.storage_db_mode, expected);
+    }
 }
