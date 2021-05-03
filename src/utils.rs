@@ -412,7 +412,7 @@ pub fn get_paiments_for_wallet<'a>(
         .collect()
 }
 
-/// Create a valid transaction from givent info
+/// Create a valid transaction from given info
 pub fn create_valid_transaction(
     t_hash_hex: &str,
     prev_n: i32,

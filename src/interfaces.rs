@@ -319,6 +319,9 @@ pub trait MinerInterface {
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
+    SendUtxoRequest {
+        address: Option<String>,
+    },
     SendBlockStored(BlockStoredInfo),
     SendPoW {
         block_num: u64,
@@ -342,6 +345,7 @@ impl fmt::Debug for ComputeRequest {
         use ComputeRequest::*;
 
         match *self {
+            SendUtxoRequest { ref address } => write!(f, "SendUtxoRequest"),
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
                 ref block_num,
@@ -361,6 +365,9 @@ impl fmt::Debug for ComputeRequest {
 }
 
 pub trait ComputeInterface {
+    ///Fetch UTXO set for given addresses
+    fn fetch_utxo_set(&mut self, peer: SocketAddr, address: Option<String>) -> Response;
+
     /// Partitions a set of provided UUIDs for key creation/agreement
     /// TODO: Figure out the correct return type
     fn partition(&self, uuids: Vec<&'static str>) -> Response;
@@ -391,6 +398,9 @@ pub trait ComputeInterface {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
+    SendUtxoSet {
+        utxo_set: Vec<u8>,
+    },
     SendAddressRequest {
         amount: TokenAmount,
     },
@@ -412,6 +422,7 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
+            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
@@ -433,4 +444,11 @@ pub trait UseInterface {
         peer: SocketAddr,
         amount: TokenAmount,
     ) -> Response;
+
+    /// Receive the requested UTXO set from Compute
+    ///
+    /// ### Arguments
+    ///
+    /// * `utxo_set` - The requested UTXO set
+    fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response;
 }

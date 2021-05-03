@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
-use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest};
+use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest, UtxoSet};
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
     get_paiments_for_wallet, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
@@ -107,6 +107,7 @@ pub struct UserNode {
     next_payment: Option<(SocketAddr, Transaction)>,
     last_block_notified: Block,
     test_auto_gen_tx: Option<AutoGenTx>,
+    received_utxo_set: Option<UtxoSet>,
 }
 
 impl UserNode {
@@ -151,6 +152,7 @@ impl UserNode {
             next_payment: None,
             last_block_notified: Default::default(),
             test_auto_gen_tx,
+            received_utxo_set: None,
         })
     }
 
@@ -372,6 +374,7 @@ impl UserNode {
         trace!("handle_request: {:?}", req);
 
         match req {
+            SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             SendAddressRequest { amount } => {
                 Some(self.receive_payment_address_request(peer, amount))
             }
@@ -400,6 +403,22 @@ impl UserNode {
             success: true,
             reason: "Shutdown",
         })
+    }
+
+    pub async fn send_request_utxo_set(
+        &mut self,
+        compute_peer: SocketAddr,
+        address: Option<String>,
+    ) -> Result<()> {
+        self.node
+            .send(compute_peer, ComputeRequest::SendUtxoRequest { address })
+            .await?;
+
+        Ok(())
+    }
+
+    pub fn get_received_utxo(&self) -> Option<UtxoSet> {
+        self.received_utxo_set.clone()
     }
 
     /// Sends the next internal payment transaction to be processed by the connected Compute
@@ -690,6 +709,14 @@ impl UserNode {
 }
 
 impl UseInterface for UserNode {
+    fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response {
+        self.received_utxo_set = deserialize(&utxo_set).ok();
+        Response {
+            success: true,
+            reason: "Received UTXO set",
+        }
+    }
+
     fn receive_payment_address_request(
         &mut self,
         peer: SocketAddr,
