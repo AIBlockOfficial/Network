@@ -416,6 +416,16 @@ impl StorageConsensused {
         }
     }
 
+    /// Convert to import type
+    pub fn into_import(self) -> StorageConsensusedImport {
+        StorageConsensusedImport {
+            sufficient_majority: self.sufficient_majority,
+            current_block_num: self.current_block_num,
+            last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
+            last_block_stored: self.last_block_stored,
+        }
+    }
+
     ///Returns a bool variable of whether or not the input value matches the current block number
     ///
     /// ### Arguments

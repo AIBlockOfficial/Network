@@ -81,6 +81,7 @@ enum CfgModif {
     Respawn(&'static str),
     HandleEvents(&'static str, &'static [&'static str]),
     RestartEventsAll(&'static [(NodeType, &'static str)]),
+    RestartUpgradeEventsAll(&'static [(NodeType, &'static str)]),
     Disconnect(&'static str),
     Reconnect(&'static str),
 }
@@ -355,13 +356,16 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
                 node_all_handle_different_event(network, &all_nodes, &all_raisons).await
             }
-            CfgModif::RestartEventsAll(es) => {
+            CfgModif::RestartEventsAll(es) | CfgModif::RestartUpgradeEventsAll(es) => {
                 let all_nodes = network.all_active_nodes_name_vec();
                 let all_raisons = network.all_active_nodes_events(|t| {
                     let es_for_t = es.iter().filter(|(te, _)| *te == t);
                     es_for_t.map(|(_, e)| e.to_string()).collect()
                 });
                 network.close_loops_and_drop_named(&all_nodes).await;
+                if matches!(modif, CfgModif::RestartUpgradeEventsAll(_)) {
+                    network.upgrade_closed_nodes().await;
+                }
                 network.re_spawn_nodes_named(&all_nodes).await;
                 network.send_startup_requests_named(&all_nodes).await;
                 node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
@@ -1553,6 +1557,23 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
     )];
 
     let network_config = complete_network_config_with_n_compute_raft(10470, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
+    let modify_cfg = vec![(
+        "After create block 1",
+        CfgModif::RestartUpgradeEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received first full partition request"),
+            (NodeType::Compute, "Received block stored"),
+            (NodeType::Compute, "Block committed"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 

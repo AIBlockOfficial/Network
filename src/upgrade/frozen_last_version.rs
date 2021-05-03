@@ -383,11 +383,11 @@ pub mod convert {
         }
     }
 
-    pub fn convert_compute_consensused(
+    pub fn convert_compute_consensused_to_import(
         old: old::compute_raft::ComputeConsensused,
         special_handling: Option<compute_raft::SpecialHandling>,
-    ) -> compute_raft::ComputeConsensused {
-        compute_raft::ComputeConsensused::from_import(compute_raft::ComputeConsensusedImport {
+    ) -> compute_raft::ComputeConsensusedImport {
+        compute_raft::ComputeConsensusedImport {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
             tx_current_block_num: old.tx_current_block_num,
@@ -395,7 +395,7 @@ pub mod convert {
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             special_handling,
-        })
+        }
     }
 
     pub fn convert_utxoset(old: old::naom::UtxoSet) -> interfaces::UtxoSet {
@@ -404,16 +404,16 @@ pub mod convert {
             .collect()
     }
 
-    pub fn convert_storage_consensused(
+    pub fn convert_storage_consensused_to_import(
         old: old::storage_raft::StorageConsensused,
         last_block_stored: Option<interfaces::BlockStoredInfo>,
-    ) -> storage_raft::StorageConsensused {
-        storage_raft::StorageConsensused::from_import(storage_raft::StorageConsensusedImport {
+    ) -> storage_raft::StorageConsensusedImport {
+        storage_raft::StorageConsensusedImport {
             sufficient_majority: old.sufficient_majority,
             current_block_num: old.current_block_num,
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             last_block_stored,
-        })
+        }
     }
 
     pub fn convert_block_stored_info(

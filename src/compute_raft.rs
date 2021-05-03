@@ -658,6 +658,22 @@ impl ComputeConsensused {
         }
     }
 
+    /// Convert to import type
+    pub fn into_import(
+        self,
+        special_handling: Option<SpecialHandling>,
+    ) -> ComputeConsensusedImport {
+        ComputeConsensusedImport {
+            unanimous_majority: self.unanimous_majority,
+            sufficient_majority: self.sufficient_majority,
+            tx_current_block_num: self.tx_current_block_num,
+            utxo_set: self.utxo_set,
+            last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
+            current_circulation: self.current_circulation,
+            special_handling,
+        }
+    }
+
     /// Set consensused committed block to mine.
     /// Internal call, public for test only.
     /// ### Arguments

@@ -12,6 +12,10 @@ use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::Response;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
+use crate::upgrade::{
+    upgrade_same_version_compute_db, upgrade_same_version_storage_db,
+    upgrade_same_version_wallet_db,
+};
 use crate::user::UserNode;
 use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
@@ -264,6 +268,14 @@ impl Network {
         timeout: Duration,
     ) -> BTreeMap<String, JoinHandle<()>> {
         spawn_main_node_loops(&self.arc_nodes, timeout).await
+    }
+
+    /// Make all dead nodes as if upgraded.
+    pub async fn upgrade_closed_nodes(&mut self) {
+        for (name, extra) in std::mem::take(&mut self.extra_params) {
+            let extra = upgrade_same_version_db(&name, &self.instance_info, extra).await;
+            self.extra_params.insert(name, extra);
+        }
     }
 
     /// Restore from config and Remove all dead nodes
@@ -819,6 +831,28 @@ pub async fn connect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>, dead: &BTr
         loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
     }
     info!("Peers connect complete: all connected");
+}
+
+/// Update the database for the node of given name based on network info.
+/// The database will be as if the node was freshly upgraded.
+///
+/// ### Arguments
+///
+/// * `name`   - Name of the node.
+/// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
+pub async fn upgrade_same_version_db(
+    name: &str,
+    info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
+) -> ExtraNodeParams {
+    let node_info = &info.node_infos[name];
+    match node_info.node_type {
+        NodeType::Miner => upgrade_same_version_wallet_db(extra).unwrap(),
+        NodeType::Compute => upgrade_same_version_compute_db(extra).unwrap(),
+        NodeType::Storage => upgrade_same_version_storage_db(extra).unwrap(),
+        NodeType::User => upgrade_same_version_wallet_db(extra).unwrap(),
+    }
 }
 
 ///Initialize network node of given name based on network info.
