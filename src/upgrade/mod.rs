@@ -349,10 +349,13 @@ pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<Extra
     }
 
     clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
-        let consensus = storage_raft::StorageConsensused::into_import(
+        let mut consensus = storage_raft::StorageConsensused::into_import(
             tracked_deserialize("StorageConsensused", &k, &v)?,
             // last_block_stored already present
         );
+        if let Some(v) = &mut consensus.last_block_stored {
+            v.shutdown = false;
+        }
         Ok(serialize(&storage_raft::StorageConsensused::from_import(
             consensus,
         ))?)

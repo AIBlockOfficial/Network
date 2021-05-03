@@ -368,7 +368,9 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 }
                 network.re_spawn_nodes_named(&all_nodes).await;
                 network.send_startup_requests_named(&all_nodes).await;
-                node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+                if !es.is_empty() {
+                    node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+                }
             }
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
             CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
@@ -1160,19 +1162,19 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(11300, 1);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_2_node() {
     let network_config = complete_network_config_with_n_compute_raft(11310, 2);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_3_node() {
     let network_config = complete_network_config_with_n_compute_raft(11320, 3);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 // Slow: Only run when explicitely specified for performance and large tests
@@ -1188,22 +1190,60 @@ async fn main_loops_many_txs_threaded_raft_1_node() {
     // not contain all transactions already created.
     main_loops_raft_1_node_common(
         network_config,
-        5,
+        vec![5],
         TokenAmount(1),
         1_000_000,
         10_000,
         5_000 / 3,
+        &[],
     )
     .await
 }
 
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11340, 1);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_raft_3_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11350, 3);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11360, 1);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_upgrade_raft_3_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11370, 3);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
 async fn main_loops_raft_1_node_common(
     mut network_config: NetworkConfig,
-    expected_block_num: u64,
+    expected_block_nums: Vec<u64>,
     initial_amount: TokenAmount,
     seed_count: i32,
     seed_wallet_count: i32,
     tx_max_count: usize,
+    modify_cfg: &[(&str, CfgModif)],
 ) {
     test_step_start();
 
@@ -1229,31 +1269,34 @@ async fn main_loops_raft_1_node_common(
     //
     // Act
     //
-    for node_name in compute_nodes {
-        node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
-    }
+    let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
+    let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
+    for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
+        let tag = format!("Before start {}", idx);
+        modify_network(&mut network, &tag, &modify_cfg).await;
 
-    let handles = network
-        .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
-        .await;
-    node_join_all_checked(handles, &"").await.unwrap();
+        for node_name in compute_nodes {
+            node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+        }
+
+        let handles = network
+            .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+            .await;
+        node_join_all_checked(handles, &"").await.unwrap();
+
+        actual_stored
+            .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
+        actual_compute
+            .push(compute_all_current_mining_block_num(&mut network, compute_nodes).await);
+        expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
+        expected_compute.push(node_all(compute_nodes, Some(expected_block_num + 1)));
+    }
 
     //
     // Assert
     //
-    let last_stored_b_num =
-        storage_all_get_last_block_stored_num(&mut network, storage_nodes).await;
-    let last_complete_b_num =
-        compute_all_current_mining_block_num(&mut network, compute_nodes).await;
-
-    assert_eq!(
-        last_stored_b_num,
-        node_all(storage_nodes, Some(expected_block_num))
-    );
-    assert_eq!(
-        last_complete_b_num,
-        node_all(compute_nodes, Some(expected_block_num + 1))
-    );
+    assert_eq!(actual_stored, expected_stored);
+    assert_eq!(actual_compute, expected_compute);
 
     test_step_complete(network).await;
 }

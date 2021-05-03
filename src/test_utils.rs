@@ -847,6 +847,7 @@ pub async fn upgrade_same_version_db(
     extra: ExtraNodeParams,
 ) -> ExtraNodeParams {
     let node_info = &info.node_infos[name];
+    info!("upgrade_same_version_db: {}", name);
     match node_info.node_type {
         NodeType::Miner => upgrade_same_version_wallet_db(extra).unwrap(),
         NodeType::Compute => upgrade_same_version_compute_db(extra).unwrap(),
