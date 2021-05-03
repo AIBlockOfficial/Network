@@ -251,6 +251,14 @@ impl Network {
         self.update_active_nodes();
     }
 
+    /// Sent startup requests for specified node.
+    pub async fn send_startup_requests_named(&mut self, names: &[String]) {
+        for name in names {
+            let node = self.arc_nodes.get(name).unwrap();
+            send_startup_requests(node).await;
+        }
+    }
+
     pub async fn spawn_main_node_loops(
         &mut self,
         timeout: Duration,
@@ -482,6 +490,17 @@ async fn address(node: &ArcNode) -> SocketAddr {
     }
 }
 
+/// Dispatch to local_event_tx
+async fn send_startup_requests(node: &ArcNode) {
+    match node {
+        ArcNode::Miner(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::Compute(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::Storage(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::User(v) => v.lock().await.send_startup_requests().await.unwrap(),
+    }
+}
+
+/// Dispatch to local_event_tx
 async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
     match node {
         ArcNode::Miner(v) => v.lock().await.local_event_tx().clone(),
@@ -675,6 +694,8 @@ pub async fn spawn_main_node_loops(
             tokio::spawn(
                 async move {
                     info!("Start main loop");
+                    send_startup_requests(&node).await;
+
                     loop {
                         match handle_next_event_and_response(&node, timeout).await {
                             Err(e) => panic!("{} - {}", e, &name),

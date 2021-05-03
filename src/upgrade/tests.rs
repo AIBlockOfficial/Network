@@ -3,7 +3,7 @@ use super::{
     get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old, upgrade_compute_db,
     upgrade_storage_db, upgrade_wallet_db, UpgradeError,
 };
-use crate::configurations::{DbMode, ExtraNodeParams};
+use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
 use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
@@ -218,15 +218,15 @@ async fn upgrade_restart_network_in_memory() {
     upgrade_restart_network_common(config).await;
 }
 
-async fn upgrade_restart_network_common(config: NetworkConfig) {
+async fn upgrade_restart_network_common(mut config: NetworkConfig) {
     test_step_start();
 
     //
     // Arrange
     //
+    config.user_test_auto_gen_setup = get_test_auto_gen_setup(Some(0));
     let mut network = Network::create_stopped_from_config(&config);
     let compute_nodes = &config.nodes[&NodeType::Compute];
-    let miner_nodes = &config.nodes[&NodeType::Miner];
     let expected_block_num = LAST_BLOCK_STORED_NUM + 2;
 
     for name in network.dead_nodes().clone() {
@@ -244,12 +244,6 @@ async fn upgrade_restart_network_common(config: NetworkConfig) {
     for node_name in compute_nodes {
         node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
     }
-    for node_name in miner_nodes {
-        // Stored request ip invalid in tests:
-        // Probably should not keep them on upgrade anyway since they need to re-connect.
-        miner_send_partition_request(&mut network, &node_name).await;
-    }
-    user_send_block_notification_request(&mut network, "user1").await;
 
     let handles = network
         .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
@@ -507,6 +501,30 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
     }
 }
 
+fn get_test_auto_gen_setup(count_override: Option<usize>) -> UserAutoGenTxSetup {
+    let user1_tx = vec![
+        WalletTxSpec {
+            out_point:  "0-000000".to_owned(),
+            secret_key: "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5".to_owned(),
+            public_key: "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5".to_owned(),
+            amount: 2
+        },
+        WalletTxSpec {
+            out_point: "0-000001".to_owned(),
+            secret_key: "09784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43".to_owned(),
+            public_key: "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43".to_owned(),
+            amount: 5
+        }
+    ];
+
+    UserAutoGenTxSetup {
+        user_initial_transactions: vec![user1_tx],
+        user_setup_tx_chunk_size: Some(5),
+        user_setup_tx_in_per_tx: Some(3),
+        user_setup_tx_max_count: count_override.unwrap_or(100000),
+    }
+}
+
 fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
     ExtraNodeParams {
         db: dbs.db.and_then(|v| v.in_memory()),
@@ -551,14 +569,4 @@ async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_bl
     let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
     let event = LocalEvent::CoordinatedShutdown(at_block);
     event_tx.send(event, "test shutdown").await.unwrap();
-}
-
-async fn miner_send_partition_request(network: &mut Network, from_miner: &str) {
-    let mut m = network.miner(from_miner).unwrap().lock().await;
-    m.send_partition_request().await.unwrap();
-}
-
-async fn user_send_block_notification_request(network: &mut Network, user: &str) {
-    let mut u = network.user(user).unwrap().lock().await;
-    u.send_block_notification_request().await.unwrap();
 }

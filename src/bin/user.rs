@@ -60,17 +60,14 @@ async fn main() {
             .unwrap();
     }
 
-    // send notification request
-    if node.is_test_auto_gen_tx_active() {
-        node.send_block_notification_request().await.unwrap();
-    }
-
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
         let mut node_conn = node_conn;
 
         async move {
+            node.send_startup_requests().await.unwrap();
+
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
                 if node.handle_next_event_response(response).await == ResponseResult::Exit {

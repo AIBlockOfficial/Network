@@ -223,14 +223,15 @@ impl ComputeNode {
         )
     }
 
+    /// Send initial requests:
+    /// - None
+    pub async fn send_startup_requests(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx
-    }
-
-    /// Propose initial block when ready
-    pub async fn propose_initial_item(&mut self) {
-        self.node_raft.propose_initial_item().await;
     }
 
     /// The current utxo_set including block being mined and previous block mining txs.
@@ -485,9 +486,7 @@ impl ComputeNode {
             Ok(Response {
                 success: true,
                 reason: "Received first full partition request",
-            }) => {
-                self.propose_initial_item().await;
-            }
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Partition list is full",
@@ -779,7 +778,7 @@ impl ComputeNode {
             SendUserBlockNotificationRequest => {
                 Some(self.receive_block_user_notification_request(peer))
             }
-            SendPartitionRequest => Some(self.receive_partition_request(peer)),
+            SendPartitionRequest => Some(self.receive_partition_request(peer).await),
             Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -836,7 +835,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `peer` - Sending peer's socket address
-    fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+    async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -847,6 +846,7 @@ impl ComputeNode {
             .unwrap();
         if self.request_list_first_flood == Some(self.request_list.len()) {
             self.request_list_first_flood = None;
+            self.node_raft.propose_initial_item().await;
             Response {
                 success: true,
                 reason: "Received first full partition request",

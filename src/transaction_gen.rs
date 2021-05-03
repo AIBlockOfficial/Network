@@ -52,6 +52,10 @@ impl TransactionGen {
         }
     }
 
+    pub fn pending_txs(&self) -> &BTreeMap<String, Transaction> {
+        &self.pending
+    }
+
     pub fn is_up_to_date_with_snapshot(&self) -> bool {
         self.up_to_date_with_snapshot
     }

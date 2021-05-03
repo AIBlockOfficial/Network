@@ -47,15 +47,13 @@ async fn main() {
             .unwrap()
     };
 
-    // Send partition request
-    println!("MINER ADDRESS: {:?}", node.address());
-    node.send_partition_request().await.unwrap();
-
     let main_loop_handle = tokio::spawn({
         let mut node = node;
         let mut node_conn = node_conn;
 
         async move {
+            node.send_startup_requests().await.unwrap();
+
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
                 if node.handle_next_event_response(response).await == ResponseResult::Exit {

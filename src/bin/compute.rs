@@ -56,6 +56,8 @@ async fn main() {
         let mut node_conn = node_conn;
 
         async move {
+            node.send_startup_requests().await.unwrap();
+
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
                 if node.handle_next_event_response(response).await == ResponseResult::Exit {

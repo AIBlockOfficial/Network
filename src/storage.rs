@@ -174,6 +174,12 @@ impl StorageNode {
         )
     }
 
+    /// Send initial requests:
+    /// - None
+    pub async fn send_startup_requests(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx
