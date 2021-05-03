@@ -147,7 +147,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 }
 
 fn configuration(
-    mut settings: config::Config,
+    settings: config::Config,
     matches: &clap::ArgMatches,
 ) -> (Processing, Vec<(String, DbMode)>, String) {
     let passphrase = matches
@@ -177,16 +177,14 @@ fn configuration(
         upgrades
     } else if NODE_TYPES.contains(&node_type) {
         let db_mode_name = format!("{}_db_mode", node_type);
-        if let Some(index) = matches.value_of("index") {
-            let mut db_mode = settings.get_table(&db_mode_name).unwrap();
-            if let Some(test_idx) = db_mode.get_mut("Test") {
-                let index = index.parse::<usize>().unwrap();
-                let index = index + test_idx.clone().try_into::<usize>().unwrap();
-                *test_idx = config::Value::new(None, index.to_string());
-                settings.set(&db_mode_name, db_mode).unwrap();
-            }
-        }
         let db_mode: DbMode = settings.get(&db_mode_name).unwrap();
+        let db_mode = if let DbMode::Test(index) = &db_mode {
+            let node_index = matches.value_of("index").unwrap_or("0");
+            let node_index = node_index.parse::<usize>().unwrap();
+            DbMode::Test(index + node_index)
+        } else {
+            db_mode
+        };
         vec![(node_type.to_string(), db_mode)]
     } else {
         panic!("type must be one of all or {}", NODE_TYPES.join(", "));
@@ -228,12 +226,13 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
             "--processing=read",
+            "--index=1",
             "--type=user",
             "--passphrase=TestPassPhrase",
         ];
         let expected = (
             Processing::Read,
-            vec![("user".to_owned(), DbMode::Test(1000))],
+            vec![("user".to_owned(), DbMode::Test(1001))],
             "TestPassPhrase".to_owned(),
         );
 
