@@ -146,7 +146,7 @@ pub struct UserNodeConfig {
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
     /// Configuration options for auto generating transactions for test
-    pub test_auto_gen_setup: UserAutoGenTxSetup,
+    pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
 /// Configuration option for setup of user node

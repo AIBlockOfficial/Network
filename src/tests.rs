@@ -1202,7 +1202,7 @@ async fn main_loops_raft_1_node_common(
     //
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
-    network_config.test_auto_gen_setup = UserAutoGenTxSetup {
+    network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
         user_initial_transactions: vec![(0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
             .collect()],
@@ -2839,7 +2839,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
             .collect(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
-        test_auto_gen_setup: Default::default(),
+        user_test_auto_gen_setup: Default::default(),
     }
 }
 
