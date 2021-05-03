@@ -36,7 +36,7 @@ pub struct WalletTxSpec {
 }
 
 /// Configuration info for a database
-#[derive(Debug, Copy, Clone, Deserialize)]
+#[derive(Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
 pub enum DbMode {
     Live,
     Test(usize),
@@ -146,7 +146,7 @@ pub struct UserNodeConfig {
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
     /// Configuration options for auto generating transactions for test
-    pub test_auto_gen_setup: UserAutoGenTxSetup,
+    pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
 /// Configuration option for setup of user node

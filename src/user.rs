@@ -139,7 +139,7 @@ impl UserNode {
         .await;
 
         let test_auto_gen_tx =
-            make_transaction_gen(config.test_auto_gen_setup, config.user_node_idx);
+            make_transaction_gen(config.user_test_auto_gen_setup, config.user_node_idx);
 
         Ok(UserNode {
             node,

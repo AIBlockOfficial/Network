@@ -72,7 +72,7 @@ pub struct NetworkConfig {
     pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
     pub test_duration_divider: usize,
     pub passphrase: Option<String>,
-    pub test_auto_gen_setup: UserAutoGenTxSetup,
+    pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
 impl NetworkConfig {
@@ -965,7 +965,7 @@ async fn init_user(
         api_port: 3000,
         user_wallet_seeds: config.user_wallet_seeds.clone(),
         passphrase: config.passphrase.clone(),
-        test_auto_gen_setup: config.test_auto_gen_setup.clone(),
+        user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);

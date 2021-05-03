@@ -75,22 +75,24 @@
             }
         ]
     ],
-    "user_initial_transactions": [
-        [
-            {
-                "out_point": "0-000000",
-                "secret_key": "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
-                "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
-                "amount": 2
-            },
-            {
-                "out_point": "0-000001",
-                "secret_key": "09784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
-                "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
-                "amount": 5
-            }
+    "user_test_auto_gen_setup": {
+        "user_initial_transactions": [
+            [
+                {
+                    "out_point": "0-000000",
+                    "secret_key": "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "amount": 2
+                },
+                {
+                    "out_point": "0-000001",
+                    "secret_key": "09784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 5
+                }
+            ]
         ]
-    ],
+    },
     "generated_keys": [
         {
             "secret_key": "e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
