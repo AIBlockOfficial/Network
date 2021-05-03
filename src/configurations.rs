@@ -36,7 +36,7 @@ pub struct WalletTxSpec {
 }
 
 /// Configuration info for a database
-#[derive(Debug, Copy, Clone, Deserialize)]
+#[derive(Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
 pub enum DbMode {
     Live,
     Test(usize),
