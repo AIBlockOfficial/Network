@@ -13,7 +13,6 @@ use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{
     node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
 };
-use crate::transaction_gen::TransactionGen;
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
@@ -82,6 +81,7 @@ enum CfgModif {
     Respawn(&'static str),
     HandleEvents(&'static str, &'static [&'static str]),
     RestartEventsAll(&'static [(NodeType, &'static str)]),
+    RestartUpgradeEventsAll(&'static [(NodeType, &'static str)]),
     Disconnect(&'static str),
     Reconnect(&'static str),
 }
@@ -171,6 +171,10 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("miner2")),
         ("After create block 1", CfgModif::Respawn("miner2")),
+        (
+            "After create block 1",
+            CfgModif::HandleEvents("compute2", &["Received partition request successfully"]),
+        ),
     ];
     let network_config = complete_network_config_with_n_compute_raft(11120, 3);
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
@@ -341,22 +345,32 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
     for (_tag, modif) in modif_config.iter().filter(|(t, _)| tag == *t) {
         match modif {
             CfgModif::Drop(v) => network.close_loops_and_drop_named(&[v.to_string()]).await,
-            CfgModif::Respawn(v) => network.re_spawn_nodes_named(&[v.to_string()]).await,
+            CfgModif::Respawn(v) => {
+                let nodes = vec![v.to_string()];
+                network.re_spawn_nodes_named(&nodes).await;
+                network.send_startup_requests_named(&nodes).await;
+            }
             CfgModif::HandleEvents(n, es) => {
                 let all_nodes = network.all_active_nodes_name_vec();
                 let raisons: Vec<String> = es.iter().map(|e| e.to_string()).collect();
                 let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
                 node_all_handle_different_event(network, &all_nodes, &all_raisons).await
             }
-            CfgModif::RestartEventsAll(es) => {
+            CfgModif::RestartEventsAll(es) | CfgModif::RestartUpgradeEventsAll(es) => {
                 let all_nodes = network.all_active_nodes_name_vec();
                 let all_raisons = network.all_active_nodes_events(|t| {
                     let es_for_t = es.iter().filter(|(te, _)| *te == t);
                     es_for_t.map(|(_, e)| e.to_string()).collect()
                 });
                 network.close_loops_and_drop_named(&all_nodes).await;
+                if matches!(modif, CfgModif::RestartUpgradeEventsAll(_)) {
+                    network.upgrade_closed_nodes().await;
+                }
                 network.re_spawn_nodes_named(&all_nodes).await;
-                node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+                network.send_startup_requests_named(&all_nodes).await;
+                if !es.is_empty() {
+                    node_all_handle_different_event(network, &all_nodes, &all_raisons).await;
+                }
             }
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
             CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
@@ -423,7 +437,7 @@ async fn create_first_block_act(network: &mut Network) {
     for compute in compute_nodes {
         let miners = &config.compute_to_miner_mapping[compute];
         for (idx, miner) in miners.iter().enumerate() {
-            miner_send_partition_request(network, miner).await;
+            node_send_startup_requests(network, miner).await;
             let evt = if idx == first_request_size - 1 {
                 "Received first full partition request"
             } else {
@@ -434,7 +448,6 @@ async fn create_first_block_act(network: &mut Network) {
     }
 
     info!("Test Step Create first Block");
-    compute_all_propose_initial_uxto_set(network, compute_nodes).await;
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
 }
 
@@ -1149,19 +1162,19 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(11300, 1);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_2_node() {
     let network_config = complete_network_config_with_n_compute_raft(11310, 2);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(basic_scheduler)]
 async fn main_loops_few_txs_raft_3_node() {
     let network_config = complete_network_config_with_n_compute_raft(11320, 3);
-    main_loops_raft_1_node_common(network_config, 2, TokenAmount(17), 20, 1, 1_000).await
+    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 // Slow: Only run when explicitely specified for performance and large tests
@@ -1177,22 +1190,60 @@ async fn main_loops_many_txs_threaded_raft_1_node() {
     // not contain all transactions already created.
     main_loops_raft_1_node_common(
         network_config,
-        5,
+        vec![5],
         TokenAmount(1),
         1_000_000,
         10_000,
         5_000 / 3,
+        &[],
     )
     .await
 }
 
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11340, 1);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_raft_3_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11350, 3);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11360, 1);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn main_loops_few_txs_restart_upgrade_raft_3_node() {
+    let network_config = complete_network_config_with_n_compute_raft(11370, 3);
+    let stop_nums = vec![1, 2];
+    let amount = TokenAmount(17);
+    let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
+    main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
+}
+
 async fn main_loops_raft_1_node_common(
     mut network_config: NetworkConfig,
-    expected_block_num: u64,
+    expected_block_nums: Vec<u64>,
     initial_amount: TokenAmount,
     seed_count: i32,
     seed_wallet_count: i32,
     tx_max_count: usize,
+    modify_cfg: &[(&str, CfgModif)],
 ) {
     test_step_start();
 
@@ -1214,40 +1265,38 @@ async fn main_loops_raft_1_node_common(
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
-    let miner_nodes = &network_config.nodes[&NodeType::Miner];
 
     //
     // Act
     //
-    for node_name in compute_nodes {
-        node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
-    }
-    for node_name in miner_nodes {
-        miner_send_partition_request(&mut network, &node_name).await;
-    }
-    user_send_block_notification_request(&mut network, "user1").await;
+    let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
+    let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
+    for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
+        let tag = format!("Before start {}", idx);
+        modify_network(&mut network, &tag, &modify_cfg).await;
 
-    let handles = network
-        .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
-        .await;
-    node_join_all_checked(handles, &"").await;
+        for node_name in compute_nodes {
+            node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+        }
+
+        let handles = network
+            .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+            .await;
+        node_join_all_checked(handles, &"").await.unwrap();
+
+        actual_stored
+            .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
+        actual_compute
+            .push(compute_all_current_mining_block_num(&mut network, compute_nodes).await);
+        expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
+        expected_compute.push(node_all(compute_nodes, Some(expected_block_num + 1)));
+    }
 
     //
     // Assert
     //
-    let last_stored_b_num =
-        storage_all_get_last_block_stored_num(&mut network, storage_nodes).await;
-    let last_complete_b_num =
-        compute_all_current_mining_block_num(&mut network, compute_nodes).await;
-
-    assert_eq!(
-        last_stored_b_num,
-        node_all(storage_nodes, Some(expected_block_num))
-    );
-    assert_eq!(
-        last_complete_b_num,
-        node_all(compute_nodes, Some(expected_block_num + 1))
-    );
+    assert_eq!(actual_stored, expected_stored);
+    assert_eq!(actual_compute, expected_compute);
 
     test_step_complete(network).await;
 }
@@ -1378,20 +1427,27 @@ async fn gen_transactions_restart() {
     gen_transactions_common(network_config, &modify_cfg).await
 }
 
-async fn gen_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&str, CfgModif)]) {
+async fn gen_transactions_common(
+    mut network_config: NetworkConfig,
+    modify_cfg: &[(&str, CfgModif)],
+) {
     test_step_start();
 
     //
     // Arrange
     //
+    network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
+        user_initial_transactions: vec![vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]],
+        user_setup_tx_chunk_size: None,
+        user_setup_tx_in_per_tx: Some(2),
+        user_setup_tx_max_count: 4,
+    };
     let mut network = Network::create_from_config(&network_config).await;
-    let mut transaction_gen =
-        TransactionGen::new(vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]);
 
     //
     // Act
     //
-    user_send_block_notification_request(&mut network, "user1").await;
+    node_send_startup_requests(&mut network, "user1").await;
     compute_handle_event(&mut network, "compute1", "Received block notification").await;
     modify_network(
         &mut network,
@@ -1409,20 +1465,14 @@ async fn gen_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&
             create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num - 1).await;
         }
 
-        let transactions = {
-            compute_flood_block_to_users(&mut network, "compute1").await;
-            user_handle_event(&mut network, "user1", "Block mining notified").await;
-            let committed = user_last_block_notified_txs(&mut network, "user1").await;
-
-            transaction_gen.commit_transactions(&committed);
-            let transactions = transaction_gen.make_all_transactions(Some(2), 4);
-            transactions.into_iter().collect()
-        };
-
-        add_transactions_act(&mut network, &transactions).await;
+        compute_flood_block_to_users(&mut network, "compute1").await;
+        user_handle_event(&mut network, "user1", "Block mining notified").await;
+        let transactions = user_process_mining_notified(&mut network, "user1").await;
+        compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+        compute_handle_event(&mut network, "compute1", "Transactions committed").await;
         let committed = compute_committed_tx_pool(&mut network, "compute1").await;
 
-        tx_expected.push(transactions);
+        tx_expected.push(transactions.unwrap());
         tx_committed.push(committed);
     }
 
@@ -1530,6 +1580,7 @@ async fn handle_message_lost_restart_block_stored_raft_1_node_common(
         "After store block 0",
         CfgModif::RestartEventsAll(&[
             (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received partition request successfully"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
@@ -1542,12 +1593,30 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
         "After create block 1",
         CfgModif::RestartEventsAll(&[
             (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received partition request successfully"),
             (NodeType::Compute, "Received block stored"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
 
     let network_config = complete_network_config_with_n_compute_raft(10470, 1);
+    handle_message_lost_common(network_config, &modify_cfg).await
+}
+
+#[tokio::test(basic_scheduler)]
+async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
+    let modify_cfg = vec![(
+        "After create block 1",
+        CfgModif::RestartUpgradeEventsAll(&[
+            (NodeType::Compute, "Snapshot applied"),
+            (NodeType::Compute, "Received first full partition request"),
+            (NodeType::Compute, "Received block stored"),
+            (NodeType::Compute, "Block committed"),
+            (NodeType::Storage, "Snapshot applied"),
+        ]),
+    )];
+
+    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
@@ -1786,7 +1855,9 @@ async fn node_all_handle_different_event<'a>(
         );
     }
 
-    node_join_all_checked(join_handles, all_raisons).await;
+    node_join_all_checked(join_handles, all_raisons)
+        .await
+        .unwrap();
 }
 
 async fn node_get_wallet_info(
@@ -1891,6 +1962,12 @@ async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_bl
     let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
     let event = LocalEvent::CoordinatedShutdown(at_block);
     event_tx.send(event, "test shutdown").await.unwrap();
+}
+
+async fn node_send_startup_requests(network: &mut Network, node: &str) {
+    network
+        .send_startup_requests_named(&[node.to_string()])
+        .await;
 }
 
 //
@@ -2095,17 +2172,6 @@ async fn compute_inject_next_event(
     let c = network.compute(to_compute).unwrap().lock().await;
 
     c.inject_next_event(from_addr, request).unwrap();
-}
-
-async fn compute_propose_initial_uxto_set(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.propose_initial_uxto_set().await;
-}
-
-async fn compute_all_propose_initial_uxto_set(network: &mut Network, compute_group: &[String]) {
-    for compute in compute_group {
-        compute_propose_initial_uxto_set(network, compute).await;
-    }
 }
 
 async fn compute_flood_rand_num_to_requesters(network: &mut Network, compute: &str) {
@@ -2472,14 +2538,13 @@ async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
     u.send_address_to_trading_peer().await.unwrap();
 }
 
-async fn user_send_block_notification_request(network: &mut Network, user: &str) {
+async fn user_process_mining_notified(
+    network: &mut Network,
+    user: &str,
+) -> Option<BTreeMap<String, Transaction>> {
     let mut u = network.user(user).unwrap().lock().await;
-    u.send_block_notification_request().await.unwrap();
-}
-
-async fn user_last_block_notified_txs(network: &mut Network, user: &str) -> Vec<String> {
-    let u = network.user(user).unwrap().lock().await;
-    u.get_last_block_notified().transactions.clone()
+    u.process_mining_notified().await;
+    u.pending_test_auto_gen_txs().cloned()
 }
 
 //
@@ -2541,11 +2606,6 @@ async fn miner_one_handle_event(
     miner_handle_event_for_node(&mut miner, true, "Barrier complete", &mut exit).await;
 
     debug!("Stop wait for event");
-}
-
-async fn miner_send_partition_request(network: &mut Network, from_miner: &str) {
-    let mut m = network.miner(from_miner).unwrap().lock().await;
-    m.send_partition_request().await.unwrap();
 }
 
 async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &str) {

@@ -18,13 +18,12 @@ use crate::db_utils::{
     SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
 use crate::interfaces::BlockStoredInfo;
-use crate::{compute, compute_raft, raft_store, storage, wallet};
+use crate::{compute, compute_raft, raft_store, storage, storage_raft, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::net::SocketAddr;
 use tracing::{error, trace};
 
 pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
@@ -150,29 +149,77 @@ pub fn upgrade_compute_db_batch<'a>(
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
+    batch.put_cf(compute::DB_COL_INTERNAL, compute::RAFT_KEY_RUN, key_run()?);
 
-    if let Some(value) = db.get_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY)? {
-        batch.delete_cf(DB_COL_DEFAULT, old::compute::REQUEST_LIST_KEY);
+    for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
+        batch.delete_cf(DB_COL_DEFAULT, &key);
 
-        deserialize::<BTreeSet<SocketAddr>>(&value)?;
-        batch.put_cf(compute::DB_COL_INTERNAL, compute::REQUEST_LIST_KEY, value);
+        if key == old::compute::REQUEST_LIST_KEY.as_bytes() {
+            // Drop known keys
+        } else {
+            let e = UpgradeError::ConfigError("Unexpected key");
+            return Err(log_key_value_error(e, "Unexpected key", &key, &value));
+        }
     }
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
-        let mut consensus: old::compute_raft::ComputeConsensused =
-            tracked_deserialize("ComputeConsensused", &k, &v)?;
+        let mut consensus = old::convert_compute_consensused_to_import(
+            tracked_deserialize("ComputeConsensused", &k, &v)?,
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+        );
         if let Some(v) = &mut consensus.tx_current_block_num {
             // Force re-process block
             *v -= 1;
         }
-        let consensus = old::convert_compute_consensused(
+
+        Ok(serialize(&compute_raft::ComputeConsensused::from_import(
             consensus,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
-        );
-        Ok(serialize(&consensus)?)
+        ))?)
     })?;
 
     Ok((batch, raft_batch))
+}
+
+/// Update the database to be as if it had just been upgraded
+pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
+    let raft_db = dbs.raft_db.as_mut().unwrap();
+
+    let (mut batch, mut raft_batch) = (db.batch_writer(), raft_db.batch_writer());
+    for (key, value) in db.iter_cf_clone(compute::DB_COL_INTERNAL) {
+        batch.delete_cf(compute::DB_COL_INTERNAL, &key);
+
+        if key == compute::RAFT_KEY_RUN.as_bytes() {
+            batch.put_cf(compute::DB_COL_INTERNAL, key, &value);
+        } else if !(key == compute::REQUEST_LIST_KEY.as_bytes()
+            || key == compute::USER_NOTIFY_LIST_KEY.as_bytes())
+        {
+            let e = UpgradeError::ConfigError("Unexpected key");
+            return Err(log_key_value_error(e, "Unexpected key", &key, &value));
+        }
+    }
+    for (key, _) in db.iter_cf_clone(compute::DB_COL_LOCAL_TXS) {
+        batch.delete_cf(compute::DB_COL_LOCAL_TXS, &key);
+    }
+
+    clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
+        let mut consensus = compute_raft::ComputeConsensused::into_import(
+            tracked_deserialize("ComputeConsensused", &k, &v)?,
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+        );
+        if let Some(v) = &mut consensus.tx_current_block_num {
+            // Force re-process block
+            *v -= 1;
+        }
+        Ok(serialize(&compute_raft::ComputeConsensused::from_import(
+            consensus,
+        ))?)
+    })?;
+
+    let (batch, raft_batch) = (batch.done(), raft_batch.done());
+    db.write(batch)?;
+    raft_db.write(raft_batch)?;
+    Ok(dbs)
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
@@ -218,6 +265,7 @@ pub fn upgrade_storage_db_batch<'a>(
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
+    batch.put_cf(storage::DB_COL_INTERNAL, storage::RAFT_KEY_RUN, key_run()?);
 
     let mut max_block = None;
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
@@ -275,16 +323,51 @@ pub fn upgrade_storage_db_batch<'a>(
     };
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
-        let consensus: old::storage_raft::StorageConsensused =
-            tracked_deserialize("StorageConsensused", &k, &v)?;
-        let consensus =
-            old::convert_storage_consensused(consensus, Some(last_block_stored.clone()));
-        Ok(serialize(&consensus)?)
+        let consensus = old::convert_storage_consensused_to_import(
+            tracked_deserialize("StorageConsensused", &k, &v)?,
+            Some(last_block_stored.clone()),
+        );
+        Ok(serialize(&storage_raft::StorageConsensused::from_import(
+            consensus,
+        ))?)
     })?;
 
     Ok((batch, raft_batch))
 }
 
+/// Update the database to be as if it had just been upgraded
+pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let db = dbs.db.as_mut().unwrap();
+    let raft_db = dbs.raft_db.as_mut().unwrap();
+
+    let (batch, mut raft_batch) = (db.batch_writer(), raft_db.batch_writer());
+    for (key, value) in db.iter_cf_clone(storage::DB_COL_INTERNAL) {
+        if key != compute::RAFT_KEY_RUN.as_bytes() {
+            let e = UpgradeError::ConfigError("Unexpected key");
+            return Err(log_key_value_error(e, "Unexpected key", &key, &value));
+        }
+    }
+
+    clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
+        let mut consensus = storage_raft::StorageConsensused::into_import(
+            tracked_deserialize("StorageConsensused", &k, &v)?,
+            // last_block_stored already present
+        );
+        if let Some(v) = &mut consensus.last_block_stored {
+            v.shutdown = false;
+        }
+        Ok(serialize(&storage_raft::StorageConsensused::from_import(
+            consensus,
+        ))?)
+    })?;
+
+    let (batch, raft_batch) = (batch.done(), raft_batch.done());
+    db.write(batch)?;
+    raft_db.write(raft_batch)?;
+    Ok(dbs)
+}
+
+/// Upgrade raft DB
 fn clean_raft_db(
     raft_db: &SimpleDb,
     raft_batch: &mut SimpleDbWriteBatch,
@@ -292,15 +375,40 @@ fn clean_raft_db(
 ) -> Result<()> {
     for (key, value) in raft_db.iter_cf_clone(DB_COL_DEFAULT) {
         raft_batch.delete_cf(DB_COL_DEFAULT, &key);
+
         if key == old::raft_store::SNAPSHOT_KEY.as_bytes() {
             let (data, meta) = get_old_persistent_snapshot_data_and_metadata(&value)?;
             let data = convert(&key, data)?;
 
             raft_batch.put_cf(DB_COL_DEFAULT, raft_store::SNAPSHOT_META_KEY, &meta);
-            raft_batch.put_cf(DB_COL_DEFAULT, raft_store::SNAPSHOT_DATA_KEY, data);
+            raft_batch.put_cf(DB_COL_DEFAULT, raft_store::SNAPSHOT_DATA_KEY, &data);
         } else if !(key.starts_with(old::raft_store::ENTRY_KEY.as_bytes())
             || key == old::raft_store::HARDSTATE_KEY.as_bytes()
             || key == old::raft_store::LAST_ENTRY_KEY.as_bytes())
+        {
+            let e = UpgradeError::ConfigError("Unexpected raft key");
+            return Err(log_key_value_error(e, "Unexpected raft key", &key, &value));
+        }
+    }
+    Ok(())
+}
+
+/// Update the raft database to be as if it had just been upgraded
+fn clean_same_raft_db(
+    raft_db: &SimpleDb,
+    raft_batch: &mut SimpleDbWriteBatch,
+    convert: impl Fn(&[u8], Vec<u8>) -> Result<Vec<u8>>,
+) -> Result<()> {
+    for (key, value) in raft_db.iter_cf_clone(DB_COL_DEFAULT) {
+        raft_batch.delete_cf(DB_COL_DEFAULT, &key);
+
+        if key == raft_store::SNAPSHOT_META_KEY.as_bytes() || key == DB_VERSION_KEY.as_bytes() {
+            raft_batch.put_cf(DB_COL_DEFAULT, &key, &value);
+        } else if key == raft_store::SNAPSHOT_DATA_KEY.as_bytes() {
+            raft_batch.put_cf(DB_COL_DEFAULT, &key, &convert(&key, value)?);
+        } else if !(key.starts_with(raft_store::ENTRY_KEY.as_bytes())
+            || key == raft_store::HARDSTATE_KEY.as_bytes()
+            || key == raft_store::LAST_ENTRY_KEY.as_bytes())
         {
             let e = UpgradeError::ConfigError("Unexpected raft key");
             return Err(log_key_value_error(e, "Unexpected raft key", &key, &value));
@@ -369,6 +477,13 @@ pub fn upgrade_wallet_db_batch<'a>(
     }
 
     Ok(batch)
+}
+
+/// Update the database to be as if it had just been upgraded
+pub fn upgrade_same_version_wallet_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+    let _db = dbs.wallet_db.as_mut().unwrap();
+    // Wallet after upgrade is the same as in normal operation
+    Ok(dbs)
 }
 
 /// whether it is a transaction key
@@ -459,4 +574,10 @@ fn get_old_persistent_snapshot_data_and_metadata(snapshot: &[u8]) -> Result<(Vec
         .write_to_bytes()
         .map_err(|e| UpgradeError::Serialization(serde::ser::Error::custom(e)))?;
     Ok((data, meta))
+}
+
+fn key_run() -> Result<Vec<u8>> {
+    // Key run not present in v2: Assume it was 0, so it is incremented on start
+    let key_run: u64 = 0;
+    Ok(serialize(&key_run)?)
 }

@@ -223,14 +223,15 @@ impl ComputeNode {
         )
     }
 
+    /// Send initial requests:
+    /// - None
+    pub async fn send_startup_requests(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx
-    }
-
-    /// Propose initial block when ready
-    pub async fn propose_initial_uxto_set(&mut self) {
-        self.node_raft.propose_initial_uxto_set().await;
     }
 
     /// The current utxo_set including block being mined and previous block mining txs.
@@ -485,9 +486,7 @@ impl ComputeNode {
             Ok(Response {
                 success: true,
                 reason: "Received first full partition request",
-            }) => {
-                self.propose_initial_uxto_set().await;
-            }
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Partition list is full",
@@ -601,11 +600,13 @@ impl ComputeNode {
         exit: &mut E,
     ) -> Option<Result<Response>> {
         loop {
+            let ready = !self.node_raft.need_initial_state();
+
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
             // i.e they should only await a channel.
             tokio::select! {
-                event = self.node.next_event() => {
+                event = self.node.next_event(), if ready => {
                     trace!("handle_next_event evt {:?}", event);
                     if let res @ Some(_) = self.handle_event(event?).await.transpose() {
                         return res;
@@ -617,7 +618,7 @@ impl ComputeNode {
                         return res;
                     }
                 }
-                Some((addr, msg)) = self.node_raft.next_msg() => {
+                Some((addr, msg)) = self.node_raft.next_msg(), if ready => {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     match self.node.send(
                         addr,
@@ -626,12 +627,12 @@ impl ComputeNode {
                             Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
                         };
                 }
-                _ = self.node_raft.timeout_propose_transactions() => {
+                _ = self.node_raft.timeout_propose_transactions(), if ready => {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
                 }
-                Some(event) = self.local_events.rx.recv() => {
+                Some(event) = self.local_events.rx.recv(), if ready => {
                     if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
                     }
@@ -777,7 +778,7 @@ impl ComputeNode {
             SendUserBlockNotificationRequest => {
                 Some(self.receive_block_user_notification_request(peer))
             }
-            SendPartitionRequest => Some(self.receive_partition_request(peer)),
+            SendPartitionRequest => Some(self.receive_partition_request(peer).await),
             Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
@@ -834,7 +835,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `peer` - Sending peer's socket address
-    fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+    async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -845,6 +846,7 @@ impl ComputeNode {
             .unwrap();
         if self.request_list_first_flood == Some(self.request_list.len()) {
             self.request_list_first_flood = None;
+            self.node_raft.propose_initial_item().await;
             Response {
                 success: true,
                 reason: "Received first full partition request",
@@ -1071,6 +1073,7 @@ impl ComputeNode {
         if let Some(first) = self.request_list_first_flood {
             if first <= self.request_list.len() {
                 self.request_list_first_flood = None;
+                self.node_raft.set_initial_proposal_done();
             }
         }
 

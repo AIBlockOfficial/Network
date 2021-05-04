@@ -121,6 +121,7 @@ mod test {
         assert_eq!(first_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
         assert_eq!(last_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
         assert_eq!(LAST_BLOCK_HASH_KEY.as_bytes()[0], NAMED_CONSTANT_PREPEND);
+
         assert_eq!(first_possible_v2_tx.as_bytes()[0], TX_PREPEND);
         assert_eq!(last_possible_v2_tx.as_bytes()[0], TX_PREPEND);
 

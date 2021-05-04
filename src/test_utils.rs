@@ -12,10 +12,14 @@ use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::Response;
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
+use crate::upgrade::{
+    upgrade_same_version_compute_db, upgrade_same_version_storage_db,
+    upgrade_same_version_wallet_db,
+};
 use crate::user::UserNode;
 use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
-    LocalEventSender, ResponseResult,
+    LocalEventSender, ResponseResult, StringError,
 };
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -251,11 +255,27 @@ impl Network {
         self.update_active_nodes();
     }
 
+    /// Sent startup requests for specified node.
+    pub async fn send_startup_requests_named(&mut self, names: &[String]) {
+        for name in names {
+            let node = self.arc_nodes.get(name).unwrap();
+            send_startup_requests(node).await;
+        }
+    }
+
     pub async fn spawn_main_node_loops(
         &mut self,
         timeout: Duration,
     ) -> BTreeMap<String, JoinHandle<()>> {
         spawn_main_node_loops(&self.arc_nodes, timeout).await
+    }
+
+    /// Make all dead nodes as if upgraded.
+    pub async fn upgrade_closed_nodes(&mut self) {
+        for (name, extra) in std::mem::take(&mut self.extra_params) {
+            let extra = upgrade_same_version_db(&name, &self.instance_info, extra).await;
+            self.extra_params.insert(name, extra);
+        }
     }
 
     /// Restore from config and Remove all dead nodes
@@ -482,6 +502,17 @@ async fn address(node: &ArcNode) -> SocketAddr {
     }
 }
 
+/// Dispatch to local_event_tx
+async fn send_startup_requests(node: &ArcNode) {
+    match node {
+        ArcNode::Miner(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::Compute(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::Storage(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::User(v) => v.lock().await.send_startup_requests().await.unwrap(),
+    }
+}
+
+/// Dispatch to local_event_tx
 async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
     match node {
         ArcNode::Miner(v) => v.lock().await.local_event_tx().clone(),
@@ -675,6 +706,8 @@ pub async fn spawn_main_node_loops(
             tokio::spawn(
                 async move {
                     info!("Start main loop");
+                    send_startup_requests(&node).await;
+
                     loop {
                         match handle_next_event_and_response(&node, timeout).await {
                             Err(e) => panic!("{} - {}", e, &name),
@@ -798,6 +831,29 @@ pub async fn connect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>, dead: &BTr
         loop_wait_connnect_to_peers_async(node_conn, expected_connected_addrs).await;
     }
     info!("Peers connect complete: all connected");
+}
+
+/// Update the database for the node of given name based on network info.
+/// The database will be as if the node was freshly upgraded.
+///
+/// ### Arguments
+///
+/// * `name`   - Name of the node.
+/// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
+pub async fn upgrade_same_version_db(
+    name: &str,
+    info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
+) -> ExtraNodeParams {
+    let node_info = &info.node_infos[name];
+    info!("upgrade_same_version_db: {}", name);
+    match node_info.node_type {
+        NodeType::Miner => upgrade_same_version_wallet_db(extra).unwrap(),
+        NodeType::Compute => upgrade_same_version_compute_db(extra).unwrap(),
+        NodeType::Storage => upgrade_same_version_storage_db(extra).unwrap(),
+        NodeType::User => upgrade_same_version_wallet_db(extra).unwrap(),
+    }
 }
 
 ///Initialize network node of given name based on network info.
@@ -1037,7 +1093,7 @@ fn check_timeout<E>(
 pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
     join_handles: BTreeMap<String, JoinHandle<T>>,
     extra: &E,
-) {
+) -> Result<(), StringError> {
     let (node_group, join_handles): (Vec<_>, Vec<_>) = join_handles.into_iter().unzip();
     let join_result: Vec<_> = join_all(join_handles).await;
     let join_result = join_result.iter().zip(&node_group);
@@ -1045,9 +1101,11 @@ pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
     let failed_join: Vec<_> = failed_join.map(|(_, name)| name).collect();
 
     if !failed_join.is_empty() {
-        panic!(
+        Err(StringError(format!(
             "Failed joined {:?}, out of {:?} (extra: {:?})",
             failed_join, node_group, extra
-        );
+        )))
+    } else {
+        Ok(())
     }
 }

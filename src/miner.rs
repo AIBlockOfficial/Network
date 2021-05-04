@@ -217,6 +217,13 @@ impl MinerNode {
         )
     }
 
+    /// Send initial requests:
+    /// - partition request
+    pub async fn send_startup_requests(&mut self) -> Result<()> {
+        info!("Send startup requets: partition");
+        self.send_partition_request().await
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx

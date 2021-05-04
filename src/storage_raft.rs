@@ -93,6 +93,8 @@ pub struct StorageRaft {
     raft_active: ActiveRaft,
     /// Consensused fields.
     consensused: StorageConsensused,
+    /// Whether consensused received initial snapshot
+    consensused_snapshot_applied: bool,
     /// Min duration between each block poposal.
     propose_block_timeout_duration: Duration,
     /// Timeout expiration time for block poposal.
@@ -115,10 +117,11 @@ impl StorageRaft {
     /// * `config`  - Configuration option for a storage node.
     /// * `raft_db` - Override raft db to use.
     pub fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
+        let use_raft = config.storage_raft != 0;
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
             &config.storage_nodes,
-            config.storage_raft != 0,
+            use_raft,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db),
         );
@@ -139,6 +142,7 @@ impl StorageRaft {
             first_raft_peer,
             raft_active,
             consensused,
+            consensused_snapshot_applied: !use_raft,
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
@@ -175,6 +179,11 @@ impl StorageRaft {
         self.raft_active.take_closed_persistent_store().await
     }
 
+    /// Check if we are waiting for initial state
+    pub fn need_initial_state(&self) -> bool {
+        !self.consensused_snapshot_applied
+    }
+
     /// Blocks & waits for a next commit from a peer.
     pub async fn next_commit(&self) -> Option<RaftCommit> {
         self.raft_active.next_commit().await
@@ -192,7 +201,7 @@ impl StorageRaft {
             RaftCommitData::Proposed(data, context) => {
                 self.received_commit_poposal(data, context).await
             }
-            RaftCommitData::Snapshot(data) => Some(self.apply_snapshot(data)),
+            RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
                 self.proposed_in_flight
                     .re_propose_all_items(&mut self.raft_active)
@@ -203,11 +212,18 @@ impl StorageRaft {
     }
 
     /// Apply snapshot
-    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> CommittedItem {
-        warn!("apply_snapshot called self.consensused updated");
-        self.consensused = deserialize(&consensused_ser).unwrap();
-        self.propose_block_timeout_at = self.next_propose_block_timeout_at();
-        CommittedItem::Snapshot
+    fn apply_snapshot(&mut self, consensused_ser: RaftData) -> Option<CommittedItem> {
+        self.consensused_snapshot_applied = true;
+
+        if consensused_ser.is_empty() {
+            // Empty initial snapshot
+            None
+        } else {
+            warn!("apply_snapshot called self.consensused updated");
+            self.consensused = deserialize(&consensused_ser).unwrap();
+            self.propose_block_timeout_at = self.next_propose_block_timeout_at();
+            Some(CommittedItem::Snapshot)
+        }
     }
 
     /// Checks a commit of the RaftData for validity
@@ -397,6 +413,16 @@ impl StorageConsensused {
             current_block_completed_parts: Default::default(),
             last_committed_raft_idx_and_term,
             last_block_stored,
+        }
+    }
+
+    /// Convert to import type
+    pub fn into_import(self) -> StorageConsensusedImport {
+        StorageConsensusedImport {
+            sufficient_majority: self.sufficient_majority,
+            current_block_num: self.current_block_num,
+            last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
+            last_block_stored: self.last_block_stored,
         }
     }
 
