@@ -7,6 +7,8 @@ mod frozen_last_version;
 mod tests;
 #[cfg(test)]
 mod tests_last_version_db;
+#[cfg(test)]
+mod tests_last_version_db_no_block;
 
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{
