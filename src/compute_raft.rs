@@ -61,8 +61,8 @@ pub enum AccumulatingBlockStoredInfo {
 pub enum SpecialHandling {
     /// Shutting down on this block.
     Shutdown,
-    /// Waiting for first block after an upgrade.
-    FirstUpgradeBlock,
+    /// Waiting for first block after an upgrade (bool: rollback applied data)
+    FirstUpgradeBlock(bool),
 }
 
 /// Initial proposal state: Need both miner ready and block info ready
@@ -943,6 +943,10 @@ impl ComputeConsensused {
 
     /// Apply accumulated block info.
     pub fn apply_ready_block_stored_info(&mut self) -> u64 {
+        // Reset block if not mined
+        self.current_block = Default::default();
+        self.current_block_tx = Default::default();
+
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_circulation = get_total_coinbase_tokens(&utxo_set);
@@ -950,7 +954,14 @@ impl ComputeConsensused {
                 self.initial_utxo_txs = Some(utxo_set);
             }
             AccumulatingBlockStoredInfo::Block(info) => {
-                if self.special_handling == Some(SpecialHandling::FirstUpgradeBlock) {
+                if self.special_handling.is_none() && info.shutdown {
+                    // Coordinated Shutdown for upgrade: Do not process this block until restart
+                    // If we just restarted from shutdown, ignore it as it is the block that shut us down
+                    self.special_handling = Some(SpecialHandling::Shutdown);
+                    return info.block_num + 1;
+                }
+
+                if self.special_handling == Some(SpecialHandling::FirstUpgradeBlock(true)) {
                     self.current_circulation -=
                         get_total_coinbase_tokens(&info.mining_transactions);
                     for (k, _) in get_tx_out_with_out_point_cloned(info.mining_transactions.iter())
@@ -959,6 +970,7 @@ impl ComputeConsensused {
                     }
                 }
 
+                self.special_handling = None;
                 self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
@@ -967,7 +979,6 @@ impl ComputeConsensused {
                 ));
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
-                self.special_handling = info.shutdown.then(|| SpecialHandling::Shutdown);
             }
         }
 

@@ -167,7 +167,7 @@ pub fn upgrade_compute_db_batch<'a>(
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
         let mut consensus = old::convert_compute_consensused_to_import(
             tracked_deserialize("ComputeConsensused", &k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock(true)),
         );
         if let Some(v) = &mut consensus.tx_current_block_num {
             // Force re-process block
@@ -205,14 +205,10 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
     }
 
     clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
-        let mut consensus = compute_raft::ComputeConsensused::into_import(
+        let consensus = compute_raft::ComputeConsensused::into_import(
             tracked_deserialize("ComputeConsensused", &k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock(false)),
         );
-        if let Some(v) = &mut consensus.tx_current_block_num {
-            // Force re-process block
-            *v -= 1;
-        }
         Ok(serialize(&compute_raft::ComputeConsensused::from_import(
             consensus,
         ))?)

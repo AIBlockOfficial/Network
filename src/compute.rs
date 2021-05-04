@@ -527,12 +527,9 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block committed shutdown",
+                reason: "Block shutdown",
             }) => {
-                debug!(
-                    "Block ready to mine (SHUTDOWN): {:?}",
-                    self.get_mining_block()
-                );
+                debug!("Block shutdown (not ready to mine)");
                 self.flood_closing_events().await.unwrap();
             }
             Ok(Response {
@@ -662,17 +659,17 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Block) => {
-                self.node_raft.generate_block().await;
+                let reason = if self.node_raft.is_shutdown_on_commit() {
+                    "Block shutdown"
+                } else {
+                    self.node_raft.generate_block().await;
+                    "Block committed"
+                };
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
-                let shutdown = self.node_raft.is_shutdown_on_commit();
                 Some(Ok(Response {
                     success: true,
-                    reason: if shutdown {
-                        "Block committed shutdown"
-                    } else {
-                        "Block committed"
-                    },
+                    reason,
                 }))
             }
             Some(CommittedItem::Snapshot) => {

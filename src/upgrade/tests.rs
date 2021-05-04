@@ -256,7 +256,7 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig) {
     {
         let compute = network.compute("compute1").unwrap().lock().await;
         let b_num = compute.get_committed_current_block_num();
-        assert_eq!(b_num, Some(expected_block_num + 1));
+        assert_eq!(b_num, Some(expected_block_num));
     }
     {
         let storage = network.storage("storage1").unwrap().lock().await;
