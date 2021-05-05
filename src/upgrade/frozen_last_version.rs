@@ -294,10 +294,30 @@ pub mod convert {
     use crate::{compute_raft, interfaces, storage_raft, wallet};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
+        block::{Block, BlockHeader},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
     use naom::script::{lang::Script, OpCodes, StackEntry};
     use std::collections::BTreeMap;
+
+    pub fn convert_block(old: old::naom::Block) -> Block {
+        Block {
+            header: convert_block_header(old.header),
+            transactions: old.transactions,
+        }
+    }
+
+    pub fn convert_block_header(old: old::naom::BlockHeader) -> BlockHeader {
+        BlockHeader {
+            version: old.version,
+            bits: old.bits,
+            nonce: old.nonce,
+            b_num: old.b_num,
+            seed_value: old.seed_value,
+            previous_hash: old.previous_hash,
+            merkle_root_hash: old.merkle_root_hash,
+        }
+    }
 
     pub fn convert_transaction(old: old::naom::Transaction) -> Transaction {
         Transaction {
@@ -391,6 +411,7 @@ pub mod convert {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
             tx_current_block_num: old.tx_current_block_num,
+            current_block: old.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),

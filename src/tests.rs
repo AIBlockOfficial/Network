@@ -1287,9 +1287,9 @@ async fn main_loops_raft_1_node_common(
         actual_stored
             .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
         actual_compute
-            .push(compute_all_current_mining_block_num(&mut network, compute_nodes).await);
+            .push(compute_all_committed_current_block_num(&mut network, compute_nodes).await);
         expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
-        expected_compute.push(node_all(compute_nodes, Some(expected_block_num + 1)));
+        expected_compute.push(node_all(compute_nodes, Some(expected_block_num)));
     }
 
     //
@@ -1606,12 +1606,10 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
 #[tokio::test(basic_scheduler)]
 async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
     let modify_cfg = vec![(
-        "After create block 1",
+        "After store block 0",
         CfgModif::RestartUpgradeEventsAll(&[
             (NodeType::Compute, "Snapshot applied"),
             (NodeType::Compute, "Received first full partition request"),
-            (NodeType::Compute, "Received block stored"),
-            (NodeType::Compute, "Block committed"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
@@ -2102,14 +2100,19 @@ async fn compute_current_mining_block(network: &mut Network, compute: &str) -> O
     c.get_mining_block().clone()
 }
 
-async fn compute_all_current_mining_block_num(
+async fn compute_committed_current_block_num(network: &mut Network, compute: &str) -> Option<u64> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_committed_current_block_num()
+}
+
+async fn compute_all_committed_current_block_num(
     network: &mut Network,
     compute_group: &[String],
 ) -> Vec<Option<u64>> {
     let mut result = Vec::new();
     for name in compute_group {
-        let r = compute_current_mining_block(network, name).await;
-        result.push(r.map(|bs| bs.header.b_num));
+        let r = compute_committed_current_block_num(network, name).await;
+        result.push(r);
     }
     result
 }

@@ -121,6 +121,7 @@ pub struct ComputeConsensusedImport {
     pub unanimous_majority: usize,
     pub sufficient_majority: usize,
     pub tx_current_block_num: Option<u64>,
+    pub current_block: Option<Block>,
     pub utxo_set: UtxoSet,
     pub last_committed_raft_idx_and_term: (u64, u64),
     pub current_circulation: TokenAmount,
@@ -632,6 +633,7 @@ impl ComputeConsensused {
             unanimous_majority,
             sufficient_majority,
             tx_current_block_num,
+            current_block,
             utxo_set,
             last_committed_raft_idx_and_term,
             current_circulation,
@@ -645,7 +647,7 @@ impl ComputeConsensused {
             tx_druid_pool: Default::default(),
             tx_current_block_previous_hash: Default::default(),
             tx_current_block_num,
-            current_block: Default::default(),
+            current_block,
             current_block_tx: Default::default(),
             initial_utxo_txs: Default::default(),
             utxo_set,
@@ -667,6 +669,7 @@ impl ComputeConsensused {
             unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             tx_current_block_num: self.tx_current_block_num,
+            current_block: self.current_block,
             utxo_set: self.utxo_set,
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
@@ -943,6 +946,10 @@ impl ComputeConsensused {
 
     /// Apply accumulated block info.
     pub fn apply_ready_block_stored_info(&mut self) -> u64 {
+        // Reset block if not mined
+        self.current_block = Default::default();
+        self.current_block_tx = Default::default();
+
         match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_circulation = get_total_coinbase_tokens(&utxo_set);
@@ -950,15 +957,14 @@ impl ComputeConsensused {
                 self.initial_utxo_txs = Some(utxo_set);
             }
             AccumulatingBlockStoredInfo::Block(info) => {
-                if self.special_handling == Some(SpecialHandling::FirstUpgradeBlock) {
-                    self.current_circulation -=
-                        get_total_coinbase_tokens(&info.mining_transactions);
-                    for (k, _) in get_tx_out_with_out_point_cloned(info.mining_transactions.iter())
-                    {
-                        self.utxo_set.remove(&k).unwrap();
-                    }
+                if self.special_handling.is_none() && info.shutdown {
+                    // Coordinated Shutdown for upgrade: Do not process this block until restart
+                    // If we just restarted from shutdown, ignore it as it is the block that shut us down
+                    self.special_handling = Some(SpecialHandling::Shutdown);
+                    return info.block_num + 1;
                 }
 
+                self.special_handling = None;
                 self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
@@ -967,7 +973,6 @@ impl ComputeConsensused {
                 ));
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
-                self.special_handling = info.shutdown.then(|| SpecialHandling::Shutdown);
             }
         }
 
