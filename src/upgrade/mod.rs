@@ -64,6 +64,13 @@ pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
 /// Result wrapper for upgrade errors
 pub type Result<T> = std::result::Result<T, UpgradeError>;
 
+/// Configuration passed in to drive upgrade
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbCfg {
+    ComputeBlockInStorage,
+    ComputeBlockToMine,
+}
+
 #[derive(Debug)]
 pub struct DbSpecInfo {
     pub node_type: &'static str,
@@ -131,12 +138,15 @@ pub fn get_upgrade_compute_db(
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+pub fn upgrade_compute_db(mut dbs: ExtraNodeParams, cfg: DbCfg) -> Result<ExtraNodeParams> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
-    let (batch, raft_batch) =
-        upgrade_compute_db_batch((&db, &raft_db), (db.batch_writer(), raft_db.batch_writer()))?;
+    let (batch, raft_batch) = upgrade_compute_db_batch(
+        (&db, &raft_db),
+        (db.batch_writer(), raft_db.batch_writer()),
+        cfg,
+    )?;
     let (batch, raft_batch) = (batch.done(), raft_batch.done());
 
     db.write(batch)?;
@@ -148,6 +158,7 @@ pub fn upgrade_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
 pub fn upgrade_compute_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
+    cfg: DbCfg,
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
@@ -167,11 +178,29 @@ pub fn upgrade_compute_db_batch<'a>(
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
         let mut consensus = old::convert_compute_consensused_to_import(
             tracked_deserialize("ComputeConsensused", &k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock(true)),
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
-        if let Some(v) = &mut consensus.tx_current_block_num {
-            // Force re-process block
-            *v -= 1;
+
+        match cfg {
+            DbCfg::ComputeBlockInStorage => {
+                // Already mined block it would have been discarded when PoW found.
+                consensus.current_block = None;
+            }
+            DbCfg::ComputeBlockToMine => {
+                if let Some(b) = &consensus.current_block {
+                    if !b.transactions.is_empty() {
+                        // Version 0.2.0 upgrade require block with no transactions
+                        return Err(UpgradeError::ConfigError("Block is not empty"));
+                    }
+                } else {
+                    // Version 0.2.0 always has block in snapshoot
+                    return Err(UpgradeError::ConfigError("Missing block to mine"));
+                }
+
+                // Handle block for version 2 upgrade only.
+                // Use converted block as is: Block is ready to mine so no special handling
+                consensus.special_handling = None;
+            }
         }
 
         Ok(serialize(&compute_raft::ComputeConsensused::from_import(
@@ -205,10 +234,12 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
     }
 
     clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
-        let consensus = compute_raft::ComputeConsensused::into_import(
+        let mut consensus = compute_raft::ComputeConsensused::into_import(
             tracked_deserialize("ComputeConsensused", &k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock(false)),
+            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
+        // Version 0.3.0 coordinated shutdown should never have a block in snapshoot
+        consensus.current_block = None;
         Ok(serialize(&compute_raft::ComputeConsensused::from_import(
             consensus,
         ))?)

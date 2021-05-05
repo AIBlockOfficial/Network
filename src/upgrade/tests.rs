@@ -1,7 +1,8 @@
 use super::tests_last_version_db::{self, DbEntryType};
+use super::tests_last_version_db_no_block;
 use super::{
     get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old, upgrade_compute_db,
-    upgrade_storage_db, upgrade_wallet_db, UpgradeError,
+    upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeError,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
 use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
@@ -22,6 +23,8 @@ const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
 const LAST_BLOCK_HASH: &str = "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c";
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
+const DBCFG_DEFAULT: DbCfg = DbCfg::ComputeBlockToMine;
+const DBCFG_COMPUTE_NO_BLOCK: DbCfg = DbCfg::ComputeBlockInStorage;
 
 enum Specs {
     Db(SimpleDbSpec, SimpleDbSpec),
@@ -32,34 +35,41 @@ enum Specs {
 async fn upgrade_compute_real_db() {
     let config = real_db(complete_network_config(20000));
     remove_all_node_dbs(&config);
-    upgrade_common(config, "compute1").await;
+    upgrade_common(config, "compute1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_compute_in_memory() {
     let config = complete_network_config(20010);
-    upgrade_common(config, "compute1").await;
+    upgrade_common(config, "compute1", DBCFG_DEFAULT).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn upgrade_compute_no_block_in_memory() {
+    let config = complete_network_config(20015);
+    let db_cfg = DBCFG_COMPUTE_NO_BLOCK;
+    upgrade_common(config, "compute1", db_cfg).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_storage_in_memory() {
     let config = complete_network_config(20020);
-    upgrade_common(config, "storage1").await;
+    upgrade_common(config, "storage1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_miner_in_memory() {
     let config = complete_network_config(20030);
-    upgrade_common(config, "miner1").await;
+    upgrade_common(config, "miner1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_user_in_memory() {
     let config = complete_network_config(20040);
-    upgrade_common(config, "user1").await;
+    upgrade_common(config, "user1", DBCFG_DEFAULT).await;
 }
 
-async fn upgrade_common(config: NetworkConfig, name: &str) {
+async fn upgrade_common(config: NetworkConfig, name: &str, db_cfg: DbCfg) {
     test_step_start();
 
     //
@@ -67,13 +77,13 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
     //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
-    let db = create_old_node_db(&n_info);
+    let db = create_old_node_db(&n_info, db_cfg);
 
     //
     // Act
     //
     let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
-    let db = upgrade_node_db(&n_info, db).unwrap();
+    let db = upgrade_node_db(&n_info, db, db_cfg).unwrap();
     let db = open_as_new_node_db(&n_info, in_memory(db)).unwrap();
 
     network.add_extra_params(name, in_memory(db));
@@ -85,13 +95,23 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
     //
     match n_info.node_type {
         NodeType::Compute => {
+            let (expected_mining_b_num, expected_b_num) = if db_cfg == DbCfg::ComputeBlockToMine {
+                let expected = Some(LAST_BLOCK_STORED_NUM + 1);
+                (expected, expected)
+            } else {
+                (None, Some(LAST_BLOCK_STORED_NUM))
+            };
+
             let compute = network.compute(name).unwrap().lock().await;
 
             let block = compute.get_mining_block();
-            assert_eq!(block.as_ref().map(|bs| bs.header.b_num), None);
+            assert_eq!(
+                block.as_ref().map(|bs| bs.header.b_num),
+                expected_mining_b_num
+            );
 
             let b_num = compute.get_committed_current_block_num();
-            assert_eq!(b_num, Some(LAST_BLOCK_STORED_NUM));
+            assert_eq!(b_num, expected_b_num);
             assert_eq!(compute.get_request_list(), &Default::default());
         }
         NodeType::Storage => {
@@ -147,34 +167,41 @@ async fn upgrade_common(config: NetworkConfig, name: &str) {
 async fn open_upgrade_started_compute_real_db() {
     let config = real_db(complete_network_config(20100));
     remove_all_node_dbs(&config);
-    open_upgrade_started_compute_common(config, "compute1").await;
+    open_upgrade_started_compute_common(config, "compute1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_compute_in_memory() {
     let config = complete_network_config(20110);
-    open_upgrade_started_compute_common(config, "compute1").await;
+    open_upgrade_started_compute_common(config, "compute1", DBCFG_DEFAULT).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn open_upgrade_started_compute_no_block_in_memory() {
+    let config = complete_network_config(20115);
+    let db_cfg = DBCFG_COMPUTE_NO_BLOCK;
+    open_upgrade_started_compute_common(config, "compute1", db_cfg).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_storage_in_memory() {
     let config = complete_network_config(20120);
-    open_upgrade_started_compute_common(config, "storage1").await;
+    open_upgrade_started_compute_common(config, "storage1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_miner_in_memory() {
     let config = complete_network_config(20130);
-    open_upgrade_started_compute_common(config, "miner1").await;
+    open_upgrade_started_compute_common(config, "miner1", DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn open_upgrade_started_user_in_memory() {
     let config = complete_network_config(20140);
-    open_upgrade_started_compute_common(config, "user1").await;
+    open_upgrade_started_compute_common(config, "user1", DBCFG_DEFAULT).await;
 }
 
-async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str) {
+async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str, db_cfg: DbCfg) {
     test_step_start();
 
     //
@@ -182,7 +209,7 @@ async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str) 
     //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
-    let db = create_old_node_db(&n_info);
+    let db = create_old_node_db(&n_info, db_cfg);
 
     //
     // Act
@@ -209,16 +236,23 @@ async fn open_upgrade_started_compute_common(config: NetworkConfig, name: &str) 
 async fn upgrade_restart_network_real_db() {
     let config = real_db(complete_network_config(20200));
     remove_all_node_dbs(&config);
-    upgrade_restart_network_common(config).await;
+    upgrade_restart_network_common(config, DBCFG_DEFAULT).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_restart_network_in_memory() {
     let config = complete_network_config(20210);
-    upgrade_restart_network_common(config).await;
+    upgrade_restart_network_common(config, DBCFG_DEFAULT).await;
 }
 
-async fn upgrade_restart_network_common(mut config: NetworkConfig) {
+#[tokio::test(basic_scheduler)]
+async fn upgrade_restart_network_compute_no_block_in_memory() {
+    let config = complete_network_config(20215);
+    let db_cfg = DBCFG_COMPUTE_NO_BLOCK;
+    upgrade_restart_network_common(config, db_cfg).await;
+}
+
+async fn upgrade_restart_network_common(mut config: NetworkConfig, db_cfg: DbCfg) {
     test_step_start();
 
     //
@@ -231,9 +265,9 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig) {
 
     for name in network.dead_nodes().clone() {
         let n_info = network.get_node_info(&name).unwrap();
-        let db = create_old_node_db(n_info);
+        let db = create_old_node_db(n_info, db_cfg);
         let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
-        let db = upgrade_node_db(n_info, db).unwrap();
+        let db = upgrade_node_db(n_info, db, db_cfg).unwrap();
         network.add_extra_params(&name, in_memory(db));
     }
 
@@ -274,18 +308,26 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig) {
 // Test helpers
 //
 
-fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
+fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams {
     match info.node_type {
         NodeType::Compute => ExtraNodeParams {
             db: Some(create_old_db(
                 &old::compute::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::COMPUTE_DB_V0_2_0,
+                if db_cfg == DbCfg::ComputeBlockToMine {
+                    &tests_last_version_db::COMPUTE_DB_V0_2_0
+                } else {
+                    &tests_last_version_db_no_block::COMPUTE_DB_V0_2_0
+                },
             )),
             raft_db: Some(create_old_db(
                 &old::compute_raft::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0,
+                if db_cfg == DbCfg::ComputeBlockToMine {
+                    &tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0
+                } else {
+                    &tests_last_version_db_no_block::COMPUTE_RAFT_DB_V0_2_0
+                },
             )),
             ..Default::default()
         },
@@ -414,9 +456,10 @@ pub fn get_upgrade_node_db(
 pub fn upgrade_node_db(
     info: &NetworkNodeInfo,
     dbs: ExtraNodeParams,
+    db_cfg: DbCfg,
 ) -> Result<ExtraNodeParams, UpgradeError> {
     match info.node_type {
-        NodeType::Compute => upgrade_compute_db(dbs),
+        NodeType::Compute => upgrade_compute_db(dbs, db_cfg),
         NodeType::Storage => upgrade_storage_db(dbs),
         NodeType::User => upgrade_wallet_db(dbs, WALLET_PASSWORD),
         NodeType::Miner => upgrade_wallet_db(dbs, WALLET_PASSWORD),
