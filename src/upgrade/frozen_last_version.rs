@@ -4,6 +4,7 @@ use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey, Signature};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
+    pub const NETWORK_VERSION: u32 = 0;
     pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = None;
     pub const DB_PATH: &str = "src/db/db";
     pub const WALLET_PATH: &str = "src/wallet/wallet";

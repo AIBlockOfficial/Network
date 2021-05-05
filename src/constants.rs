@@ -1,9 +1,5 @@
 pub use naom::constants::*;
 
-/*------- NETWORK CONSTANTS --------*/
-pub const NETWORK_VERSION: u32 = 1;
-pub const NETWORK_VERSION_SERIALIZED: &[u8] = b"1";
-
 /*------- BLOCK CONSTANTS --------*/
 
 // Bit shifting value for reward issuance
