@@ -535,7 +535,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     drs_tx_hash: None,
                     script_public_key: Some("79609a5b997a265ab3f370c4abef00ad".to_owned()),
                 }],
-                version: 0,
+                version: old::constants::NETWORK_VERSION as usize,
                 druid_info: None,
             },
         ))
