@@ -32,7 +32,7 @@ test:cargo:
       prefix: test
   script:
     - rustc --version && cargo --version  # Print version info for debugging
-    - cargo test --lib --workspace --verbose
+    - cargo test --workspace --verbose
 
 lint:rustfmt:
   only:
