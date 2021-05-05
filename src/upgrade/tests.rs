@@ -20,7 +20,7 @@ use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
-const LAST_BLOCK_HASH: &str = "f628017bb00472a33a5070bce18ef68320c558f999350e1a3164f319ba9b5c00";
+const LAST_BLOCK_HASH: &str = "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c";
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 enum Specs {
@@ -477,7 +477,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
         nonce: Vec::new(),
         merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),
         mining_transactions: std::iter::once((
-            "g567775cc21b9647014a6b7959919911".to_owned(),
+            "g27fac41a2d62a56c8962e3d360838c8".to_owned(),
             Transaction {
                 inputs: vec![TxIn {
                     previous_out: None,
@@ -490,7 +490,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     locktime: 0,
                     drs_block_hash: None,
                     drs_tx_hash: None,
-                    script_public_key: Some("6e8f40e652d5f26c6e65180602a289a2".to_owned()),
+                    script_public_key: Some("79609a5b997a265ab3f370c4abef00ad".to_owned()),
                 }],
                 version: 0,
                 druid_info: None,
