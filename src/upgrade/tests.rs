@@ -21,7 +21,16 @@ use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
-const LAST_BLOCK_HASH: &str = "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c";
+const BLOCK_HASHES: &[&str] = &[
+    "abd4012af0eb398f7fed06cdc633c506d374bb8e38174035c0fb9910d3d7a7f6",
+    "04d6006a3923d06c00be1c9f26e38142e1defbe0d5a57ea60d94255c20a59a04",
+    "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c",
+];
+const BLOCK_INDEXES: &[&str] = &[
+    "nIndexedBlockHashKey_0000000000000000",
+    "nIndexedBlockHashKey_0000000000000001",
+    "nIndexedBlockHashKey_0000000000000002",
+];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 const DBCFG_DEFAULT: DbCfg = DbCfg::ComputeBlockToMine;
 const DBCFG_COMPUTE_NO_BLOCK: DbCfg = DbCfg::ComputeBlockInStorage;
@@ -118,21 +127,25 @@ async fn upgrade_common(config: NetworkConfig, name: &str, db_cfg: DbCfg) {
             let storage = network.storage(name).unwrap().lock().await;
 
             {
-                let mut expected_last_block = Vec::new();
+                let mut expected_blocks = vec![Some(vec![]); BLOCK_HASHES.len()];
+                let mut actual_blocks = vec![None; BLOCK_HASHES.len()];
+
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
                 for (_, k, v) in tests_last_version_db::STORAGE_DB_V0_2_0 {
-                    if *k == LAST_BLOCK_HASH.as_bytes() {
-                        expected_last_block = v.to_vec();
+                    if let Some(b_num) = BLOCK_HASHES.iter().position(|v| *k == v.as_bytes()) {
+                        expected_blocks[b_num] = Some(v.to_vec());
+                        actual_blocks[b_num] = storage.get_stored_value(BLOCK_INDEXES[b_num]);
                     }
                     expected.push(Some(v.to_vec()));
                     actual.push(storage.get_stored_value(k));
                 }
                 assert_eq!(actual, expected);
+                assert_eq!(actual_blocks, expected_blocks);
                 assert_eq!(storage.get_stored_values_count(), expected.len());
                 assert_eq!(
                     storage.get_stored_value(LAST_BLOCK_HASH_KEY),
-                    Some(expected_last_block)
+                    expected_blocks[LAST_BLOCK_STORED_NUM as usize]
                 );
                 assert_eq!(
                     storage.get_last_block_stored(),
@@ -515,7 +528,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
     use naom::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
-        block_hash: LAST_BLOCK_HASH.to_owned(),
+        block_hash: BLOCK_HASHES[LAST_BLOCK_STORED_NUM as usize].to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
         merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),
