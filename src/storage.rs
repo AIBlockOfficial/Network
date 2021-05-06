@@ -1,6 +1,9 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
-use crate::constants::{BLOCK_PREPEND, DB_PATH, LAST_BLOCK_HASH_KEY, PEER_LIMIT};
+use crate::constants::{
+    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
+    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
@@ -31,6 +34,7 @@ pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 /// Database columns
 pub const DB_COL_INTERNAL: &str = "internal";
 pub const DB_COL_BC_ALL: &str = "block_chain_all";
+pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
@@ -44,6 +48,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     columns: &[
         DB_COL_INTERNAL,
         DB_COL_BC_ALL,
+        DB_COL_BC_NAMED,
         DB_COL_BC_NOW,
         DB_COL_BC_V0_2_0,
     ],
@@ -521,7 +526,7 @@ impl StorageNode {
         //
         let mut batch = self_db.batch_writer();
         let pointer = put_to_block_chain(&mut batch, &block_hash, &block_input);
-        batch.put_cf(DB_COL_BC_ALL, LAST_BLOCK_HASH_KEY, &pointer);
+        put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
         let all_txs = block_txs.iter().chain(&mining_transactions);
         for (tx_hash, tx_value) in all_txs {
@@ -568,7 +573,13 @@ impl StorageNode {
     ///
     /// * `key` - Given key to find the value.
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        let pointer = self.db.get_cf(DB_COL_BC_ALL, key).unwrap_or_else(|e| {
+        let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
+            DB_COL_BC_NAMED
+        } else {
+            DB_COL_BC_ALL
+        };
+
+        let pointer = self.db.get_cf(col_all, key).unwrap_or_else(|e| {
             warn!("get_stored_value error: {}", e);
             None
         })?;
@@ -580,9 +591,8 @@ impl StorageNode {
     }
 
     /// Get count of all the stored values
-    /// Do not count LAST_BLOCK_HASH_KEY.
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count_cf(DB_COL_BC_ALL).saturating_sub(1)
+        self.db.count_cf(DB_COL_BC_ALL)
     }
 
     /// Sends the latest block to storage
@@ -806,6 +816,19 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     pointer
 }
 
+/// Add to the block chain named column
+///
+/// ### Arguments
+///
+/// * `batch`   - Database writer
+/// * `pointer` - The block version pointer
+/// * `b_num`   - The block number
+pub fn put_named_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &[u8], b_num: u64) {
+    let indexed_key = indexed_block_hash_key(b_num);
+    batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, &pointer);
+    batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
+}
+
 /// Version pointer for the column:key
 ///
 /// ### Arguments
@@ -818,6 +841,15 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
     r.extend(&[DB_POINTER_SEPARATOR]);
     r.extend(key.as_ref());
     r
+}
+
+/// The key for indexed block
+///
+/// ### Arguments
+///
+/// * `b_num`  - The block number
+fn indexed_block_hash_key(b_num: u64) -> String {
+    format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
 }
 
 /// Decodes a version pointer

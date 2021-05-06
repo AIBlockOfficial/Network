@@ -19,6 +19,10 @@ pub const NAMED_CONSTANT_PREPEND: u8 = b'n';
 /// The constant for the named last block hash with NAMED_CONSTANT_PREPEND.
 pub const LAST_BLOCK_HASH_KEY: &str = "nLastBlockHashKey";
 
+/// The constant for the named indexed block hash with NAMED_CONSTANT_PREPEND.
+/// The index number is 0-indexed hexadecimal value of 16 characters with leading 0.
+pub const INDEXED_BLOCK_HASH_PREFIX_KEY: &str = "nIndexedBlockHashKey_";
+
 /// Path to chain DB
 pub const DB_PATH: &str = "src/db/db";
 
@@ -105,6 +109,7 @@ mod test {
             first_possible_v2_tx,
             last_possible_v2_tx,
             // Named constants with same prefix
+            INDEXED_BLOCK_HASH_PREFIX_KEY,
             LAST_BLOCK_HASH_KEY,
         ];
 
@@ -117,6 +122,10 @@ mod test {
         assert_eq!(first_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
         assert_eq!(last_possible_v3_block.as_bytes()[0], BLOCK_PREPEND);
         assert_eq!(LAST_BLOCK_HASH_KEY.as_bytes()[0], NAMED_CONSTANT_PREPEND);
+        assert_eq!(
+            INDEXED_BLOCK_HASH_PREFIX_KEY.as_bytes()[0],
+            NAMED_CONSTANT_PREPEND
+        );
 
         assert_eq!(first_possible_v2_tx.as_bytes()[0], TX_PREPEND);
         assert_eq!(last_possible_v2_tx.as_bytes()[0], TX_PREPEND);

@@ -2,7 +2,7 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, LAST_BLOCK_HASH_KEY, SANC_LIST_TEST};
+use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UtxoSet,
@@ -1688,43 +1688,53 @@ async fn handle_message_lost_common(
 
 #[tokio::test(basic_scheduler)]
 async fn request_specified_block_no_raft() {
-    request_specified_block_common(complete_network_config(11360), CfgNum::All).await;
-}
-
-async fn request_specified_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_start();
 
     //
     // Arrange
     //
-
+    let network_config = complete_network_config(11360);
     let mut network = Network::create_from_config(&network_config).await;
-    create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, Cfg::All, cfg_num).await;
-    send_block_to_storage_act(&mut network, cfg_num).await;
-    let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
-    let block_key = &stored0.as_ref().unwrap().block_hash;
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
+    let no_transactions = BTreeMap::new();
+    let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
+
+    let mut block_keys: Vec<String> = Vec::new();
+    for i in 0..11_usize {
+        let previous = block_keys.last().map(|v| v.as_str());
+        let transactions = transactions.get(i).unwrap_or(&no_transactions);
+        let ((block_key, _), block) = complete_block(i as u64, previous, &transactions, 1).await;
+
+        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &block).await;
+        node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
+        block_keys.push(block_key.clone());
+    }
+
+    let inputs: Vec<&str> = vec![
+        block_keys[0].as_str(),
+        "nLastBlockHashKey",
+        "nIndexedBlockHashKey_0000000000000000",
+        "nIndexedBlockHashKey_000000000000000a",
+        "0000_non_existent",
+        "nIndexedBlockHashKey_000000000000000b",
+    ];
+    let expected = vec![Some(0), Some(10), Some(0), Some(10), None, None];
 
     //
     // Act
     //
+    let mut actual = Vec::new();
+
     node_connect_to(&mut network, "miner1", "storage1").await;
-
-    request_specified_block_act(&mut network, "miner1", "storage1", block_key).await;
-    let actual0 = miner_get_specified_block_received_num(&mut network, "miner1").await;
-
-    request_specified_block_act(&mut network, "miner1", "storage1", LAST_BLOCK_HASH_KEY).await;
-    let actual_last = miner_get_specified_block_received_num(&mut network, "miner1").await;
-
-    request_specified_block_act(&mut network, "miner1", "storage1", "non_existent").await;
-    let non_existent = miner_get_specified_block_received_num(&mut network, "miner1").await;
+    for input in inputs {
+        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
+        actual.push(miner_get_specified_block_received_num(&mut network, "miner1").await);
+    }
 
     //
     // Assert
     //
-    assert_eq!(actual0, Some(0));
-    assert_eq!(actual_last, Some(0));
-    assert_eq!(non_existent, None);
+    assert_eq!(actual, expected);
 
     test_step_complete(network).await;
 }
