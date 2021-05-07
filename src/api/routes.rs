@@ -1,6 +1,6 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
-use crate::storage::StorageNode;
+use crate::db_utils::SimpleDb;
 use crate::wallet::WalletDb;
 
 use std::convert::Infallible;
@@ -80,7 +80,7 @@ pub fn payment_address(
 
 // POST get block information by number
 pub fn block_info_by_nums(
-    peer: Arc<Mutex<StorageNode>>,
+    db: Arc<Mutex<SimpleDb>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
@@ -96,7 +96,7 @@ pub fn block_info_by_nums(
 
     warp::path("block_by_num")
         .and(warp::post())
-        .and(with_node_component(peer))
+        .and(with_node_component(db))
         .and(warp::body::json())
         .and_then(handlers::post_block_by_num)
         .with(cors)

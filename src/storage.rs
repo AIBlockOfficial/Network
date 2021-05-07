@@ -1,8 +1,9 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{
-    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
-    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+    BLOCK_PREPEND, DB_COLS_BC, DB_COL_BC_ALL, DB_COL_BC_NAMED, DB_COL_BC_NOW, DB_COL_BC_V0_2_0,
+    DB_COL_INTERNAL, DB_PATH, DB_POINTER_SEPARATOR, INDEXED_BLOCK_HASH_PREFIX_KEY,
+    LAST_BLOCK_HASH_KEY, NAMED_CONSTANT_PREPEND, PEER_LIMIT,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
@@ -25,21 +26,12 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
-
-/// Database columns
-pub const DB_COL_INTERNAL: &str = "internal";
-pub const DB_COL_BC_ALL: &str = "block_chain_all";
-pub const DB_COL_BC_NAMED: &str = "block_chain_named";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
-pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
-
-pub const DB_COLS_BC: &[&str] = &[DB_COL_BC_NOW, DB_COL_BC_V0_2_0];
-pub const DB_POINTER_SEPARATOR: u8 = b':';
 
 /// Database specification
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -100,9 +92,10 @@ impl From<bincode::Error> for StorageError {
 pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
-    db: SimpleDb,
+    db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
+    api_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     specified_block_fetched: Option<(Vec<u8>, SocketAddr)>,
@@ -121,6 +114,8 @@ impl StorageNode {
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?
             .address;
+
+        let api_addr = SocketAddr::new(addr.ip(), config.api_port);
         let compute_addr = config
             .compute_nodes
             .get(config.storage_node_idx)
@@ -129,7 +124,9 @@ impl StorageNode {
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
-        let db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+        let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+        let db = Arc::new(Mutex::new(raw_db));
+
         let shutdown_group = {
             let compute = std::iter::once(compute_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -140,6 +137,7 @@ impl StorageNode {
             node,
             node_raft,
             db,
+            api_addr,
             local_events: Default::default(),
             compute_addr,
             whitelisted: Default::default(),
@@ -149,9 +147,19 @@ impl StorageNode {
         .load_local_db()?)
     }
 
-    /// Returns the compute node's public endpoint.
+    /// Returns the storage node's public endpoint.
     pub fn address(&self) -> SocketAddr {
         self.node.address()
+    }
+
+    /// Returns the storage node's API address
+    pub fn api_addr(&self) -> SocketAddr {
+        self.api_addr
+    }
+
+    /// Returns an arc of the storage node's db
+    pub fn db(&self) -> Arc<Mutex<SimpleDb>> {
+        self.db.clone()
     }
 
     ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
@@ -203,8 +211,10 @@ impl StorageNode {
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         let raft_db = self.node_raft.take_closed_persistent_store().await;
+        let mut self_db = self.db.lock().unwrap();
+
         ExtraNodeParams {
-            db: self.db.take().in_memory(),
+            db: self_db.take().in_memory(),
             raft_db: raft_db.in_memory(),
             ..Default::default()
         }
@@ -366,7 +376,7 @@ impl StorageNode {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::Block) => {
                 let block = self.node_raft.generate_complete_block();
-                let block_stored = Self::store_complete_block(&mut self.db, block);
+                let block_stored = Self::store_complete_block(&mut self.db.lock().unwrap(), block);
                 self.node_raft
                     .event_processed_generate_snapshot(block_stored);
                 Some(Ok(Response {
@@ -562,24 +572,13 @@ impl StorageNode {
         last_block_stored_info
     }
 
-    /// Fetches blocks by their block numbers. Blocks which for whatever reason are
-    /// unretrievable will be replaced with a default (best handling?)
+    /// Gets a value from the stored blockchain via key
     ///
     /// ### Arguments
     ///
-    /// * `nums`    - Numbers of the blocks to fetch
-    pub fn get_blocks_by_num(&self, nums: Vec<u64>) -> Vec<StoredSerializingBlock> {
-        nums.iter()
-            .map(|num| {
-                let key = indexed_block_hash_key(*num);
-                let block = self.get_stored_value(key).unwrap_or_default();
-
-                match deserialize(&block) {
-                    Ok(b) => b,
-                    Err(_) => StoredSerializingBlock::default(),
-                }
-            })
-            .collect::<Vec<StoredSerializingBlock>>()
+    /// * `key` - Key for the value to retrieve
+    pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+        get_stored_value_from_db(self.db(), key)
     }
 
     /// Get the last block stored info to send to the compute nodes
@@ -587,32 +586,10 @@ impl StorageNode {
         self.node_raft.get_last_block_stored()
     }
 
-    /// Get the stored value at the given key
-    ///
-    /// ### Arguments
-    ///
-    /// * `key` - Given key to find the value.
-    pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
-            DB_COL_BC_NAMED
-        } else {
-            DB_COL_BC_ALL
-        };
-
-        let pointer = self.db.get_cf(col_all, key).unwrap_or_else(|e| {
-            warn!("get_stored_value error: {}", e);
-            None
-        })?;
-        let (cf, key) = decode_version_pointer(&pointer);
-        self.db.get_cf(cf, key).unwrap_or_else(|e| {
-            warn!("get_stored_value error: {}", e);
-            None
-        })
-    }
-
     /// Get count of all the stored values
     pub fn get_stored_values_count(&self) -> usize {
-        self.db.count_cf(DB_COL_BC_ALL)
+        let db = self.db.lock().unwrap();
+        db.count_cf(DB_COL_BC_ALL)
     }
 
     /// Sends the latest block to storage
@@ -737,16 +714,14 @@ impl StorageNode {
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
         self.node_raft.set_key_run({
-            let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
+            let mut db = self.db.lock().unwrap();
+            let key_run = match db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
                 Ok(Some(key_run)) => deserialize::<u64>(&key_run)? + 1,
                 Ok(None) => 0,
                 Err(e) => panic!("Error accessing db: {:?}", e),
             };
             debug!("load_local_db: key_run update to {:?}", key_run);
-            if let Err(e) = self
-                .db
-                .put_cf(DB_COL_INTERNAL, RAFT_KEY_RUN, &serialize(&key_run)?)
-            {
+            if let Err(e) = db.put_cf(DB_COL_INTERNAL, RAFT_KEY_RUN, &serialize(&key_run)?) {
                 panic!("Error accessing db: {:?}", e);
             }
             key_run
@@ -847,6 +822,56 @@ pub fn put_named_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &
     let indexed_key = indexed_block_hash_key(b_num);
     batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, &pointer);
     batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
+}
+
+/// Get the stored value at the given key
+///
+/// ### Arguments
+///
+/// * `key` - Given key to find the value.
+pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
+    db: Arc<Mutex<SimpleDb>>,
+    key: K,
+) -> Option<Vec<u8>> {
+    let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
+        DB_COL_BC_NAMED
+    } else {
+        DB_COL_BC_ALL
+    };
+    let u_db = match db.lock() {
+        Ok(db) => db,
+        Err(poison) => poison.into_inner(),
+    };
+
+    let pointer = u_db.get_cf(col_all, key).unwrap_or_else(|e| {
+        warn!("get_stored_value error: {}", e);
+        None
+    })?;
+    let (cf, key) = decode_version_pointer(&pointer);
+    u_db.get_cf(cf, key).unwrap_or_else(|e| {
+        warn!("get_stored_value error: {}", e);
+        None
+    })
+}
+
+/// Fetches blocks by their block numbers. Blocks which for whatever reason are
+/// unretrievable will be replaced with a default (best handling?)
+///
+/// ### Arguments
+///
+/// * `nums`    - Numbers of the blocks to fetch
+pub fn get_blocks_by_num(db: Arc<Mutex<SimpleDb>>, nums: Vec<u64>) -> Vec<StoredSerializingBlock> {
+    nums.iter()
+        .map(|num| {
+            let key = indexed_block_hash_key(*num);
+            let block = get_stored_value_from_db(db.clone(), key).unwrap_or_default();
+
+            match deserialize(&block) {
+                Ok(b) => b,
+                Err(_) => StoredSerializingBlock::default(),
+            }
+        })
+        .collect::<Vec<StoredSerializingBlock>>()
 }
 
 /// Version pointer for the column:key

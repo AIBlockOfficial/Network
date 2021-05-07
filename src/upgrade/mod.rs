@@ -12,7 +12,8 @@ mod tests_last_version_db_no_block;
 
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{
-    DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
+    DB_COL_BC_ALL, DB_COL_BC_NAMED, DB_COL_BC_NOW, DB_COL_BC_V0_2_0, DB_COL_INTERNAL, DB_PATH,
+    DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
 };
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
@@ -272,11 +273,11 @@ pub fn get_upgrade_storage_db(
     let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
     let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
 
-    db.upgrade_create_missing_cf(storage::DB_COL_INTERNAL)?;
-    db.upgrade_create_missing_cf(storage::DB_COL_BC_ALL)?;
-    db.upgrade_create_missing_cf(storage::DB_COL_BC_NAMED)?;
-    db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
-    db.upgrade_create_missing_cf(storage::DB_COL_BC_V0_2_0)?;
+    db.upgrade_create_missing_cf(DB_COL_INTERNAL)?;
+    db.upgrade_create_missing_cf(DB_COL_BC_ALL)?;
+    db.upgrade_create_missing_cf(DB_COL_BC_NAMED)?;
+    db.upgrade_create_missing_cf(DB_COL_BC_NOW)?;
+    db.upgrade_create_missing_cf(DB_COL_BC_V0_2_0)?;
     Ok(ExtraNodeParams {
         db: Some(db),
         raft_db: Some(raft_db),
@@ -312,7 +313,7 @@ pub fn upgrade_storage_db_batch<'a>(
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
-    batch.put_cf(storage::DB_COL_INTERNAL, storage::RAFT_KEY_RUN, key_run()?);
+    batch.put_cf(DB_COL_INTERNAL, storage::RAFT_KEY_RUN, key_run()?);
 
     let mut max_block = None;
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
@@ -320,14 +321,14 @@ pub fn upgrade_storage_db_batch<'a>(
 
         if is_transaction_key(&key) {
             let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
-            storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
+            storage::put_to_block_chain_at(&mut batch, DB_COL_BC_V0_2_0, &key, &value);
         } else if is_block_key(&key) {
             let stored_block: old::naom::StoredSerializingBlock =
                 tracked_deserialize("Block deserialize", &key, &value)?;
             let block_num = stored_block.block.header.b_num;
 
             let pointer =
-                storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
+                storage::put_to_block_chain_at(&mut batch, DB_COL_BC_V0_2_0, &key, &value);
             storage::put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
             max_block = std::cmp::max(max_block, Some((block_num, key, pointer)));
@@ -390,7 +391,7 @@ pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<Extra
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
     let (batch, mut raft_batch) = (db.batch_writer(), raft_db.batch_writer());
-    for (key, value) in db.iter_cf_clone(storage::DB_COL_INTERNAL) {
+    for (key, value) in db.iter_cf_clone(DB_COL_INTERNAL) {
         if key != compute::RAFT_KEY_RUN.as_bytes() {
             let e = UpgradeError::ConfigError("Unexpected key");
             return Err(log_key_value_error(e, "Unexpected key", &key, &value));

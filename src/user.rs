@@ -9,9 +9,9 @@ use crate::utils::{
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
-use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{Transaction, TxOut};
 use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
@@ -72,21 +72,7 @@ impl From<bincode::Error> for UserError {
     }
 }
 
-/// A structure for an asset to send, along with its quantity
-#[derive(Debug, Clone)]
-pub struct AssetInTransit {
-    pub asset: Asset,
-    pub amount: TokenAmount,
-}
-
-#[derive(Debug, Clone)]
-pub struct ReturnPayment {
-    pub tx_in: TxIn,
-    pub amount: TokenAmount,
-    pub transaction: Transaction,
-}
-
-/// An instance of a MinerNode
+/// Generates transactions
 #[derive(Debug)]
 pub struct AutoGenTx {
     tx_generator: TransactionGen,
@@ -95,7 +81,7 @@ pub struct AutoGenTx {
     tx_max_count: usize,
 }
 
-/// An instance of a MinerNode
+/// An instance of a UserNode
 #[derive(Debug)]
 pub struct UserNode {
     node: Node,

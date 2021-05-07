@@ -1,13 +1,15 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
+use crate::db_utils::SimpleDb;
 use crate::interfaces::UserRequest;
-use crate::storage::StorageNode;
-use crate::wallet::EncapsulationData;
-use crate::wallet::WalletDb;
+use crate::storage::get_blocks_by_num;
+use crate::wallet::{EncapsulationData, WalletDb};
 
+use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
@@ -23,8 +25,13 @@ pub struct Addresses {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BlockInfo {
-    block_num: u64,
+pub struct APIBlockInfo {
+    b_num: u64,
+    b_hash: String,
+    merkle_hash: String,
+    previous_hash: String,
+    compute_nodes: usize,
+    transactions: usize,
 }
 
 /// Information about a wallet to be returned to requester
@@ -116,17 +123,32 @@ pub async fn get_wallet_encapsulation_data(
 
 /// Post to retrieve block information by number
 pub async fn post_block_by_num(
-    peer: Arc<Mutex<StorageNode>>,
+    db: Arc<Mutex<SimpleDb>>,
     block_nums: Vec<u64>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let storage = match peer.lock() {
-        Ok(s) => s,
-        Err(poison) => poison.into_inner(),
-    };
+    let blocks = get_blocks_by_num(db, block_nums);
+    let api_blocks: Vec<APIBlockInfo> = blocks
+        .iter()
+        .map(|b| {
+            let previous_hash = match &b.block.header.previous_hash {
+                Some(h) => h.clone(),
+                None => String::default(),
+            };
 
-    let blocks = storage.get_blocks_by_num(block_nums);
+            let b_hash = hex::encode(Sha3_256::digest(&serialize(&b.block).unwrap()));
 
-    Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
+            APIBlockInfo {
+                b_hash,
+                previous_hash,
+                b_num: b.block.header.b_num,
+                merkle_hash: b.block.header.merkle_root_hash.clone(),
+                compute_nodes: b.mining_tx_hash_and_nonces.len(),
+                transactions: b.block.transactions.len(),
+            }
+        })
+        .collect();
+
+    Ok(warp::reply::json(&api_blocks))
 }
 
 /// Post to import new keypairs to the connected wallet

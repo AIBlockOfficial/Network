@@ -1,10 +1,11 @@
 //! App to run a storage node.
 
 use clap::{App, Arg};
+use std::net::SocketAddr;
 use system::configurations::StorageNodeConfig;
 use system::StorageNode;
 use system::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 
@@ -21,6 +22,8 @@ async fn main() {
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+    let api_addr = node.api_addr();
+
     let local_event_tx = node.local_event_tx().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
@@ -47,6 +50,22 @@ async fn main() {
         })
     };
 
+    // Warp API
+    let warp_handle = tokio::spawn({
+        println!("Warp API starting at port {:?}", api_addr.port());
+        println!();
+
+        let db = node.db();
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(api_addr.port());
+
+        async move {
+            warp::serve(routes::block_info_by_nums(db))
+                .run(bind_address)
+                .await;
+        }
+    });
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -69,13 +88,16 @@ async fn main() {
         }
     });
 
-    let (main, raft, conn, disconn) = tokio::join!(
+    let (main, warp_result, raft, conn, disconn) = tokio::join!(
         main_loop_handle,
+        warp_handle,
         raft_loop_handle,
         conn_loop_handle,
         disconn_loop_handle
     );
+
     main.unwrap();
+    warp_result.unwrap();
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();

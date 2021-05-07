@@ -978,6 +978,7 @@ async fn init_storage(
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         storage_raft,
+        api_port: 3001,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
         storage_block_timeout: 1000 / config.test_duration_divider,
     };
