@@ -36,7 +36,7 @@ impl TransactionGen {
         let addr_to_keys = infos
             .iter()
             .map(|(_, (pk, sk, address))| (*pk, sk.clone(), address.clone()))
-            .map(|(pk, sk, address)| (address.clone(), TransactionsKeys { sk, pk, address }))
+            .map(|(pk, sk, address)| (address.clone(), TransactionsKeys { pk, sk, address }))
             .collect();
 
         let mut ready: BTreeMap<_, Vec<_>> = Default::default();
