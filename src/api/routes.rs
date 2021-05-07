@@ -62,6 +62,19 @@ pub fn wallet_encapsulation_data(
         .with(cors)
 }
 
+// GET new payment address
+pub fn payment_address(
+    db: WalletDb,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("new_payment_address")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(handlers::get_new_payment_address)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST save keypair
