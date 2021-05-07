@@ -1,8 +1,10 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::interfaces::UserRequest;
+use crate::storage::StorageNode;
 use crate::wallet::EncapsulationData;
 use crate::wallet::WalletDb;
+
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
 use std::str;
+use std::sync::{Arc, Mutex};
 use tracing::error;
 
 /// Private/public keypairs, stored with payment address as key.
@@ -17,6 +20,11 @@ use tracing::error;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
     addresses: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BlockInfo {
+    block_num: u64,
 }
 
 /// Information about a wallet to be returned to requester
@@ -105,6 +113,21 @@ pub async fn get_wallet_encapsulation_data(
 }
 
 //======= POST HANDLERS =======//
+
+/// Post to retrieve block information by number
+pub async fn post_block_by_num(
+    peer: Arc<Mutex<StorageNode>>,
+    block_nums: Vec<u64>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let storage = match peer.lock() {
+        Ok(s) => s,
+        Err(poison) => poison.into_inner(),
+    };
+
+    let blocks = storage.get_blocks_by_num(block_nums);
+
+    Ok(warp::reply::json(&"Key/s saved successfully".to_owned()))
+}
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(

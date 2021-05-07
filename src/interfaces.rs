@@ -21,7 +21,7 @@ pub struct Response {
 }
 
 /// Mined block as stored in DB.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
     pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,

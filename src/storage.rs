@@ -562,6 +562,26 @@ impl StorageNode {
         last_block_stored_info
     }
 
+    /// Fetches blocks by their block numbers. Blocks which for whatever reason are
+    /// unretrievable will be replaced with a default (best handling?)
+    ///
+    /// ### Arguments
+    ///
+    /// * `nums`    - Numbers of the blocks to fetch
+    pub fn get_blocks_by_num(&self, nums: Vec<u64>) -> Vec<StoredSerializingBlock> {
+        nums.iter()
+            .map(|num| {
+                let key = indexed_block_hash_key(*num);
+                let block = self.get_stored_value(key).unwrap_or_default();
+
+                match deserialize(&block) {
+                    Ok(b) => b,
+                    Err(_) => StoredSerializingBlock::default(),
+                }
+            })
+            .collect::<Vec<StoredSerializingBlock>>()
+    }
+
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.node_raft.get_last_block_stored()
