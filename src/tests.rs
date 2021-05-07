@@ -57,8 +57,20 @@ const BLOCK_RECEIVED: &str = "Block received to be added";
 const BLOCK_STORED: &str = "Block complete stored";
 const BLOCK_RECEIVED_AND_STORED: [&str; 2] = [BLOCK_RECEIVED, BLOCK_STORED];
 
+const SOME_PUB_KEYS: [&str; 3] = [
+    COMMON_PUB_KEY,
+    "ec527f879a19bed8dee429a25cd2518e7d9ec0f439ba24aecbd089b340154fad",
+    "5ee0828b1f830f790bea4a3f11256b90274081dfc6bb642dfd8c8a685df941cd",
+];
+const SOME_PUB_KEY_ADDRS: [&str; 3] = [
+    COMMON_PUB_ADDR,
+    "f5b0f7eb078166d2667a2c5af0ac020f",
+    "8fd42eabfca575319b090c843510e903",
+];
+
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_SEC_KEY: &str = "0186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca45371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Cfg {
@@ -1751,6 +1763,72 @@ async fn request_specified_block_act(
     miner_handle_event(network, &miner_from, "Specified block received").await;
 }
 
+#[tokio::test(basic_scheduler)]
+async fn request_utxo_set_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11400, 1);
+    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+        let a = DEFAULT_SEED_AMOUNT;
+        let pk = SOME_PUB_KEYS;
+        &[
+            ("000000", vec![(pk[0], a)]),
+            ("000001", vec![(pk[1], a), (pk[0], a)]),
+            ("000002", vec![(pk[2], a)]),
+        ]
+    });
+    let mut network = Network::create_from_config(&network_config).await;
+    create_first_block_act(&mut network).await;
+
+    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+    let addresses = {
+        let a = SOME_PUB_KEY_ADDRS;
+        let ne = Some("DoesNotExist");
+        vec![None, Some(a[0]), Some(a[1]), Some(a[2]), ne]
+    };
+    let expected = vec![
+        Some(committed_utxo_set.keys().cloned().collect()),
+        Some(vec![
+            OutPoint::new("000000".to_string(), 0),
+            OutPoint::new("000001".to_string(), 1),
+        ]),
+        Some(vec![OutPoint::new("000001".to_string(), 0)]),
+        Some(vec![OutPoint::new("000002".to_string(), 0)]),
+        Some(Vec::new()),
+    ];
+
+    //
+    // Act
+    //
+    let mut actual = Vec::new();
+    for address in addresses {
+        let address = address.map(|v| v.to_string());
+        request_utxo_set_act(&mut network, "user1", "compute1", address).await;
+        actual.push(user_get_received_utxo_set_keys(&mut network, "user1").await);
+    }
+
+    //
+    // Assert
+    //
+    assert_eq!(actual, expected);
+    test_step_complete(network).await;
+}
+
+async fn request_utxo_set_act(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+    address: Option<String>,
+) {
+    user_send_utxo_request(network, user, compute, address).await;
+    compute_handle_event(network, compute, "Received UTXO fetch request").await;
+    compute_send_utxo_set(network, compute).await;
+    user_handle_event(network, user, "Received UTXO set").await;
+}
+
 //
 // Node helpers
 //
@@ -2242,6 +2320,11 @@ async fn compute_all_mining_block_mined(
     }
 }
 
+async fn compute_send_utxo_set(network: &mut Network, compute: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.send_fetched_utxo_set().await.unwrap();
+}
+
 //
 // StorageNode helpers
 //
@@ -2560,6 +2643,29 @@ async fn user_process_mining_notified(
     u.pending_test_auto_gen_txs().cloned()
 }
 
+//Will return None if deserialization of UtxoSet has failed
+async fn user_get_received_utxo_set_keys(
+    network: &mut Network,
+    user: &str,
+) -> Option<Vec<OutPoint>> {
+    let u = network.user(user).unwrap().lock().await;
+    let received_utxo_set = u.get_received_utxo();
+    received_utxo_set.map(|received_utxo_set| received_utxo_set.keys().cloned().collect())
+}
+
+async fn user_send_utxo_request(
+    network: &mut Network,
+    from_user: &str,
+    to_compute: &str,
+    address: Option<String>,
+) {
+    let mut u = network.user(from_user).unwrap().lock().await;
+    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    u.send_request_utxo_set(compute_node_addr, address)
+        .await
+        .unwrap();
+}
+
 //
 // MinerNode helpers
 //
@@ -2689,14 +2795,23 @@ fn valid_transactions_with(
 }
 
 fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetSpec {
+    let seed: Vec<_> = seed
+        .iter()
+        .copied()
+        .map(|(n, v)| (v, (0..n).map(|_| (COMMON_PUB_KEY, amount)).collect()))
+        .collect();
+    make_compute_seed_utxo_with_info(&seed)
+}
+
+fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -> UtxoSetSpec {
     seed.iter()
-        .map(|(n, v)| {
+        .map(|(v, txo)| {
             (
                 v.to_string(),
-                (0..*n)
-                    .map(|_| TxOutSpec {
-                        public_key: COMMON_PUB_KEY.to_owned(),
-                        amount,
+                txo.iter()
+                    .map(|(pk, amount)| TxOutSpec {
+                        public_key: pk.to_string(),
+                        amount: *amount,
                     })
                     .collect(),
             )

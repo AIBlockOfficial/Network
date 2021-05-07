@@ -141,6 +141,7 @@ pub struct ComputeNode {
     user_notification_list: BTreeSet<SocketAddr>,
     coordiated_shudown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
+    fetched_utxo_set: Option<(SocketAddr, Vec<u8>)>,
 }
 
 impl ComputeNode {
@@ -189,6 +190,7 @@ impl ComputeNode {
             user_notification_list: Default::default(),
             coordiated_shudown: u64::MAX,
             shutdown_group,
+            fetched_utxo_set: None,
         }
         .load_local_db()?)
     }
@@ -456,6 +458,16 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
+    ///Sends the requested UTXO set to the user that requested it.
+    pub async fn send_fetched_utxo_set(&mut self) -> Result<()> {
+        if let Some((peer, utxo_set)) = self.fetched_utxo_set.take() {
+            self.node
+                .send(peer, UserRequest::SendUtxoSet { utxo_set })
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Listens for new events from peers and handles them, processing any errors.
     pub async fn handle_next_event_response(
         &mut self,
@@ -464,6 +476,14 @@ impl ComputeNode {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Received UTXO fetch request",
+            }) => {
+                if let Err(e) = self.send_fetched_utxo_set().await {
+                    error!("Requested UTXO set not sent {:?}", e);
+                }
+            }
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
@@ -762,6 +782,7 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
+            SendUtxoRequest { address } => Some(self.fetch_utxo_set(peer, address)),
             SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
                 block_num,
@@ -1237,6 +1258,26 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
+    fn fetch_utxo_set(&mut self, peer: SocketAddr, address: Option<String>) -> Response {
+        //If an address is given, filter through the UTXO set to find entries for that address to create a UTXO subset.
+        self.fetched_utxo_set = if let Some(address) = address {
+            let utxo_subset: UtxoSet = self
+                .get_committed_utxo_set()
+                .iter()
+                .filter(|(_, v)| address.eq(v.script_public_key.as_ref().unwrap()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            Some((peer, serialize(&utxo_subset).unwrap()))
+        } else {
+            //Send the entire UTXO set.
+            Some((peer, serialize(&self.get_committed_utxo_set()).unwrap()))
+        };
+        Response {
+            success: true,
+            reason: "Received UTXO fetch request",
+        }
+    }
+
     fn partition(&self, _uuids: Vec<&'static str>) -> Response {
         Response {
             success: false,

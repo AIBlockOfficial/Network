@@ -198,9 +198,9 @@ impl RaftNode {
                 raft_db,
             },
             RaftNodeChannels {
+                msg_out_rx,
                 cmd_tx,
                 committed_rx,
-                msg_out_rx,
             },
         )
     }
