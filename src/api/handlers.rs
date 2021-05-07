@@ -74,6 +74,15 @@ pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply
     Ok(warp::reply::json(&Addresses { addresses }))
 }
 
+/// Gets a newly generated payment address
+pub async fn get_new_payment_address(
+    wallet_db: WalletDb,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let (address, _) = wallet_db.generate_payment_address().await;
+
+    Ok(warp::reply::json(&address))
+}
+
 /// Gets information needed to encapsulate data
 pub async fn get_wallet_encapsulation_data(
     wallet_db: WalletDb,
