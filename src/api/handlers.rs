@@ -1,7 +1,7 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::UserRequest;
+use crate::interfaces::{StoredSerializingBlock, UserRequest};
 use crate::storage::get_blocks_by_num;
 use crate::wallet::{EncapsulationData, WalletDb};
 
@@ -26,12 +26,8 @@ pub struct Addresses {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct APIBlockInfo {
-    b_num: u64,
     b_hash: String,
-    merkle_hash: String,
-    previous_hash: String,
-    compute_nodes: usize,
-    transactions: usize,
+    block: StoredSerializingBlock,
 }
 
 /// Information about a wallet to be returned to requester
@@ -130,20 +126,11 @@ pub async fn post_block_by_num(
     let api_blocks: Vec<APIBlockInfo> = blocks
         .iter()
         .map(|b| {
-            let previous_hash = match &b.block.header.previous_hash {
-                Some(h) => h.clone(),
-                None => String::default(),
-            };
-
             let b_hash = hex::encode(Sha3_256::digest(&serialize(&b.block).unwrap()));
 
             APIBlockInfo {
                 b_hash,
-                previous_hash,
-                b_num: b.block.header.b_num,
-                merkle_hash: b.block.header.merkle_root_hash.clone(),
-                compute_nodes: b.mining_tx_hash_and_nonces.len(),
-                transactions: b.block.transactions.len(),
+                block: b.clone(),
             }
         })
         .collect();

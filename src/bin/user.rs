@@ -84,7 +84,7 @@ async fn main() {
     let warp_handle = tokio::spawn({
         let (db, node, api_addr) = api_inputs;
 
-        println!("Warp API starting at port {:?}", api_addr.port());
+        println!("Warp API started on port {:?}", api_addr.port());
         println!();
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();

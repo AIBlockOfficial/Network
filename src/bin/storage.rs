@@ -52,12 +52,13 @@ async fn main() {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        println!("Warp API starting at port {:?}", api_addr.port());
+        println!("Warp API started on port {:?}", api_addr.port());
         println!();
 
-        let db = node.db();
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());
+
+        let db = node.db();
 
         async move {
             warp::serve(routes::block_info_by_nums(db))
@@ -88,7 +89,7 @@ async fn main() {
         }
     });
 
-    let (main, warp_result, raft, conn, disconn) = tokio::join!(
+    let (main, warp, raft, conn, disconn) = tokio::join!(
         main_loop_handle,
         warp_handle,
         raft_loop_handle,
@@ -97,7 +98,7 @@ async fn main() {
     );
 
     main.unwrap();
-    warp_result.unwrap();
+    warp.unwrap();
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
