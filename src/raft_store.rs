@@ -135,9 +135,10 @@ impl RaftStore {
     pub fn load_in_memory_or_default(mut self, init_cs: ConfState) -> RaftResult<Self> {
         let in_memory = &self.in_memory;
         let presistent = &self.presistent;
-        in_memory.wl().set_conf_state(init_cs, None);
+        in_memory.wl().set_conf_state(init_cs.clone(), None);
 
-        if let Some(snapshot) = get_persistent_snapshot(presistent)? {
+        if let Some(mut snapshot) = get_persistent_snapshot(presistent)? {
+            snapshot.mut_metadata().set_conf_state(init_cs);
             let snap_index = snapshot.get_metadata().get_index();
             info!("load snapshot idx={}", snap_index);
 

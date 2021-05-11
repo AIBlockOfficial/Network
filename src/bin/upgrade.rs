@@ -5,7 +5,7 @@ use system::configurations::DbMode;
 use system::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
     get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbCfg,
-    DbSpecInfo, UpgradeError, DB_SPEC_INFOS,
+    DbSpecInfo, UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
 };
 
 const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
@@ -21,8 +21,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = clap_app().get_matches();
-    let (processing, db_modes, passphrase, db_cfg) =
-        configuration(load_settings(&matches), &matches);
+    let (processing, db_modes, upgrade_cfg) = configuration(load_settings(&matches), &matches);
 
     match processing {
         Processing::Read => {
@@ -31,7 +30,7 @@ async fn main() {
             }
         }
         Processing::Upgrade => {
-            if let Err(e) = process_upgrade(db_modes, passphrase, db_cfg) {
+            if let Err(e) = process_upgrade(db_modes, upgrade_cfg) {
                 println!("Upgrade error, aborting: {:?}", e);
             }
         }
@@ -68,18 +67,17 @@ fn process_read(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
 /// Process reading databases, format in a rust ready constants.
 fn process_upgrade(
     db_modes: Vec<(String, DbMode)>,
-    passphrase: String,
-    db_cfg: DbCfg,
+    upgrade_cfg: UpgradeCfg,
 ) -> Result<(), UpgradeError> {
     println!("Upgrade with config {:?}", db_modes);
     for (node_type, mode) in db_modes {
         println!("Upgrade Database {}, {:?}", node_type, mode);
         let extra = Default::default();
         match node_type.as_str() {
-            "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, extra)?, db_cfg)?,
-            "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, extra)?)?,
-            "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &passphrase)?,
-            "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &passphrase)?,
+            "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, extra)?, &upgrade_cfg)?,
+            "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, extra)?, &upgrade_cfg)?,
+            "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
+            "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
             _ => return Err(UpgradeError::ConfigError("Type does not exists")),
         };
         println!("Done Upgrade Database {}, {:?}", node_type, mode);
@@ -157,7 +155,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 fn configuration(
     settings: config::Config,
     matches: &clap::ArgMatches,
-) -> (Processing, Vec<(String, DbMode)>, String, DbCfg) {
+) -> (Processing, Vec<(String, DbMode)>, UpgradeCfg) {
     let passphrase = matches
         .value_of("passphrase")
         .unwrap_or_default()
@@ -172,6 +170,12 @@ fn configuration(
         "mine" => DbCfg::ComputeBlockToMine,
         "discard" => DbCfg::ComputeBlockInStorage,
         v => panic!("expect compute_block to be miner or discard: {}", v),
+    };
+    let raft_len = settings.get_array("storage_nodes").unwrap().len();
+    let upgrade_cfg = UpgradeCfg {
+        raft_len,
+        passphrase,
+        db_cfg,
     };
 
     let db_modes = if node_type == "all" {
@@ -203,7 +207,7 @@ fn configuration(
         panic!("type must be one of all or {}", NODE_TYPES.join(", "));
     };
 
-    (processing, db_modes, passphrase, db_cfg)
+    (processing, db_modes, upgrade_cfg)
 }
 
 #[cfg(test)]
@@ -228,8 +232,11 @@ mod test {
                 ("user".to_owned(), DbMode::Test(1000)),
                 ("miner".to_owned(), DbMode::Test(0)),
             ],
-            String::new(),
-            DbCfg::ComputeBlockToMine,
+            UpgradeCfg {
+                raft_len: 1,
+                passphrase: String::new(),
+                db_cfg: DbCfg::ComputeBlockToMine,
+            },
         );
 
         validate_startup_common(args, expected);
@@ -249,8 +256,33 @@ mod test {
         let expected = (
             Processing::Read,
             vec![("user".to_owned(), DbMode::Test(1001))],
-            "TestPassPhrase".to_owned(),
-            DbCfg::ComputeBlockInStorage,
+            UpgradeCfg {
+                raft_len: 1,
+                passphrase: "TestPassPhrase".to_owned(),
+                db_cfg: DbCfg::ComputeBlockInStorage,
+            },
+        );
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_read_all_raft_3() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_3.toml",
+            "--processing=read",
+            "--type=compute",
+            "--compute_block=mine",
+        ];
+        let expected = (
+            Processing::Read,
+            vec![("compute".to_owned(), DbMode::Test(0))],
+            UpgradeCfg {
+                raft_len: 3,
+                passphrase: String::new(),
+                db_cfg: DbCfg::ComputeBlockToMine,
+            },
         );
 
         validate_startup_common(args, expected);
@@ -258,7 +290,7 @@ mod test {
 
     fn validate_startup_common(
         args: Vec<&str>,
-        expected: (Processing, Vec<(String, DbMode)>, String, DbCfg),
+        expected: (Processing, Vec<(String, DbMode)>, UpgradeCfg),
     ) {
         //
         // Act

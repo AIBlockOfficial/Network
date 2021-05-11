@@ -133,10 +133,7 @@ impl StorageRaft {
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
-        let consensused = StorageConsensused {
-            sufficient_majority: peers_len / 2 + 1,
-            ..StorageConsensused::default()
-        };
+        let consensused = StorageConsensused::default().with_peers_len(peers_len);
 
         Self {
             first_raft_peer,
@@ -220,7 +217,16 @@ impl StorageRaft {
             None
         } else {
             warn!("apply_snapshot called self.consensused updated");
+
+            let sufficient_majority = self.consensused.sufficient_majority;
             self.consensused = deserialize(&consensused_ser).unwrap();
+
+            if sufficient_majority != self.consensused.sufficient_majority {
+                panic!(
+                    "snapshot majority incompatible with launched network: {}",
+                    self.consensused.sufficient_majority
+                );
+            }
             self.propose_block_timeout_at = self.next_propose_block_timeout_at();
             Some(CommittedItem::Snapshot)
         }
@@ -397,6 +403,12 @@ impl StorageRaft {
 }
 
 impl StorageConsensused {
+    /// Specify the raft group size
+    pub fn with_peers_len(mut self, peers_len: usize) -> Self {
+        self.sufficient_majority = peers_len / 2 + 1;
+        self
+    }
+
     /// Create ComputeConsensused from imported data in upgrade
     pub fn from_import(consensused: StorageConsensusedImport) -> Self {
         let StorageConsensusedImport {

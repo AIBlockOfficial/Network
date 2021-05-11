@@ -3003,7 +3003,7 @@ fn generate_nonce() -> Vec<u8> {
     (0..16).map(|_| rng.gen_range(0, 200)).collect()
 }
 
-fn complete_network_config(initial_port: u16) -> NetworkConfig {
+fn basic_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
         compute_raft: false,
@@ -3011,24 +3011,21 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         in_memory_db: true,
         compute_partition_full_size: 1,
         compute_minimum_miner_pool_len: 1,
-        nodes: vec![
-            (NodeType::Miner, vec!["miner1".to_string()]),
-            (NodeType::Compute, vec!["compute1".to_string()]),
-            (NodeType::Storage, vec!["storage1".to_string()]),
-            (NodeType::User, vec!["user1".to_string()]),
-        ]
-        .into_iter()
-        .collect(),
+        nodes: vec![(NodeType::User, vec!["user1".to_string()])]
+            .into_iter()
+            .collect(),
         compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
         compute_genesis_tx_in: None,
         user_wallet_seeds: Vec::new(),
-        compute_to_miner_mapping: Some(("compute1".to_string(), vec!["miner1".to_string()]))
-            .into_iter()
-            .collect(),
+        compute_to_miner_mapping: Default::default(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
         user_test_auto_gen_setup: Default::default(),
     }
+}
+
+fn complete_network_config(initial_port: u16) -> NetworkConfig {
+    complete_network_config_with_n_compute_miner(initial_port, false, 1, 1)
 }
 
 fn complete_network_config_with_n_compute_raft(
@@ -3041,31 +3038,10 @@ fn complete_network_config_with_n_compute_raft(
 fn complete_network_config_with_n_compute_miner(
     initial_port: u16,
     use_raft: bool,
-    compute_count: usize,
+    raft_count: usize,
     miner_count: usize,
 ) -> NetworkConfig {
-    let mut cfg = complete_network_config(initial_port);
-    cfg.compute_raft = use_raft;
-    cfg.storage_raft = use_raft;
-    *cfg.nodes_mut(NodeType::Compute) = (0..compute_count)
-        .map(|idx| format!("compute{}", idx + 1))
-        .collect();
-    *cfg.nodes_mut(NodeType::Storage) = (0..compute_count)
-        .map(|idx| format!("storage{}", idx + 1))
-        .collect();
-    *cfg.nodes_mut(NodeType::Miner) = (0..miner_count)
-        .map(|idx| format!("miner{}", idx + 1))
-        .collect();
-    cfg.compute_to_miner_mapping = {
-        let miner_nodes = &cfg.nodes[&NodeType::Miner];
-        let compute_nodes = &cfg.nodes[&NodeType::Compute];
-        let miners = miner_nodes.iter().cloned();
-        let computes = compute_nodes.iter().cloned().cycle();
-        let mut mapping = BTreeMap::new();
-        for (miner, compute) in miners.zip(computes) {
-            mapping.entry(compute).or_insert_with(Vec::new).push(miner);
-        }
-        mapping
-    };
-    cfg
+    basic_network_config(initial_port)
+        .with_raft(use_raft)
+        .with_groups(raft_count, miner_count)
 }
