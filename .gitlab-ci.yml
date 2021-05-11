@@ -29,7 +29,7 @@ test:cargo:
     - merge_requests
   cache:
     key:
-      prefix: test
+      prefix: test2
   script:
     - rustc --version && cargo --version  # Print version info for debugging
     - cargo test --workspace --verbose
