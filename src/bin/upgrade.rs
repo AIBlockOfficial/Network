@@ -1,6 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
+use std::collections::BTreeSet;
 use system::configurations::DbMode;
 use system::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
@@ -17,7 +18,7 @@ enum Processing {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), UpgradeError> {
     tracing_subscriber::fmt::init();
 
     let matches = clap_app().get_matches();
@@ -27,14 +28,18 @@ async fn main() {
         Processing::Read => {
             if let Err(e) = process_read(db_modes) {
                 println!("Read out error, aborting: {:?}", e);
+                return Err(e);
             }
         }
         Processing::Upgrade => {
             if let Err(e) = process_upgrade(db_modes, upgrade_cfg) {
                 println!("Upgrade error, aborting: {:?}", e);
+                return Err(e);
             }
         }
     }
+
+    Ok(())
 }
 
 /// Process reading databases, format in a rust ready constants.
@@ -137,6 +142,12 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Specify what to do with compute node: mine or discard")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("ignore")
+                .long("ignore")
+                .help("Ignore some toml nodes: ignore=compute.0,storage.0,user.1,miner.1")
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -178,6 +189,9 @@ fn configuration(
         db_cfg,
     };
 
+    let ignore = matches.value_of("ignore").unwrap_or("");
+    let ignore: BTreeSet<String> = ignore.split(',').map(|v| v.to_owned()).collect();
+
     let db_modes = if node_type == "all" {
         let mut upgrades = Vec::new();
         for node_type in NODE_TYPES {
@@ -185,9 +199,11 @@ fn configuration(
             let node_specs_name = format!("{}_nodes", node_type);
             let node_specs = settings.get_array(&node_specs_name).unwrap();
             for node_index in 0..node_specs.len() {
-                if let DbMode::Test(index) = settings.get(&db_mode_name).unwrap() {
-                    let db_mode = DbMode::Test(index + node_index);
-                    upgrades.push((node_type.to_string(), db_mode));
+                if !ignore.contains(&format!("{}.{}", node_type, node_index)) {
+                    if let DbMode::Test(index) = settings.get(&db_mode_name).unwrap() {
+                        let db_mode = DbMode::Test(index + node_index);
+                        upgrades.push((node_type.to_string(), db_mode));
+                    }
                 }
             }
         }
@@ -280,6 +296,36 @@ mod test {
             vec![("compute".to_owned(), DbMode::Test(0))],
             UpgradeCfg {
                 raft_len: 3,
+                passphrase: String::new(),
+                db_cfg: DbCfg::ComputeBlockToMine,
+            },
+        );
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_read_all_raft_2() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_2.toml",
+            "--processing=read",
+            "--type=all",
+            "--compute_block=mine",
+            "--ignore=miner.1,miner.2,miner.3,miner.4,miner.5,miner.6,user.1",
+        ];
+        let expected = (
+            Processing::Read,
+            vec![
+                ("compute".to_owned(), DbMode::Test(0)),
+                ("compute".to_owned(), DbMode::Test(1)),
+                ("storage".to_owned(), DbMode::Test(0)),
+                ("storage".to_owned(), DbMode::Test(1)),
+                ("user".to_owned(), DbMode::Test(1000)),
+                ("miner".to_owned(), DbMode::Test(0)),
+            ],
+            UpgradeCfg {
+                raft_len: 2,
                 passphrase: String::new(),
                 db_cfg: DbCfg::ComputeBlockToMine,
             },
