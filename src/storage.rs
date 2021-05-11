@@ -152,14 +152,9 @@ impl StorageNode {
         self.node.address()
     }
 
-    /// Returns the storage node's API address
-    pub fn api_addr(&self) -> SocketAddr {
-        self.api_addr
-    }
-
-    /// Returns an arc of the storage node's db
-    pub fn db(&self) -> Arc<Mutex<SimpleDb>> {
-        self.db.clone()
+    /// Returns the storage node's API info
+    pub fn api_inputs(&self) -> (Arc<Mutex<SimpleDb>>, SocketAddr) {
+        (self.db.clone(), self.api_addr)
     }
 
     ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
@@ -578,7 +573,7 @@ impl StorageNode {
     ///
     /// * `key` - Key for the value to retrieve
     pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        get_stored_value_from_db(self.db(), key)
+        get_stored_value_from_db(self.db.clone(), key)
     }
 
     /// Get the last block stored info to send to the compute nodes

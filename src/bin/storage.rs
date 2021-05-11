@@ -22,7 +22,7 @@ async fn main() {
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
-    let api_addr = node.api_addr();
+    let (db, api_addr) = node.api_inputs();
 
     let local_event_tx = node.local_event_tx().clone();
 
@@ -57,8 +57,6 @@ async fn main() {
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());
-
-        let db = node.db();
 
         async move {
             warp::serve(routes::block_info_by_nums(db))
@@ -131,6 +129,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     settings.set_default("storage_node_idx", 0).unwrap();
     settings.set_default("storage_raft", 0).unwrap();
+    settings.set_default("storage_api_port", 3001).unwrap();
     settings
         .set_default("storage_raft_tick_timeout", 10)
         .unwrap();

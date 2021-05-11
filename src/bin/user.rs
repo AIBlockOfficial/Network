@@ -182,7 +182,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .value_of("initial_block_config")
         .unwrap_or("src/bin/initial_block.json");
 
-    settings.set_default("api_port", 3000).unwrap();
+    settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();

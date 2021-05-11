@@ -71,7 +71,7 @@ pub fn payment_address(
 
     warp::path("new_payment_address")
         .and(warp::get())
-        .and(with_db(db))
+        .and(with_node_component(db))
         .and_then(handlers::get_new_payment_address)
         .with(cors)
 }

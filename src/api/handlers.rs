@@ -1,15 +1,13 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::{StoredSerializingBlock, UserRequest};
+use crate::interfaces::UserRequest;
 use crate::storage::get_blocks_by_num;
 use crate::wallet::{EncapsulationData, WalletDb};
 
-use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
@@ -22,12 +20,6 @@ use tracing::error;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
     addresses: BTreeMap<String, Vec<u8>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct APIBlockInfo {
-    b_hash: String,
-    block: StoredSerializingBlock,
 }
 
 /// Information about a wallet to be returned to requester
@@ -123,19 +115,8 @@ pub async fn post_block_by_num(
     block_nums: Vec<u64>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let blocks = get_blocks_by_num(db, block_nums);
-    let api_blocks: Vec<APIBlockInfo> = blocks
-        .iter()
-        .map(|b| {
-            let b_hash = hex::encode(Sha3_256::digest(&serialize(&b.block).unwrap()));
 
-            APIBlockInfo {
-                b_hash,
-                block: b.clone(),
-            }
-        })
-        .collect();
-
-    Ok(warp::reply::json(&api_blocks))
+    Ok(warp::reply::json(&blocks))
 }
 
 /// Post to import new keypairs to the connected wallet
