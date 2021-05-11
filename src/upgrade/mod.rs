@@ -617,15 +617,15 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
 }
 
 fn get_old_persistent_snapshot_data_and_metadata(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-    use protobuf::Message;
     use raft::prelude::Snapshot;
     let mut snapshot = protobuf::parse_from_bytes::<Snapshot>(snapshot)
         .map_err(|e| UpgradeError::Serialization(serde::de::Error::custom(e)))?;
     let data = snapshot.take_data();
-    let meta = snapshot
-        .get_metadata()
-        .write_to_bytes()
-        .map_err(|e| UpgradeError::Serialization(serde::ser::Error::custom(e)))?;
+    let meta = snapshot.get_metadata();
+    let meta = serialize(&raft_store::SnapMetadata {
+        index: meta.index,
+        term: meta.term,
+    })?;
     Ok((data, meta))
 }
 

@@ -293,16 +293,7 @@ impl ComputeRaft {
         } else {
             // Non empty snapshot
             warn!("apply_snapshot called self.consensused updated");
-
-            let sufficient_majority = self.consensused.sufficient_majority;
             self.consensused = deserialize(&consensused_ser).unwrap();
-
-            if sufficient_majority != self.consensused.sufficient_majority {
-                panic!(
-                    "snapshot majority incompatible with launched network: {}",
-                    self.consensused.sufficient_majority
-                );
-            }
             if let Some(proposal) = &mut self.local_initial_proposal {
                 *proposal = InitialProposal::PendingAll;
             }

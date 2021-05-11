@@ -217,16 +217,7 @@ impl StorageRaft {
             None
         } else {
             warn!("apply_snapshot called self.consensused updated");
-
-            let sufficient_majority = self.consensused.sufficient_majority;
             self.consensused = deserialize(&consensused_ser).unwrap();
-
-            if sufficient_majority != self.consensused.sufficient_majority {
-                panic!(
-                    "snapshot majority incompatible with launched network: {}",
-                    self.consensused.sufficient_majority
-                );
-            }
             self.propose_block_timeout_at = self.next_propose_block_timeout_at();
             Some(CommittedItem::Snapshot)
         }

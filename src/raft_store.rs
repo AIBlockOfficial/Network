@@ -6,6 +6,7 @@ use protobuf::Message;
 use raft::prelude::*;
 use raft::storage::MemStorage;
 use raft::{Result as RaftResult, StorageError};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{error, info};
 
@@ -14,6 +15,12 @@ pub const SNAPSHOT_DATA_KEY: &str = "SnaphotDataKey";
 pub const SNAPSHOT_META_KEY: &str = "SnaphotMetaKey";
 pub const ENTRY_KEY: &str = "EntryKey";
 pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapMetadata {
+    pub index: u64,
+    pub term: u64,
+}
 
 pub struct RaftStore {
     /// In memory storage used during normal operation
@@ -137,8 +144,7 @@ impl RaftStore {
         let presistent = &self.presistent;
         in_memory.wl().set_conf_state(init_cs.clone(), None);
 
-        if let Some(mut snapshot) = get_persistent_snapshot(presistent)? {
-            snapshot.mut_metadata().set_conf_state(init_cs);
+        if let Some(snapshot) = get_persistent_snapshot(presistent, init_cs)? {
             let snap_index = snapshot.get_metadata().get_index();
             info!("load snapshot idx={}", snap_index);
 
@@ -302,7 +308,10 @@ fn set_last_persistent_entry(presistent: &mut SimpleDbWriteBatch, index: u64) ->
     Ok(())
 }
 
-fn get_persistent_snapshot(presistent: &SimpleDb) -> RaftResult<Option<Snapshot>> {
+fn get_persistent_snapshot(
+    presistent: &SimpleDb,
+    init_cs: ConfState,
+) -> RaftResult<Option<Snapshot>> {
     let data = presistent
         .get_cf(DB_COL_DEFAULT, SNAPSHOT_DATA_KEY)
         .map_err(from_db_err)?;
@@ -311,9 +320,18 @@ fn get_persistent_snapshot(presistent: &SimpleDb) -> RaftResult<Option<Snapshot>
         .map_err(from_db_err)?;
 
     if let (Some(data), Some(meta)) = (data, meta) {
+        let meta = {
+            let metadata: SnapMetadata = deserialize(&meta).map_err(from_ser_err)?;
+            let mut meta = SnapshotMetadata::new();
+            meta.set_conf_state(init_cs);
+            meta.index = metadata.index;
+            meta.term = metadata.term;
+            meta
+        };
+
         let mut snapshot = Snapshot::new();
         snapshot.set_data(data);
-        snapshot.set_metadata(protobuf::parse_from_bytes::<SnapshotMetadata>(&meta)?);
+        snapshot.set_metadata(meta);
         Ok(Some(snapshot))
     } else {
         Ok(None)
@@ -325,7 +343,12 @@ fn set_persistent_snapshot(
     snapshot: &Snapshot,
 ) -> RaftResult<()> {
     let data = snapshot.get_data();
-    let meta = snapshot.get_metadata().write_to_bytes()?;
+    let meta = snapshot.get_metadata();
+    let meta = serialize(&SnapMetadata {
+        index: meta.index,
+        term: meta.term,
+    })
+    .map_err(from_ser_err)?;
     presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_DATA_KEY, data);
     presistent.put_cf(DB_COL_DEFAULT, SNAPSHOT_META_KEY, meta);
     Ok(())
