@@ -82,10 +82,11 @@ async fn main() {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        println!("Warp API starting at port 3000");
+        let (db, node, api_addr) = api_inputs;
+
+        println!("Warp API started on port {:?}", api_addr.port());
         println!();
 
-        let (db, node, api_addr) = api_inputs;
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());
 
@@ -181,7 +182,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .value_of("initial_block_config")
         .unwrap_or("src/bin/initial_block.json");
 
-    settings.set_default("api_port", 3000).unwrap();
+    settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();

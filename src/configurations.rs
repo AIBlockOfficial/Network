@@ -91,6 +91,8 @@ pub struct StorageNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// Whether storage node will use raft or act independently (0)
     pub storage_raft: usize,
+    /// API port
+    pub storage_api_port: u16,
     /// Timeout for ticking raft
     pub storage_raft_tick_timeout: usize,
     /// Timeout for generating a new block
@@ -140,7 +142,7 @@ pub struct UserNodeConfig {
     /// All peer user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
     /// API port
-    pub api_port: u16,
+    pub user_api_port: u16,
     /// Wallet seeds
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     /// Option of the passphrase used for encryption

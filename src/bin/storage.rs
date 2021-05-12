@@ -1,10 +1,11 @@
 //! App to run a storage node.
 
 use clap::{App, Arg};
+use std::net::SocketAddr;
 use system::configurations::StorageNodeConfig;
 use system::StorageNode;
 use system::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 
@@ -21,6 +22,8 @@ async fn main() {
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+    let (db, api_addr) = node.api_inputs();
+
     let local_event_tx = node.local_event_tx().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
@@ -47,6 +50,21 @@ async fn main() {
         })
     };
 
+    // Warp API
+    let warp_handle = tokio::spawn({
+        println!("Warp API started on port {:?}", api_addr.port());
+        println!();
+
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(api_addr.port());
+
+        async move {
+            warp::serve(routes::block_info_by_nums(db))
+                .run(bind_address)
+                .await;
+        }
+    });
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -69,13 +87,16 @@ async fn main() {
         }
     });
 
-    let (main, raft, conn, disconn) = tokio::join!(
+    let (main, warp, raft, conn, disconn) = tokio::join!(
         main_loop_handle,
+        warp_handle,
         raft_loop_handle,
         conn_loop_handle,
         disconn_loop_handle
     );
+
     main.unwrap();
+    warp.unwrap();
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
@@ -98,6 +119,13 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Run the specified storage node index from config file")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("api_port")
+                .short("p")
+                .long("api_port")
+                .help("Run the API for the storage node as the specified port")
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -108,6 +136,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     settings.set_default("storage_node_idx", 0).unwrap();
     settings.set_default("storage_raft", 0).unwrap();
+    settings.set_default("storage_api_port", 3001).unwrap();
     settings
         .set_default("storage_raft_tick_timeout", 10)
         .unwrap();
@@ -115,6 +144,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
+
+    if let Some(port) = matches.value_of("api_port") {
+        settings.set("storage_api_port", port).unwrap();
+    }
+
     if let Some(index) = matches.value_of("index") {
         settings.set("storage_node_idx", index).unwrap();
         let mut db_mode = settings.get_table("storage_db_mode").unwrap();

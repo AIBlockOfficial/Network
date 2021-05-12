@@ -58,12 +58,12 @@ if [ "$USE_TEST_GROUPS" = "1" ]
 then
     RUST_LOG="$STORAGE_LOG,raft=warn" sg test_s2 "target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
 else
-    RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2 > storage_2.log 2>&1 &
+    RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3001 --index=2 > storage_2.log 2>&1 &
     s2=$!
 fi
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=1 > storage_1.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3002 --index=1 > storage_1.log 2>&1 &
 s1=$!
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml > storage_0.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3003 > storage_0.log 2>&1 &
 s0=$!
 
 if [ "$USE_TEST_GROUPS" = "1" ]

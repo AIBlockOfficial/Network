@@ -1,8 +1,10 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
+use crate::db_utils::SimpleDb;
 use crate::interfaces::UserRequest;
-use crate::wallet::EncapsulationData;
-use crate::wallet::WalletDb;
+use crate::storage::get_blocks_by_num;
+use crate::wallet::{EncapsulationData, WalletDb};
+
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
 use std::str;
+use std::sync::{Arc, Mutex};
 use tracing::error;
 
 /// Private/public keypairs, stored with payment address as key.
@@ -105,6 +108,16 @@ pub async fn get_wallet_encapsulation_data(
 }
 
 //======= POST HANDLERS =======//
+
+/// Post to retrieve block information by number
+pub async fn post_block_by_num(
+    db: Arc<Mutex<SimpleDb>>,
+    block_nums: Vec<u64>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let blocks = get_blocks_by_num(db, block_nums);
+
+    Ok(warp::reply::json(&blocks))
+}
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(
