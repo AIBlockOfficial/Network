@@ -45,7 +45,7 @@ async fn should_fetch_block_info_by_nums() {
         .method("POST")
         .path("/block_by_num")
         .header("Content-Type", "application/json")
-        .json(&vec![0 as u64])
+        .json(&vec![0_u64])
         .reply(&filter)
         .await;
 

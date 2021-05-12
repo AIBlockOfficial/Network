@@ -50,18 +50,6 @@ pub const SANC_LIST_PROD: &str = "src/db/sanc_list.json";
 /// Path to test sanction list
 pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
-/*------- STORAGE DB CONSTANTS ----------*/
-
-/// Database columns
-pub const DB_COL_INTERNAL: &str = "internal";
-pub const DB_COL_BC_ALL: &str = "block_chain_all";
-pub const DB_COL_BC_NAMED: &str = "block_chain_named";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
-pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
-
-pub const DB_COLS_BC: &[&str] = &[DB_COL_BC_NOW, DB_COL_BC_V0_2_0];
-pub const DB_POINTER_SEPARATOR: u8 = b':';
-
 /*------- LIMIT CONSTANTS -------*/
 
 /// Limit for the transaction pool per compute node

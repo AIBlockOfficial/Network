@@ -1,9 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{
-    BLOCK_PREPEND, DB_COLS_BC, DB_COL_BC_ALL, DB_COL_BC_NAMED, DB_COL_BC_NOW, DB_COL_BC_V0_2_0,
-    DB_COL_INTERNAL, DB_PATH, DB_POINTER_SEPARATOR, INDEXED_BLOCK_HASH_PREFIX_KEY,
-    LAST_BLOCK_HASH_KEY, NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
+    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
@@ -32,6 +31,16 @@ use tracing_futures::Instrument;
 
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+
+/// Database columns
+pub const DB_COL_INTERNAL: &str = "internal";
+pub const DB_COL_BC_ALL: &str = "block_chain_all";
+pub const DB_COL_BC_NAMED: &str = "block_chain_named";
+pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
+pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
+
+pub const DB_COLS_BC: &[&str] = &[DB_COL_BC_NOW, DB_COL_BC_V0_2_0];
+pub const DB_POINTER_SEPARATOR: u8 = b':';
 
 /// Database specification
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -833,11 +842,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     } else {
         DB_COL_BC_ALL
     };
-    let u_db = match db.lock() {
-        Ok(db) => db,
-        Err(poison) => poison.into_inner(),
-    };
-
+    let u_db = db.lock().unwrap();
     let pointer = u_db.get_cf(col_all, key).unwrap_or_else(|e| {
         warn!("get_stored_value error: {}", e);
         None
