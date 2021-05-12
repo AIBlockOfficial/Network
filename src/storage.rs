@@ -115,7 +115,7 @@ impl StorageNode {
             .ok_or(StorageError::ConfigError("Invalid storage index"))?
             .address;
 
-        let api_addr = SocketAddr::new(addr.ip(), config.api_port);
+        let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);
         let compute_addr = config
             .compute_nodes
             .get(config.storage_node_idx)
@@ -780,7 +780,7 @@ impl StorageInterface for StorageNode {
 /// * `batch` - Database writer
 /// * `key`   - The key for the data
 /// * `value` - The value to store
-fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) -> Vec<u8> {
+pub fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) -> Vec<u8> {
     put_to_block_chain_at(batch, DB_COL_BC_NOW, key, value)
 }
 

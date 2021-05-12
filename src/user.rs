@@ -114,7 +114,7 @@ impl UserNode {
             .get(config.user_compute_node_idx)
             .ok_or(UserError::ConfigError("Invalid compute index"))?
             .address;
-        let api_addr = SocketAddr::new(addr.ip(), config.api_port);
+        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
         let wallet_db = WalletDb::new(
