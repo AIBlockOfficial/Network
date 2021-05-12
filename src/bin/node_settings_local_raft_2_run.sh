@@ -40,9 +40,9 @@ else
     USER_LOG=debug
 fi
 
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_2.toml --index=1 > storage_1.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_2.toml --api_port=3001 --index=1 > storage_1.log 2>&1 &
 s1=$!
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_2.toml > storage_0.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_2.toml --api_port=3002 > storage_0.log 2>&1 &
 s0=$!
 RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_2.toml --index=1 > compute_1.log 2>&1 &
 c1=$!

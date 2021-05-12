@@ -119,6 +119,13 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Run the specified storage node index from config file")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("api_port")
+                .short("p")
+                .long("api_port")
+                .help("Run the API for the storage node as the specified port")
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -137,6 +144,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
+
+    if let Some(port) = matches.value_of("api_port") {
+        settings.set("storage_api_port", port).unwrap();
+    }
+
     if let Some(index) = matches.value_of("index") {
         settings.set("storage_node_idx", index).unwrap();
         let mut db_mode = settings.get_table("storage_db_mode").unwrap();
