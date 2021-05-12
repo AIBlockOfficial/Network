@@ -194,12 +194,7 @@ impl ComputeRaft {
         let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
-        let consensused = ComputeConsensused {
-            unanimous_majority: peers_len,
-            sufficient_majority: peers_len / 2 + 1,
-            ..ComputeConsensused::default()
-        };
-
+        let consensused = ComputeConsensused::default().with_peers_len(peers_len);
         let local_initial_proposal = Some(InitialProposal::PendingItem {
             item: ComputeRaftItem::FirstBlock(utxo_set),
             dedup_b_num: None,
@@ -627,6 +622,13 @@ impl ComputeRaft {
 }
 
 impl ComputeConsensused {
+    /// Specify the raft group size
+    pub fn with_peers_len(mut self, peers_len: usize) -> Self {
+        self.unanimous_majority = peers_len;
+        self.sufficient_majority = peers_len / 2 + 1;
+        self
+    }
+
     /// Create ComputeConsensused from imported data in upgrade
     pub fn from_import(consensused: ComputeConsensusedImport) -> Self {
         let ComputeConsensusedImport {

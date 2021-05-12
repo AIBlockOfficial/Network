@@ -70,6 +70,14 @@ pub enum DbCfg {
     ComputeBlockToMine,
 }
 
+/// Configuration passed in to drive upgrade
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeCfg {
+    pub raft_len: usize,
+    pub passphrase: String,
+    pub db_cfg: DbCfg,
+}
+
 #[derive(Debug)]
 pub struct DbSpecInfo {
     pub node_type: &'static str,
@@ -137,14 +145,17 @@ pub fn get_upgrade_compute_db(
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_compute_db(mut dbs: ExtraNodeParams, cfg: DbCfg) -> Result<ExtraNodeParams> {
+pub fn upgrade_compute_db(
+    mut dbs: ExtraNodeParams,
+    upgrade_cfg: &UpgradeCfg,
+) -> Result<ExtraNodeParams> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
     let (batch, raft_batch) = upgrade_compute_db_batch(
         (&db, &raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
-        cfg,
+        upgrade_cfg,
     )?;
     let (batch, raft_batch) = (batch.done(), raft_batch.done());
 
@@ -157,7 +168,7 @@ pub fn upgrade_compute_db(mut dbs: ExtraNodeParams, cfg: DbCfg) -> Result<ExtraN
 pub fn upgrade_compute_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
-    cfg: DbCfg,
+    upgrade_cfg: &UpgradeCfg,
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
@@ -180,7 +191,7 @@ pub fn upgrade_compute_db_batch<'a>(
             Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
 
-        match cfg {
+        match upgrade_cfg.db_cfg {
             DbCfg::ComputeBlockInStorage => {
                 // Already mined block it would have been discarded when PoW found.
                 consensus.current_block = None;
@@ -201,10 +212,10 @@ pub fn upgrade_compute_db_batch<'a>(
                 consensus.special_handling = None;
             }
         }
+        let consensus = compute_raft::ComputeConsensused::from_import(consensus)
+            .with_peers_len(upgrade_cfg.raft_len);
 
-        Ok(serialize(&compute_raft::ComputeConsensused::from_import(
-            consensus,
-        ))?)
+        Ok(serialize(&consensus)?)
     })?;
 
     Ok((batch, raft_batch))
@@ -274,12 +285,18 @@ pub fn get_upgrade_storage_db(
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_storage_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+pub fn upgrade_storage_db(
+    mut dbs: ExtraNodeParams,
+    upgrade_cfg: &UpgradeCfg,
+) -> Result<ExtraNodeParams> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
-    let (batch, raft_batch) =
-        upgrade_storage_db_batch((&db, &raft_db), (db.batch_writer(), raft_db.batch_writer()))?;
+    let (batch, raft_batch) = upgrade_storage_db_batch(
+        (&db, &raft_db),
+        (db.batch_writer(), raft_db.batch_writer()),
+        upgrade_cfg,
+    )?;
     let (batch, raft_batch) = (batch.done(), raft_batch.done());
 
     db.write(batch)?;
@@ -291,6 +308,7 @@ pub fn upgrade_storage_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
 pub fn upgrade_storage_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
+    upgrade_cfg: &UpgradeCfg,
 ) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
@@ -358,9 +376,9 @@ pub fn upgrade_storage_db_batch<'a>(
             tracked_deserialize("StorageConsensused", &k, &v)?,
             Some(last_block_stored.clone()),
         );
-        Ok(serialize(&storage_raft::StorageConsensused::from_import(
-            consensus,
-        ))?)
+        let consensus = storage_raft::StorageConsensused::from_import(consensus)
+            .with_peers_len(upgrade_cfg.raft_len);
+        Ok(serialize(&consensus)?)
     })?;
 
     Ok((batch, raft_batch))
@@ -460,9 +478,12 @@ pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Resul
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_wallet_db(mut dbs: ExtraNodeParams, passphrase: &str) -> Result<ExtraNodeParams> {
+pub fn upgrade_wallet_db(
+    mut dbs: ExtraNodeParams,
+    upgrade_cfg: &UpgradeCfg,
+) -> Result<ExtraNodeParams> {
     let db = dbs.wallet_db.as_mut().unwrap();
-    let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), passphrase)?.done();
+    let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), upgrade_cfg)?.done();
     db.write(batch)?;
     Ok(dbs)
 }
@@ -471,11 +492,12 @@ pub fn upgrade_wallet_db(mut dbs: ExtraNodeParams, passphrase: &str) -> Result<E
 pub fn upgrade_wallet_db_batch<'a>(
     db: &SimpleDb,
     mut batch: SimpleDbWriteBatch<'a>,
-    passphrase: &str,
+    upgrade_cfg: &UpgradeCfg,
 ) -> Result<SimpleDbWriteBatch<'a>> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
-    let masterkey = wallet::get_or_save_master_key_store(&db, &mut batch, passphrase.as_bytes());
+    let passphrase = upgrade_cfg.passphrase.as_bytes();
+    let masterkey = wallet::get_or_save_master_key_store(&db, &mut batch, passphrase);
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == old::wallet::FUND_KEY.as_bytes() {
@@ -595,15 +617,15 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
 }
 
 fn get_old_persistent_snapshot_data_and_metadata(snapshot: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-    use protobuf::Message;
     use raft::prelude::Snapshot;
     let mut snapshot = protobuf::parse_from_bytes::<Snapshot>(snapshot)
         .map_err(|e| UpgradeError::Serialization(serde::de::Error::custom(e)))?;
     let data = snapshot.take_data();
-    let meta = snapshot
-        .get_metadata()
-        .write_to_bytes()
-        .map_err(|e| UpgradeError::Serialization(serde::ser::Error::custom(e)))?;
+    let meta = snapshot.get_metadata();
+    let meta = serialize(&raft_store::SnapMetadata {
+        index: meta.index,
+        term: meta.term,
+    })?;
     Ok((data, meta))
 }
 

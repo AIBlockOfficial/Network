@@ -133,10 +133,7 @@ impl StorageRaft {
         let first_raft_peer = config.storage_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
-        let consensused = StorageConsensused {
-            sufficient_majority: peers_len / 2 + 1,
-            ..StorageConsensused::default()
-        };
+        let consensused = StorageConsensused::default().with_peers_len(peers_len);
 
         Self {
             first_raft_peer,
@@ -397,6 +394,12 @@ impl StorageRaft {
 }
 
 impl StorageConsensused {
+    /// Specify the raft group size
+    pub fn with_peers_len(mut self, peers_len: usize) -> Self {
+        self.sufficient_majority = peers_len / 2 + 1;
+        self
+    }
+
     /// Create ComputeConsensused from imported data in upgrade
     pub fn from_import(consensused: StorageConsensusedImport) -> Self {
         let StorageConsensusedImport {

@@ -79,12 +79,6 @@ pub struct NetworkConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
-impl NetworkConfig {
-    pub fn nodes_mut(&mut self, node_type: NodeType) -> &mut Vec<String> {
-        self.nodes.get_mut(&node_type).unwrap()
-    }
-}
-
 /// Node info to create node
 #[derive(Clone)]
 pub struct NetworkNodeInfo {
@@ -442,6 +436,46 @@ impl Network {
         self.all_active_nodes_flat_iter()
             .map(|(t, n)| (n.clone(), evts(*t)))
             .collect()
+    }
+}
+
+impl NetworkConfig {
+    pub fn nodes_mut(&mut self, node_type: NodeType) -> &mut Vec<String> {
+        self.nodes.get_mut(&node_type).unwrap()
+    }
+
+    pub fn with_raft(mut self, use_raft: bool) -> Self {
+        self.compute_raft = use_raft;
+        self.storage_raft = use_raft;
+        self
+    }
+
+    pub fn with_groups(mut self, raft_count: usize, miner_count: usize) -> Self {
+        let (rc, mc) = (raft_count, miner_count);
+        self.nodes.insert(
+            NodeType::Compute,
+            (0..rc).map(|idx| format!("compute{}", idx + 1)).collect(),
+        );
+        self.nodes.insert(
+            NodeType::Storage,
+            (0..rc).map(|idx| format!("storage{}", idx + 1)).collect(),
+        );
+        self.nodes.insert(
+            NodeType::Miner,
+            (0..mc).map(|idx| format!("miner{}", idx + 1)).collect(),
+        );
+        self.compute_to_miner_mapping = {
+            let miner_nodes = &self.nodes[&NodeType::Miner];
+            let compute_nodes = &self.nodes[&NodeType::Compute];
+            let miners = miner_nodes.iter().cloned();
+            let computes = compute_nodes.iter().cloned().cycle();
+            let mut mapping = BTreeMap::new();
+            for (miner, compute) in miners.zip(computes) {
+                mapping.entry(compute).or_insert_with(Vec::new).push(miner);
+            }
+            mapping
+        };
+        self
     }
 }
 
