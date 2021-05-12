@@ -23,6 +23,12 @@ pub const LAST_BLOCK_HASH_KEY: &str = "nLastBlockHashKey";
 /// The index number is 0-indexed hexadecimal value of 16 characters with leading 0.
 pub const INDEXED_BLOCK_HASH_PREFIX_KEY: &str = "nIndexedBlockHashKey_";
 
+/// The constant for the named indexed transaction hash with NAMED_CONSTANT_PREPEND.
+/// The block index number is 0-indexed hexadecimal value of 16 characters with leading 0.
+/// The transaction index number is 0-indexed hexadecimal value of 8 characters with leading 0.
+/// The block and transaction number need to be separated by `_`.
+pub const INDEXED_TX_HASH_PREFIX_KEY: &str = "nIndexedTxHashKey_";
+
 /// Path to chain DB
 pub const DB_PATH: &str = "src/db/db";
 

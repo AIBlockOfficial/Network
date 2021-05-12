@@ -1,8 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{
-    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
-    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+    BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY,
+    LAST_BLOCK_HASH_KEY, NAMED_CONSTANT_PREPEND, PEER_LIMIT,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
@@ -483,10 +483,7 @@ impl StorageNode {
         // Save the complete block
         trace!("Store complete block: {:?}", complete);
 
-        let (
-            (stored_block, block_txs, mining_transactions),
-            (block_num, merkle_hash, nonce, shutdown),
-        ) = {
+        let ((stored_block, all_block_txs), (block_num, merkle_hash, nonce, shutdown)) = {
             let CompleteBlock { common, per_node } = complete;
 
             let header = common.block.header.clone();
@@ -501,11 +498,11 @@ impl StorageNode {
                     .map(|(idx, v)| (*idx, (v.mining_tx.0.clone(), v.nonce.clone())))
                     .collect(),
             };
-            let block_txs = common.block_txs;
-            let mining_transactions: BTreeMap<_, _> =
-                per_node.into_iter().map(|(_, v)| v.mining_tx).collect();
 
-            let to_store = (stored_block, block_txs, mining_transactions);
+            let mut all_block_txs = common.block_txs;
+            all_block_txs.extend(per_node.into_iter().map(|(_, v)| v.mining_tx));
+
+            let to_store = (stored_block, all_block_txs);
             let store_extra_info = (block_num, merkle_hash, nonce, shutdown);
             (to_store, store_extra_info)
         };
@@ -523,15 +520,20 @@ impl StorageNode {
             block_num,
             merkle_hash,
             nonce,
-            mining_transactions: mining_transactions.clone(),
+            mining_transactions: stored_block
+                .mining_tx_hash_and_nonces
+                .values()
+                .filter_map(|(tx_hash, _)| all_block_txs.get_key_value(tx_hash))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             shutdown,
         };
 
         info!(
             "Store complete block summary: b_num={}, txs={}, mining={}, hash={}",
             block_num,
-            block_txs.len(),
-            mining_transactions.len(),
+            stored_block.block.transactions.len(),
+            last_block_stored_info.mining_transactions.len(),
             block_hash
         );
 
@@ -542,10 +544,21 @@ impl StorageNode {
         let pointer = put_to_block_chain(&mut batch, &block_hash, &block_input);
         put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
-        let all_txs = block_txs.iter().chain(&mining_transactions);
-        for (tx_hash, tx_value) in all_txs {
-            let tx_input = serialize(tx_value).unwrap();
-            put_to_block_chain(&mut batch, tx_hash, &tx_input);
+        let all_txs = all_ordered_stored_block_tx_hashes(
+            &stored_block.block.transactions,
+            &stored_block.mining_tx_hash_and_nonces,
+        );
+        for (tx_num, tx_hash) in all_txs {
+            if let Some(tx_value) = all_block_txs.get(tx_hash) {
+                let tx_input = serialize(tx_value).unwrap();
+                let pointer = put_to_block_chain(&mut batch, tx_hash, &tx_input);
+                put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
+            } else {
+                error!(
+                    "Missing block {} transaction {}: \"{}\"",
+                    block_num, tx_num, tx_hash
+                );
+            }
         }
 
         let batch = batch.done();
@@ -556,7 +569,8 @@ impl StorageNode {
         //
         if block_num == 0 {
             info!("!!! Stored Genesis Block !!!");
-            for (hash, tx) in block_txs.iter() {
+            for hash in &stored_block.block.transactions {
+                let tx = all_block_txs.get(hash).unwrap();
                 let tx_in = get_genesis_tx_in_display(tx);
                 info!("Genesis Transaction: Hash:{} -> TxIn:{}", hash, tx_in);
 
@@ -828,6 +842,40 @@ pub fn put_named_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &
     batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
 }
 
+/// Add to the block chain named column
+///
+/// ### Arguments
+///
+/// * `batch`   - Database writer
+/// * `pointer` - The transaction version pointer
+/// * `b_num`   - The block number
+/// * `tx_num`  - The transaction index in the block
+pub fn put_named_tx_to_block_chain(
+    batch: &mut SimpleDbWriteBatch,
+    pointer: &[u8],
+    b_num: u64,
+    tx_num: u32,
+) {
+    let indexed_key = indexed_tx_hash_key(b_num, tx_num);
+    batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
+}
+
+/// Iterate on all the StoredSerializingBlock transaction hashes
+/// First the transactions in provided order and then the mining txs
+///
+/// ### Arguments
+///
+/// * `transactions`              - The block transactions
+/// * `mining_tx_hash_and_nonces` - The block mining transactions
+pub fn all_ordered_stored_block_tx_hashes<'a>(
+    transactions: &'a [String],
+    mining_tx_hash_and_nonces: &'a BTreeMap<u64, (String, Vec<u8>)>,
+) -> impl Iterator<Item = (u32, &'a String)> + 'a {
+    let mining_hashes = mining_tx_hash_and_nonces.values().map(|(hash, _)| hash);
+    let all_txs = transactions.iter().chain(mining_hashes);
+    all_txs.enumerate().map(|(idx, v)| (idx as u32, v))
+}
+
 /// Get the stored value at the given key
 ///
 /// ### Arguments
@@ -895,6 +943,19 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
 /// * `b_num`  - The block number
 fn indexed_block_hash_key(b_num: u64) -> String {
     format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
+}
+
+/// The key for indexed block
+///
+/// ### Arguments
+///
+/// * `b_num`  - The block number
+/// * `tx_num` - The transaction index in the block
+fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
+    format!(
+        "{}{:016x}_{:08x}",
+        INDEXED_TX_HASH_PREFIX_KEY, b_num, tx_num
+    )
 }
 
 /// Decodes a version pointer

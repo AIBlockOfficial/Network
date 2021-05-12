@@ -21,15 +21,25 @@ use tracing::info;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
-const BLOCK_HASHES: &[&str] = &[
-    "abd4012af0eb398f7fed06cdc633c506d374bb8e38174035c0fb9910d3d7a7f6",
-    "04d6006a3923d06c00be1c9f26e38142e1defbe0d5a57ea60d94255c20a59a04",
-    "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c",
-];
-const BLOCK_INDEXES: &[&str] = &[
-    "nIndexedBlockHashKey_0000000000000000",
+const LAST_BLOCK_BLOCK_HASH: &str =
+    "7825220b591e99ad654acd0268f9ec0a5e08d3f46929f93cd4195ce943bb9f5c";
+const LAST_BLOCK_STORAGE_DB_V0_2_0_INDEX: usize = 5;
+const STORAGE_DB_V0_2_0_INDEXES: &[&str] = &[
+    "nIndexedTxHashKey_0000000000000000_00000000",
+    "nIndexedTxHashKey_0000000000000000_00000001",
+    "nIndexedTxHashKey_0000000000000000_00000002",
+    "nIndexedTxHashKey_0000000000000000_00000003",
     "nIndexedBlockHashKey_0000000000000001",
     "nIndexedBlockHashKey_0000000000000002",
+    "nIndexedBlockHashKey_0000000000000000",
+    "nIndexedTxHashKey_0000000000000001_00000000",
+    "nIndexedTxHashKey_0000000000000002_00000003",
+    "nIndexedTxHashKey_0000000000000002_00000000",
+    "nIndexedTxHashKey_0000000000000001_00000001",
+    "nIndexedTxHashKey_0000000000000000_00000004",
+    "nIndexedTxHashKey_0000000000000001_00000002",
+    "nIndexedTxHashKey_0000000000000002_00000001",
+    "nIndexedTxHashKey_0000000000000002_00000002",
 ];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
@@ -126,25 +136,22 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let storage = network.storage(name).unwrap().lock().await;
 
             {
-                let mut expected_blocks = vec![Some(vec![]); BLOCK_HASHES.len()];
-                let mut actual_blocks = vec![None; BLOCK_HASHES.len()];
-
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
-                for (_, k, v) in tests_last_version_db::STORAGE_DB_V0_2_0 {
-                    if let Some(b_num) = BLOCK_HASHES.iter().position(|v| *k == v.as_bytes()) {
-                        expected_blocks[b_num] = Some(v.to_vec());
-                        actual_blocks[b_num] = storage.get_stored_value(BLOCK_INDEXES[b_num]);
-                    }
-                    expected.push(Some(v.to_vec()));
-                    actual.push(storage.get_stored_value(k));
+                let mut actual_indexed = Vec::new();
+                for (idx, (_, k, v)) in tests_last_version_db::STORAGE_DB_V0_2_0.iter().enumerate()
+                {
+                    let idx_k = STORAGE_DB_V0_2_0_INDEXES[idx];
+                    expected.push(Some(test_hash(v.to_vec())));
+                    actual.push(storage.get_stored_value(k).map(test_hash));
+                    actual_indexed.push(storage.get_stored_value(idx_k).map(test_hash));
                 }
                 assert_eq!(actual, expected);
-                assert_eq!(actual_blocks, expected_blocks);
+                assert_eq!(actual_indexed, expected);
                 assert_eq!(storage.get_stored_values_count(), expected.len());
                 assert_eq!(
-                    storage.get_stored_value(LAST_BLOCK_HASH_KEY),
-                    expected_blocks[LAST_BLOCK_STORED_NUM as usize]
+                    storage.get_stored_value(LAST_BLOCK_HASH_KEY).map(test_hash),
+                    expected[LAST_BLOCK_STORAGE_DB_V0_2_0_INDEX]
                 );
                 assert_eq!(
                     storage.get_last_block_stored(),
@@ -558,7 +565,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
     use naom::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
-        block_hash: BLOCK_HASHES[LAST_BLOCK_STORED_NUM as usize].to_owned(),
+        block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
         nonce: Vec::new(),
         merkle_hash: "24c87c26cf5233f59ffe9b3f8f19cd7e1cdcf871dafb2e3e800e15cf155da944".to_owned(),
@@ -655,4 +662,11 @@ async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_bl
     let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
     let event = LocalEvent::CoordinatedShutdown(at_block);
     event_tx.send(event, "test shutdown").await.unwrap();
+}
+
+fn test_hash(t: Vec<u8>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
 }
