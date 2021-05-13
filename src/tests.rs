@@ -1705,11 +1705,15 @@ async fn request_specified_block_no_raft() {
     //
     // Arrange
     //
-    let network_config = complete_network_config(11360);
+    let mut network_config = complete_network_config(11360);
+    network_config.test_duration_divider = 10;
+
     let mut network = Network::create_from_config(&network_config).await;
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let no_transactions = BTreeMap::new();
     let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
+    let first_tx = transactions[0].iter().next();
+    let first_tx = first_tx.map(|(k, v)| (k.clone(), v.clone())).unwrap();
 
     let mut block_keys: Vec<String> = Vec::new();
     for i in 0..11_usize {
@@ -1722,7 +1726,7 @@ async fn request_specified_block_no_raft() {
         block_keys.push(block_key.clone());
     }
 
-    let inputs: Vec<&str> = vec![
+    let inputs_block: Vec<&str> = vec![
         block_keys[0].as_str(),
         "nLastBlockHashKey",
         "nIndexedBlockHashKey_0000000000000000",
@@ -1730,23 +1734,40 @@ async fn request_specified_block_no_raft() {
         "0000_non_existent",
         "nIndexedBlockHashKey_000000000000000b",
     ];
-    let expected = vec![Some(0), Some(10), Some(0), Some(10), None, None];
+    let expected_block = vec![Some(0), Some(10), Some(0), Some(10), None, None];
+
+    let inputs_tx: Vec<&str> = vec![
+        first_tx.0.as_str(),
+        "nIndexedTxHashKey_0000000000000000_00000000",
+        "nIndexedTxHashKey_0000000000000000_00000100",
+    ];
+    let expected_tx = vec![
+        Some((first_tx.1.inputs.len(), first_tx.1.outputs.len())),
+        Some((first_tx.1.inputs.len(), first_tx.1.outputs.len())),
+        None,
+    ];
 
     //
     // Act
     //
-    let mut actual = Vec::new();
+    let mut actual_block = Vec::new();
+    let mut actual_tx = Vec::new();
 
     node_connect_to(&mut network, "miner1", "storage1").await;
-    for input in inputs {
+    for input in inputs_block {
         request_specified_block_act(&mut network, "miner1", "storage1", input).await;
-        actual.push(miner_get_specified_block_received_num(&mut network, "miner1").await);
+        actual_block.push(miner_get_specified_block_received_num(&mut network, "miner1").await);
+    }
+    for input in inputs_tx {
+        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
+        actual_tx.push(miner_get_specified_block_received_tx_lens(&mut network, "miner1").await);
     }
 
     //
     // Assert
     //
-    assert_eq!(actual, expected);
+    assert_eq!(actual_block, expected_block);
+    assert_eq!(actual_tx, expected_tx);
 
     test_step_complete(network).await;
 }
@@ -2681,6 +2702,16 @@ async fn miner_get_specified_block_received_num(network: &mut Network, miner: &s
     let (block, _) = m.get_specified_block_received().await.as_ref()?;
     let block: StoredSerializingBlock = deserialize(&block).ok()?;
     Some(block.block.header.b_num)
+}
+
+async fn miner_get_specified_block_received_tx_lens(
+    network: &mut Network,
+    miner: &str,
+) -> Option<(usize, usize)> {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    let (tx, _) = m.get_specified_block_received().await.as_ref()?;
+    let tx: Transaction = deserialize(&tx).ok()?;
+    Some((tx.inputs.len(), tx.outputs.len()))
 }
 
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {

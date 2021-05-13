@@ -320,15 +320,31 @@ pub fn upgrade_storage_db_batch<'a>(
 
         if is_transaction_key(&key) {
             let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
-            storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
         } else if is_block_key(&key) {
             let stored_block: old::naom::StoredSerializingBlock =
                 tracked_deserialize("Block deserialize", &key, &value)?;
             let block_num = stored_block.block.header.b_num;
+            let column = storage::DB_COL_BC_V0_2_0;
 
-            let pointer =
-                storage::put_to_block_chain_at(&mut batch, storage::DB_COL_BC_V0_2_0, &key, &value);
+            let pointer = storage::put_to_block_chain_at(&mut batch, column, &key, &value);
             storage::put_named_block_to_block_chain(&mut batch, &pointer, block_num);
+
+            let all_txs = storage::all_ordered_stored_block_tx_hashes(
+                &stored_block.block.transactions,
+                &stored_block.mining_tx_hash_and_nonces,
+            );
+            for (tx_num, tx_hash) in all_txs {
+                if let Some(tx_value) = db.get_cf(DB_COL_DEFAULT, tx_hash)? {
+                    let pointer =
+                        storage::put_to_block_chain_at(&mut batch, column, tx_hash, tx_value);
+                    storage::put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
+                } else {
+                    error!(
+                        "Missing block {} transaction {}: \"{}\"",
+                        block_num, tx_num, tx_hash
+                    );
+                }
+            }
 
             max_block = std::cmp::max(max_block, Some((block_num, key, pointer)));
         } else {
