@@ -42,7 +42,7 @@ async fn main() {
         println!("Connect to storage address: {:?}", storage_addr);
         node.connect_to(storage_addr).await.unwrap();
 
-        node.request_specified_block(value.to_string())
+        node.request_blockchain_item(value.to_string())
             .await
             .unwrap()
     };

@@ -1699,7 +1699,7 @@ async fn handle_message_lost_common(
 }
 
 #[tokio::test(basic_scheduler)]
-async fn request_specified_block_no_raft() {
+async fn request_blockchain_item_no_raft() {
     test_step_start();
 
     //
@@ -1755,12 +1755,12 @@ async fn request_specified_block_no_raft() {
 
     node_connect_to(&mut network, "miner1", "storage1").await;
     for input in inputs_block {
-        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
-        actual_block.push(miner_get_specified_block_received_num(&mut network, "miner1").await);
+        request_blockchain_item_act(&mut network, "miner1", "storage1", input).await;
+        actual_block.push(miner_get_blockchain_item_received_b_num(&mut network, "miner1").await);
     }
     for input in inputs_tx {
-        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
-        actual_tx.push(miner_get_specified_block_received_tx_lens(&mut network, "miner1").await);
+        request_blockchain_item_act(&mut network, "miner1", "storage1", input).await;
+        actual_tx.push(miner_get_blockchain_item_received_tx_lens(&mut network, "miner1").await);
     }
 
     //
@@ -1772,16 +1772,16 @@ async fn request_specified_block_no_raft() {
     test_step_complete(network).await;
 }
 
-async fn request_specified_block_act(
+async fn request_blockchain_item_act(
     network: &mut Network,
     miner_from: &str,
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_specified_block(network, &miner_from, block_key).await;
-    storage_handle_event(network, &storage_to, "Specified block fetched from storage").await;
-    storage_send_specified_block(network, &storage_to).await;
-    miner_handle_event(network, &miner_from, "Specified block received").await;
+    miner_request_blockchain_item(network, &miner_from, block_key).await;
+    storage_handle_event(network, &storage_to, "Blockchain item fetched from storage").await;
+    storage_send_blockchain_item(network, &storage_to).await;
+    miner_handle_event(network, &miner_from, "Blockchain item received").await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -2362,9 +2362,9 @@ async fn storage_inject_next_event(
     s.inject_next_event(from_addr, request).unwrap();
 }
 
-async fn storage_send_specified_block(network: &mut Network, from_storage: &str) {
+async fn storage_send_blockchain_item(network: &mut Network, from_storage: &str) {
     let mut s = network.storage(from_storage).unwrap().lock().await;
-    s.send_specified_block().await.unwrap();
+    s.send_blockchain_item().await.unwrap();
 }
 
 async fn storage_inject_send_block_to_storage(
@@ -2690,26 +2690,29 @@ async fn user_send_utxo_request(
 //
 // MinerNode helpers
 //
-async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: &str) {
+async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
     let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_specified_block(block_key.to_owned())
+    m.request_blockchain_item(block_key.to_owned())
         .await
         .unwrap();
 }
 
-async fn miner_get_specified_block_received_num(network: &mut Network, miner: &str) -> Option<u64> {
+async fn miner_get_blockchain_item_received_b_num(
+    network: &mut Network,
+    miner: &str,
+) -> Option<u64> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (block, _) = m.get_specified_block_received().await.as_ref()?;
+    let (block, _) = m.get_blockchain_item_received().await.as_ref()?;
     let block: StoredSerializingBlock = deserialize(&block).ok()?;
     Some(block.block.header.b_num)
 }
 
-async fn miner_get_specified_block_received_tx_lens(
+async fn miner_get_blockchain_item_received_tx_lens(
     network: &mut Network,
     miner: &str,
 ) -> Option<(usize, usize)> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (tx, _) = m.get_specified_block_received().await.as_ref()?;
+    let (tx, _) = m.get_blockchain_item_received().await.as_ref()?;
     let tx: Transaction = deserialize(&tx).ok()?;
     Some((tx.inputs.len(), tx.outputs.len()))
 }

@@ -107,7 +107,7 @@ pub struct StorageNode {
     api_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
-    specified_block_fetched: Option<(Vec<u8>, SocketAddr)>,
+    blockchain_item_fetched: Option<(Vec<u8>, SocketAddr)>,
 }
 
 impl StorageNode {
@@ -151,7 +151,7 @@ impl StorageNode {
             compute_addr,
             whitelisted: Default::default(),
             shutdown_group,
-            specified_block_fetched: Default::default(),
+            blockchain_item_fetched: Default::default(),
         }
         .load_local_db()?)
     }
@@ -234,10 +234,10 @@ impl StorageNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Specified block fetched from storage",
+                reason: "Blockchain item fetched from storage",
             }) => {
-                if let Err(e) = self.send_specified_block().await {
-                    error!("Specified block not sent {:?}", e);
+                if let Err(e) = self.send_blockchain_item().await {
+                    error!("Blockchain item not sent {:?}", e);
                 }
             }
             Ok(Response {
@@ -444,7 +444,7 @@ impl StorageNode {
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
         match req {
-            GetSpecifiedBlock { key } => Some(self.get_specified_block(peer, &key)),
+            GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, &key)),
             GetHistory {
                 start_time,
                 end_time,
@@ -461,11 +461,11 @@ impl StorageNode {
         }
     }
 
-    ///Sends the latest block fetched from storage.
-    pub async fn send_specified_block(&mut self) -> Result<()> {
-        if let Some((block, peer)) = self.specified_block_fetched.take() {
+    ///Sends the latest blockchain item fetched from storage.
+    pub async fn send_blockchain_item(&mut self) -> Result<()> {
+        if let Some((block, peer)) = self.blockchain_item_fetched.take() {
             self.node
-                .send(peer, MineRequest::SendSpecifiedBlock { block })
+                .send(peer, MineRequest::SendBlockchainItem { block })
                 .await?;
         }
         Ok(())
@@ -750,11 +750,11 @@ impl StorageNode {
 }
 
 impl StorageInterface for StorageNode {
-    fn get_specified_block(&mut self, peer: SocketAddr, key: &str) -> Response {
-        self.specified_block_fetched = Some((self.get_stored_value(key).unwrap_or_default(), peer));
+    fn get_blockchain_item(&mut self, peer: SocketAddr, key: &str) -> Response {
+        self.blockchain_item_fetched = Some((self.get_stored_value(key).unwrap_or_default(), peer));
         Response {
             success: true,
-            reason: "Specified block fetched from storage",
+            reason: "Blockchain item fetched from storage",
         }
     }
 
