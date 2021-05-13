@@ -923,6 +923,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
         .map(|data| BlockchainItem {
             version,
             item_type,
+            key: key.to_owned(),
             data,
         })
 }

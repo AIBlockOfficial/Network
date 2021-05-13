@@ -114,6 +114,7 @@ pub enum NodeType {
 pub struct BlockchainItem {
     pub version: u32,
     pub item_type: BlockchainItemType,
+    pub key: Vec<u8>,
     pub data: Vec<u8>,
 }
 

@@ -148,6 +148,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                     expected.push(Some(test_hash(BlockchainItem {
                         version: 0,
                         item_type: index_type(idx_k),
+                        key: k.to_vec(),
                         data: v.to_vec(),
                     })));
                     actual.push(storage.get_stored_value(k).map(test_hash));
