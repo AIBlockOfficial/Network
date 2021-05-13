@@ -11,7 +11,10 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
+/// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
+/// Token to uniquely identify messages.
+pub type Token = u64;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -106,8 +109,37 @@ pub enum NodeType {
     User,
 }
 
-/// Token to uniquely identify messages.
-pub type Token = u64;
+/// Mined block as stored in DB.
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockchainItem {
+    pub version: u32,
+    pub item_type: BlockchainItemType,
+    pub data: Vec<u8>,
+}
+
+/// Denotes blockchain item types
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BlockchainItemType {
+    Block = b'b',
+    Tx = b't',
+}
+
+impl Default for BlockchainItemType {
+    fn default() -> Self {
+        Self::Block
+    }
+}
+
+impl BlockchainItemType {
+    pub fn from_u8s(v: &[u8]) -> std::result::Result<Self, String> {
+        match v {
+            b"b" => Ok(BlockchainItemType::Block),
+            b"t" => Ok(BlockchainItemType::Tx),
+            v => Err(format!("Unkown BlockchainItemType: {:?}", v)),
+        }
+    }
+}
 
 /// Internal protocol messages exchanged between nodes.
 /// Handle nodes membership & bootstrapping. Wrap higher-level protocols.
@@ -220,7 +252,7 @@ pub trait StorageInterface {
     ///
     /// * `peer` - The requestor address.
     /// * `key`  - The blockchain item key.
-    fn get_blockchain_item(&mut self, peer: SocketAddr, key: &str) -> Response;
+    fn get_blockchain_item(&mut self, peer: SocketAddr, key: String) -> Response;
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
@@ -273,7 +305,8 @@ pub enum MineRequest {
         p_list: Vec<ProofOfWork>,
     },
     SendBlockchainItem {
-        block: Vec<u8>,
+        key: String,
+        item: BlockchainItem,
     },
     SendTransactions {
         tx_merkle_verification: Vec<String>,
@@ -286,7 +319,7 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
-            SendBlockchainItem { ref block } => write!(f, "SendBlockchainItem"),
+            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
             SendBlock {
                 ref block,
                 ref reward,
@@ -310,7 +343,12 @@ pub trait MinerInterface {
     /// ### Arguments
     ///
     /// * `block` - The received block.
-    fn receive_blockchain_item(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response;
+    fn receive_blockchain_item(
+        &mut self,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
+    ) -> Response;
 }
 
 ///============ COMPUTE NODE ============///

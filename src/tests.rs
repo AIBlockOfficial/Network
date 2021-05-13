@@ -2,10 +2,10 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
+use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
-    StorageRequest, StoredSerializingBlock, UtxoSet,
+    BlockStoredInfo, BlockchainItem, BlockchainItemType, CommonBlockInfo, ComputeRequest,
+    MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -17,6 +17,7 @@ use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
     create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
+    StringError,
 };
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -2460,6 +2461,8 @@ async fn storage_get_last_stored_info(
 fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str) -> Option<String> {
     let stored_block = {
         let stored_value = s.get_stored_value(block_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Block).unwrap();
         match deserialize::<StoredSerializingBlock>(&stored_value) {
             Err(e) => return Some(format!("error: {:?}", e)),
             Ok(v) => v,
@@ -2469,6 +2472,8 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
     let mut block_txs = BTreeMap::new();
     for tx_hash in &stored_block.block.transactions {
         let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
             Ok(v) => v,
@@ -2479,6 +2484,8 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
     let mut per_node = BTreeMap::new();
     for (idx, (tx_hash, nonce)) in &stored_block.mining_tx_hash_and_nonces {
         let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
             Ok(v) => v,
@@ -2702,8 +2709,8 @@ async fn miner_get_blockchain_item_received_b_num(
     miner: &str,
 ) -> Option<u64> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (block, _) = m.get_blockchain_item_received().await.as_ref()?;
-    let block: StoredSerializingBlock = deserialize(&block).ok()?;
+    let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
+    let block: StoredSerializingBlock = deserialize(&item.data).ok()?;
     Some(block.block.header.b_num)
 }
 
@@ -2712,8 +2719,8 @@ async fn miner_get_blockchain_item_received_tx_lens(
     miner: &str,
 ) -> Option<(usize, usize)> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (tx, _) = m.get_blockchain_item_received().await.as_ref()?;
-    let tx: Transaction = deserialize(&tx).ok()?;
+    let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
+    let tx: Transaction = deserialize(&item.data).ok()?;
     Some((tx.inputs.len(), tx.outputs.len()))
 }
 
@@ -2960,6 +2967,20 @@ async fn construct_mining_extra_info(
         nonce: generate_pow_for_block(&block.clone(), hash.clone()).await,
         mining_tx: (hash, tx),
         shutdown: false,
+    }
+}
+
+fn checked_blockchain_item_data(
+    v: BlockchainItem,
+    t: BlockchainItemType,
+) -> Result<Vec<u8>, StringError> {
+    if v.version != NETWORK_VERSION || v.item_type != t {
+        Err(StringError(format!(
+            "blockchain_item check v:{}={}, t:{:?}=={:?}",
+            v.version, NETWORK_VERSION, v.item_type, t
+        )))
+    } else {
+        Ok(v.data)
     }
 }
 

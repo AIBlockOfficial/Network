@@ -3,8 +3,8 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response, StorageRequest,
-    StoredSerializingBlock,
+    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    StorageRequest, StoredSerializingBlock,
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
@@ -128,7 +128,7 @@ pub struct MinerNode {
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
-    blockchain_item_received: Option<(Vec<u8>, SocketAddr)>,
+    blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
 }
 
 impl MinerNode {
@@ -260,7 +260,8 @@ impl MinerNode {
                 match self
                     .blockchain_item_received
                     .as_ref()
-                    .map(|(v, _)| deserialize::<StoredSerializingBlock>(&v))
+                    .map(|(_, item, _)| &item.data)
+                    .map(|data| deserialize::<StoredSerializingBlock>(&data))
                 {
                     Some(Ok(b)) => info!(
                         "Successfully received blockchain item: b_num = {}, previous_hash = {:?}",
@@ -445,7 +446,7 @@ impl MinerNode {
         trace!("handle_request: {:?}", req);
 
         match req {
-            SendBlockchainItem { block } => Some(self.receive_blockchain_item(peer, block)),
+            SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
             SendRandomNum {
@@ -492,7 +493,9 @@ impl MinerNode {
     }
 
     /// Return the blockchain item received
-    pub async fn get_blockchain_item_received(&mut self) -> &Option<(Vec<u8>, SocketAddr)> {
+    pub async fn get_blockchain_item_received(
+        &mut self,
+    ) -> &Option<(String, BlockchainItem, SocketAddr)> {
         &self.blockchain_item_received
     }
 
@@ -930,19 +933,21 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn receive_blockchain_item(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response {
-        //TODO: Do something with received block (success).
-        //TODO: Act on empty block received (failure).
-        match block.is_empty() {
-            true => self.blockchain_item_received = None,
-            false => self.blockchain_item_received = Some((block, peer)),
-        }
+    fn receive_blockchain_item(
+        &mut self,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
+    ) -> Response {
+        self.blockchain_item_received =
+            Some((key, item, peer)).filter(|(_, i, _)| !i.data.is_empty());
         Response {
             success: true,
             reason: "Blockchain item received",
         }
     }
 }
+
 /// Load mining address from wallet
 async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
     Ok(wallet_db

@@ -5,11 +5,14 @@ use super::{
     upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
-use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
+use crate::constants::{
+    DB_VERSION_KEY, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
+    NETWORK_VERSION_SERIALIZED,
+};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
-use crate::interfaces::{BlockStoredInfo, Response};
+use crate::interfaces::{BlockStoredInfo, BlockchainItem, BlockchainItemType, Response};
 use crate::test_utils::{
     node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType,
 };
@@ -142,7 +145,11 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 for (idx, (_, k, v)) in tests_last_version_db::STORAGE_DB_V0_2_0.iter().enumerate()
                 {
                     let idx_k = STORAGE_DB_V0_2_0_INDEXES[idx];
-                    expected.push(Some(test_hash(v.to_vec())));
+                    expected.push(Some(test_hash(BlockchainItem {
+                        version: 0,
+                        item_type: index_type(idx_k),
+                        data: v.to_vec(),
+                    })));
                     actual.push(storage.get_stored_value(k).map(test_hash));
                     actual_indexed.push(storage.get_stored_value(idx_k).map(test_hash));
                 }
@@ -664,9 +671,20 @@ async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_bl
     event_tx.send(event, "test shutdown").await.unwrap();
 }
 
-fn test_hash(t: Vec<u8>) -> u64 {
+fn test_hash(t: BlockchainItem) -> (u32, BlockchainItemType, u64) {
     use std::hash::{Hash, Hasher};
     let mut s = std::collections::hash_map::DefaultHasher::new();
-    t.hash(&mut s);
-    s.finish()
+    t.data.hash(&mut s);
+
+    (t.version, t.item_type, s.finish())
+}
+
+fn index_type(v: &str) -> BlockchainItemType {
+    if v.starts_with(INDEXED_BLOCK_HASH_PREFIX_KEY) {
+        BlockchainItemType::Block
+    } else if v.starts_with(INDEXED_TX_HASH_PREFIX_KEY) {
+        BlockchainItemType::Tx
+    } else {
+        panic!("index_type not found {}", v);
+    }
 }
