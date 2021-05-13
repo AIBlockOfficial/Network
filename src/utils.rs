@@ -1,8 +1,8 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
-use crate::constants::{MINING_DIFFICULTY, REWARD_ISSUANCE_VAL};
+use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
-use crate::interfaces::ProofOfWork;
+use crate::interfaces::{BlockchainItem, BlockchainItemType, ProofOfWork, StoredSerializingBlock};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
@@ -165,6 +165,34 @@ impl fmt::Display for StringError {
 impl fmt::Debug for StringError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+/// Deserialization of a BlockchainItem
+pub enum DeserializedBlockchainItem {
+    CurrentBlock(StoredSerializingBlock),
+    CurrentTx(Transaction),
+    VersionErr(u32),
+    SerializationErr(bincode::Error),
+}
+
+impl DeserializedBlockchainItem {
+    pub fn from_item(item: &BlockchainItem) -> Self {
+        if item.version != NETWORK_VERSION {
+            return Self::VersionErr(item.version);
+        }
+        match item.item_type {
+            BlockchainItemType::Block => {
+                match bincode::deserialize::<StoredSerializingBlock>(&item.data) {
+                    Ok(b) => Self::CurrentBlock(b),
+                    Err(e) => Self::SerializationErr(e),
+                }
+            }
+            BlockchainItemType::Tx => match bincode::deserialize::<Transaction>(&item.data) {
+                Ok(b) => Self::CurrentTx(b),
+                Err(e) => Self::SerializationErr(e),
+            },
+        }
     }
 }
 

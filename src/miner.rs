@@ -4,12 +4,13 @@ use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
-    StorageRequest, StoredSerializingBlock,
+    StorageRequest,
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
-    get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address,
+    DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -257,19 +258,11 @@ impl MinerNode {
                 success: true,
                 reason: "Blockchain item received",
             }) => {
-                match self
-                    .blockchain_item_received
-                    .as_ref()
-                    .map(|(_, item, _)| &item.data)
-                    .map(|data| deserialize::<StoredSerializingBlock>(&data))
-                {
-                    Some(Ok(b)) => info!(
-                        "Successfully received blockchain item: b_num = {}, previous_hash = {:?}",
-                        b.block.header.b_num, b.block.header.previous_hash
-                    ),
-                    Some(Err(e)) => warn!("Received invalid block {:?}", e),
-                    None => warn!("Failed to retrieve blockchain item"),
-                };
+                if let Some((key, item, peer)) = self.blockchain_item_received.as_ref() {
+                    log_received_blockchain_item(key, item, peer);
+                } else {
+                    warn!("Failed to retrieve blockchain item");
+                }
             }
             Ok(Response {
                 success: true,
@@ -992,4 +985,22 @@ async fn store_last_coinbase(
 fn generate_random_num(upper_limit: usize) -> usize {
     let mut rng = rand::thread_rng();
     rng.gen_range(0, upper_limit)
+}
+
+/// Log the received blockchain item
+fn log_received_blockchain_item(_key: &str, item: &BlockchainItem, _peer: &SocketAddr) {
+    use DeserializedBlockchainItem::*;
+    match DeserializedBlockchainItem::from_item(item) {
+        CurrentBlock(b) => info!(
+            "Successfully received blockchain item: b_num = {}, previous_hash = {:?}",
+            b.block.header.b_num, b.block.header.previous_hash
+        ),
+        CurrentTx(tx) => info!(
+            "Successfully received blockchain item: tx_in={}, tx_out={}",
+            tx.inputs.len(),
+            tx.outputs.len()
+        ),
+        VersionErr(v) => warn!("Unsupported blockchain item version {}", v),
+        SerializationErr(e) => warn!("Failed to deserialize blockchain item {:?}", e),
+    }
 }

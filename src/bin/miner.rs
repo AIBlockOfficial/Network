@@ -37,7 +37,7 @@ async fn main() {
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
 
     // Send any requests here
-    if let Some(value) = matches.value_of("request_block") {
+    if let Some(value) = matches.value_of("request_bc_item") {
         let storage_addr = node.storage_address();
         println!("Connect to storage address: {:?}", storage_addr);
         node.connect_to(storage_addr).await.unwrap();
@@ -104,9 +104,9 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("request_block")
-                .long("request_block")
-                .help("Hash of the block to request from history")
+            Arg::with_name("request_bc_item")
+                .long("request_bc_item")
+                .help("Key (hash or name) of the blockchain item to request from storage")
                 .takes_value(true),
         )
         .arg(
