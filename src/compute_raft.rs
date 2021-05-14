@@ -5,14 +5,13 @@ use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, UtxoSet};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
+use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::{
-    get_inputs_previous_out_point, get_tx_out_with_out_point_cloned,
-};
+use naom::utils::transaction_utils::get_inputs_previous_out_point;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -99,7 +98,7 @@ pub struct ComputeConsensused {
     /// The very first block to consensus.
     initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
     /// UTXO set containain the valid transaction to use as previous input hashes.
-    utxo_set: UtxoSet,
+    utxo_set: TrackedUtxoSet,
     /// Accumulating block:
     /// Require majority of compute node votes for normal blocks.
     /// Require unanimit for first block.
@@ -561,9 +560,14 @@ impl ComputeRaft {
         self.consensused.get_mining_block()
     }
 
-    /// Current utxo_set including block being mined
+    /// Current utxo_set returned as `UtxoSet` including block being mined
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.consensused.get_committed_utxo_set()
+    }
+
+    /// Current utxo_set returned as `TrackedUtxoSet`
+    pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
+        &self.consensused.get_committed_utxo_tracked_set()
     }
 
     /// Take mining block when mining is completed, use to populate mined block.
@@ -652,7 +656,7 @@ impl ComputeConsensused {
             current_block,
             current_block_tx: Default::default(),
             initial_utxo_txs: Default::default(),
-            utxo_set,
+            utxo_set: TrackedUtxoSet::new(utxo_set),
             current_block_stored_info: Default::default(),
             last_committed_raft_idx_and_term,
             current_circulation,
@@ -672,7 +676,7 @@ impl ComputeConsensused {
             sufficient_majority: self.sufficient_majority,
             tx_current_block_num: self.tx_current_block_num,
             current_block: self.current_block,
-            utxo_set: self.utxo_set,
+            utxo_set: self.utxo_set.into_utxoset(),
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
             special_handling,
@@ -694,8 +698,7 @@ impl ComputeConsensused {
         // to accept next block transactions.
         // TODO: Roll back append and removal if block rejected by miners.
 
-        self.utxo_set
-            .extend(get_tx_out_with_out_point_cloned(block_tx.iter()));
+        self.utxo_set.extend_tracked_utxo_set(&block_tx);
 
         self.current_block = Some(block);
         self.current_block_tx = block_tx;
@@ -713,6 +716,11 @@ impl ComputeConsensused {
 
     /// Current utxo_set including block being mined
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
+        &self.utxo_set
+    }
+
+    /// Current tracked UTXO set
+    pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         &self.utxo_set
     }
 
@@ -821,7 +829,7 @@ impl ComputeConsensused {
     ) {
         for hash in get_inputs_previous_out_point(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
-            self.utxo_set.remove(hash).unwrap();
+            self.utxo_set.remove_tracked_utxo_entry(hash);
         }
         block.transactions.extend(txs.keys().cloned());
         block_tx.append(&mut txs);
@@ -970,9 +978,8 @@ impl ComputeConsensused {
                 self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.tx_current_block_num = Some(info.block_num + 1);
-                self.utxo_set.extend(get_tx_out_with_out_point_cloned(
-                    info.mining_transactions.iter(),
-                ));
+                self.utxo_set
+                    .extend_tracked_utxo_set(&info.mining_transactions);
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
             }

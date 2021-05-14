@@ -5,7 +5,8 @@ use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTx
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock, UtxoSet,
+    ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
+    UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -1822,29 +1823,63 @@ async fn request_utxo_set_raft_1_node() {
     create_first_block_act(&mut network).await;
 
     let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+
     let addresses = {
         let a = SOME_PUB_KEY_ADDRS;
-        let ne = Some("DoesNotExist");
-        vec![None, Some(a[0]), Some(a[1]), Some(a[2]), ne]
+        let ne = vec!["DoesNotExist".to_string()];
+        vec![
+            //Request full UTXO set
+            UtxoFetchType::All,
+            //Request single address with multiple OutPoints
+            UtxoFetchType::AnyOf(vec![a[0].to_string()]),
+            //Request single address with one OutPoint
+            UtxoFetchType::AnyOf(vec![a[1].to_string()]),
+            //Request single address with one OutPoint
+            UtxoFetchType::AnyOf(vec![a[2].to_string()]),
+            //Request combination of different addresses with different OutPoints
+            UtxoFetchType::AnyOf(vec![a[1].to_string(), a[2].to_string()]),
+            //Request combination of different addresses containing invalid address
+            UtxoFetchType::AnyOf(vec![
+                "DoesNotExist".to_string(),
+                a[1].to_string(),
+                a[2].to_string(),
+            ]),
+            //Single invalid address
+            UtxoFetchType::AnyOf(ne),
+        ]
     };
     let expected = vec![
-        Some(committed_utxo_set.keys().cloned().collect()),
-        Some(vec![
+        //No address - Should return full UTXO set
+        committed_utxo_set.keys().cloned().collect(),
+        //Single address with multiple OutPoints
+        vec![
             OutPoint::new("000000".to_string(), 0),
             OutPoint::new("000001".to_string(), 1),
-        ]),
-        Some(vec![OutPoint::new("000001".to_string(), 0)]),
-        Some(vec![OutPoint::new("000002".to_string(), 0)]),
-        Some(Vec::new()),
+        ],
+        //Single address with one OutPoint
+        vec![OutPoint::new("000001".to_string(), 0)],
+        //Single address with one OutPoint
+        vec![OutPoint::new("000002".to_string(), 0)],
+        //Combination of different addresses with different OutPoints
+        vec![
+            OutPoint::new("000001".to_string(), 0),
+            OutPoint::new("000002".to_string(), 0),
+        ],
+        //Combination of different addresses containing an invalid address - Should filter out invalid address
+        vec![
+            OutPoint::new("000001".to_string(), 0),
+            OutPoint::new("000002".to_string(), 0),
+        ],
+        //Single invalid address - Should return an empty set
+        Vec::new(),
     ];
 
     //
     // Act
     //
     let mut actual = Vec::new();
-    for address in addresses {
-        let address = address.map(|v| v.to_string());
-        request_utxo_set_act(&mut network, "user1", "compute1", address).await;
+    for address_list in addresses {
+        request_utxo_set_act(&mut network, "user1", "compute1", address_list).await;
         actual.push(user_get_received_utxo_set_keys(&mut network, "user1").await);
     }
 
@@ -1859,9 +1894,9 @@ async fn request_utxo_set_act(
     network: &mut Network,
     user: &str,
     compute: &str,
-    address: Option<String>,
+    address_list: UtxoFetchType,
 ) {
-    user_send_utxo_request(network, user, compute, address).await;
+    user_send_utxo_request(network, user, compute, address_list).await;
     compute_handle_event(network, compute, "Received UTXO fetch request").await;
     compute_send_utxo_set(network, compute).await;
     user_handle_event(network, user, "Received UTXO set").await;
@@ -2687,25 +2722,21 @@ async fn user_process_mining_notified(
     u.pending_test_auto_gen_txs().cloned()
 }
 
-//Will return None if deserialization of UtxoSet has failed
-async fn user_get_received_utxo_set_keys(
-    network: &mut Network,
-    user: &str,
-) -> Option<Vec<OutPoint>> {
+async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> Vec<OutPoint> {
     let u = network.user(user).unwrap().lock().await;
-    let received_utxo_set = u.get_received_utxo();
-    received_utxo_set.map(|received_utxo_set| received_utxo_set.keys().cloned().collect())
+    let received_utxo_set = u.get_received_utxo().unwrap();
+    received_utxo_set.keys().cloned().collect()
 }
 
 async fn user_send_utxo_request(
     network: &mut Network,
     from_user: &str,
     to_compute: &str,
-    address: Option<String>,
+    address_list: UtxoFetchType,
 ) {
     let mut u = network.user(from_user).unwrap().lock().await;
     let compute_node_addr = network.get_address(to_compute).await.unwrap();
-    u.send_request_utxo_set(compute_node_addr, address)
+    u.send_request_utxo_set(compute_node_addr, address_list)
         .await
         .unwrap();
 }

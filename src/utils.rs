@@ -800,3 +800,48 @@ async fn shutdown_on_path(
         shutdown_num
     }
 }
+
+/// Get all the script_public_key and OutPoint from the (hash,transactions)
+///
+/// ### Arguments
+///
+/// * `txs` - The entries to to provide an update for.
+pub fn get_pk_with_out_point<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
+) -> impl Iterator<Item = (&'a String, OutPoint)> {
+    get_tx_out_with_out_point(txs)
+        .filter_map(|(op, txout)| txout.script_public_key.as_ref().map(|spk| (spk, op)))
+}
+
+/// Get all the script_public_key and OutPoint from the (hash,transactions)
+///
+/// ### Arguments
+///
+/// * `txs` - The entries to to provide an update for.
+pub fn get_pk_with_out_point_cloned<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
+) -> impl Iterator<Item = (String, OutPoint)> + 'a {
+    get_pk_with_out_point(txs).map(|(spk, op)| (spk.clone(), op))
+}
+
+/// Get all the script_public_key and OutPoint from the UTXO set
+///
+/// ### Arguments
+///
+/// * `utxo_set` - The UTXO set.
+pub fn get_pk_with_out_point_from_utxo_set<'a>(
+    utxo_set: impl Iterator<Item = (&'a OutPoint, &'a TxOut)>,
+) -> impl Iterator<Item = (&'a String, &'a OutPoint)> {
+    utxo_set.filter_map(|(op, txout)| txout.script_public_key.as_ref().map(|spk| (spk, op)))
+}
+
+/// Get all the script_public_key and OutPoint from the UTXO set
+///
+/// ### Arguments
+///
+/// * `utxo_set` - The UTXO set.
+pub fn get_pk_with_out_point_from_utxo_set_cloned<'a>(
+    utxo_set: impl Iterator<Item = (&'a OutPoint, &'a TxOut)> + 'a,
+) -> impl Iterator<Item = (String, OutPoint)> + 'a {
+    get_pk_with_out_point_from_utxo_set(utxo_set).map(|(spk, op)| (spk.clone(), op.clone()))
+}
