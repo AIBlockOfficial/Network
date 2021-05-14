@@ -948,6 +948,16 @@ pub fn get_blocks_by_num(db: Arc<Mutex<SimpleDb>>, nums: Vec<u64>) -> Vec<Stored
         .collect::<Vec<StoredSerializingBlock>>()
 }
 
+/// Fetches the most recent block stored
+pub fn get_last_block_stored(db: Arc<Mutex<SimpleDb>>) -> StoredSerializingBlock {
+    let item = get_stored_value_from_db(db.clone(), LAST_BLOCK_HASH_KEY).unwrap_or_default();
+
+    match deserialize(&item.data) {
+        Ok(b) => b,
+        Err(_) => StoredSerializingBlock::default(),
+    }
+}
+
 /// Version pointer for the column:key
 ///
 /// ### Arguments

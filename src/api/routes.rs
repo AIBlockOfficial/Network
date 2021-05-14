@@ -76,6 +76,19 @@ pub fn payment_address(
         .with(cors)
 }
 
+// GET latest block
+pub fn latest_block(
+    db: Arc<Mutex<SimpleDb>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("latest_block")
+        .and(warp::get())
+        .and(with_node_component(db))
+        .and_then(handlers::get_latest_block)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST get block information by number

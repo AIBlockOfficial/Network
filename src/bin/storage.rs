@@ -59,7 +59,8 @@ async fn main() {
         bind_address.set_port(api_addr.port());
 
         async move {
-            warp::serve(routes::block_info_by_nums(db))
+            use warp::Filter;
+            warp::serve(routes::block_info_by_nums(db.clone()).or(routes::latest_block(db)))
                 .run(bind_address)
                 .await;
         }
