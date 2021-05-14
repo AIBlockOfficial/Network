@@ -18,7 +18,7 @@ use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
     SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
-use crate::interfaces::BlockStoredInfo;
+use crate::interfaces::{BlockStoredInfo, BlockchainItemType};
 use crate::{compute, compute_raft, raft_store, storage, storage_raft, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
@@ -326,7 +326,10 @@ pub fn upgrade_storage_db_batch<'a>(
             let block_num = stored_block.block.header.b_num;
             let column = storage::DB_COL_BC_V0_2_0;
 
-            let pointer = storage::put_to_block_chain_at(&mut batch, column, &key, &value);
+            let pointer = {
+                let t = BlockchainItemType::Block;
+                storage::put_to_block_chain_at(&mut batch, column, t, &key, &value)
+            };
             storage::put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
             let all_txs = storage::all_ordered_stored_block_tx_hashes(
@@ -335,8 +338,10 @@ pub fn upgrade_storage_db_batch<'a>(
             );
             for (tx_num, tx_hash) in all_txs {
                 if let Some(tx_value) = db.get_cf(DB_COL_DEFAULT, tx_hash)? {
-                    let pointer =
-                        storage::put_to_block_chain_at(&mut batch, column, tx_hash, tx_value);
+                    let pointer = {
+                        let t = BlockchainItemType::Tx;
+                        storage::put_to_block_chain_at(&mut batch, column, t, tx_hash, tx_value)
+                    };
                     storage::put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
                 } else {
                     error!(

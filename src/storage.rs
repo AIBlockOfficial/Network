@@ -6,8 +6,9 @@ use crate::constants::{
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo,
-    NodeType, ProofOfWork, Response, StorageInterface, StorageRequest, StoredSerializingBlock,
+    BlockStoredInfo, BlockchainItem, BlockchainItemType, CommonBlockInfo, ComputeRequest, Contract,
+    MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
+    StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
@@ -25,6 +26,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::str;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
@@ -39,7 +41,8 @@ pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
-pub const DB_COLS_BC: &[&str] = &[DB_COL_BC_NOW, DB_COL_BC_V0_2_0];
+/// Version columns
+pub const DB_COLS_BC: &[(&str, u32)] = &[(DB_COL_BC_NOW, 1), (DB_COL_BC_V0_2_0, 0)];
 pub const DB_POINTER_SEPARATOR: u8 = b':';
 
 /// Database specification
@@ -107,7 +110,7 @@ pub struct StorageNode {
     api_addr: SocketAddr,
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
-    specified_block_fetched: Option<(Vec<u8>, SocketAddr)>,
+    blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
 }
 
 impl StorageNode {
@@ -151,7 +154,7 @@ impl StorageNode {
             compute_addr,
             whitelisted: Default::default(),
             shutdown_group,
-            specified_block_fetched: Default::default(),
+            blockchain_item_fetched: Default::default(),
         }
         .load_local_db()?)
     }
@@ -234,10 +237,10 @@ impl StorageNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Specified block fetched from storage",
+                reason: "Blockchain item fetched from storage",
             }) => {
-                if let Err(e) = self.send_specified_block().await {
-                    error!("Specified block not sent {:?}", e);
+                if let Err(e) = self.send_blockchain_item().await {
+                    error!("Blockchain item not sent {:?}", e);
                 }
             }
             Ok(Response {
@@ -444,7 +447,7 @@ impl StorageNode {
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
         match req {
-            GetSpecifiedBlock { key } => Some(self.get_specified_block(peer, &key)),
+            GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, key)),
             GetHistory {
                 start_time,
                 end_time,
@@ -461,11 +464,11 @@ impl StorageNode {
         }
     }
 
-    ///Sends the latest block fetched from storage.
-    pub async fn send_specified_block(&mut self) -> Result<()> {
-        if let Some((block, peer)) = self.specified_block_fetched.take() {
+    ///Sends the latest blockchain item fetched from storage.
+    pub async fn send_blockchain_item(&mut self) -> Result<()> {
+        if let Some((key, item, peer)) = self.blockchain_item_fetched.take() {
             self.node
-                .send(peer, MineRequest::SendSpecifiedBlock { block })
+                .send(peer, MineRequest::SendBlockchainItem { key, item })
                 .await?;
         }
         Ok(())
@@ -541,7 +544,10 @@ impl StorageNode {
         // Store to database
         //
         let mut batch = self_db.batch_writer();
-        let pointer = put_to_block_chain(&mut batch, &block_hash, &block_input);
+        let pointer = {
+            let t = BlockchainItemType::Block;
+            put_to_block_chain(&mut batch, t, &block_hash, &block_input)
+        };
         put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
         let all_txs = all_ordered_stored_block_tx_hashes(
@@ -551,7 +557,10 @@ impl StorageNode {
         for (tx_num, tx_hash) in all_txs {
             if let Some(tx_value) = all_block_txs.get(tx_hash) {
                 let tx_input = serialize(tx_value).unwrap();
-                let pointer = put_to_block_chain(&mut batch, tx_hash, &tx_input);
+                let pointer = {
+                    let t = BlockchainItemType::Tx;
+                    put_to_block_chain(&mut batch, t, tx_hash, &tx_input)
+                };
                 put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
             } else {
                 error!(
@@ -595,7 +604,7 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `key` - Key for the value to retrieve
-    pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+    pub fn get_stored_value<K: AsRef<[u8]>>(&self, key: K) -> Option<BlockchainItem> {
         get_stored_value_from_db(self.db.clone(), key)
     }
 
@@ -750,11 +759,12 @@ impl StorageNode {
 }
 
 impl StorageInterface for StorageNode {
-    fn get_specified_block(&mut self, peer: SocketAddr, key: &str) -> Response {
-        self.specified_block_fetched = Some((self.get_stored_value(key).unwrap_or_default(), peer));
+    fn get_blockchain_item(&mut self, peer: SocketAddr, key: String) -> Response {
+        let item = self.get_stored_value(&key).unwrap_or_default();
+        self.blockchain_item_fetched = Some((key, item, peer));
         Response {
             success: true,
-            reason: "Specified block fetched from storage",
+            reason: "Blockchain item fetched from storage",
         }
     }
 
@@ -801,29 +811,37 @@ impl StorageInterface for StorageNode {
 /// ### Arguments
 ///
 /// * `batch` - Database writer
+/// * `item_type` - The type for the data
 /// * `key`   - The key for the data
 /// * `value` - The value to store
-pub fn put_to_block_chain(batch: &mut SimpleDbWriteBatch, key: &str, value: &[u8]) -> Vec<u8> {
-    put_to_block_chain_at(batch, DB_COL_BC_NOW, key, value)
+pub fn put_to_block_chain(
+    batch: &mut SimpleDbWriteBatch,
+    item_type: BlockchainItemType,
+    key: &str,
+    value: &[u8],
+) -> Vec<u8> {
+    put_to_block_chain_at(batch, DB_COL_BC_NOW, item_type, key, value)
 }
 
 /// Add to the block chain columns for specified version
 ///
 /// ### Arguments
 ///
-/// * `batch` - Database writer
-/// * `cf`    - Column family to store the key/value
-/// * `key`   - The key for the data
-/// * `value` - The value to store
+/// * `batch`     - Database writer
+/// * `cf`        - Column family to store the key/value
+/// * `item_type` - The type for the data
+/// * `key`       - The key for the data
+/// * `value`     - The value to store
 pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     batch: &mut SimpleDbWriteBatch,
     cf: &'static str,
+    item_type: BlockchainItemType,
     key: K,
     value: V,
 ) -> Vec<u8> {
     let key = key.as_ref();
     let value = value.as_ref();
-    let pointer = version_pointer(cf, key);
+    let pointer = version_pointer(cf, item_type, key);
     batch.put_cf(cf, key, value);
     batch.put_cf(DB_COL_BC_ALL, key, &pointer);
     pointer
@@ -884,7 +902,7 @@ pub fn all_ordered_stored_block_tx_hashes<'a>(
 pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     db: Arc<Mutex<SimpleDb>>,
     key: K,
-) -> Option<Vec<u8>> {
+) -> Option<BlockchainItem> {
     let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
         DB_COL_BC_NAMED
     } else {
@@ -895,11 +913,19 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
         warn!("get_stored_value error: {}", e);
         None
     })?;
-    let (cf, key) = decode_version_pointer(&pointer);
-    u_db.get_cf(cf, key).unwrap_or_else(|e| {
-        warn!("get_stored_value error: {}", e);
-        None
-    })
+
+    let (version, item_type, cf, key) = decode_version_pointer(&pointer);
+    u_db.get_cf(cf, key)
+        .unwrap_or_else(|e| {
+            warn!("get_stored_value error: {}", e);
+            None
+        })
+        .map(|data| BlockchainItem {
+            version,
+            item_type,
+            key: key.to_owned(),
+            data,
+        })
 }
 
 /// Fetches blocks by their block numbers. Blocks which for whatever reason are
@@ -912,9 +938,9 @@ pub fn get_blocks_by_num(db: Arc<Mutex<SimpleDb>>, nums: Vec<u64>) -> Vec<Stored
     nums.iter()
         .map(|num| {
             let key = indexed_block_hash_key(*num);
-            let block = get_stored_value_from_db(db.clone(), key).unwrap_or_default();
+            let item = get_stored_value_from_db(db.clone(), key).unwrap_or_default();
 
-            match deserialize(&block) {
+            match deserialize(&item.data) {
                 Ok(b) => b,
                 Err(_) => StoredSerializingBlock::default(),
             }
@@ -926,11 +952,18 @@ pub fn get_blocks_by_num(db: Arc<Mutex<SimpleDb>>, nums: Vec<u64>) -> Vec<Stored
 ///
 /// ### Arguments
 ///
-/// * `cf`  - Column family the data is
-/// * `key` - The key for the data
-fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
+/// * `cf`        - Column family the data is
+/// * `key`       - The key for the data
+/// * `item_type` - The type for the data
+fn version_pointer<K: AsRef<[u8]>>(
+    cf: &'static str,
+    item_type: BlockchainItemType,
+    key: K,
+) -> Vec<u8> {
     let mut r = Vec::new();
     r.extend(cf.as_bytes());
+    r.extend(&[DB_POINTER_SEPARATOR]);
+    r.extend(&[item_type as u8]);
     r.extend(&[DB_POINTER_SEPARATOR]);
     r.extend(key.as_ref());
     r
@@ -963,10 +996,11 @@ fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
 /// ### Arguments
 ///
 /// * `pointer`    - String to be split and decoded
-pub fn decode_version_pointer(pointer: &[u8]) -> (&'static str, &[u8]) {
+pub fn decode_version_pointer(pointer: &[u8]) -> (u32, BlockchainItemType, &'static str, &[u8]) {
     let mut it = pointer.split(|c| c == &DB_POINTER_SEPARATOR);
     let cf = it.next().unwrap();
-    let cf = DB_COLS_BC.iter().find(|v| v.as_bytes() == cf).unwrap();
+    let (cf, version) = DB_COLS_BC.iter().find(|(v, _)| v.as_bytes() == cf).unwrap();
+    let item_type = BlockchainItemType::from_u8s(it.next().unwrap()).unwrap();
     let key = it.next().unwrap();
-    (cf, key)
+    (*version, item_type, cf, key)
 }

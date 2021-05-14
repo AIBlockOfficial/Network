@@ -11,7 +11,10 @@ use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
+/// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
+/// Token to uniquely identify messages.
+pub type Token = u64;
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -106,8 +109,38 @@ pub enum NodeType {
     User,
 }
 
-/// Token to uniquely identify messages.
-pub type Token = u64;
+/// Mined block as stored in DB.
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockchainItem {
+    pub version: u32,
+    pub item_type: BlockchainItemType,
+    pub key: Vec<u8>,
+    pub data: Vec<u8>,
+}
+
+/// Denotes blockchain item types
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BlockchainItemType {
+    Block = b'b',
+    Tx = b't',
+}
+
+impl Default for BlockchainItemType {
+    fn default() -> Self {
+        Self::Block
+    }
+}
+
+impl BlockchainItemType {
+    pub fn from_u8s(v: &[u8]) -> std::result::Result<Self, String> {
+        match v {
+            b"b" => Ok(BlockchainItemType::Block),
+            b"t" => Ok(BlockchainItemType::Tx),
+            v => Err(format!("Unkown BlockchainItemType: {:?}", v)),
+        }
+    }
+}
 
 /// Internal protocol messages exchanged between nodes.
 /// Handle nodes membership & bootstrapping. Wrap higher-level protocols.
@@ -164,7 +197,7 @@ pub enum CommMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
-    GetSpecifiedBlock {
+    GetBlockchainItem {
         key: String,
     },
     GetHistory {
@@ -193,7 +226,7 @@ impl fmt::Debug for StorageRequest {
         use StorageRequest::*;
 
         match *self {
-            GetSpecifiedBlock { ref key } => write!(f, "GetSpecifiedBlock"),
+            GetBlockchainItem { ref key } => write!(f, "GetBlockchainItem"),
             GetHistory {
                 ref start_time,
                 ref end_time,
@@ -214,13 +247,13 @@ impl fmt::Debug for StorageRequest {
 }
 
 pub trait StorageInterface {
-    /// Get a specific block from stored history.
+    /// Get a blockchain item from stored history.
     ///
     /// ### Arguments
     ///
-    /// * `peer` - The address of the peer who requested the block.
-    /// * `key` - The hash key of the block which needs to be returned from storage.
-    fn get_specified_block(&mut self, peer: SocketAddr, key: &str) -> Response;
+    /// * `peer` - The requestor address.
+    /// * `key`  - The blockchain item key.
+    fn get_blockchain_item(&mut self, peer: SocketAddr, key: String) -> Response;
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
@@ -272,8 +305,9 @@ pub enum MineRequest {
     SendPartitionList {
         p_list: Vec<ProofOfWork>,
     },
-    SendSpecifiedBlock {
-        block: Vec<u8>,
+    SendBlockchainItem {
+        key: String,
+        item: BlockchainItem,
     },
     SendTransactions {
         tx_merkle_verification: Vec<String>,
@@ -286,7 +320,7 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
-            SendSpecifiedBlock { ref block } => write!(f, "SendSpecifiedBlock"),
+            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
             SendBlock {
                 ref block,
                 ref reward,
@@ -310,7 +344,12 @@ pub trait MinerInterface {
     /// ### Arguments
     ///
     /// * `block` - The received block.
-    fn receive_specified_block(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response;
+    fn receive_blockchain_item(
+        &mut self,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
+    ) -> Response;
 }
 
 ///============ COMPUTE NODE ============///

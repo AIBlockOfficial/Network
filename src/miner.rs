@@ -3,13 +3,14 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response, StorageRequest,
-    StoredSerializingBlock,
+    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    StorageRequest,
 };
 use crate::utils::{
     concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
-    get_partition_entry_key, validate_pow_block, validate_pow_for_address, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult, RunningTaskOrResult,
+    get_partition_entry_key, validate_pow_block, validate_pow_for_address,
+    DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    RunningTaskOrResult,
 };
 use crate::wallet::WalletDb;
 use crate::Node;
@@ -128,7 +129,7 @@ pub struct MinerNode {
     current_payment_address: Option<String>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
-    specified_block_received: Option<(Vec<u8>, SocketAddr)>,
+    blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
 }
 
 impl MinerNode {
@@ -174,7 +175,7 @@ impl MinerNode {
             current_payment_address: None,
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
-            specified_block_received: Default::default(),
+            blockchain_item_received: Default::default(),
         }
         .load_local_db()
         .await?)
@@ -255,20 +256,13 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Specified block received",
+                reason: "Blockchain item received",
             }) => {
-                match self
-                    .specified_block_received
-                    .as_ref()
-                    .map(|(v, _)| deserialize::<StoredSerializingBlock>(&v))
-                {
-                    Some(Ok(b)) => info!(
-                        "Successfully received specified block: b_num = {}, previous_hash = {:?}",
-                        b.block.header.b_num, b.block.header.previous_hash
-                    ),
-                    Some(Err(e)) => warn!("Received invalid block {:?}", e),
-                    None => warn!("Failed to retrieve specified block"),
-                };
+                if let Some((key, item, peer)) = self.blockchain_item_received.as_ref() {
+                    log_received_blockchain_item(key, item, peer);
+                } else {
+                    warn!("Failed to retrieve blockchain item");
+                }
             }
             Ok(Response {
                 success: true,
@@ -445,7 +439,7 @@ impl MinerNode {
         trace!("handle_request: {:?}", req);
 
         match req {
-            SendSpecifiedBlock { block } => Some(self.receive_specified_block(peer, block)),
+            SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
             SendBlock { block, reward } => self.receive_pre_block(peer, block, reward).await,
             SendPartitionList { p_list } => self.receive_partition_list(peer, p_list),
             SendRandomNum {
@@ -478,22 +472,24 @@ impl MinerNode {
         })
     }
 
-    /// Sends a request to retrieve a specific block from storage
+    /// Sends a request to retrieve a blockchain item from storage
     ///
     /// ### Arguments
     ///
-    /// * `key` - Key of the block to retrieve from storage
-    /// * `peer` - Storage peer to send the request to
-    pub async fn request_specified_block(&mut self, key: String) -> Result<()> {
-        self.specified_block_received = None;
+    /// * `key`  - The blockchain item key.
+    pub async fn request_blockchain_item(&mut self, key: String) -> Result<()> {
+        self.blockchain_item_received = None;
         self.node
-            .send(self.storage_addr, StorageRequest::GetSpecifiedBlock { key })
+            .send(self.storage_addr, StorageRequest::GetBlockchainItem { key })
             .await?;
         Ok(())
     }
 
-    pub async fn get_specified_block_received(&mut self) -> &Option<(Vec<u8>, SocketAddr)> {
-        &self.specified_block_received
+    /// Return the blockchain item received
+    pub async fn get_blockchain_item_received(
+        &mut self,
+    ) -> &Option<(String, BlockchainItem, SocketAddr)> {
+        &self.blockchain_item_received
     }
 
     /// Handles the receipt of the random number of partitioning
@@ -930,19 +926,21 @@ impl MinerNode {
 }
 
 impl MinerInterface for MinerNode {
-    fn receive_specified_block(&mut self, peer: SocketAddr, block: Vec<u8>) -> Response {
-        //TODO: Do something with received block (success).
-        //TODO: Act on empty block received (failure).
-        match block.is_empty() {
-            true => self.specified_block_received = None,
-            false => self.specified_block_received = Some((block, peer)),
-        }
+    fn receive_blockchain_item(
+        &mut self,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
+    ) -> Response {
+        self.blockchain_item_received =
+            Some((key, item, peer)).filter(|(_, i, _)| !i.data.is_empty());
         Response {
             success: true,
-            reason: "Specified block received",
+            reason: "Blockchain item received",
         }
     }
 }
+
 /// Load mining address from wallet
 async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
     Ok(wallet_db
@@ -987,4 +985,22 @@ async fn store_last_coinbase(
 fn generate_random_num(upper_limit: usize) -> usize {
     let mut rng = rand::thread_rng();
     rng.gen_range(0, upper_limit)
+}
+
+/// Log the received blockchain item
+fn log_received_blockchain_item(_key: &str, item: &BlockchainItem, _peer: &SocketAddr) {
+    use DeserializedBlockchainItem::*;
+    match DeserializedBlockchainItem::from_item(item) {
+        CurrentBlock(b) => info!(
+            "Successfully received blockchain item: b_num = {}, previous_hash = {:?}",
+            b.block.header.b_num, b.block.header.previous_hash
+        ),
+        CurrentTx(tx) => info!(
+            "Successfully received blockchain item: tx_in={}, tx_out={}",
+            tx.inputs.len(),
+            tx.outputs.len()
+        ),
+        VersionErr(v) => warn!("Unsupported blockchain item version {}", v),
+        SerializationErr(e) => warn!("Failed to deserialize blockchain item {:?}", e),
+    }
 }

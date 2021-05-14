@@ -2,10 +2,10 @@
 
 use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, SANC_LIST_TEST};
+use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeRequest, MinedBlockExtraInfo, Response,
-    StorageRequest, StoredSerializingBlock, UtxoSet,
+    BlockStoredInfo, BlockchainItem, BlockchainItemType, CommonBlockInfo, ComputeRequest,
+    MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -17,6 +17,7 @@ use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
     create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
+    StringError,
 };
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::TokenAmount;
@@ -1699,7 +1700,7 @@ async fn handle_message_lost_common(
 }
 
 #[tokio::test(basic_scheduler)]
-async fn request_specified_block_no_raft() {
+async fn request_blockchain_item_no_raft() {
     test_step_start();
 
     //
@@ -1755,12 +1756,12 @@ async fn request_specified_block_no_raft() {
 
     node_connect_to(&mut network, "miner1", "storage1").await;
     for input in inputs_block {
-        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
-        actual_block.push(miner_get_specified_block_received_num(&mut network, "miner1").await);
+        request_blockchain_item_act(&mut network, "miner1", "storage1", input).await;
+        actual_block.push(miner_get_blockchain_item_received_b_num(&mut network, "miner1").await);
     }
     for input in inputs_tx {
-        request_specified_block_act(&mut network, "miner1", "storage1", input).await;
-        actual_tx.push(miner_get_specified_block_received_tx_lens(&mut network, "miner1").await);
+        request_blockchain_item_act(&mut network, "miner1", "storage1", input).await;
+        actual_tx.push(miner_get_blockchain_item_received_tx_lens(&mut network, "miner1").await);
     }
 
     //
@@ -1772,16 +1773,16 @@ async fn request_specified_block_no_raft() {
     test_step_complete(network).await;
 }
 
-async fn request_specified_block_act(
+async fn request_blockchain_item_act(
     network: &mut Network,
     miner_from: &str,
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_specified_block(network, &miner_from, block_key).await;
-    storage_handle_event(network, &storage_to, "Specified block fetched from storage").await;
-    storage_send_specified_block(network, &storage_to).await;
-    miner_handle_event(network, &miner_from, "Specified block received").await;
+    miner_request_blockchain_item(network, &miner_from, block_key).await;
+    storage_handle_event(network, &storage_to, "Blockchain item fetched from storage").await;
+    storage_send_blockchain_item(network, &storage_to).await;
+    miner_handle_event(network, &miner_from, "Blockchain item received").await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -2362,9 +2363,9 @@ async fn storage_inject_next_event(
     s.inject_next_event(from_addr, request).unwrap();
 }
 
-async fn storage_send_specified_block(network: &mut Network, from_storage: &str) {
+async fn storage_send_blockchain_item(network: &mut Network, from_storage: &str) {
     let mut s = network.storage(from_storage).unwrap().lock().await;
-    s.send_specified_block().await.unwrap();
+    s.send_blockchain_item().await.unwrap();
 }
 
 async fn storage_inject_send_block_to_storage(
@@ -2460,6 +2461,8 @@ async fn storage_get_last_stored_info(
 fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str) -> Option<String> {
     let stored_block = {
         let stored_value = s.get_stored_value(block_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Block).unwrap();
         match deserialize::<StoredSerializingBlock>(&stored_value) {
             Err(e) => return Some(format!("error: {:?}", e)),
             Ok(v) => v,
@@ -2469,6 +2472,8 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
     let mut block_txs = BTreeMap::new();
     for tx_hash in &stored_block.block.transactions {
         let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
             Ok(v) => v,
@@ -2479,6 +2484,8 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
     let mut per_node = BTreeMap::new();
     for (idx, (tx_hash, nonce)) in &stored_block.mining_tx_hash_and_nonces {
         let stored_value = s.get_stored_value(tx_hash)?;
+        let stored_value =
+            checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
             Err(e) => return Some(format!("error mining tx hash: {:?} : {:?}", e, tx_hash)),
             Ok(v) => v,
@@ -2690,27 +2697,30 @@ async fn user_send_utxo_request(
 //
 // MinerNode helpers
 //
-async fn miner_request_specified_block(network: &mut Network, miner_from: &str, block_key: &str) {
+async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
     let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_specified_block(block_key.to_owned())
+    m.request_blockchain_item(block_key.to_owned())
         .await
         .unwrap();
 }
 
-async fn miner_get_specified_block_received_num(network: &mut Network, miner: &str) -> Option<u64> {
+async fn miner_get_blockchain_item_received_b_num(
+    network: &mut Network,
+    miner: &str,
+) -> Option<u64> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (block, _) = m.get_specified_block_received().await.as_ref()?;
-    let block: StoredSerializingBlock = deserialize(&block).ok()?;
+    let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
+    let block: StoredSerializingBlock = deserialize(&item.data).ok()?;
     Some(block.block.header.b_num)
 }
 
-async fn miner_get_specified_block_received_tx_lens(
+async fn miner_get_blockchain_item_received_tx_lens(
     network: &mut Network,
     miner: &str,
 ) -> Option<(usize, usize)> {
     let mut m = network.miner(miner).unwrap().lock().await;
-    let (tx, _) = m.get_specified_block_received().await.as_ref()?;
-    let tx: Transaction = deserialize(&tx).ok()?;
+    let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
+    let tx: Transaction = deserialize(&item.data).ok()?;
     Some((tx.inputs.len(), tx.outputs.len()))
 }
 
@@ -2957,6 +2967,20 @@ async fn construct_mining_extra_info(
         nonce: generate_pow_for_block(&block.clone(), hash.clone()).await,
         mining_tx: (hash, tx),
         shutdown: false,
+    }
+}
+
+fn checked_blockchain_item_data(
+    v: BlockchainItem,
+    t: BlockchainItemType,
+) -> Result<Vec<u8>, StringError> {
+    if v.version != NETWORK_VERSION || v.item_type != t {
+        Err(StringError(format!(
+            "blockchain_item check v:{}={}, t:{:?}=={:?}",
+            v.version, NETWORK_VERSION, v.item_type, t
+        )))
+    } else {
+        Ok(v.data)
     }
 }
 
