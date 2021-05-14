@@ -2,7 +2,7 @@ use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::UserRequest;
-use crate::storage::get_blocks_by_num;
+use crate::storage::{get_blocks_by_num, get_last_block_stored};
 use crate::wallet::{EncapsulationData, WalletDb};
 
 use naom::constants::D_DISPLAY_PLACES;
@@ -105,6 +105,14 @@ pub async fn get_wallet_encapsulation_data(
     };
 
     Ok(warp::reply::json(&response))
+}
+
+/// Gets the latest block information
+pub async fn get_latest_block(
+    db: Arc<Mutex<SimpleDb>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let last_block = get_last_block_stored(db);
+    Ok(warp::reply::json(&last_block))
 }
 
 //======= POST HANDLERS =======//
