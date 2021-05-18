@@ -120,6 +120,22 @@ pub struct BlockchainItem {
 
 /// Denotes blockchain item types
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BlockchainItemMeta {
+    Block { block_num: u64, tx_len: u32 },
+    Tx { block_num: u64, tx_num: u32 },
+}
+
+impl BlockchainItemMeta {
+    pub fn as_type(&self) -> BlockchainItemType {
+        match self {
+            Self::Block { .. } => BlockchainItemType::Block,
+            Self::Tx { .. } => BlockchainItemType::Tx,
+        }
+    }
+}
+
+/// Denotes blockchain item types
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BlockchainItemType {
     Block = b'b',
