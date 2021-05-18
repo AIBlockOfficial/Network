@@ -109,7 +109,7 @@ pub enum NodeType {
     User,
 }
 
-/// Mined block as stored in DB.
+/// Mined block or transaction as stored in DB.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockchainItem {
     pub version: u32,

@@ -40,6 +40,31 @@ fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
 
 /*------- TESTS --------*/
 
+/// Test POST for get blockchain item by key
+#[tokio::test(basic_scheduler)]
+async fn test_post_blockchain_entry_by_key() {
+    let db = get_db_with_block();
+    let filter = routes::blockchain_entry_by_key(db);
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/blockchain_entry_by_key")
+        .header("Content-Type", "application/json")
+        .json(&"bbd35f90edbc8b1aa04b195a23ab985d97cf0ea3b9701d5aa7e17a9902979caa4")
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    println!("res: {:?}", res);
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "{\"version\":1,\"item_type\":\"Block\",\"key\":[98,98,100,51,53,102,57,48,101,100,98,99,56,98,49,97,97,48,52,98,49,57,53,97,50,51,97,98,57,56,53,100,57,55,99,102,48,101,97,51,98,57,55,48,49,100,53,97,97,55,101,49,55,97,57,57,48,50,57,55,57,99,97,97,52],\"data\":[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}");
+}
+
 /// Test POST for get block info by nums
 #[tokio::test(basic_scheduler)]
 async fn test_post_block_info_by_nums() {

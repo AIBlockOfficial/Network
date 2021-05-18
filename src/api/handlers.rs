@@ -1,12 +1,14 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::UserRequest;
-use crate::storage::{get_blocks_by_num, get_last_block_stored};
+use crate::interfaces::{StoredSerializingBlock, UserRequest};
+use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
+use crate::utils::DeserializedBlockchainItem;
 use crate::wallet::{EncapsulationData, WalletDb};
 
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
+use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
@@ -14,6 +16,13 @@ use std::collections::BTreeMap;
 use std::str;
 use std::sync::{Arc, Mutex};
 use tracing::error;
+
+/// Data entry from the blockchain
+#[derive(Debug, Serialize, Deserialize)]
+enum BlockchainData {
+    Block(StoredSerializingBlock),
+    Transaction(Transaction),
+}
 
 /// Private/public keypairs, stored with payment address as key.
 /// Values are encrypted
@@ -116,6 +125,34 @@ pub async fn get_latest_block(
 }
 
 //======= POST HANDLERS =======//
+
+/// Post to retrieve an item from the blockchain db by hash key
+pub async fn post_blockchain_entry_by_key(
+    db: Arc<Mutex<SimpleDb>>,
+    key: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let item = match get_stored_value_from_db(db, key.as_bytes()) {
+        Some(i) => i,
+        None => return Err(warp::reject::custom(errors::ErrorNoDataFoundForKey)),
+    };
+
+    let des = match DeserializedBlockchainItem::from_item(&item) {
+        DeserializedBlockchainItem::CurrentBlock(b, ..) => BlockchainData::Block(b),
+        DeserializedBlockchainItem::CurrentTx(t, ..) => BlockchainData::Transaction(t),
+        DeserializedBlockchainItem::VersionErr(err) => {
+            error!("Version error: {:?}", err);
+            return Err(warp::reject::custom(
+                errors::ErrorDataNetworkVersionMismatch,
+            ));
+        }
+        DeserializedBlockchainItem::SerializationErr(err) => {
+            error!("Deserializing error: {:?}", err);
+            return Err(warp::reject::custom(errors::ErrorCouldNotDeserializeData));
+        }
+    };
+
+    Ok(warp::reply::json(&des))
+}
 
 /// Post to retrieve block information by number
 pub async fn post_block_by_num(
