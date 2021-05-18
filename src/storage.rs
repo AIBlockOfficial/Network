@@ -815,10 +815,10 @@ impl StorageInterface for StorageNode {
 ///
 /// ### Arguments
 ///
-/// * `batch` - Database writer
-/// * `item_meta` - The type for the data
-/// * `key`   - The key for the data
-/// * `value` - The value to store
+/// * `batch`     - Database writer
+/// * `item_meta` - The metadata for the data
+/// * `key`       - The key for the data
+/// * `value`     - The value to store
 pub fn put_to_block_chain(
     batch: &mut SimpleDbWriteBatch,
     item_meta: &BlockchainItemMeta,
@@ -834,7 +834,7 @@ pub fn put_to_block_chain(
 ///
 /// * `batch`     - Database writer
 /// * `cf`        - Column family to store the key/value
-/// * `item_meta` - The type for the data
+/// * `item_meta` - The metadata for the data
 /// * `key`       - The key for the data
 /// * `value`     - The value to store
 pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
@@ -885,22 +885,6 @@ pub fn put_named_tx_to_block_chain(
     batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
 }
 
-/// Add to the block chain named column
-///
-/// ### Arguments
-///
-/// * `batch`   - Database writer
-/// * `key`     - The key for the data
-/// * `meta`    - The metadata to store
-pub fn put_meta_to_block_chain<K: AsRef<[u8]>>(
-    batch: &mut SimpleDbWriteBatch,
-    key: K,
-    meta: &BlockchainItemMeta,
-) {
-    let meta = serialize(meta).unwrap();
-    batch.put_cf(DB_COL_BC_META, key, &meta);
-}
-
 /// Iterate on all the StoredSerializingBlock transaction hashes
 /// First the transactions in provided order and then the mining txs
 ///
@@ -937,8 +921,8 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     let (version, cf, key) = decode_version_pointer(&pointer);
     let data = ok_or_warn(u_db.get_cf(cf, key), "get_stored_value data")?;
     let meta = {
-        let col = DB_COL_BC_META;
-        let meta = ok_or_warn(u_db.get_cf(col, key), "get_stored_value meta")?;
+        let meta = u_db.get_cf(DB_COL_BC_META, key);
+        let meta = ok_or_warn(meta, "get_stored_value meta")?;
         let meta = deserialize::<BlockchainItemMeta>(&meta).map(Some);
         ok_or_warn(meta, "get_stored_value meta ser")?
     };

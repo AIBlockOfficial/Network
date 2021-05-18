@@ -991,12 +991,14 @@ fn generate_random_num(upper_limit: usize) -> usize {
 fn log_received_blockchain_item(_key: &str, item: &BlockchainItem, _peer: &SocketAddr) {
     use DeserializedBlockchainItem::*;
     match DeserializedBlockchainItem::from_item(item) {
-        CurrentBlock(b) => info!(
-            "Successfully received blockchain item: b_num = {}, previous_hash = {:?}",
-            b.block.header.b_num, b.block.header.previous_hash
+        CurrentBlock(b, b_num, tx_len) => info!(
+            "Successfully received blockchain item: b_num = {}({}), tx_len = {}, previous_hash = {:?}",
+            b.block.header.b_num, b.block.header.b_num == b_num, tx_len, b.block.header.previous_hash
         ),
-        CurrentTx(tx) => info!(
-            "Successfully received blockchain item: tx_in={}, tx_out={}",
+        CurrentTx(tx, b_num, tx_num) => info!(
+            "Successfully received blockchain item: b_num = {}, tx_num = {}, tx_in={}, tx_out={}",
+            b_num,
+            tx_num,
             tx.inputs.len(),
             tx.outputs.len()
         ),

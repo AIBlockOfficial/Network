@@ -2,7 +2,7 @@ use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
-use crate::interfaces::{BlockchainItem, BlockchainItemType, ProofOfWork, StoredSerializingBlock};
+use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
@@ -170,9 +170,13 @@ impl fmt::Debug for StringError {
 
 /// Deserialization of a BlockchainItem
 pub enum DeserializedBlockchainItem {
-    CurrentBlock(StoredSerializingBlock),
-    CurrentTx(Transaction),
+    // Data, block_num, tx_len
+    CurrentBlock(StoredSerializingBlock, u64, u32),
+    // Data, block_num, tx_num
+    CurrentTx(Transaction, u64, u32),
+    // Data
     VersionErr(u32),
+    // Data
     SerializationErr(bincode::Error),
 }
 
@@ -181,17 +185,19 @@ impl DeserializedBlockchainItem {
         if item.version != NETWORK_VERSION {
             return Self::VersionErr(item.version);
         }
-        match item.item_meta.as_type() {
-            BlockchainItemType::Block => {
+        match item.item_meta {
+            BlockchainItemMeta::Block { block_num, tx_len } => {
                 match bincode::deserialize::<StoredSerializingBlock>(&item.data) {
-                    Ok(b) => Self::CurrentBlock(b),
+                    Ok(b) => Self::CurrentBlock(b, block_num, tx_len),
                     Err(e) => Self::SerializationErr(e),
                 }
             }
-            BlockchainItemType::Tx => match bincode::deserialize::<Transaction>(&item.data) {
-                Ok(b) => Self::CurrentTx(b),
-                Err(e) => Self::SerializationErr(e),
-            },
+            BlockchainItemMeta::Tx { block_num, tx_num } => {
+                match bincode::deserialize::<Transaction>(&item.data) {
+                    Ok(b) => Self::CurrentTx(b, block_num, tx_num),
+                    Err(e) => Self::SerializationErr(e),
+                }
+            }
         }
     }
 }
