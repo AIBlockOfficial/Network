@@ -4,8 +4,8 @@ use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemType, CommonBlockInfo, ComputeRequest,
-    MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock, UtxoSet,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
+    ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -1713,8 +1713,8 @@ async fn request_blockchain_item_no_raft() {
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let no_transactions = BTreeMap::new();
     let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
-    let first_tx = transactions[0].iter().next();
-    let first_tx = first_tx.map(|(k, v)| (k.clone(), v.clone())).unwrap();
+    let all_txs = transactions.iter().cloned();
+    let all_txs: Vec<Vec<_>> = all_txs.map(|v| v.into_iter().collect()).collect();
 
     let mut block_keys: Vec<String> = Vec::new();
     for i in 0..11_usize {
@@ -1735,18 +1735,34 @@ async fn request_blockchain_item_no_raft() {
         "0000_non_existent",
         "nIndexedBlockHashKey_000000000000000b",
     ];
-    let expected_block = vec![Some(0), Some(10), Some(0), Some(10), None, None];
-
-    let inputs_tx: Vec<&str> = vec![
-        first_tx.0.as_str(),
-        "nIndexedTxHashKey_0000000000000000_00000000",
-        "nIndexedTxHashKey_0000000000000000_00000100",
-    ];
-    let expected_tx = vec![
-        Some((first_tx.1.inputs.len(), first_tx.1.outputs.len())),
-        Some((first_tx.1.inputs.len(), first_tx.1.outputs.len())),
+    let expected_block = vec![
+        Some((0, ('b', 0, 4))),
+        Some((10, ('b', 10, 1))),
+        Some((0, ('b', 0, 4))),
+        Some((10, ('b', 10, 1))),
+        None,
         None,
     ];
+
+    let inputs_tx: Vec<&str> = vec![
+        all_txs[0][0].0.as_str(),
+        "nIndexedTxHashKey_0000000000000000_00000000",
+        "nIndexedTxHashKey_0000000000000000_00000001",
+        "nIndexedTxHashKey_0000000000000001_00000000",
+        "nIndexedTxHashKey_0000000000000000_00000100",
+    ];
+    let expected_tx = {
+        let t00 = &all_txs[0][0].1;
+        let t01 = &all_txs[0][1].1;
+        let t10 = &all_txs[1][0].1;
+        vec![
+            Some((t00.inputs.len(), t00.outputs.len(), ('t', 0, 0))),
+            Some((t00.inputs.len(), t00.outputs.len(), ('t', 0, 0))),
+            Some((t01.inputs.len(), t01.outputs.len(), ('t', 0, 1))),
+            Some((t10.inputs.len(), t10.outputs.len(), ('t', 1, 0))),
+            None,
+        ]
+    };
 
     //
     // Act
@@ -2707,21 +2723,32 @@ async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, 
 async fn miner_get_blockchain_item_received_b_num(
     network: &mut Network,
     miner: &str,
-) -> Option<u64> {
+) -> Option<(u64, (char, u64, u32))> {
     let mut m = network.miner(miner).unwrap().lock().await;
     let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
     let block: StoredSerializingBlock = deserialize(&item.data).ok()?;
-    Some(block.block.header.b_num)
+    Some((block.block.header.b_num, miner_blockchain_item_meta(&item)))
 }
 
 async fn miner_get_blockchain_item_received_tx_lens(
     network: &mut Network,
     miner: &str,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, (char, u64, u32))> {
     let mut m = network.miner(miner).unwrap().lock().await;
     let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
     let tx: Transaction = deserialize(&item.data).ok()?;
-    Some((tx.inputs.len(), tx.outputs.len()))
+    Some((
+        tx.inputs.len(),
+        tx.outputs.len(),
+        miner_blockchain_item_meta(&item),
+    ))
+}
+
+fn miner_blockchain_item_meta(item: &BlockchainItem) -> (char, u64, u32) {
+    match item.item_meta {
+        BlockchainItemMeta::Block { block_num, tx_len } => ('b', block_num, tx_len),
+        BlockchainItemMeta::Tx { block_num, tx_num } => ('t', block_num, tx_num),
+    }
 }
 
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
@@ -2974,10 +3001,13 @@ fn checked_blockchain_item_data(
     v: BlockchainItem,
     t: BlockchainItemType,
 ) -> Result<Vec<u8>, StringError> {
-    if v.version != NETWORK_VERSION || v.item_type != t {
+    if v.version != NETWORK_VERSION || v.item_meta.as_type() != t {
         Err(StringError(format!(
             "blockchain_item check v:{}={}, t:{:?}=={:?}",
-            v.version, NETWORK_VERSION, v.item_type, t
+            v.version,
+            NETWORK_VERSION,
+            v.item_meta.as_type(),
+            t
         )))
     } else {
         Ok(v.data)

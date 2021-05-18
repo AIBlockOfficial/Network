@@ -181,7 +181,7 @@ impl DeserializedBlockchainItem {
         if item.version != NETWORK_VERSION {
             return Self::VersionErr(item.version);
         }
-        match item.item_type {
+        match item.item_meta.as_type() {
             BlockchainItemType::Block => {
                 match bincode::deserialize::<StoredSerializingBlock>(&item.data) {
                     Ok(b) => Self::CurrentBlock(b),

@@ -113,7 +113,7 @@ pub enum NodeType {
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockchainItem {
     pub version: u32,
-    pub item_type: BlockchainItemType,
+    pub item_meta: BlockchainItemMeta,
     pub key: Vec<u8>,
     pub data: Vec<u8>,
 }
@@ -123,6 +123,15 @@ pub struct BlockchainItem {
 pub enum BlockchainItemMeta {
     Block { block_num: u64, tx_len: u32 },
     Tx { block_num: u64, tx_num: u32 },
+}
+
+impl Default for BlockchainItemMeta {
+    fn default() -> Self {
+        Self::Block {
+            block_num: 0,
+            tx_len: 0,
+        }
+    }
 }
 
 impl BlockchainItemMeta {

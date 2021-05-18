@@ -944,7 +944,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     };
     Some(BlockchainItem {
         version,
-        item_type: meta.as_type(),
+        item_meta: meta,
         key: key.to_owned(),
         data,
     })
