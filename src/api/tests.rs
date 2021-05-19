@@ -2,22 +2,30 @@ use crate::api::routes;
 use crate::configurations::DbMode;
 use crate::constants::BLOCK_PREPEND;
 use crate::db_utils::{new_db, SimpleDb};
-use crate::interfaces::BlockchainItemMeta;
+use crate::interfaces::{BlockchainItemType, StoredSerializingBlock};
 use crate::storage::{put_named_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use bincode::serialize;
 use naom::primitives::block::Block;
 use sha3::{Digest, Sha3_256};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use warp::http::{HeaderMap, HeaderValue};
 
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
     let block = Block::new();
+    let mut mining_tx_hash_and_nonces = BTreeMap::new();
+    mining_tx_hash_and_nonces.insert(0, ("test".to_string(), vec![0, 1, 23]));
+
+    let block_to_input = StoredSerializingBlock {
+        block,
+        mining_tx_hash_and_nonces,
+    };
 
     let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
     let mut batch = db.batch_writer();
 
-    let block_input = serialize(&block).unwrap();
+    let block_input = serialize(&block_to_input).unwrap();
     let block_hash = {
         let hash_digest = Sha3_256::digest(&block_input);
         let mut hash_digest = hex::encode(hash_digest);
@@ -50,7 +58,7 @@ async fn test_post_blockchain_entry_by_key() {
         .method("POST")
         .path("/blockchain_entry_by_key")
         .header("Content-Type", "application/json")
-        .json(&"bbd35f90edbc8b1aa04b195a23ab985d97cf0ea3b9701d5aa7e17a9902979caa4")
+        .json(&"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997")
         .reply(&filter)
         .await;
 
@@ -58,11 +66,9 @@ async fn test_post_blockchain_entry_by_key() {
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
 
-    println!("res: {:?}", res);
-
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "{\"version\":1,\"item_type\":\"Block\",\"key\":[98,98,100,51,53,102,57,48,101,100,98,99,56,98,49,97,97,48,52,98,49,57,53,97,50,51,97,98,57,56,53,100,57,55,99,102,48,101,97,51,98,57,55,48,49,100,53,97,97,55,101,49,55,97,57,57,48,50,57,55,57,99,97,97,52],\"data\":[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}");
+    assert_eq!(res.body(), "{\"Block\":{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}}");
 }
 
 /// Test POST for get block info by nums
@@ -85,7 +91,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{}}]");
+    assert_eq!(res.body(), "[{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]");
 }
 
 /// Test GET latest block info
@@ -106,5 +112,5 @@ async fn test_get_latest_block() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{}}");
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
 }
