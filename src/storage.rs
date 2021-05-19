@@ -450,6 +450,7 @@ impl StorageNode {
         use StorageRequest::*;
         match req {
             GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, key)),
+            SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
             GetHistory {
                 start_time,
                 end_time,
@@ -469,9 +470,19 @@ impl StorageNode {
     ///Sends the latest blockchain item fetched from storage.
     pub async fn send_blockchain_item(&mut self) -> Result<()> {
         if let Some((key, item, peer)) = self.blockchain_item_fetched.take() {
-            self.node
-                .send(peer, MineRequest::SendBlockchainItem { key, item })
-                .await?;
+            match self.node.get_peer_node_type(peer).await? {
+                NodeType::Miner => {
+                    self.node
+                        .send(peer, MineRequest::SendBlockchainItem { key, item })
+                        .await?
+                }
+                NodeType::Storage => {
+                    self.node
+                        .send(peer, StorageRequest::SendBlockchainItem { key, item })
+                        .await?
+                }
+                _ => return Ok(()),
+            }
         }
         Ok(())
     }
@@ -770,6 +781,18 @@ impl StorageInterface for StorageNode {
         Response {
             success: true,
             reason: "Blockchain item fetched from storage",
+        }
+    }
+
+    fn receive_blockchain_item(
+        &mut self,
+        _peer: SocketAddr,
+        _key: String,
+        _item: BlockchainItem,
+    ) -> Response {
+        Response {
+            success: true,
+            reason: "Blockchain item received",
         }
     }
 

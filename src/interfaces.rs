@@ -218,6 +218,10 @@ pub enum StorageRequest {
     GetBlockchainItem {
         key: String,
     },
+    SendBlockchainItem {
+        key: String,
+        item: BlockchainItem,
+    },
     GetHistory {
         start_time: u64,
         end_time: u64,
@@ -245,6 +249,7 @@ impl fmt::Debug for StorageRequest {
 
         match *self {
             GetBlockchainItem { ref key } => write!(f, "GetBlockchainItem"),
+            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
             GetHistory {
                 ref start_time,
                 ref end_time,
@@ -272,6 +277,20 @@ pub trait StorageInterface {
     /// * `peer` - The requestor address.
     /// * `key`  - The blockchain item key.
     fn get_blockchain_item(&mut self, peer: SocketAddr, key: String) -> Response;
+
+    /// Receive a blockchain item from storage node.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - The requestor address.
+    /// * `key`  - The blockchain item key.
+    /// * `item` - The data associated with key.
+    fn receive_blockchain_item(
+        &mut self,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
+    ) -> Response;
 
     /// Returns a read only section of a stored history.
     /// Time slices are considered to be block IDs (u64).
@@ -357,11 +376,13 @@ impl fmt::Debug for MineRequest {
 }
 
 pub trait MinerInterface {
-    /// Receive a specific block as requested from storage node.
+    /// Receive a blockchain item from storage node.
     ///
     /// ### Arguments
     ///
-    /// * `block` - The received block.
+    /// * `peer` - The requestor address.
+    /// * `key`  - The blockchain item key.
+    /// * `item` - The data associated with key.
     fn receive_blockchain_item(
         &mut self,
         peer: SocketAddr,

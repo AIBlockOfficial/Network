@@ -537,6 +537,13 @@ impl Node {
         Ok(())
     }
 
+    /// Get peer type.
+    pub async fn get_peer_node_type(&self, peer_addr: SocketAddr) -> Result<NodeType> {
+        let peers = self.peers.read().await;
+        let peer = peers.get(&peer_addr).ok_or(CommsError::PeerNotFound)?;
+        peer.peer_type.ok_or(CommsError::PeerInvalidState)
+    }
+
     /// Sends data to a peer.
     async fn send_message(&mut self, peer_addr: SocketAddr, message: CommMessage) -> Result<()> {
         let data = Bytes::from(serialize(&message)?);
