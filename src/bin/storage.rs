@@ -60,9 +60,13 @@ async fn main() {
 
         async move {
             use warp::Filter;
-            warp::serve(routes::block_info_by_nums(db.clone()).or(routes::latest_block(db)))
-                .run(bind_address)
-                .await;
+            warp::serve(
+                routes::block_info_by_nums(db.clone())
+                    .or(routes::latest_block(db.clone()))
+                    .or(routes::blockchain_entry_by_key(db)),
+            )
+            .run(bind_address)
+            .await;
         }
     });
 

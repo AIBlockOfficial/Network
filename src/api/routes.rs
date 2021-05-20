@@ -91,6 +91,30 @@ pub fn latest_block(
 
 //======= POST ROUTES =======//
 
+// POST get db item by key
+pub fn blockchain_entry_by_key(
+    db: Arc<Mutex<SimpleDb>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("blockchain_entry_by_key")
+        .and(warp::post())
+        .and(with_node_component(db))
+        .and(warp::body::json())
+        .and_then(handlers::post_blockchain_entry_by_key)
+        .with(cors)
+}
+
 // POST get block information by number
 pub fn block_info_by_nums(
     db: Arc<Mutex<SimpleDb>>,

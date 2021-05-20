@@ -32,3 +32,18 @@ impl warp::reject::Reject for ErrorCannotAccessUserNode {}
 #[derive(Debug)]
 pub struct ErrorCannotSaveAddressesToWallet;
 impl warp::reject::Reject for ErrorCannotSaveAddressesToWallet {}
+
+/// API error struct for trying to access non-existent data
+#[derive(Debug)]
+pub struct ErrorNoDataFoundForKey;
+impl warp::reject::Reject for ErrorNoDataFoundForKey {}
+
+/// API error struct for a deserialization error
+#[derive(Debug)]
+pub struct ErrorCouldNotDeserializeData;
+impl warp::reject::Reject for ErrorCouldNotDeserializeData {}
+
+/// API error struct for a version-network mismatch error
+#[derive(Debug)]
+pub struct ErrorDataNetworkVersionMismatch;
+impl warp::reject::Reject for ErrorDataNetworkVersionMismatch {}
