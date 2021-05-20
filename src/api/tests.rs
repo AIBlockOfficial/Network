@@ -2,7 +2,7 @@ use crate::api::routes;
 use crate::configurations::DbMode;
 use crate::constants::BLOCK_PREPEND;
 use crate::db_utils::{new_db, SimpleDb};
-use crate::interfaces::BlockchainItemType;
+use crate::interfaces::BlockchainItemMeta;
 use crate::storage::{put_named_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use bincode::serialize;
 use naom::primitives::block::Block;
@@ -25,11 +25,13 @@ fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
         hash_digest
     };
 
+    let block_num = 0;
     let pointer = {
-        let t = BlockchainItemType::Block;
-        put_to_block_chain(&mut batch, t, &block_hash, &block_input)
+        let tx_len = 0;
+        let t = BlockchainItemMeta::Block { block_num, tx_len };
+        put_to_block_chain(&mut batch, &t, &block_hash, &block_input)
     };
-    put_named_block_to_block_chain(&mut batch, &pointer, 0);
+    put_named_block_to_block_chain(&mut batch, &pointer, block_num);
     let batch = batch.done();
     db.write(batch).unwrap();
 

@@ -113,33 +113,41 @@ pub enum NodeType {
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockchainItem {
     pub version: u32,
-    pub item_type: BlockchainItemType,
+    pub item_meta: BlockchainItemMeta,
     pub key: Vec<u8>,
     pub data: Vec<u8>,
 }
 
-/// Denotes blockchain item types
+/// Denotes blockchain item metadata
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[repr(u8)]
-pub enum BlockchainItemType {
-    Block = b'b',
-    Tx = b't',
+pub enum BlockchainItemMeta {
+    Block { block_num: u64, tx_len: u32 },
+    Tx { block_num: u64, tx_num: u32 },
 }
 
-impl Default for BlockchainItemType {
+impl Default for BlockchainItemMeta {
     fn default() -> Self {
-        Self::Block
-    }
-}
-
-impl BlockchainItemType {
-    pub fn from_u8s(v: &[u8]) -> std::result::Result<Self, String> {
-        match v {
-            b"b" => Ok(BlockchainItemType::Block),
-            b"t" => Ok(BlockchainItemType::Tx),
-            v => Err(format!("Unkown BlockchainItemType: {:?}", v)),
+        Self::Block {
+            block_num: 0,
+            tx_len: 0,
         }
     }
+}
+
+impl BlockchainItemMeta {
+    pub fn as_type(&self) -> BlockchainItemType {
+        match self {
+            Self::Block { .. } => BlockchainItemType::Block,
+            Self::Tx { .. } => BlockchainItemType::Tx,
+        }
+    }
+}
+
+/// Denotes blockchain item types
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockchainItemType {
+    Block,
+    Tx,
 }
 
 /// Internal protocol messages exchanged between nodes.

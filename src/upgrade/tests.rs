@@ -5,14 +5,11 @@ use super::{
     upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
-use crate::constants::{
-    DB_VERSION_KEY, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
-    NETWORK_VERSION_SERIALIZED,
-};
+use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
 use crate::db_utils::{
     new_db, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec, DB_COL_DEFAULT,
 };
-use crate::interfaces::{BlockStoredInfo, BlockchainItem, BlockchainItemType, Response};
+use crate::interfaces::{BlockStoredInfo, BlockchainItem, BlockchainItemMeta, Response};
 use crate::test_utils::{
     node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType,
 };
@@ -44,6 +41,7 @@ const STORAGE_DB_V0_2_0_INDEXES: &[&str] = &[
     "nIndexedTxHashKey_0000000000000002_00000001",
     "nIndexedTxHashKey_0000000000000002_00000002",
 ];
+const STORAGE_DB_V0_2_0_BLOCK_LEN: &[u32] = &[5, 3, 4];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 enum Specs {
@@ -147,7 +145,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                     let idx_k = STORAGE_DB_V0_2_0_INDEXES[idx];
                     expected.push(Some(test_hash(BlockchainItem {
                         version: 0,
-                        item_type: index_type(idx_k),
+                        item_meta: index_meta(idx_k),
                         key: k.to_vec(),
                         data: v.to_vec(),
                     })));
@@ -672,20 +670,28 @@ async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_bl
     event_tx.send(event, "test shutdown").await.unwrap();
 }
 
-fn test_hash(t: BlockchainItem) -> (u32, BlockchainItemType, u64) {
+fn test_hash(t: BlockchainItem) -> (u32, BlockchainItemMeta, u64) {
     use std::hash::{Hash, Hasher};
     let mut s = std::collections::hash_map::DefaultHasher::new();
     t.data.hash(&mut s);
 
-    (t.version, t.item_type, s.finish())
+    (t.version, t.item_meta, s.finish())
 }
 
-fn index_type(v: &str) -> BlockchainItemType {
-    if v.starts_with(INDEXED_BLOCK_HASH_PREFIX_KEY) {
-        BlockchainItemType::Block
-    } else if v.starts_with(INDEXED_TX_HASH_PREFIX_KEY) {
-        BlockchainItemType::Tx
-    } else {
-        panic!("index_type not found {}", v);
+fn index_meta(v: &str) -> BlockchainItemMeta {
+    let mut it = v.split('_');
+    match (it.next(), it.next(), it.next()) {
+        (Some("nIndexedBlockHashKey"), Some(block_num), None) => {
+            let block_num = u64::from_str_radix(block_num, 16).unwrap();
+            BlockchainItemMeta::Block {
+                block_num,
+                tx_len: STORAGE_DB_V0_2_0_BLOCK_LEN[block_num as usize],
+            }
+        }
+        (Some("nIndexedTxHashKey"), Some(block_num), Some(tx_num)) => BlockchainItemMeta::Tx {
+            block_num: u64::from_str_radix(block_num, 16).unwrap(),
+            tx_num: u32::from_str_radix(tx_num, 16).unwrap(),
+        },
+        _ => panic!("index_meta not found {}", v),
     }
 }

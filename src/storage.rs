@@ -6,7 +6,7 @@ use crate::constants::{
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemType, CommonBlockInfo, ComputeRequest, Contract,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, CommonBlockInfo, ComputeRequest, Contract,
     MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
     StorageRequest, StoredSerializingBlock,
 };
@@ -38,6 +38,7 @@ pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 pub const DB_COL_INTERNAL: &str = "internal";
 pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
+pub const DB_COL_BC_META: &str = "block_chain_meta";
 pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
@@ -53,6 +54,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         DB_COL_INTERNAL,
         DB_COL_BC_ALL,
         DB_COL_BC_NAMED,
+        DB_COL_BC_META,
         DB_COL_BC_NOW,
         DB_COL_BC_V0_2_0,
     ],
@@ -544,22 +546,19 @@ impl StorageNode {
         // Store to database
         //
         let mut batch = self_db.batch_writer();
-        let pointer = {
-            let t = BlockchainItemType::Block;
-            put_to_block_chain(&mut batch, t, &block_hash, &block_input)
-        };
-        put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
         let all_txs = all_ordered_stored_block_tx_hashes(
             &stored_block.block.transactions,
             &stored_block.mining_tx_hash_and_nonces,
         );
+        let mut tx_len = 0;
         for (tx_num, tx_hash) in all_txs {
+            tx_len = tx_num + 1;
             if let Some(tx_value) = all_block_txs.get(tx_hash) {
                 let tx_input = serialize(tx_value).unwrap();
                 let pointer = {
-                    let t = BlockchainItemType::Tx;
-                    put_to_block_chain(&mut batch, t, tx_hash, &tx_input)
+                    let t = BlockchainItemMeta::Tx { block_num, tx_num };
+                    put_to_block_chain(&mut batch, &t, tx_hash, &tx_input)
                 };
                 put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
             } else {
@@ -569,6 +568,12 @@ impl StorageNode {
                 );
             }
         }
+
+        let pointer = {
+            let t = BlockchainItemMeta::Block { block_num, tx_len };
+            put_to_block_chain(&mut batch, &t, &block_hash, &block_input)
+        };
+        put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
         let batch = batch.done();
         self_db.write(batch).unwrap();
@@ -810,17 +815,17 @@ impl StorageInterface for StorageNode {
 ///
 /// ### Arguments
 ///
-/// * `batch` - Database writer
-/// * `item_type` - The type for the data
-/// * `key`   - The key for the data
-/// * `value` - The value to store
+/// * `batch`     - Database writer
+/// * `item_meta` - The metadata for the data
+/// * `key`       - The key for the data
+/// * `value`     - The value to store
 pub fn put_to_block_chain(
     batch: &mut SimpleDbWriteBatch,
-    item_type: BlockchainItemType,
+    item_meta: &BlockchainItemMeta,
     key: &str,
     value: &[u8],
 ) -> Vec<u8> {
-    put_to_block_chain_at(batch, DB_COL_BC_NOW, item_type, key, value)
+    put_to_block_chain_at(batch, DB_COL_BC_NOW, item_meta, key, value)
 }
 
 /// Add to the block chain columns for specified version
@@ -829,21 +834,23 @@ pub fn put_to_block_chain(
 ///
 /// * `batch`     - Database writer
 /// * `cf`        - Column family to store the key/value
-/// * `item_type` - The type for the data
+/// * `item_meta` - The metadata for the data
 /// * `key`       - The key for the data
 /// * `value`     - The value to store
 pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     batch: &mut SimpleDbWriteBatch,
     cf: &'static str,
-    item_type: BlockchainItemType,
+    item_meta: &BlockchainItemMeta,
     key: K,
     value: V,
 ) -> Vec<u8> {
     let key = key.as_ref();
     let value = value.as_ref();
-    let pointer = version_pointer(cf, item_type, key);
+    let pointer = version_pointer(cf, key);
+    let item_meta = serialize(item_meta).unwrap();
     batch.put_cf(cf, key, value);
     batch.put_cf(DB_COL_BC_ALL, key, &pointer);
+    batch.put_cf(DB_COL_BC_META, key, &item_meta);
     pointer
 }
 
@@ -909,23 +916,22 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
         DB_COL_BC_ALL
     };
     let u_db = db.lock().unwrap();
-    let pointer = u_db.get_cf(col_all, key).unwrap_or_else(|e| {
-        warn!("get_stored_value error: {}", e);
-        None
-    })?;
+    let pointer = ok_or_warn(u_db.get_cf(col_all, key), "get_stored_value pointer")?;
 
-    let (version, item_type, cf, key) = decode_version_pointer(&pointer);
-    u_db.get_cf(cf, key)
-        .unwrap_or_else(|e| {
-            warn!("get_stored_value error: {}", e);
-            None
-        })
-        .map(|data| BlockchainItem {
-            version,
-            item_type,
-            key: key.to_owned(),
-            data,
-        })
+    let (version, cf, key) = decode_version_pointer(&pointer);
+    let data = ok_or_warn(u_db.get_cf(cf, key), "get_stored_value data")?;
+    let meta = {
+        let meta = u_db.get_cf(DB_COL_BC_META, key);
+        let meta = ok_or_warn(meta, "get_stored_value meta")?;
+        let meta = deserialize::<BlockchainItemMeta>(&meta).map(Some);
+        ok_or_warn(meta, "get_stored_value meta ser")?
+    };
+    Some(BlockchainItem {
+        version,
+        item_meta: meta,
+        key: key.to_owned(),
+        data,
+    })
 }
 
 /// Fetches blocks by their block numbers. Blocks which for whatever reason are
@@ -964,16 +970,9 @@ pub fn get_last_block_stored(db: Arc<Mutex<SimpleDb>>) -> StoredSerializingBlock
 ///
 /// * `cf`        - Column family the data is
 /// * `key`       - The key for the data
-/// * `item_type` - The type for the data
-fn version_pointer<K: AsRef<[u8]>>(
-    cf: &'static str,
-    item_type: BlockchainItemType,
-    key: K,
-) -> Vec<u8> {
+fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
     let mut r = Vec::new();
     r.extend(cf.as_bytes());
-    r.extend(&[DB_POINTER_SEPARATOR]);
-    r.extend(&[item_type as u8]);
     r.extend(&[DB_POINTER_SEPARATOR]);
     r.extend(key.as_ref());
     r
@@ -1006,11 +1005,17 @@ fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
 /// ### Arguments
 ///
 /// * `pointer`    - String to be split and decoded
-pub fn decode_version_pointer(pointer: &[u8]) -> (u32, BlockchainItemType, &'static str, &[u8]) {
+pub fn decode_version_pointer(pointer: &[u8]) -> (u32, &'static str, &[u8]) {
     let mut it = pointer.split(|c| c == &DB_POINTER_SEPARATOR);
     let cf = it.next().unwrap();
     let (cf, version) = DB_COLS_BC.iter().find(|(v, _)| v.as_bytes() == cf).unwrap();
-    let item_type = BlockchainItemType::from_u8s(it.next().unwrap()).unwrap();
     let key = it.next().unwrap();
-    (*version, item_type, cf, key)
+    (*version, cf, key)
+}
+
+fn ok_or_warn<V, E: fmt::Display>(r: std::result::Result<Option<V>, E>, tag: &str) -> Option<V> {
+    r.unwrap_or_else(|e| {
+        warn!("{}: {}", tag, e);
+        None
+    })
 }
