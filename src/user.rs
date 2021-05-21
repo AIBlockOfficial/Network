@@ -1,7 +1,9 @@
 use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
-use crate::interfaces::{ComputeRequest, NodeType, Response, UseInterface, UserRequest, UtxoSet};
+use crate::interfaces::{
+    ComputeRequest, NodeType, Response, UseInterface, UserRequest, UtxoFetchType, UtxoSet,
+};
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
     get_paiments_for_wallet, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
@@ -394,10 +396,13 @@ impl UserNode {
     pub async fn send_request_utxo_set(
         &mut self,
         compute_peer: SocketAddr,
-        address: Option<String>,
+        address_list: UtxoFetchType,
     ) -> Result<()> {
         self.node
-            .send(compute_peer, ComputeRequest::SendUtxoRequest { address })
+            .send(
+                compute_peer,
+                ComputeRequest::SendUtxoRequest { address_list },
+            )
             .await?;
 
         Ok(())

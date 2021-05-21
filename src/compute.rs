@@ -6,7 +6,8 @@ use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest, UtxoSet,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    UtxoFetchType, UtxoSet, UtxoSetRef,
 };
 use crate::raft::RaftCommit;
 use crate::utils::{
@@ -24,6 +25,7 @@ use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 
+use crate::tracked_utxo::TrackedUtxoSet;
 use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
@@ -239,6 +241,10 @@ impl ComputeNode {
     /// The current utxo_set including block being mined and previous block mining txs.
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         &self.node_raft.get_committed_utxo_set()
+    }
+
+    pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
+        &self.node_raft.get_committed_utxo_tracked_set()
     }
 
     /// The current tx_pool that will be used to generate next block
@@ -782,7 +788,7 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
-            SendUtxoRequest { address } => Some(self.fetch_utxo_set(peer, address)),
+            SendUtxoRequest { address_list } => Some(self.fetch_utxo_set(peer, address_list)),
             SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
                 block_num,
@@ -1258,19 +1264,23 @@ impl ComputeNode {
 }
 
 impl ComputeInterface for ComputeNode {
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address: Option<String>) -> Response {
-        //If an address is given, filter through the UTXO set to find entries for that address to create a UTXO subset.
-        self.fetched_utxo_set = if let Some(address) = address {
-            let utxo_subset: UtxoSet = self
-                .get_committed_utxo_set()
-                .iter()
-                .filter(|(_, v)| address.eq(v.script_public_key.as_ref().unwrap()))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            Some((peer, serialize(&utxo_subset).unwrap()))
-        } else {
-            //Send the entire UTXO set.
-            Some((peer, serialize(&self.get_committed_utxo_set()).unwrap()))
+    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
+        self.fetched_utxo_set = match address_list {
+            UtxoFetchType::All => Some((
+                peer,
+                serialize(&self.get_committed_utxo_set()).unwrap_or_default(),
+            )),
+            UtxoFetchType::AnyOf(addresses) => {
+                let utxo_set = self.get_committed_utxo_set();
+                let utxo_tracked_set = self.get_committed_utxo_tracked_set();
+                let utxo_subset: UtxoSetRef = addresses
+                    .iter()
+                    .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(&v))
+                    .flatten()
+                    .filter_map(|op| utxo_set.get_key_value(op))
+                    .collect();
+                Some((peer, serialize(&utxo_subset).unwrap_or_default()))
+            }
         };
         Response {
             success: true,

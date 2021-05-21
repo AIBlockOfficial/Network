@@ -7,14 +7,24 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
+pub type UtxoSetRef<'a> = BTreeMap<&'a OutPoint, &'a TxOut>;
+
 /// Token to uniquely identify messages.
 pub type Token = u64;
+
+/// Enum that determines full UTXO retrieval or subset UTXO retrieval
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum UtxoFetchType {
+    All,
+    AnyOf(Vec<String>),
+}
 
 /// A placeholder struct for sensible feedback
 #[derive(Debug, Clone, PartialEq)]
@@ -367,7 +377,7 @@ pub trait MinerInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
     SendUtxoRequest {
-        address: Option<String>,
+        address_list: UtxoFetchType,
     },
     SendBlockStored(BlockStoredInfo),
     SendPoW {
@@ -392,7 +402,7 @@ impl fmt::Debug for ComputeRequest {
         use ComputeRequest::*;
 
         match *self {
-            SendUtxoRequest { ref address } => write!(f, "SendUtxoRequest"),
+            SendUtxoRequest { ref address_list } => write!(f, "SendUtxoRequest"),
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
                 ref block_num,
@@ -413,7 +423,7 @@ impl fmt::Debug for ComputeRequest {
 
 pub trait ComputeInterface {
     ///Fetch UTXO set for given addresses
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address: Option<String>) -> Response;
+    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response;
 
     /// Partitions a set of provided UUIDs for key creation/agreement
     /// TODO: Figure out the correct return type

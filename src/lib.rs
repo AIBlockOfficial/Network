@@ -24,6 +24,7 @@ mod storage_raft;
 mod test_utils;
 #[cfg(test)]
 mod tests;
+mod tracked_utxo;
 mod transaction_gen;
 mod unicorn;
 pub mod upgrade;
