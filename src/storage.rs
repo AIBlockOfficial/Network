@@ -940,18 +940,27 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
 /// ### Arguments
 ///
 /// * `nums`    - Numbers of the blocks to fetch
-pub fn get_blocks_by_num(db: Arc<Mutex<SimpleDb>>, nums: Vec<u64>) -> Vec<StoredSerializingBlock> {
+pub fn get_blocks_by_num(
+    db: Arc<Mutex<SimpleDb>>,
+    nums: Vec<u64>,
+) -> Vec<(String, StoredSerializingBlock)> {
     nums.iter()
         .map(|num| {
             let key = indexed_block_hash_key(*num);
             let item = get_stored_value_from_db(db.clone(), key).unwrap_or_default();
 
-            match deserialize(&item.data) {
+            let block = match deserialize(&item.data) {
                 Ok(b) => b,
                 Err(_) => StoredSerializingBlock::default(),
-            }
+            };
+
+            let hash_digest = Sha3_256::digest(&item.data);
+            let mut hash_hex = hex::encode(hash_digest);
+            hash_hex.insert(0, BLOCK_PREPEND as char);
+
+            (hash_hex, block)
         })
-        .collect::<Vec<StoredSerializingBlock>>()
+        .collect::<Vec<(String, StoredSerializingBlock)>>()
 }
 
 /// Fetches the most recent block stored
