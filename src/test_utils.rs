@@ -431,10 +431,10 @@ impl Network {
     ///Returns all active nodes
     pub fn all_active_nodes_events(
         &self,
-        evts: impl Fn(NodeType) -> Vec<String>,
+        evts: impl Fn(NodeType, &str) -> Vec<String>,
     ) -> BTreeMap<String, Vec<String>> {
         self.all_active_nodes_flat_iter()
-            .map(|(t, n)| (n.clone(), evts(*t)))
+            .map(|(t, n)| (n.clone(), evts(*t, &n)))
             .collect()
     }
 }
