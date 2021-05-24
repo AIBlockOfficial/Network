@@ -209,7 +209,7 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `address` - Address to save to wallet
-    /// * `keys`    - Address-related keys in a pre-encrypted state
+    /// * `keys`    - Address-related keys in an encrypted state
     pub async fn save_encrypted_address_to_wallet(
         &self,
         address: String,
@@ -437,6 +437,7 @@ impl WalletDb {
     }
 }
 
+// Set data needed for encapsulated communication
 pub fn set_encapsulation_data(db: &mut SimpleDbWriteBatch, data: EncapsulationData) {
     db.put_cf(
         DB_COL_DEFAULT,
@@ -445,6 +446,7 @@ pub fn set_encapsulation_data(db: &mut SimpleDbWriteBatch, data: EncapsulationDa
     );
 }
 
+// Get data needed for encapsulated communication
 pub fn get_encapsulation_data(db: &SimpleDb) -> Result<EncapsulationData, ()> {
     match db.get_cf(DB_COL_DEFAULT, DATA_ENCAPSULATION_KEY) {
         Ok(Some(data)) => Ok(deserialize(&data).unwrap()),

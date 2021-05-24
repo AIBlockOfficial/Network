@@ -20,10 +20,10 @@ address = "127.0.0.1:12300"
 address = "127.0.0.1:12301"
 
 [[storage_nodes]]
-address = "127.0.0.1:8080"
+address = "127.0.0.1:12330"
 
 [[storage_nodes]]
-address = "127.0.0.1:8081"
+address = "127.0.0.1:12331"
 
 [[miner_nodes]]
 address = "127.0.0.1:12340"

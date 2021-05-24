@@ -1,10 +1,12 @@
-use crate::api::handlers::{EncapsulatedData, EncapsulatedPayment};
+use crate::api::handlers::{Addresses, EncapsulatedData, EncapsulatedPayment, PublicKeyAddresses};
 use crate::api::routes;
-use crate::comms_handler::Node;
+use crate::comms_handler::{Event, Node};
 use crate::configurations::DbMode;
 use crate::constants::BLOCK_PREPEND;
 use crate::db_utils::{new_db, SimpleDb};
-use crate::interfaces::{BlockchainItemMeta, NodeType, StoredSerializingBlock};
+use crate::interfaces::{
+    BlockchainItemMeta, NodeType, StoredSerializingBlock, UserRequest, UtxoFetchType,
+};
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::wallet::{EncapsulationData, WalletDb};
 use bincode::serialize;
@@ -16,6 +18,20 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use warp::http::{HeaderMap, HeaderValue};
+
+const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
+    "4348536e3d5a13e347262b5023963edf",
+    [
+        195, 253, 191, 157, 40, 253, 233, 186, 96, 35, 27, 83, 83, 224, 191, 126, 133, 101, 235,
+        168, 233, 122, 174, 109, 18, 247, 175, 139, 253, 55, 164, 187, 238, 175, 251, 110, 53, 47,
+        158, 241, 103, 144, 49, 65, 247, 147, 145, 140, 12, 129, 123, 19, 187, 121, 31, 163, 16,
+        231, 248, 38, 243, 200, 34, 91, 4, 241, 40, 42, 97, 236, 37, 180, 26, 16, 34, 171, 12, 92,
+        4, 8, 53, 193, 181, 209, 97, 76, 164, 76, 0, 122, 44, 120, 212, 27, 145, 224, 20, 207, 215,
+        134, 23, 178, 170, 157, 218, 55, 14, 64, 185, 128, 63, 131, 194, 24, 6, 228, 34, 50, 252,
+        118, 94, 153, 105, 236, 92, 122, 169, 219, 119, 9, 250, 255, 20, 40, 148, 74, 182, 73, 180,
+        83, 10, 240, 193, 201, 45, 5, 205, 34, 188, 174, 229, 96,
+    ],
+);
 
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
@@ -300,4 +316,80 @@ async fn test_post_make_ip_payment_incorrect() {
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "Unhandled rejection: ErrorCannotAccessUserNode");
+}
+
+/// Test POST import key-pairs
+#[tokio::test(basic_scheduler)]
+async fn test_import_keypairs_success() {
+    let passphrase: Option<String> = Some(String::from(""));
+    let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
+    let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
+
+    let mut addresses: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    addresses.insert(
+        COMMON_ADDR_STORE.0.to_string(),
+        COMMON_ADDR_STORE.1.to_vec(),
+    );
+    let imported_addresses = Addresses { addresses };
+    let filter = routes::import_keypairs(db.clone());
+    let wallet_addresses_before = db.get_known_addresses();
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/import_keypairs")
+        .header("Content-Type", "application/json")
+        .json(&imported_addresses)
+        .reply(&filter)
+        .await;
+
+    let wallet_addresses_after = db.get_known_addresses();
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    assert_eq!(wallet_addresses_before, Vec::<String>::new());
+    assert_eq!(wallet_addresses_after, vec![COMMON_ADDR_STORE.0]);
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "\"Key/s saved successfully\"");
+}
+
+/// Test POST update running total successful
+#[tokio::test(basic_scheduler)]
+async fn test_update_running_total() {
+    let self_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12370);
+    let mut self_node = Node::new(self_socket, 20, NodeType::User).await.unwrap();
+    let addresses = PublicKeyAddresses {
+        address_list: vec![COMMON_ADDR_STORE.0.to_string()],
+    };
+
+    let filter = routes::update_running_total(self_node.clone());
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/update_running_total")
+        .header("Content-Type", "application/json")
+        .json(&addresses)
+        .reply(&filter)
+        .await;
+
+    // Assert
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "\"Running total updated\"");
+
+    let expected_frame = {
+        let address_list = UtxoFetchType::AnyOf(addresses.address_list);
+        let sent_request = UserRequest::UpdateWalletFromUtxoSet { address_list };
+        Some(serialize(&sent_request).unwrap())
+    };
+
+    let actual_frame = self_node
+        .next_event()
+        .await
+        .map(|Event::NewFrame { peer: _, frame }| frame.to_vec());
+
+    assert_eq!(expected_frame, actual_frame);
 }

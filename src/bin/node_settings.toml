@@ -20,7 +20,7 @@ user_setup_tx_max_count = 100000
 address = "127.0.0.1:12300"
 
 [[storage_nodes]]
-address = "127.0.0.1:8080"
+address = "127.0.0.1:12330"
 
 [[miner_nodes]]
 address = "127.0.0.1:12340"

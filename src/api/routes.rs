@@ -219,3 +219,27 @@ pub fn make_ip_payment(
         .and_then(handlers::post_make_ip_payment)
         .with(cors)
 }
+
+// POST update running total
+pub fn update_running_total(
+    peer: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("update_running_total")
+        .and(warp::post())
+        .and(with_node_component(peer))
+        .and(warp::body::json())
+        .and_then(handlers::post_update_running_total)
+        .with(cors)
+}
