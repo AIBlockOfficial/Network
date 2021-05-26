@@ -72,39 +72,7 @@ This will compile everything into a release state, from which you can then run y
 - **Miner**: `RUST_LOG="$MINER_LOG" target/release/user --config=src/bin/node_settings_local_raft_1.toml`
 - **User**: `RUST_LOG=warp target/release/user --config=src/bin/node_settings_local_raft_1.toml`
 
-You can provide a number of flags to the command depending on the type of node:
-
-### Compute
-
-- ```config```: The configuration to run the node with
-- ```initial_block_config```: The initial block config to run the node with
-- ```index```: Run the specified compute node index from config file
-
-### Storage
-
-- ```config```: The configuration to run the node with
-- ```api_port```: The API port to run the node with
-- ```index```: Run the specified compute node index from config file
-
-### Miner
-
-- ```config```: The configuration to run the node with
-- ```compute_index```: Endpoint index of a compute node that the miner should connect to
-- ```storage_index```: Endpoint index of a storage node that the miner should connect to
-- ```index```: Run the specified compute node index from config file
-- ```request_bc_item```: Key (hash or name) of the blockchain item to request from storage
-- ```passphrase```: Enter a password or passphase for the encryption of the Wallet
-
-### User
-
-- ```config```: The configuration to run the node with
-- ```api_port```: The API port to run the node with
-- ```compute_index```: Endpoint index of a compute node that the miner should connect to
-- ```peer_user_index```: Endpoint index of a peer user node that the user should connect to
-- ```amount```: The amount of tokens to send to the peer's recipient address
-- ```index```: Run the specified compute node index from config file
-- ```passphrase```: Enter a password or passphase for the encryption of the Wallet
-
+You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (eg. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs.
 
 ..
 
