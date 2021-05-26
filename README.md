@@ -7,6 +7,7 @@ A repo for the development of the Zenotta Network Protocol (ZNP).
 ..
 
 ## Setup
+
 The Zenotta Network Protocol (in fact, almost all of Zenotta's code) runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
 
 ```
@@ -56,6 +57,26 @@ The path can be changed as needed. Once done you can build the project using `ca
 
 ..
 
+## Running Nodes Locally
+
+You can build everything by running
+
+```rust
+cargo build --release
+```
+
+This will compile everything into a release state, from which you can then run your nodes locally. The following are example commands for each type to get you up and running quickly:
+
+- **Compute**: `RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_1.toml`
+- **Storage**: `RUST_LOG=warp target/release/storage --config=src/bin/node_settings_local_raft_1.toml`
+- **Miner**: `RUST_LOG="$MINER_LOG" target/release/user --config=src/bin/node_settings_local_raft_1.toml`
+- **User**: `RUST_LOG=warp target/release/user --config=src/bin/node_settings_local_raft_1.toml`
+
+You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (eg. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs.
+
+..
+
+
 ## Git Flow
 
 **When working on this repo, please ensure that any branches you may create pull from `develop` regularly. In doing this you 
@@ -70,40 +91,10 @@ git checkout -b branch_name
 
 where `branch_name` would be replaced with your chosen branch name. There is no general branch naming convention aside from two cases:
 
-- *New features*: These should be prefixed with `feature:` and then the branch name (eg. `feature:new_cool_feature`)
-- *Bugfixes*: These should be prefixed with `bugfix:` and then the branch name (eg. `bugfix:new_damn_bug`)
+- *New features*: These should be prefixed with `feature_` and then the branch name (eg. `feature_new_cool_feature`)
+- *Bugfixes*: These should be prefixed with `bugfix_` and then the branch name (eg. `bugfix_new_damn_bug`)
 
 Beyond this, it is only expected that branches have sensible naming that describes what the branch involves or is for.
-
-..
-
-## Running example nodes
-
-To run a test compute node:
-
-```
-cargo run --bin compute
-```
-
-You can optionally supply IP address & port arguments as `--ip 127.0.0.1 --port 12345`. You can learn more about available options by running `cargo run --bin compute -- --help`.
-
-Similarly, you can run a miner node and provide a compute node address:
-
-```
-cargo run --bin miner -- --connect 127.0.0.1:12345
-```
-
-Similarly, you can run a storage node and provide a compute node address:
-
-```
-cargo run --bin storage -- --ip 127.0.0.1 --port 12345
-```
-
-To enable log output, set this environment variable:
-
-```
-RUST_LOG=system=trace
-```
 
 ..
 
