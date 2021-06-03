@@ -3,6 +3,11 @@
 pub struct ErrorInvalidPassphrase;
 impl warp::reject::Reject for ErrorInvalidPassphrase {}
 
+/// API error struct for invalid passphrase entered
+#[derive(Debug)]
+pub struct ErrorCannotParseAddress;
+impl warp::reject::Reject for ErrorCannotParseAddress {}
+
 /// API error struct for inability to access encapsulation data
 #[derive(Debug)]
 pub struct ErrorCannotAccessEncapsulationData;
@@ -27,6 +32,11 @@ impl warp::reject::Reject for ErrorCannotAccessWallet {}
 #[derive(Debug)]
 pub struct ErrorCannotAccessUserNode;
 impl warp::reject::Reject for ErrorCannotAccessUserNode {}
+
+/// API error struct for inability to access peer user node
+#[derive(Debug)]
+pub struct ErrorCannotAccessPeerUserNode;
+impl warp::reject::Reject for ErrorCannotAccessPeerUserNode {}
 
 /// API error struct for inability to save addresses to wallet
 #[derive(Debug)]

@@ -1,20 +1,31 @@
+use crate::api::handlers::{EncapsulatedData, EncapsulatedPayment};
 use crate::api::routes;
+use crate::comms_handler::Node;
 use crate::configurations::DbMode;
 use crate::constants::BLOCK_PREPEND;
 use crate::db_utils::{new_db, SimpleDb};
-use crate::interfaces::{BlockchainItemMeta, StoredSerializingBlock};
+use crate::interfaces::{BlockchainItemMeta, NodeType, StoredSerializingBlock};
 use crate::storage::{
     put_named_block_to_block_chain, put_named_tx_to_block_chain, put_to_block_chain, DB_SPEC,
 };
+use crate::wallet::{EncapsulationData, WalletDb};
 use bincode::serialize;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::{block::Block, transaction::Transaction};
 use sha3::{Digest, Sha3_256};
+use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use warp::http::{HeaderMap, HeaderValue};
 
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
+    let db = get_db_with_block_no_mutex();
+    Arc::new(Mutex::new(db))
+}
+
+fn get_db_with_block_no_mutex() -> SimpleDb {
     let block = Block::new();
 
     let tx = Transaction::new();
@@ -61,10 +72,13 @@ fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
 
     let batch = batch.done();
     db.write(batch).unwrap();
-
-    Arc::new(Mutex::new(db))
+    db
 }
 
+async fn create_encapsulation_data(wallet_db: &WalletDb) -> EncapsulationData {
+    let _ = wallet_db.generate_encapsulation_data().await;
+    wallet_db.get_encapsulation_data().await.unwrap()
+}
 /*------- TESTS --------*/
 
 /// Test POST for get blockchain block by key
@@ -184,4 +198,110 @@ async fn test_get_latest_block() {
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+}
+
+/// Test POST make ip payment with correct address
+#[tokio::test(basic_scheduler)]
+async fn test_post_make_ip_payment() {
+    let self_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12360);
+    let peer_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12361);
+
+    let amount: u64 = 25;
+    let address = String::from("127.0.0.1:12361");
+    let amount = TokenAmount(amount);
+    let passphrase = String::from("");
+    let encapdata = EncapsulatedPayment {
+        address,
+        amount,
+        passphrase,
+    };
+
+    let self_node = Node::new(self_socket, 20, NodeType::User).await.unwrap();
+    let _peer_node = Node::new(peer_socket, 20, NodeType::User).await.unwrap();
+
+    let passphrase: Option<String> = Some(String::from(""));
+    let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
+    let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
+
+    let EncapsulationData {
+        public_key,
+        secret_key,
+    } = create_encapsulation_data(&db).await;
+
+    let _unsused_secret_key_to_avoid_warning = secret_key;
+    let message: Vec<u8> = serde_json::to_vec(&encapdata).unwrap();
+    let ciphered_message = sealedbox::seal(&message, &public_key);
+    let encaped_message = EncapsulatedData { ciphered_message };
+    let filter = routes::make_ip_payment(db, self_node);
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/make_ip_payment")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&encaped_message)
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "\"Payment processing\"");
+}
+
+/// Test POST make ip payment with incorrect address
+#[tokio::test(basic_scheduler)]
+async fn test_post_make_ip_payment_incorrect() {
+    let self_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12365);
+    let peer_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12366);
+
+    let amount: u64 = 25;
+    let address = String::from("127.0.0.1:12370");
+    let amount = TokenAmount(amount);
+    let passphrase = String::from("");
+    let encapdata = EncapsulatedPayment {
+        address,
+        amount,
+        passphrase,
+    };
+
+    let self_node = Node::new(self_socket, 20, NodeType::User).await.unwrap();
+    let _peer_node = Node::new(peer_socket, 20, NodeType::User).await.unwrap();
+
+    let passphrase: Option<String> = Some(String::from(""));
+    let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
+    let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
+
+    let EncapsulationData {
+        public_key,
+        secret_key,
+    } = create_encapsulation_data(&db).await;
+
+    let _unsused_secret_key_to_avoid_warning = secret_key;
+    let message: Vec<u8> = serde_json::to_vec(&encapdata).unwrap();
+    let ciphered_message = sealedbox::seal(&message, &public_key);
+    let encaped_message = EncapsulatedData { ciphered_message };
+    let filter = routes::make_ip_payment(db, self_node);
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/make_ip_payment")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&encaped_message)
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    println!("{:?}", res);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    assert_eq!(res.status(), 500);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "Unhandled rejection: ErrorCannotAccessUserNode");
 }

@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::box_::PublicKey as PK;
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
-use tracing::error;
+use tracing::{error, trace};
 
 /// Data entry from the blockchain
 #[derive(Debug, Serialize, Deserialize)]
@@ -224,5 +225,50 @@ pub async fn post_make_payment(
         return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
     }
 
+    Ok(warp::reply::json(&"Payment processing".to_owned()))
+}
+
+///Post make a new payment from the connected wallet using an ip address
+pub async fn post_make_ip_payment(
+    db: WalletDb,
+    mut peer: Node,
+    encapsulated_data: EncapsulatedData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    trace!("in the payment");
+    let encapsulation_data = db
+        .get_encapsulation_data()
+        .await
+        .map_err(|_| warp::reject::custom(errors::ErrorCannotAccessEncapsulationData))?;
+
+    let EncapsulatedData { ciphered_message } = encapsulated_data;
+
+    let EncapsulationData {
+        public_key,
+        secret_key,
+    } = encapsulation_data;
+
+    let deciphered_message = sealedbox::open(&ciphered_message, &public_key, &secret_key)
+        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
+
+    let EncapsulatedPayment {
+        address,
+        amount,
+        passphrase,
+    } = serde_json::from_slice(&deciphered_message)
+        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
+
+    let request = match db.test_passphrase(passphrase).await {
+        Ok(()) => UserRequest::SendAddressRequest { amount },
+        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+    };
+
+    let peer_socket: SocketAddr = address
+        .parse::<SocketAddr>()
+        .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
+
+    if let Err(e1) = peer.connect_and_send(peer_socket, request).await {
+        error!("route:make_payment error: {:?}", e1);
+        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+    }
     Ok(warp::reply::json(&"Payment processing".to_owned()))
 }

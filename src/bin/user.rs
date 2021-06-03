@@ -95,6 +95,7 @@ async fn main() {
             warp::serve(
                 routes::wallet_info(db.clone())
                     .or(routes::make_payment(db.clone(), node.clone()))
+                    .or(routes::make_ip_payment(db.clone(), node.clone()))
                     .or(routes::wallet_keypairs(db.clone()))
                     .or(routes::import_keypairs(db.clone()))
                     .or(routes::wallet_encapsulation_data(db.clone()))
