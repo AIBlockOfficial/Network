@@ -920,7 +920,10 @@ impl StorageInterface for StorageNode {
         key: String,
         item: BlockchainItem,
     ) -> Response {
-        if let Some(block) = self.catchup_fetch.receive_blockchain_items(key, item) {
+        let to_store = self.catchup_fetch.receive_blockchain_items(key, item);
+        let is_complete = self.catchup_fetch.is_complete();
+
+        if let Some(block) = to_store {
             let mut self_db = self.db.lock().unwrap();
             let b_num = block.0;
 
@@ -941,7 +944,7 @@ impl StorageInterface for StorageNode {
 
                     Response {
                         success: true,
-                        reason: if self.catchup_fetch.is_complete() {
+                        reason: if is_complete {
                             "Blockchain item received: Block stored(Done)"
                         } else {
                             "Blockchain item received: Block stored"
@@ -960,6 +963,10 @@ impl StorageInterface for StorageNode {
                 }
             }
         } else {
+            if !is_complete {
+                self.catchup_fetch.update_timeout(Default::default());
+            }
+
             Response {
                 success: true,
                 reason: "Blockchain item received",

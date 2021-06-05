@@ -178,7 +178,10 @@ impl StorageFetch {
 
         // Start fetch
         self.to_receive = {
-            let next = self.last_contiguous_block_num.unwrap_or_default() + 1;
+            let next = self
+                .last_contiguous_block_num
+                .map(|v| v + 1)
+                .unwrap_or_default();
             Some(FetchReceive::new_block_fetch(next, block_num))
         };
         true
