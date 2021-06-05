@@ -11,7 +11,7 @@ use crate::interfaces::{
     StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
-use crate::storage_fetch::{FetchStatus, StorageFetch};
+use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
@@ -162,7 +162,7 @@ impl StorageNode {
         Ok(StorageNode {
             node,
             node_raft,
-            catchup_fetch: StorageFetch::new(),
+            catchup_fetch: StorageFetch::new(addr, &config.storage_nodes),
             db,
             api_addr,
             local_events: Default::default(),
@@ -300,6 +300,20 @@ impl StorageNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Snapshot applied: Fetch missing blocks",
+            }) => {
+                warn!("Snapshot applied: Fetch missing blocks");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Catch up stored blocks",
+            }) => {
+                if let Err(e) = self.catchup_fetch_blockchain_item().await {
+                    error!("Resend block stored failed {:?}", e);
+                }
+            }
+            Ok(Response {
+                success: true,
                 reason,
             }) => {
                 error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
@@ -360,6 +374,15 @@ impl StorageNode {
                         self.resend_trigger_message().await;
                     }
                 }
+                Some(()) = self.catchup_fetch.timeout_fetch_blockchain_item(), if ready => {
+                    trace!("handle_next_event timeout fetch blockchain item");
+                    let duration = self.node_raft.propose_block_timeout_duration();
+                    self.catchup_fetch.update_timeout(duration);
+                    return Some(Ok(Response {
+                        success: true,
+                        reason: "Catch up stored blocks",
+                    }))
+                }
                 Some(event) = self.local_events.rx.recv(), if ready => {
                     if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
@@ -405,6 +428,7 @@ impl StorageNode {
                     let contiguous = self.catchup_fetch.check_contiguous_block_num(b_num);
                     let stored = Self::store_complete_block(&mut self_db, contiguous, block);
                     self.catchup_fetch.update_contiguous_block_num(contiguous);
+                    self.catchup_fetch.increase_running_target(b_num);
 
                     stored
                 };
@@ -415,10 +439,21 @@ impl StorageNode {
                     reason: "Block complete stored",
                 }))
             }
-            Some(CommittedItem::Snapshot) => Some(Ok(Response {
-                success: true,
-                reason: "Snapshot applied",
-            })),
+            Some(CommittedItem::Snapshot) => {
+                if let Some(stored) = self.node_raft.get_last_block_stored() {
+                    let b_num = stored.block_num;
+                    if self.catchup_fetch.fetch_missing_blockchain_items(b_num) {
+                        return Some(Ok(Response {
+                            success: true,
+                            reason: "Snapshot applied: Fetch missing blocks",
+                        }));
+                    }
+                }
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Snapshot applied",
+                }))
+            }
             None => None,
         }
     }
@@ -644,6 +679,63 @@ impl StorageNode {
         last_block_stored_info
     }
 
+    ///Stores a completed block including transactions and mining transactions.
+    ///
+    /// ### Arguments
+    ///
+    /// * `self_db` - Database to update
+    /// * `b_num`   - Block number to store
+    /// * `status`  - Block is contiguous with last contiguous
+    /// * `items`   - Complete block object to be stored.
+    fn store_fetched_complete_block(
+        self_db: &mut SimpleDb,
+        last_block_stored: &BlockStoredInfo,
+        status: FetchStatus,
+        (b_num, items): FetchedBlockChain,
+    ) -> Result<FetchStatus> {
+        let mut batch = self_db.batch_writer();
+        let mut block_pointer = None;
+
+        for item in &items {
+            let key = str::from_utf8(&item.key)
+                .map_err(|_| StorageError::ConfigError("Non UTF-8 blockchain key"))?;
+            let pointer = put_to_block_chain(&mut batch, &item.item_meta, key, &item.data);
+
+            if let BlockchainItemMeta::Block { block_num, .. } = &item.item_meta {
+                if block_num == &b_num {
+                    block_pointer = Some(pointer);
+                }
+            }
+        }
+
+        if let Some(block_pointer) = block_pointer {
+            if last_block_stored.block_num == b_num {
+                put_named_last_block_to_block_chain(&mut batch, &block_pointer);
+            }
+            if FetchStatus::Contiguous(b_num) == status {
+                put_contiguous_block_num(&mut batch, b_num);
+            }
+        } else {
+            return Err(StorageError::ConfigError("Block not specified"));
+        }
+
+        let batch = batch.done();
+        self_db.write(batch).unwrap();
+        Ok(status)
+    }
+
+    /// Sends a request to retrieve a blockchain item from storage
+    pub async fn catchup_fetch_blockchain_item(&mut self) -> Result<()> {
+        if let Some((peer, key)) = self.catchup_fetch.get_fetch_peer_and_key() {
+            let request = StorageRequest::GetBlockchainItem { key };
+            self.node.send(peer, request).await?;
+        } else {
+            error!("No peer to catchup from");
+        };
+
+        Ok(())
+    }
+
     /// Gets a value from the stored blockchain via key
     ///
     /// ### Arguments
@@ -824,13 +916,54 @@ impl StorageInterface for StorageNode {
 
     fn receive_blockchain_item(
         &mut self,
-        _peer: SocketAddr,
-        _key: String,
-        _item: BlockchainItem,
+        peer: SocketAddr,
+        key: String,
+        item: BlockchainItem,
     ) -> Response {
-        Response {
-            success: true,
-            reason: "Blockchain item received",
+        if let Some(block) = self.catchup_fetch.receive_blockchain_items(key, item) {
+            let mut self_db = self.db.lock().unwrap();
+            let b_num = block.0;
+
+            let result = match self.node_raft.get_last_block_stored() {
+                Some(last_stored) if last_stored.block_num >= b_num => {
+                    let contiguous = self.catchup_fetch.check_contiguous_block_num(b_num);
+                    Self::store_fetched_complete_block(&mut self_db, last_stored, contiguous, block)
+                }
+                _ => Err(StorageError::ConfigError(
+                    "Expect only block less than block stored",
+                )),
+            };
+
+            match result {
+                Ok(status) => {
+                    self.catchup_fetch.update_contiguous_block_num(status);
+                    self.catchup_fetch.update_timeout(Default::default());
+
+                    Response {
+                        success: true,
+                        reason: if self.catchup_fetch.is_complete() {
+                            "Blockchain item received: Block stored(Done)"
+                        } else {
+                            "Blockchain item received: Block stored"
+                        },
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "receive_blockchain_item from {} could not process block: {:?}",
+                        peer, e
+                    );
+                    Response {
+                        success: false,
+                        reason: "Blockchain item received: Block failed",
+                    }
+                }
+            }
+        } else {
+            Response {
+                success: true,
+                reason: "Blockchain item received",
+            }
         }
     }
 

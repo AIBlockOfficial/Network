@@ -1801,13 +1801,101 @@ async fn request_blockchain_item_act(
 }
 
 #[tokio::test(basic_scheduler)]
+async fn catchup_fetch_blockchain_item_raft() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11420, 3);
+    network_config.test_duration_divider = 10;
+
+    let mut network = Network::create_from_config(&network_config).await;
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
+    let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
+    let all_txs = transactions.iter().cloned();
+    let _all_txs: Vec<Vec<_>> = all_txs.map(|v| v.into_iter().collect()).collect();
+    let ((_block_keys, _), blocks) = complete_blocks(3, &transactions, 2).await;
+
+    let tx_lens = transactions.iter().map(|v| v.len());
+    let items_counts = tx_lens.chain(std::iter::repeat(0)).map(|tx| 3 + tx);
+    let items_counts: Vec<usize> = items_counts.take(blocks.len()).collect();
+
+    let modify_cfg = vec![
+        ("Before store block 1", CfgModif::Drop("storage3")),
+        ("Before store block 3", CfgModif::Respawn("storage3")),
+        (
+            "Before store block 3",
+            CfgModif::HandleEvents(&[
+                ("storage3", "Snapshot applied"),
+                ("storage3", "Snapshot applied: Fetch missing blocks"),
+            ]),
+        ),
+    ];
+
+    //
+    // Act
+    //
+    for (i, block) in blocks.iter().enumerate() {
+        info!("Test Step Storage add block {}", i);
+
+        let tag = format!("Before store block {}", i);
+        modify_network(&mut network, &tag, &modify_cfg).await;
+        let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
+
+        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", block).await;
+        storage_inject_send_block_to_storage(&mut network, "compute2", "storage2", block).await;
+
+        storage_all_handle_event(&mut network, &storage_nodes[0..2], BLOCK_RECEIVED).await;
+        node_all_handle_event(&mut network, &storage_nodes, &[BLOCK_STORED]).await;
+    }
+
+    let tag = "Before store block 3";
+    modify_network(&mut network, tag, &modify_cfg).await;
+
+    for (b_num, items_count) in items_counts.iter().copied().enumerate().skip(1) {
+        for i in 0..items_count {
+            info!(
+                "Test Step Storage catchup b_num={} (count={}) i={}",
+                b_num, items_count, i,
+            );
+
+            let network = &mut network;
+            let receive_evt = if i < items_count - 1 {
+                "Blockchain item received"
+            } else if b_num < items_counts.len() - 1 {
+                "Blockchain item received: Block stored"
+            } else {
+                "Blockchain item received: Block stored(Done)"
+            };
+
+            storage_handle_event(network, "storage3", "Catch up stored blocks").await;
+            storage_catchup_fetch_blockchain_item(network, "storage3").await;
+            storage_handle_event(network, "storage1", "Blockchain item fetched from storage").await;
+            storage_send_blockchain_item(network, "storage1").await;
+            storage_handle_event(network, "storage3", receive_evt).await;
+        }
+    }
+
+    //
+    // Assert
+    //
+    let all_items_count = items_counts[..].iter().sum::<usize>();
+    let actual_db_count =
+        storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    assert_eq!(actual_db_count, node_all(storage_nodes, all_items_count));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn request_utxo_set_raft_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11410, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11420, 1);
     network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;
@@ -2418,6 +2506,11 @@ async fn storage_inject_next_event(
 async fn storage_send_blockchain_item(network: &mut Network, from_storage: &str) {
     let mut s = network.storage(from_storage).unwrap().lock().await;
     s.send_blockchain_item().await.unwrap();
+}
+
+async fn storage_catchup_fetch_blockchain_item(network: &mut Network, from_storage: &str) {
+    let mut s = network.storage(from_storage).unwrap().lock().await;
+    s.catchup_fetch_blockchain_item().await.unwrap();
 }
 
 async fn storage_inject_send_block_to_storage(
