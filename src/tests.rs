@@ -40,7 +40,7 @@ use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::sync::Mutex;
 use tokio::time;
-use tracing::{debug, error_span, info, warn};
+use tracing::{debug, error, error_span, info, warn};
 use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
@@ -93,7 +93,7 @@ enum CfgNum {
 enum CfgModif {
     Drop(&'static str),
     Respawn(&'static str),
-    HandleEvents(&'static str, &'static [&'static str]),
+    HandleEvents(&'static [(&'static str, &'static str)]),
     RestartEventsAll(&'static [(NodeType, &'static str)]),
     RestartUpgradeEventsAll(&'static [(NodeType, &'static str)]),
     Disconnect(&'static str),
@@ -187,7 +187,7 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
         ("After create block 1", CfgModif::Respawn("miner2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents("compute2", &["Received partition request successfully"]),
+            CfgModif::HandleEvents(&[("compute2", "Received partition request successfully")]),
         ),
     ];
     let network_config = complete_network_config_with_n_compute_raft(11120, 3);
@@ -201,14 +201,11 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
         ("After create block 1", CfgModif::Respawn("compute2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents(
-                "compute2",
-                &[
-                    "Snapshot applied",
-                    "Transactions committed",
-                    "Block committed",
-                ],
-            ),
+            CfgModif::HandleEvents(&[
+                ("compute2", "Snapshot applied"),
+                ("compute2", "Transactions committed"),
+                ("compute2", "Block committed"),
+            ]),
         ),
     ];
 
@@ -223,7 +220,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
         ("After create block 1", CfgModif::Respawn("storage2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
+            CfgModif::HandleEvents(&[("storage2", BLOCK_STORED)]),
         ),
     ];
 
@@ -248,7 +245,10 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
         ("After create block 1", CfgModif::Reconnect("compute2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents("compute2", &["Transactions committed", "Block committed"]),
+            CfgModif::HandleEvents(&[
+                ("compute2", "Transactions committed"),
+                ("compute2", "Block committed"),
+            ]),
         ),
     ];
 
@@ -263,7 +263,7 @@ async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
         ("After create block 1", CfgModif::Reconnect("storage2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents("storage2", &[BLOCK_STORED]),
+            CfgModif::HandleEvents(&[("storage2", BLOCK_STORED)]),
         ),
     ];
 
@@ -364,15 +364,17 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 network.re_spawn_nodes_named(&nodes).await;
                 network.send_startup_requests_named(&nodes).await;
             }
-            CfgModif::HandleEvents(n, es) => {
+            CfgModif::HandleEvents(es) => {
                 let all_nodes = network.all_active_nodes_name_vec();
-                let raisons: Vec<String> = es.iter().map(|e| e.to_string()).collect();
-                let all_raisons = Some((n.to_string(), raisons)).into_iter().collect();
+                let all_raisons = network.all_active_nodes_events(|_, n| {
+                    let es_for_t = es.iter().filter(|(ne, _)| *ne == n);
+                    es_for_t.map(|(_, e)| e.to_string()).collect()
+                });
                 node_all_handle_different_event(network, &all_nodes, &all_raisons).await
             }
             CfgModif::RestartEventsAll(es) | CfgModif::RestartUpgradeEventsAll(es) => {
                 let all_nodes = network.all_active_nodes_name_vec();
-                let all_raisons = network.all_active_nodes_events(|t| {
+                let all_raisons = network.all_active_nodes_events(|t, _| {
                     let es_for_t = es.iter().filter(|(te, _)| *te == t);
                     es_for_t.map(|(_, e)| e.to_string()).collect()
                 });
@@ -564,11 +566,13 @@ async fn add_transactions_raft_1_node() {
 #[tokio::test(basic_scheduler)]
 async fn add_transactions_restart_tx_raft_1_node() {
     let tag = "After add local Transactions";
-    let name = "compute1";
     let modify_cfg = vec![
-        (tag, CfgModif::Drop(name)),
-        (tag, CfgModif::Respawn(name)),
-        (tag, CfgModif::HandleEvents(name, &["Snapshot applied"])),
+        (tag, CfgModif::Drop("compute1")),
+        (tag, CfgModif::Respawn("compute1")),
+        (
+            tag,
+            CfgModif::HandleEvents(&[("compute1", "Snapshot applied")]),
+        ),
     ];
 
     let network_config = complete_network_config_with_n_compute_raft(10615, 1);
@@ -1647,14 +1651,14 @@ async fn handle_message_lost_common(
     let all_nodes = network.all_active_nodes_name_vec();
     let mining_reward = network.mining_reward();
 
-    let expected_events_b1_create = network.all_active_nodes_events(|t| match t {
+    let expected_events_b1_create = network.all_active_nodes_events(|t, _| match t {
         NodeType::Compute => vec![
             "Received block stored".to_owned(),
             "Block committed".to_owned(),
         ],
         NodeType::Storage | NodeType::Miner | NodeType::User => vec![],
     });
-    let expected_events_b1_stored = network.all_active_nodes_events(|t| match t {
+    let expected_events_b1_stored = network.all_active_nodes_events(|t, _| match t {
         NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
         NodeType::Compute => vec![
             "Partition list is full".to_owned(),
@@ -1707,25 +1711,19 @@ async fn request_blockchain_item_no_raft() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config(11360);
+    let mut network_config = complete_network_config(11400);
     network_config.test_duration_divider = 10;
 
     let mut network = Network::create_from_config(&network_config).await;
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
-    let no_transactions = BTreeMap::new();
     let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
     let all_txs = transactions.iter().cloned();
     let all_txs: Vec<Vec<_>> = all_txs.map(|v| v.into_iter().collect()).collect();
+    let ((block_keys, _), blocks) = complete_blocks(11, &transactions, 1).await;
 
-    let mut block_keys: Vec<String> = Vec::new();
-    for i in 0..11_usize {
-        let previous = block_keys.last().map(|v| v.as_str());
-        let transactions = transactions.get(i).unwrap_or(&no_transactions);
-        let ((block_key, _), block) = complete_block(i as u64, previous, &transactions, 1).await;
-
+    for block in &blocks {
         storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &block).await;
         node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
-        block_keys.push(block_key.clone());
     }
 
     let inputs_block: Vec<&str> = vec![
@@ -1803,13 +1801,104 @@ async fn request_blockchain_item_act(
 }
 
 #[tokio::test(basic_scheduler)]
+async fn catchup_fetch_blockchain_item_raft() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11420, 3);
+    network_config.test_duration_divider = 10;
+
+    let mut network = Network::create_from_config(&network_config).await;
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
+    let transactions = vec![network.collect_initial_uxto_txs(), valid_transactions(true)];
+    let all_txs = transactions.iter().cloned();
+    let _all_txs: Vec<Vec<_>> = all_txs.map(|v| v.into_iter().collect()).collect();
+    let ((_block_keys, _), blocks) = complete_blocks(3, &transactions, 2).await;
+
+    let tx_lens = transactions.iter().map(|v| v.len());
+    let items_counts = tx_lens.chain(std::iter::repeat(0)).map(|tx| 3 + tx);
+    let items_counts: Vec<usize> = items_counts.take(blocks.len()).collect();
+
+    let modify_cfg = vec![
+        ("Before store block 1", CfgModif::Drop("storage3")),
+        ("Before store block 3", CfgModif::Respawn("storage3")),
+        (
+            "Before store block 3",
+            CfgModif::HandleEvents(&[
+                ("storage3", "Snapshot applied"),
+                ("storage3", "Snapshot applied: Fetch missing blocks"),
+            ]),
+        ),
+    ];
+
+    //
+    // Act
+    //
+    for (i, block) in blocks.iter().enumerate() {
+        info!("Test Step Storage add block {}", i);
+
+        let tag = format!("Before store block {}", i);
+        modify_network(&mut network, &tag, &modify_cfg).await;
+        let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
+
+        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", block).await;
+        storage_inject_send_block_to_storage(&mut network, "compute2", "storage2", block).await;
+
+        storage_all_handle_event(&mut network, &storage_nodes[0..2], BLOCK_RECEIVED).await;
+        node_all_handle_event(&mut network, &storage_nodes, &[BLOCK_STORED]).await;
+    }
+
+    let tag = "Before store block 3";
+    modify_network(&mut network, tag, &modify_cfg).await;
+
+    // Process event and treat it as messaged lost => switch to storage2
+    storage_handle_event(&mut network, "storage3", "Catch up stored blocks").await;
+
+    for (b_num, items_count) in items_counts.iter().copied().enumerate().skip(1) {
+        for i in 0..items_count {
+            info!(
+                "Test Step Storage catchup b_num={} (count={}) i={}",
+                b_num, items_count, i,
+            );
+
+            let network = &mut network;
+            let receive_evt = if i < items_count - 1 {
+                "Blockchain item received"
+            } else if b_num < items_counts.len() - 1 {
+                "Blockchain item received: Block stored"
+            } else {
+                "Blockchain item received: Block stored(Done)"
+            };
+
+            storage_handle_event(network, "storage3", "Catch up stored blocks").await;
+            storage_catchup_fetch_blockchain_item(network, "storage3").await;
+            storage_handle_event(network, "storage2", "Blockchain item fetched from storage").await;
+            storage_send_blockchain_item(network, "storage2").await;
+            storage_handle_event(network, "storage3", receive_evt).await;
+        }
+    }
+
+    //
+    // Assert
+    //
+    let all_items_count = items_counts[..].iter().sum::<usize>();
+    let actual_db_count =
+        storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
+    assert_eq!(actual_db_count, node_all(storage_nodes, all_items_count));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn request_utxo_set_raft_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11400, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11420, 1);
     network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;
@@ -2172,7 +2261,10 @@ async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        other => {
+            error!("Unexpected result: {:?} (expected:{})", other, reason_val);
+            panic!("Unexpected result: {:?} (expected:{})", other, reason_val);
+        }
     }
 }
 
@@ -2419,6 +2511,11 @@ async fn storage_send_blockchain_item(network: &mut Network, from_storage: &str)
     s.send_blockchain_item().await.unwrap();
 }
 
+async fn storage_catchup_fetch_blockchain_item(network: &mut Network, from_storage: &str) {
+    let mut s = network.storage(from_storage).unwrap().lock().await;
+    s.catchup_fetch_blockchain_item().await.unwrap();
+}
+
 async fn storage_inject_send_block_to_storage(
     network: &mut Network,
     compute: &str,
@@ -2604,7 +2701,10 @@ async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     match s.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        other => {
+            error!("Unexpected result: {:?} (expected:{})", other, reason_val);
+            panic!("Unexpected result: {:?} (expected:{})", other, reason_val);
+        }
     }
 }
 
@@ -2646,7 +2746,10 @@ async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     match u.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        other => {
+            error!("Unexpected result: {:?} (expected:{})", other, reason_val);
+            panic!("Unexpected result: {:?} (expected:{})", other, reason_val);
+        }
     }
 }
 
@@ -2802,7 +2905,10 @@ async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     match m.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val => {}
-        other => panic!("Unexpected result: {:?} (expected:{})", other, reason_val),
+        other => {
+            error!("Unexpected result: {:?} (expected:{})", other, reason_val);
+            panic!("Unexpected result: {:?} (expected:{})", other, reason_val);
+        }
     }
 }
 
@@ -3043,6 +3149,30 @@ fn checked_blockchain_item_data(
     } else {
         Ok(v.data)
     }
+}
+
+async fn complete_blocks(
+    block_count: usize,
+    block_txs: &[BTreeMap<String, Transaction>],
+    mining_txs: usize,
+) -> ((Vec<String>, Vec<String>), Vec<CompleteBlock>) {
+    let no_transactions = BTreeMap::new();
+
+    let mut block_keys: Vec<String> = Vec::new();
+    let mut complete_strs: Vec<String> = Vec::new();
+    let mut blocks: Vec<CompleteBlock> = Vec::new();
+
+    for i in 0..block_count {
+        let previous = block_keys.last().map(|v| v.as_str());
+        let transactions = block_txs.get(i).unwrap_or(&no_transactions);
+        let ((block_key, complete_str), block) =
+            complete_block(i as u64, previous, &transactions, mining_txs).await;
+
+        block_keys.push(block_key);
+        complete_strs.push(complete_str);
+        blocks.push(block);
+    }
+    ((block_keys, complete_strs), blocks)
 }
 
 async fn complete_block(

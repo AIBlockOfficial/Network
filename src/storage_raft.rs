@@ -387,6 +387,11 @@ impl StorageRaft {
         ProposeBlockTimeout::Some(Instant::now() + self.propose_block_timeout_duration)
     }
 
+    /// The duration for propose block time out
+    pub fn propose_block_timeout_duration(&self) -> Duration {
+        self.propose_block_timeout_duration
+    }
+
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.consensused.get_last_block_stored()

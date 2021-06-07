@@ -335,11 +335,8 @@ pub fn upgrade_storage_db_batch<'a>(
             for (tx_num, tx_hash) in all_txs {
                 tx_len = tx_num + 1;
                 if let Some(tx_value) = db.get_cf(DB_COL_DEFAULT, tx_hash)? {
-                    let pointer = {
-                        let t = BlockchainItemMeta::Tx { block_num, tx_num };
-                        storage::put_to_block_chain_at(&mut batch, column, &t, tx_hash, tx_value)
-                    };
-                    storage::put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
+                    let t = BlockchainItemMeta::Tx { block_num, tx_num };
+                    storage::put_to_block_chain_at(&mut batch, column, &t, tx_hash, tx_value);
                 } else {
                     error!(
                         "Missing block {} transaction {}: \"{}\"",
@@ -352,7 +349,6 @@ pub fn upgrade_storage_db_batch<'a>(
                 let t = BlockchainItemMeta::Block { block_num, tx_len };
                 storage::put_to_block_chain_at(&mut batch, column, &t, &key, &value)
             };
-            storage::put_named_block_to_block_chain(&mut batch, &pointer, block_num);
 
             max_block = std::cmp::max(max_block, Some((block_num, key, pointer)));
         } else {
@@ -362,7 +358,8 @@ pub fn upgrade_storage_db_batch<'a>(
     }
 
     let last_block_stored = if let Some((block_num, key, pointer)) = max_block {
-        storage::put_named_block_to_block_chain(&mut batch, &pointer, block_num);
+        storage::put_named_last_block_to_block_chain(&mut batch, &pointer);
+        storage::put_contiguous_block_num(&mut batch, block_num);
 
         let value = db.get_cf(DB_COL_DEFAULT, &key)?;
         let value = value.ok_or(UpgradeError::ConfigError("Missing last block"))?;
@@ -415,7 +412,9 @@ pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<Extra
 
     let (batch, mut raft_batch) = (db.batch_writer(), raft_db.batch_writer());
     for (key, value) in db.iter_cf_clone(storage::DB_COL_INTERNAL) {
-        if key != compute::RAFT_KEY_RUN.as_bytes() {
+        if key != storage::RAFT_KEY_RUN.as_bytes()
+            && key != storage::LAST_CONTIGUOUS_BLOCK_KEY.as_bytes()
+        {
             let e = UpgradeError::ConfigError("Unexpected key");
             return Err(log_key_value_error(e, "Unexpected key", &key, &value));
         }

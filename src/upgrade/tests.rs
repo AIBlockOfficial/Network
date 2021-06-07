@@ -1,8 +1,8 @@
 use super::tests_last_version_db::{self, DbEntryType};
 use super::tests_last_version_db_no_block;
 use super::{
-    get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old, upgrade_compute_db,
-    upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
+    dump_db, get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old,
+    upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
 use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
@@ -15,9 +15,12 @@ use crate::test_utils::{
 };
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 use tracing::info;
+
+type ExtraNodeParamsFilterMap = BTreeMap<String, ExtraNodeParamsFilter>;
 
 const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 2;
@@ -44,9 +47,22 @@ const STORAGE_DB_V0_2_0_INDEXES: &[&str] = &[
 const STORAGE_DB_V0_2_0_BLOCK_LEN: &[u32] = &[5, 3, 4];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
+const KEEP_ALL_FILTER: ExtraNodeParamsFilter = ExtraNodeParamsFilter {
+    db: true,
+    raft_db: true,
+    wallet_db: true,
+};
+
 enum Specs {
     Db(SimpleDbSpec, SimpleDbSpec),
     Wallet(SimpleDbSpec),
+}
+
+#[derive(Clone, Copy)]
+pub struct ExtraNodeParamsFilter {
+    pub db: bool,
+    pub raft_db: bool,
+    pub wallet_db: bool,
 }
 
 #[tokio::test(basic_scheduler)]
@@ -265,20 +281,20 @@ async fn open_upgrade_started_compute_common(
 async fn upgrade_restart_network_real_db() {
     let config = real_db(complete_network_config(20200));
     remove_all_node_dbs(&config);
-    upgrade_restart_network_common(config, cfg_upgrade()).await;
+    upgrade_restart_network_common(config, cfg_upgrade(), Default::default()).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_restart_network_in_memory() {
     let config = complete_network_config(20210);
-    upgrade_restart_network_common(config, cfg_upgrade()).await;
+    upgrade_restart_network_common(config, cfg_upgrade(), Default::default()).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_restart_network_compute_no_block_in_memory() {
     let config = complete_network_config(20215);
     let upgrade_cfg = cfg_upgrade_no_block();
-    upgrade_restart_network_common(config, upgrade_cfg).await;
+    upgrade_restart_network_common(config, upgrade_cfg, Default::default()).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -290,10 +306,36 @@ async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
     let config = complete_network_config(20220).with_groups(raft_len, raft_len);
     let mut upgrade_cfg = cfg_upgrade_no_block();
     upgrade_cfg.raft_len = raft_len;
-    upgrade_restart_network_common(config, upgrade_cfg).await;
+    upgrade_restart_network_common(config, upgrade_cfg, Default::default()).await;
 }
 
-async fn upgrade_restart_network_common(mut config: NetworkConfig, upgrade_cfg: UpgradeCfg) {
+#[tokio::test(basic_scheduler)]
+async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory() {
+    // Only copy over the upgraded raft database, and pull main db
+    let raft_len = 3;
+    let filter = ExtraNodeParamsFilter {
+        db: false,
+        raft_db: true,
+        wallet_db: false,
+    };
+    let params_filters = vec![
+        ("storage1".to_owned(), filter),
+        ("storage2".to_owned(), filter),
+    ]
+    .into_iter()
+    .collect();
+
+    let config = complete_network_config(20230).with_groups(raft_len, raft_len - 1);
+    let mut upgrade_cfg = cfg_upgrade_no_block();
+    upgrade_cfg.raft_len = raft_len;
+    upgrade_restart_network_common(config, upgrade_cfg, params_filters).await;
+}
+
+async fn upgrade_restart_network_common(
+    mut config: NetworkConfig,
+    upgrade_cfg: UpgradeCfg,
+    params_filters: ExtraNodeParamsFilterMap,
+) {
     test_step_start();
 
     //
@@ -302,6 +344,8 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig, upgrade_cfg: 
     config.user_test_auto_gen_setup = get_test_auto_gen_setup(Some(0));
     let mut network = Network::create_stopped_from_config(&config);
     let compute_nodes = &config.nodes[&NodeType::Compute];
+    let storage_nodes = &config.nodes[&NodeType::Storage];
+    let miner_nodes = &config.nodes[&NodeType::Miner];
     let extra_blocks = 2usize;
     let expected_block_num = LAST_BLOCK_STORED_NUM + extra_blocks as u64;
 
@@ -310,6 +354,7 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig, upgrade_cfg: 
         let db = create_old_node_db(n_info, upgrade_cfg.db_cfg);
         let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
         let db = upgrade_node_db(n_info, db, &upgrade_cfg).unwrap();
+        let db = filter_dbs(db, params_filters.get(&name).unwrap_or(&KEEP_ALL_FILTER));
         network.add_extra_params(&name, in_memory(db));
     }
 
@@ -335,16 +380,33 @@ async fn upgrade_restart_network_common(mut config: NetworkConfig, upgrade_cfg: 
         assert_eq!(b_num, Some(expected_block_num));
     }
     {
-        let storage = network.storage("storage1").unwrap().lock().await;
-        let count = storage.get_stored_values_count();
-        let mining_txs_per_block = upgrade_cfg.raft_len;
-        let expected_count = tests_last_version_db::STORAGE_DB_V0_2_0.len()
-            + extra_blocks * (mining_txs_per_block + 1);
+        let mut actual_count = Vec::new();
+        let mut actual_last_bnum = Vec::new();
+        for node in storage_nodes {
+            let storage = network.storage(node).unwrap().lock().await;
+            let count = storage.get_stored_values_count();
+            let block_stored = storage.get_last_block_stored().as_ref();
+            let last_bnum = block_stored.map(|b| b.block_num);
 
-        assert_eq!(count, expected_count);
+            actual_count.push(count);
+            actual_last_bnum.push(last_bnum);
 
-        let block_stored = storage.get_last_block_stored().as_ref();
-        assert_eq!(block_stored.map(|b| b.block_num), Some(expected_block_num));
+            let (db, _) = storage.api_inputs();
+            let db = db.lock().unwrap();
+            info!(
+                "dump_db {}: count:{} b_num:{:?}, \n{}",
+                node,
+                count,
+                last_bnum,
+                dump_db(&db).collect::<Vec<String>>().join("\n")
+            );
+        }
+
+        let raft_len = upgrade_cfg.raft_len;
+        let expected_count =
+            tests_last_version_db::STORAGE_DB_V0_2_0.len() + extra_blocks * (miner_nodes.len() + 1);
+        assert_eq!(actual_count, vec![expected_count; raft_len]);
+        assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
 
     test_step_complete(network).await;
@@ -629,6 +691,14 @@ fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
         db: dbs.db.and_then(|v| v.in_memory()),
         raft_db: dbs.raft_db.and_then(|v| v.in_memory()),
         wallet_db: dbs.wallet_db.and_then(|v| v.in_memory()),
+    }
+}
+
+fn filter_dbs(dbs: ExtraNodeParams, filter_dbs: &ExtraNodeParamsFilter) -> ExtraNodeParams {
+    ExtraNodeParams {
+        db: dbs.db.filter(|_| filter_dbs.db),
+        raft_db: dbs.raft_db.filter(|_| filter_dbs.raft_db),
+        wallet_db: dbs.wallet_db.filter(|_| filter_dbs.wallet_db),
     }
 }
 

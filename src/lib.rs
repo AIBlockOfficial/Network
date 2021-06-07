@@ -19,6 +19,7 @@ mod raft;
 mod raft_store;
 mod raft_util;
 mod storage;
+mod storage_fetch;
 mod storage_raft;
 #[cfg(test)]
 mod test_utils;

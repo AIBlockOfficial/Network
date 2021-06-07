@@ -2,14 +2,14 @@ use crate::configurations::DbMode;
 use crate::constants::{DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED};
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::{error::Error, fmt};
 use tracing::{debug, warn};
 
 pub type DbIteratorItem = (Vec<u8>, Vec<u8>);
 pub type InMemoryWriteBatch = Vec<(usize, Vec<u8>, Option<Vec<u8>>)>;
 pub type InMemoryColumns = BTreeMap<String, usize>;
-pub type InMemoryDb = Vec<HashMap<Vec<u8>, Vec<u8>>>;
+pub type InMemoryDb = Vec<BTreeMap<Vec<u8>, Vec<u8>>>;
 
 /// Result wrapper for SimpleDb errors
 pub type Result<T> = std::result::Result<T, SimpleDbError>;
