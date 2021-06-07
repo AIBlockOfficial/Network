@@ -314,6 +314,22 @@ impl StorageNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Blockchain item received",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Blockchain item received: Block stored",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Blockchain item received: Block stored(Done)",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Blockchain item received: Block failed",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason,
             }) => {
                 error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
@@ -696,6 +712,12 @@ impl StorageNode {
         let mut batch = self_db.batch_writer();
         let mut block_pointer = None;
 
+        info!(
+            "Store catchup complete block summary: b_num={}, items={}",
+            b_num,
+            items.len(),
+        );
+
         for item in &items {
             let key = str::from_utf8(&item.key)
                 .map_err(|_| StorageError::ConfigError("Non UTF-8 blockchain key"))?;
@@ -941,14 +963,16 @@ impl StorageInterface for StorageNode {
                 Ok(status) => {
                     self.catchup_fetch.update_contiguous_block_num(status);
                     self.catchup_fetch.update_timeout(Default::default());
+                    let reason = if is_complete {
+                        "Blockchain item received: Block stored(Done)"
+                    } else {
+                        "Blockchain item received: Block stored"
+                    };
 
+                    info!("{}(b_num = {})", reason, b_num);
                     Response {
                         success: true,
-                        reason: if is_complete {
-                            "Blockchain item received: Block stored(Done)"
-                        } else {
-                            "Blockchain item received: Block stored"
-                        },
+                        reason,
                     }
                 }
                 Err(e) => {
