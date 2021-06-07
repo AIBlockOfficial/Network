@@ -5,9 +5,7 @@ use crate::configurations::DbMode;
 use crate::constants::BLOCK_PREPEND;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{BlockchainItemMeta, NodeType, StoredSerializingBlock};
-use crate::storage::{
-    put_named_block_to_block_chain, put_named_tx_to_block_chain, put_to_block_chain, DB_SPEC,
-};
+use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::wallet::{EncapsulationData, WalletDb};
 use bincode::serialize;
 use naom::primitives::asset::TokenAmount;
@@ -52,23 +50,21 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
         hash_digest
     };
 
-    let block_num = 0;
-    let pointer = {
+    {
+        let block_num = 0;
         let tx_len = 0;
         let t = BlockchainItemMeta::Block { block_num, tx_len };
-        put_to_block_chain(&mut batch, &t, &block_hash, &block_input)
-    };
-    put_named_block_to_block_chain(&mut batch, &pointer, block_num);
-
+        let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input);
+        put_named_last_block_to_block_chain(&mut batch, &pointer);
+    }
     // Handle tx insert
-    let tx_pointer = {
+    {
         let t = BlockchainItemMeta::Tx {
             block_num: 0,
             tx_num: 1,
         };
-        put_to_block_chain(&mut batch, &t, &tx_hash, &tx_value)
-    };
-    put_named_tx_to_block_chain(&mut batch, &tx_pointer, 0, 0);
+        put_to_block_chain(&mut batch, &t, &tx_hash, &tx_value);
+    }
 
     let batch = batch.done();
     db.write(batch).unwrap();

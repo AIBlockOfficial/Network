@@ -4,13 +4,14 @@ use crate::constants::{
     BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY,
     LAST_BLOCK_HASH_KEY, NAMED_CONSTANT_PREPEND, PEER_LIMIT,
 };
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec, SimpleDbWriteBatch};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, CommonBlockInfo, ComputeRequest, Contract,
     MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
     StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
+use crate::storage_fetch::{FetchStatus, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     concat_merkle_coinbase, get_genesis_tx_in_display, validate_pow_block, LocalEvent,
@@ -33,6 +34,7 @@ use tracing_futures::Instrument;
 
 /// Key storing current proposer run
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
+pub const LAST_CONTIGUOUS_BLOCK_KEY: &str = "LastContiguousBlockKey";
 
 /// Database columns
 pub const DB_COL_INTERNAL: &str = "internal";
@@ -67,6 +69,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 pub enum StorageError {
     ConfigError(&'static str),
     Network(CommsError),
+    DbError(SimpleDbError),
     Serialization(bincode::Error),
 }
 
@@ -75,6 +78,7 @@ impl fmt::Display for StorageError {
         match self {
             Self::ConfigError(err) => write!(f, "Config error: {}", err),
             Self::Network(err) => write!(f, "Network error: {}", err),
+            Self::DbError(err) => write!(f, "DB error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
         }
     }
@@ -85,6 +89,7 @@ impl Error for StorageError {
         match self {
             Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
+            Self::DbError(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
         }
     }
@@ -93,6 +98,12 @@ impl Error for StorageError {
 impl From<CommsError> for StorageError {
     fn from(other: CommsError) -> Self {
         Self::Network(other)
+    }
+}
+
+impl From<SimpleDbError> for StorageError {
+    fn from(other: SimpleDbError) -> Self {
+        Self::DbError(other)
     }
 }
 
@@ -106,6 +117,7 @@ impl From<bincode::Error> for StorageError {
 pub struct StorageNode {
     node: Node,
     node_raft: StorageRaft,
+    catchup_fetch: StorageFetch,
     db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
@@ -150,6 +162,7 @@ impl StorageNode {
         Ok(StorageNode {
             node,
             node_raft,
+            catchup_fetch: StorageFetch::new(),
             db,
             api_addr,
             local_events: Default::default(),
@@ -385,7 +398,16 @@ impl StorageNode {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::Block) => {
                 let block = self.node_raft.generate_complete_block();
-                let block_stored = Self::store_complete_block(&mut self.db.lock().unwrap(), block);
+                let block_stored = {
+                    let mut self_db = self.db.lock().unwrap();
+
+                    let b_num = block.common.block.header.b_num;
+                    let contiguous = self.catchup_fetch.check_contiguous_block_num(b_num);
+                    let stored = Self::store_complete_block(&mut self_db, contiguous, block);
+                    self.catchup_fetch.update_contiguous_block_num(contiguous);
+
+                    stored
+                };
                 self.node_raft
                     .event_processed_generate_snapshot(block_stored);
                 Some(Ok(Response {
@@ -491,8 +513,14 @@ impl StorageNode {
     ///
     /// ### Arguments
     ///
+    /// * `self_db`  - Database to update
+    /// * `status`   - Block is contiguous with last contiguous
     /// * `complete` - CompleteBlock object to be stored.
-    fn store_complete_block(self_db: &mut SimpleDb, complete: CompleteBlock) -> BlockStoredInfo {
+    fn store_complete_block(
+        self_db: &mut SimpleDb,
+        status: FetchStatus,
+        complete: CompleteBlock,
+    ) -> BlockStoredInfo {
         // TODO: Makes the DB save process async
         // TODO: only accept whitelisted blocks
 
@@ -567,11 +595,8 @@ impl StorageNode {
             tx_len = tx_num + 1;
             if let Some(tx_value) = all_block_txs.get(tx_hash) {
                 let tx_input = serialize(tx_value).unwrap();
-                let pointer = {
-                    let t = BlockchainItemMeta::Tx { block_num, tx_num };
-                    put_to_block_chain(&mut batch, &t, tx_hash, &tx_input)
-                };
-                put_named_tx_to_block_chain(&mut batch, &pointer, block_num, tx_num);
+                let t = BlockchainItemMeta::Tx { block_num, tx_num };
+                put_to_block_chain(&mut batch, &t, tx_hash, &tx_input);
             } else {
                 error!(
                     "Missing block {} transaction {}: \"{}\"",
@@ -580,11 +605,15 @@ impl StorageNode {
             }
         }
 
-        let pointer = {
+        {
             let t = BlockchainItemMeta::Block { block_num, tx_len };
-            put_to_block_chain(&mut batch, &t, &block_hash, &block_input)
-        };
-        put_named_block_to_block_chain(&mut batch, &pointer, block_num);
+            let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input);
+            put_named_last_block_to_block_chain(&mut batch, &pointer);
+
+            if FetchStatus::Contiguous(block_num) == status {
+                put_contiguous_block_num(&mut batch, block_num);
+            }
+        }
 
         let batch = batch.done();
         self_db.write(batch).unwrap();
@@ -770,6 +799,15 @@ impl StorageNode {
             key_run
         });
 
+        self.catchup_fetch.set_initial_last_contiguous_block_key({
+            let db = self.db.lock().unwrap();
+            match db.get_cf(DB_COL_INTERNAL, LAST_CONTIGUOUS_BLOCK_KEY) {
+                Ok(Some(b_num)) => Some(deserialize::<u64>(&b_num)?),
+                Ok(None) => None,
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            }
+        });
+
         Ok(self)
     }
 }
@@ -870,42 +908,34 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     let key = key.as_ref();
     let value = value.as_ref();
     let pointer = version_pointer(cf, key);
-    let item_meta = serialize(item_meta).unwrap();
+    let meta_key = match *item_meta {
+        BlockchainItemMeta::Block { block_num, .. } => indexed_block_hash_key(block_num),
+        BlockchainItemMeta::Tx { block_num, tx_num } => indexed_tx_hash_key(block_num, tx_num),
+    };
+    let meta_ser = serialize(item_meta).unwrap();
+
     batch.put_cf(cf, key, value);
     batch.put_cf(DB_COL_BC_ALL, key, &pointer);
-    batch.put_cf(DB_COL_BC_META, key, &item_meta);
+    batch.put_cf(DB_COL_BC_META, key, &meta_ser);
+    batch.put_cf(DB_COL_BC_NAMED, &meta_key, &pointer);
+
     pointer
 }
 
-/// Add to the block chain named column
+/// Add to the last block chain named column
 ///
 /// ### Arguments
 ///
 /// * `batch`   - Database writer
 /// * `pointer` - The block version pointer
-/// * `b_num`   - The block number
-pub fn put_named_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &[u8], b_num: u64) {
-    let indexed_key = indexed_block_hash_key(b_num);
+pub fn put_named_last_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &[u8]) {
     batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, &pointer);
-    batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
 }
 
-/// Add to the block chain named column
-///
-/// ### Arguments
-///
-/// * `batch`   - Database writer
-/// * `pointer` - The transaction version pointer
-/// * `b_num`   - The block number
-/// * `tx_num`  - The transaction index in the block
-pub fn put_named_tx_to_block_chain(
-    batch: &mut SimpleDbWriteBatch,
-    pointer: &[u8],
-    b_num: u64,
-    tx_num: u32,
-) {
-    let indexed_key = indexed_tx_hash_key(b_num, tx_num);
-    batch.put_cf(DB_COL_BC_NAMED, &indexed_key, &pointer);
+/// Update database with contiguous value
+pub fn put_contiguous_block_num(batch: &mut SimpleDbWriteBatch, block_num: u64) {
+    let last_num = serialize(&block_num).unwrap();
+    batch.put_cf(DB_COL_INTERNAL, LAST_CONTIGUOUS_BLOCK_KEY, &last_num);
 }
 
 /// Iterate on all the StoredSerializingBlock transaction hashes
@@ -1015,7 +1045,7 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
 /// ### Arguments
 ///
 /// * `b_num`  - The block number
-fn indexed_block_hash_key(b_num: u64) -> String {
+pub fn indexed_block_hash_key(b_num: u64) -> String {
     format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
 }
 
@@ -1025,7 +1055,7 @@ fn indexed_block_hash_key(b_num: u64) -> String {
 ///
 /// * `b_num`  - The block number
 /// * `tx_num` - The transaction index in the block
-fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
+pub fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
     format!(
         "{}{:016x}_{:08x}",
         INDEXED_TX_HASH_PREFIX_KEY, b_num, tx_num
@@ -1045,6 +1075,7 @@ pub fn decode_version_pointer(pointer: &[u8]) -> (u32, &'static str, &[u8]) {
     (*version, cf, key)
 }
 
+/// Return an option, emiting a warning for errors converted to
 fn ok_or_warn<V, E: fmt::Display>(r: std::result::Result<Option<V>, E>, tag: &str) -> Option<V> {
     r.unwrap_or_else(|e| {
         warn!("{}: {}", tag, e);
