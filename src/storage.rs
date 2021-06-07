@@ -150,8 +150,15 @@ impl StorageNode {
 
         let node = Node::new(addr, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
-        let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
-        let db = Arc::new(Mutex::new(raw_db));
+        let catchup_fetch = {
+            let timeout_duration = node_raft.propose_block_timeout_duration();
+            StorageFetch::new(addr, &config.storage_nodes, timeout_duration)
+        };
+
+        let db = {
+            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+            Arc::new(Mutex::new(raw_db))
+        };
 
         let shutdown_group = {
             let compute = std::iter::once(compute_addr);
@@ -162,7 +169,7 @@ impl StorageNode {
         Ok(StorageNode {
             node,
             node_raft,
-            catchup_fetch: StorageFetch::new(addr, &config.storage_nodes),
+            catchup_fetch,
             db,
             api_addr,
             local_events: Default::default(),
@@ -392,8 +399,9 @@ impl StorageNode {
                 }
                 Some(()) = self.catchup_fetch.timeout_fetch_blockchain_item(), if ready => {
                     trace!("handle_next_event timeout fetch blockchain item");
-                    let duration = self.node_raft.propose_block_timeout_duration();
-                    self.catchup_fetch.update_timeout(duration);
+                    if self.catchup_fetch.set_retry_timeout() {
+                        self.catchup_fetch.change_to_next_fetch_peer();
+                    }
                     return Some(Ok(Response {
                         success: true,
                         reason: "Catch up stored blocks",
@@ -962,7 +970,7 @@ impl StorageInterface for StorageNode {
             match result {
                 Ok(status) => {
                     self.catchup_fetch.update_contiguous_block_num(status);
-                    self.catchup_fetch.update_timeout(Default::default());
+                    self.catchup_fetch.set_first_timeout();
                     let reason = if is_complete {
                         "Blockchain item received: Block stored(Done)"
                     } else {
@@ -988,7 +996,7 @@ impl StorageInterface for StorageNode {
             }
         } else {
             if !is_complete {
-                self.catchup_fetch.update_timeout(Default::default());
+                self.catchup_fetch.set_first_timeout();
             }
 
             Response {

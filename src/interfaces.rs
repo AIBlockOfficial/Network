@@ -128,6 +128,12 @@ pub struct BlockchainItem {
     pub data: Vec<u8>,
 }
 
+impl BlockchainItem {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty()
+    }
+}
+
 /// Denotes blockchain item metadata
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BlockchainItemMeta {

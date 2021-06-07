@@ -46,7 +46,7 @@ impl FetchReceiveState {
 struct FetchReceive {
     target_b_num: u64,
     state: FetchReceiveState,
-    timeout_at: Instant,
+    timeout_at: (Instant, bool),
     blockchain_items: Vec<BlockchainItem>,
 }
 
@@ -57,7 +57,7 @@ impl FetchReceive {
         Self {
             target_b_num,
             state: FetchReceiveState::WaitBlock { b_num },
-            timeout_at: Instant::now(),
+            timeout_at: (Instant::now(), false),
             blockchain_items: Default::default(),
         }
     }
@@ -126,6 +126,8 @@ impl FetchReceive {
 }
 
 pub struct StorageFetch {
+    /// Duration of timeout before retry
+    timeout_duration: Duration,
     /// Storage nodes to fetch from
     storage_nodes: Vec<SocketAddr>,
     /// The index of the peer in `storage_nodes` to fetch from.
@@ -138,10 +140,11 @@ pub struct StorageFetch {
 
 impl StorageFetch {
     /// Initialize with database info
-    pub fn new(addr: SocketAddr, storage_nodes: &[NodeSpec]) -> Self {
+    pub fn new(addr: SocketAddr, storage_nodes: &[NodeSpec], timeout_duration: Duration) -> Self {
         let storage_nodes = storage_nodes.iter().map(|s| s.address);
         let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
         Self {
+            timeout_duration,
             storage_nodes,
             fetch_peer_idx: 0,
             last_contiguous_block_num: None,
@@ -190,17 +193,28 @@ impl StorageFetch {
     /// Provvide the key to fetch
     pub async fn timeout_fetch_blockchain_item(&self) -> Option<()> {
         if let Some(to_receive) = &self.to_receive {
-            time::delay_until(to_receive.timeout_at).await;
+            time::delay_until(to_receive.timeout_at.0).await;
             Some(())
         } else {
             None
         }
     }
 
-    /// Update next timeout
-    pub fn update_timeout(&mut self, timeout: Duration) {
+    /// Update next timeout: return true if was retrying already
+    pub fn set_retry_timeout(&mut self) -> bool {
         if let Some(to_receive) = &mut self.to_receive {
-            to_receive.timeout_at = Instant::now() + timeout;
+            let was_retry = to_receive.timeout_at.1;
+            to_receive.timeout_at = (Instant::now() + self.timeout_duration, true);
+            was_retry
+        } else {
+            false
+        }
+    }
+
+    /// Update next timeout
+    pub fn set_first_timeout(&mut self) {
+        if let Some(to_receive) = &mut self.to_receive {
+            to_receive.timeout_at = (Instant::now(), false);
         }
     }
 
@@ -227,6 +241,12 @@ impl StorageFetch {
         _key: String,
         item: BlockchainItem,
     ) -> Option<FetchedBlockChain> {
+        if !self.is_complete() && item.is_empty() {
+            // item not found
+            self.change_to_next_fetch_peer();
+            return None;
+        }
+
         if let Some(to_receive) = &mut self.to_receive {
             let block = to_receive.receive_blockchain_items(item);
             if to_receive.is_complete() {

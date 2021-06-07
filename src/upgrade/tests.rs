@@ -310,21 +310,22 @@ async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
 }
 
 #[tokio::test(basic_scheduler)]
-async fn upgrade_restart_network_compute_no_block_raft_2_raft_db_only_in_memory() {
+async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory() {
     // Only copy over the upgraded raft database, and pull main db
-    let raft_len = 2;
-    let params_filters = vec![(
-        "storage1".to_owned(),
-        ExtraNodeParamsFilter {
-            db: false,
-            raft_db: true,
-            wallet_db: false,
-        },
-    )]
+    let raft_len = 3;
+    let filter = ExtraNodeParamsFilter {
+        db: false,
+        raft_db: true,
+        wallet_db: false,
+    };
+    let params_filters = vec![
+        ("storage1".to_owned(), filter),
+        ("storage2".to_owned(), filter),
+    ]
     .into_iter()
     .collect();
 
-    let config = complete_network_config(20230).with_groups(raft_len, raft_len);
+    let config = complete_network_config(20230).with_groups(raft_len, raft_len - 1);
     let mut upgrade_cfg = cfg_upgrade_no_block();
     upgrade_cfg.raft_len = raft_len;
     upgrade_restart_network_common(config, upgrade_cfg, params_filters).await;
@@ -343,6 +344,8 @@ async fn upgrade_restart_network_common(
     config.user_test_auto_gen_setup = get_test_auto_gen_setup(Some(0));
     let mut network = Network::create_stopped_from_config(&config);
     let compute_nodes = &config.nodes[&NodeType::Compute];
+    let storage_nodes = &config.nodes[&NodeType::Storage];
+    let miner_nodes = &config.nodes[&NodeType::Miner];
     let extra_blocks = 2usize;
     let expected_block_num = LAST_BLOCK_STORED_NUM + extra_blocks as u64;
 
@@ -377,37 +380,33 @@ async fn upgrade_restart_network_common(
         assert_eq!(b_num, Some(expected_block_num));
     }
     {
-        let storage = network.storage("storage1").unwrap().lock().await;
-        let count = storage.get_stored_values_count();
-        let mining_txs_per_block = upgrade_cfg.raft_len;
-        let expected_count = tests_last_version_db::STORAGE_DB_V0_2_0.len()
-            + extra_blocks * (mining_txs_per_block + 1);
+        let mut actual_count = Vec::new();
+        let mut actual_last_bnum = Vec::new();
+        for node in storage_nodes {
+            let storage = network.storage(node).unwrap().lock().await;
+            let count = storage.get_stored_values_count();
+            let block_stored = storage.get_last_block_stored().as_ref();
+            let last_bnum = block_stored.map(|b| b.block_num);
 
-        {
-            if upgrade_cfg.raft_len > 1 {
-                let storage = network.storage("storage2").unwrap().lock().await;
-                let count = storage.get_stored_values_count();
-                let (db, _) = storage.api_inputs();
-                let db = db.lock().unwrap();
-                info!(
-                    "dump_db storage2: {}, \n{}",
-                    count,
-                    dump_db(&db).collect::<Vec<String>>().join("\n")
-                );
-            }
+            actual_count.push(count);
+            actual_last_bnum.push(last_bnum);
+
             let (db, _) = storage.api_inputs();
             let db = db.lock().unwrap();
             info!(
-                "dump_db storage1: {}, \n{}",
+                "dump_db {}: count:{} b_num:{:?}, \n{}",
+                node,
                 count,
+                last_bnum,
                 dump_db(&db).collect::<Vec<String>>().join("\n")
             );
         }
 
-        assert_eq!(count, expected_count);
-
-        let block_stored = storage.get_last_block_stored().as_ref();
-        assert_eq!(block_stored.map(|b| b.block_num), Some(expected_block_num));
+        let raft_len = upgrade_cfg.raft_len;
+        let expected_count =
+            tests_last_version_db::STORAGE_DB_V0_2_0.len() + extra_blocks * (miner_nodes.len() + 1);
+        assert_eq!(actual_count, vec![expected_count; raft_len]);
+        assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
 
     test_step_complete(network).await;

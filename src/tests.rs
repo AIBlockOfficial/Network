@@ -1853,6 +1853,9 @@ async fn catchup_fetch_blockchain_item_raft() {
     let tag = "Before store block 3";
     modify_network(&mut network, tag, &modify_cfg).await;
 
+    // Process event and treat it as messaged lost => switch to storage2
+    storage_handle_event(&mut network, "storage3", "Catch up stored blocks").await;
+
     for (b_num, items_count) in items_counts.iter().copied().enumerate().skip(1) {
         for i in 0..items_count {
             info!(
@@ -1871,8 +1874,8 @@ async fn catchup_fetch_blockchain_item_raft() {
 
             storage_handle_event(network, "storage3", "Catch up stored blocks").await;
             storage_catchup_fetch_blockchain_item(network, "storage3").await;
-            storage_handle_event(network, "storage1", "Blockchain item fetched from storage").await;
-            storage_send_blockchain_item(network, "storage1").await;
+            storage_handle_event(network, "storage2", "Blockchain item fetched from storage").await;
+            storage_send_blockchain_item(network, "storage2").await;
             storage_handle_event(network, "storage3", receive_evt).await;
         }
     }
