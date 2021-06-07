@@ -482,6 +482,10 @@ pub trait ComputeInterface {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
+    UpdateWalletFromUtxoSet {
+        // TODO: Might need to change this request to a generic type for multiple use cases
+        address_list: UtxoFetchType,
+    },
     SendUtxoSet {
         utxo_set: Vec<u8>,
     },
@@ -506,6 +510,7 @@ impl fmt::Debug for UserRequest {
         use UserRequest::*;
 
         match *self {
+            UpdateWalletFromUtxoSet { .. } => write!(f, "RequestUtxoSet"),
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
@@ -529,7 +534,7 @@ pub trait UseInterface {
         amount: TokenAmount,
     ) -> Response;
 
-    /// Receive the requested UTXO set from Compute
+    /// Receive the requested UTXO set/subset from Compute
     ///
     /// ### Arguments
     ///

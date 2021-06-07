@@ -1,7 +1,7 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::{StoredSerializingBlock, UserRequest};
+use crate::interfaces::{StoredSerializingBlock, UserRequest, UtxoFetchType};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::utils::DeserializedBlockchainItem;
 use crate::wallet::{EncapsulationData, WalletDb};
@@ -29,7 +29,7 @@ enum BlockchainData {
 /// Values are encrypted
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
-    addresses: BTreeMap<String, Vec<u8>>,
+    pub addresses: BTreeMap<String, Vec<u8>>,
 }
 
 /// Information about a wallet to be returned to requester
@@ -42,6 +42,12 @@ struct WalletInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyEncapsulation {
     pub public_key: PK,
+}
+
+/// Public key addresses received from client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicKeyAddresses {
+    pub address_list: Vec<String>,
 }
 
 /// Ciphered data received from client
@@ -271,4 +277,21 @@ pub async fn post_make_ip_payment(
         return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
     }
     Ok(warp::reply::json(&"Payment processing".to_owned()))
+}
+
+/// Post to update running total of connected wallet
+pub async fn post_update_running_total(
+    peer: Node,
+    addresses: PublicKeyAddresses,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let request = UserRequest::UpdateWalletFromUtxoSet {
+        address_list: UtxoFetchType::AnyOf(addresses.address_list),
+    };
+
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:update_running_total error: {:?}", e);
+        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+    }
+
+    Ok(warp::reply::json(&"Running total updated".to_owned()))
 }

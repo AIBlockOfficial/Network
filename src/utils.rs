@@ -15,7 +15,7 @@ use naom::primitives::{
 use naom::script::{lang::Script, StackEntry};
 use naom::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, get_tx_out_with_out_point,
+    construct_tx_hash, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
@@ -432,17 +432,23 @@ fn validate_pow(pow: &[u8]) -> bool {
 ///
 /// * `txs`   - The transactions
 pub fn get_paiments_for_wallet<'a>(
-    txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
 ) -> Vec<(OutPoint, TokenAmount, String)> {
-    get_tx_out_with_out_point(txs)
-        .map(|(out_p, tx_out)| {
-            (
-                out_p,
-                tx_out.value.token_amount(),
-                &tx_out.script_public_key,
-            )
-        })
-        .map(|(out_p, amount, address)| (out_p, amount, address.clone().unwrap()))
+    let utxo_iterator = get_tx_out_with_out_point_cloned(txs);
+    get_paiments_for_wallet_from_utxo(utxo_iterator)
+}
+
+/// Get the paiment info from the given UTXO set/subset
+///
+/// ### Arguments
+///
+/// * `utxo_set`   - The UTXO set/subset
+pub fn get_paiments_for_wallet_from_utxo(
+    utxos: impl Iterator<Item = (OutPoint, TxOut)>,
+) -> Vec<(OutPoint, TokenAmount, String)> {
+    utxos
+        .map(|(out_p, tx_out)| (out_p, tx_out.value.token_amount(), tx_out.script_public_key))
+        .map(|(out_p, amount, address)| (out_p, amount, address.unwrap()))
         .collect()
 }
 

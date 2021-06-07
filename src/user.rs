@@ -6,14 +6,15 @@ use crate::interfaces::{
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
-    get_paiments_for_wallet, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent, LocalEventChannel,
+    LocalEventSender, ResponseResult,
 };
 use crate::wallet::WalletDb;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{Transaction, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
@@ -195,6 +196,18 @@ impl UserNode {
         }
     }
 
+    /// Update the running total from a retrieved UTXO set/subset
+    pub async fn update_running_total(&mut self) {
+        let utxo_set = self.received_utxo_set.take();
+        let payments: Vec<(OutPoint, TokenAmount, String)> =
+            get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
+    }
+
     /// Listens for new events from peers and handles them, processing any errors.
     pub async fn handle_next_event_response(
         &mut self,
@@ -230,6 +243,16 @@ impl UserNode {
                 reason: "Block mining notified",
             }) => {
                 self.process_mining_notified().await;
+            }
+            Ok(Response {
+                success: true,
+                reason: "Request UTXO set",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Received UTXO set",
+            }) => {
+                self.update_running_total().await;
             }
             Ok(Response {
                 success: true,
@@ -362,6 +385,10 @@ impl UserNode {
         trace!("handle_request: {:?}", req);
 
         match req {
+            UpdateWalletFromUtxoSet { address_list } => {
+                self.request_utxo_set_for_wallet_update(peer, address_list)
+                    .await
+            }
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             SendAddressRequest { amount } => {
                 Some(self.receive_payment_address_request(peer, amount))
@@ -393,18 +420,13 @@ impl UserNode {
         })
     }
 
-    pub async fn send_request_utxo_set(
-        &mut self,
-        compute_peer: SocketAddr,
-        address_list: UtxoFetchType,
-    ) -> Result<()> {
+    pub async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
         self.node
             .send(
-                compute_peer,
+                self.compute_address(),
                 ComputeRequest::SendUtxoRequest { address_list },
             )
             .await?;
-
         Ok(())
     }
 
@@ -457,6 +479,26 @@ impl UserNode {
             .await?;
 
         Ok(())
+    }
+
+    /// Request a UTXO set/subset from Compute for updating the running total
+    ///
+    /// ### Arguments
+    ///
+    /// * `address_list` - Address list of UTXO set/subset to retrieve
+    pub async fn request_utxo_set_for_wallet_update(
+        &mut self,
+        peer: SocketAddr,
+        address_list: UtxoFetchType,
+    ) -> Option<Response> {
+        if peer != self.address() {
+            return None;
+        }
+        self.send_request_utxo_set(address_list).await.ok()?;
+        Some(Response {
+            success: true,
+            reason: "Request UTXO set",
+        })
     }
 
     /// Receives a payment transaction to one of this user's addresses

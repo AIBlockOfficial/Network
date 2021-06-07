@@ -1057,7 +1057,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `nonce` - Sequence number in a Vec<u8>
-    /// * `mining_transaction` - String and transaction to be put into a BTreeMap    
+    /// * `mining_transaction` - String and transaction to be put into a BTreeMap
     pub fn mining_block_mined(
         &mut self,
         nonce: Vec<u8>,

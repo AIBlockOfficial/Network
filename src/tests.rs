@@ -6,7 +6,7 @@ use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
     ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
-    UtxoFetchType, UtxoSet,
+    UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -61,13 +61,20 @@ const BLOCK_RECEIVED_AND_STORED: [&str; 2] = [BLOCK_RECEIVED, BLOCK_STORED];
 
 const SOME_PUB_KEYS: [&str; 3] = [
     COMMON_PUB_KEY,
-    "ec527f879a19bed8dee429a25cd2518e7d9ec0f439ba24aecbd089b340154fad",
-    "5ee0828b1f830f790bea4a3f11256b90274081dfc6bb642dfd8c8a685df941cd",
+    "6e86cc1fc5efbe64c2690efbb966b9fe1957facc497dce311981c68dac88e08c",
+    "8b835e00c57ebff6637ec32276f2c6c0df71129c8f0860131a78a4692a0b59dc",
 ];
+
+const SOME_SEC_KEYS: [&str; 3] = [
+    COMMON_SEC_KEY,
+    "70391d510eb988291d2dca15e5b8a54c552b4f2361bf29b1b945300a3e7cc9b46e86cc1fc5efbe64c2690efbb966b9fe1957facc497dce311981c68dac88e08c",
+    "1842082f6d8b0ecf75a309544980027e15ed1c00e95a14063705b2a4fc3586708b835e00c57ebff6637ec32276f2c6c0df71129c8f0860131a78a4692a0b59dc",
+];
+
 const SOME_PUB_KEY_ADDRS: [&str; 3] = [
     COMMON_PUB_ADDR,
-    "f5b0f7eb078166d2667a2c5af0ac020f",
-    "8fd42eabfca575319b090c843510e903",
+    "abc7c0448465c4507faf2ee588728824",
+    "6ae52e3870884ab66ec49d3bb359c0bf",
 ];
 
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
@@ -1985,10 +1992,102 @@ async fn request_utxo_set_act(
     compute: &str,
     address_list: UtxoFetchType,
 ) {
-    user_send_utxo_request(network, user, compute, address_list).await;
+    user_send_request_utxo_set(network, user, address_list).await;
     compute_handle_event(network, compute, "Received UTXO fetch request").await;
     compute_send_utxo_set(network, compute).await;
     user_handle_event(network, user, "Received UTXO set").await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn request_utxo_set_and_update_running_total_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11440, 1);
+    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+        let a = DEFAULT_SEED_AMOUNT;
+        let pk = SOME_PUB_KEYS;
+        &[
+            ("000000", vec![(pk[0], a)]),
+            ("000001", vec![(pk[1], a), (pk[0], a)]),
+            ("000002", vec![(pk[2], a), (pk[1], a)]),
+        ]
+    });
+    network_config.user_wallet_seeds = {
+        let pk = SOME_PUB_KEYS;
+        let sk = SOME_SEC_KEYS;
+        vec![vec![
+            WalletTxSpec {
+                out_point: "0-000000".to_string(),
+                secret_key: sk[0].to_string(),
+                public_key: pk[0].to_string(),
+                amount: 3,
+            },
+            WalletTxSpec {
+                out_point: "0-000001".to_string(),
+                secret_key: sk[1].to_string(),
+                public_key: pk[1].to_string(),
+                amount: 3,
+            },
+            WalletTxSpec {
+                out_point: "0-000002".to_string(),
+                secret_key: sk[2].to_string(),
+                public_key: pk[2].to_string(),
+                amount: 3,
+            },
+        ]]
+    };
+
+    let user_nodes = &network_config.nodes[&NodeType::User];
+    let mut network = Network::create_from_config(&network_config).await;
+    let address_list: UtxoFetchType =
+        UtxoFetchType::AnyOf(SOME_PUB_KEY_ADDRS.iter().map(|v| v.to_string()).collect());
+
+    //
+    // Act
+    //
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, Cfg::All, CfgNum::All).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    let before = node_all_get_wallet_info(&mut network, user_nodes).await;
+    request_utxo_set_and_update_running_total_act(&mut network, "user1", "compute1", address_list)
+        .await;
+    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        before
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(9)]
+    );
+
+    assert_eq!(
+        after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
+        vec![TokenAmount(15),]
+    );
+
+    test_step_complete(network).await;
+}
+
+async fn request_utxo_set_and_update_running_total_act(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+    address_list: UtxoFetchType,
+) {
+    user_trigger_update_wallet_from_utxo_set(network, user, address_list).await;
+    user_handle_event(network, user, "Request UTXO set").await;
+    compute_handle_event(network, compute, "Received UTXO fetch request").await;
+    compute_send_utxo_set(network, compute).await;
+    user_handle_event(network, user, "Received UTXO set").await;
+    user_update_running_total(network, user).await;
 }
 
 //
@@ -2831,17 +2930,31 @@ async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> V
     received_utxo_set.keys().cloned().collect()
 }
 
-async fn user_send_utxo_request(
+async fn user_update_running_total(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.update_running_total().await;
+}
+
+async fn user_trigger_update_wallet_from_utxo_set(
     network: &mut Network,
-    from_user: &str,
-    to_compute: &str,
+    user: &str,
     address_list: UtxoFetchType,
 ) {
-    let mut u = network.user(from_user).unwrap().lock().await;
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
-    u.send_request_utxo_set(compute_node_addr, address_list)
-        .await
+    let u = network.user(user).unwrap().lock().await;
+    let request = UserRequest::UpdateWalletFromUtxoSet { address_list };
+    u.api_inputs()
+        .1
+        .inject_next_event(u.address(), request)
         .unwrap();
+}
+
+async fn user_send_request_utxo_set(
+    network: &mut Network,
+    user: &str,
+    address_list: UtxoFetchType,
+) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.send_request_utxo_set(address_list).await.unwrap();
 }
 
 //
