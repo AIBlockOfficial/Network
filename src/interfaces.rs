@@ -479,38 +479,44 @@ pub trait ComputeInterface {
 
 ///============ USER NODE ============///
 
-/// Encapsulates user requests
+/// Encapsulates user requests injected by API
 #[derive(Deserialize, Serialize, Clone)]
-pub enum UserRequest {
+pub enum UserApiRequest {
     UpdateWalletFromUtxoSet {
         // TODO: Might need to change this request to a generic type for multiple use cases
         address_list: UtxoFetchType,
     },
-    SendUtxoSet {
-        utxo_set: Vec<u8>,
-    },
-    SendAddressRequest {
+    MakeIpPayment {
+        payment_peer: SocketAddr,
         amount: TokenAmount,
     },
-    SendPaymentAddress {
+    MakePayment {
         address: String,
         amount: TokenAmount,
     },
-    SendPaymentTransaction {
-        transaction: Transaction,
-    },
-    BlockMining {
-        block: Block,
-    },
+}
+
+/// Encapsulates user requests
+#[derive(Deserialize, Serialize, Clone)]
+pub enum UserRequest {
+    UserApi(UserApiRequest),
+    SendUtxoSet { utxo_set: Vec<u8> },
+    SendAddressRequest,
+    SendPaymentAddress { address: String },
+    SendPaymentTransaction { transaction: Transaction },
+    BlockMining { block: Block },
     Closing,
 }
 
 impl fmt::Debug for UserRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use UserApiRequest::*;
         use UserRequest::*;
 
         match *self {
-            UpdateWalletFromUtxoSet { .. } => write!(f, "RequestUtxoSet"),
+            UserApi(UpdateWalletFromUtxoSet { .. }) => write!(f, "UpdateWalletFromUtxoSet"),
+            UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
+            UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
@@ -528,11 +534,7 @@ pub trait UseInterface {
     ///
     /// * `peer`    - Peer who made the request
     /// * `amount`  - The amount the payment will be
-    fn receive_payment_address_request(
-        &mut self,
-        peer: SocketAddr,
-        amount: TokenAmount,
-    ) -> Response;
+    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response;
 
     /// Receive the requested UTXO set/subset from Compute
     ///

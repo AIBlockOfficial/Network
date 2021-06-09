@@ -6,7 +6,7 @@ use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
     ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
-    UserRequest, UtxoFetchType, UtxoSet,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -2941,7 +2941,7 @@ async fn user_trigger_update_wallet_from_utxo_set(
     address_list: UtxoFetchType,
 ) {
     let u = network.user(user).unwrap().lock().await;
-    let request = UserRequest::UpdateWalletFromUtxoSet { address_list };
+    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     u.api_inputs()
         .1
         .inject_next_event(u.address(), request)

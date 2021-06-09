@@ -1,7 +1,7 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::{StoredSerializingBlock, UserRequest, UtxoFetchType};
+use crate::interfaces::{StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::utils::DeserializedBlockchainItem;
 use crate::wallet::{EncapsulationData, WalletDb};
@@ -222,7 +222,7 @@ pub async fn post_make_payment(
         .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
 
     let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::SendPaymentAddress { address, amount },
+        Ok(()) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
         Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
     };
 
@@ -237,7 +237,7 @@ pub async fn post_make_payment(
 ///Post make a new payment from the connected wallet using an ip address
 pub async fn post_make_ip_payment(
     db: WalletDb,
-    mut peer: Node,
+    peer: Node,
     encapsulated_data: EncapsulatedData,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     trace!("in the payment");
@@ -263,19 +263,23 @@ pub async fn post_make_ip_payment(
     } = serde_json::from_slice(&deciphered_message)
         .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
 
-    let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::SendAddressRequest { amount },
-        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
-    };
-
-    let peer_socket: SocketAddr = address
+    let payment_peer: SocketAddr = address
         .parse::<SocketAddr>()
         .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
 
-    if let Err(e1) = peer.connect_and_send(peer_socket, request).await {
-        error!("route:make_payment error: {:?}", e1);
+    let request = match db.test_passphrase(passphrase).await {
+        Ok(()) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
+            payment_peer,
+            amount,
+        }),
+        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+    };
+
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:make_payment error: {:?}", e);
         return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
     }
+
     Ok(warp::reply::json(&"Payment processing".to_owned()))
 }
 
@@ -284,9 +288,9 @@ pub async fn post_update_running_total(
     peer: Node,
     addresses: PublicKeyAddresses,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let request = UserRequest::UpdateWalletFromUtxoSet {
+    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
         address_list: UtxoFetchType::AnyOf(addresses.address_list),
-    };
+    });
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:update_running_total error: {:?}", e);
