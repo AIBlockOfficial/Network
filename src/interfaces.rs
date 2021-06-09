@@ -499,12 +499,26 @@ pub enum UserApiRequest {
 /// Encapsulates user requests
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserRequest {
+    /// Process an API internal request
     UserApi(UserApiRequest),
-    SendUtxoSet { utxo_set: Vec<u8> },
-    SendAddressRequest,
-    SendPaymentAddress { address: String },
+
+    /// Initiate donations request
+    SendDonationRequest,
+    /// Request payemt address with optional proof of work
+    SendAddressRequest { rnum: Option<Vec<u8>> },
+    /// Provide payment address with optional proof of work
+    SendPaymentAddress {
+        address: String,
+        pow: Option<ProofOfWork>,
+    },
+    /// Complete payment
     SendPaymentTransaction { transaction: Transaction },
+
+    /// Process received utxo set
+    SendUtxoSet { utxo_set: Vec<u8> },
+    /// Process received block being mined
     BlockMining { block: Block },
+    /// Process closing event
     Closing,
 }
 
@@ -517,29 +531,15 @@ impl fmt::Debug for UserRequest {
             UserApi(UpdateWalletFromUtxoSet { .. }) => write!(f, "UpdateWalletFromUtxoSet"),
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
-            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
+
+            SendDonationRequest { .. } => write!(f, "SendDonationRequest"),
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
+
+            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),
             Closing => write!(f, "Closing"),
         }
     }
-}
-
-pub trait UseInterface {
-    /// Receives a request for a new payment address to be produced
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Peer who made the request
-    /// * `amount`  - The amount the payment will be
-    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response;
-
-    /// Receive the requested UTXO set/subset from Compute
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response;
 }

@@ -2905,7 +2905,7 @@ async fn user_send_address_request(
 ) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_address_request(user_node_addr, amount)
+    u.send_address_request(user_node_addr, amount, None)
         .await
         .unwrap();
 }

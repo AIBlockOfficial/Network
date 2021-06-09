@@ -55,7 +55,7 @@ async fn main() {
     if let Some(amount_to_send) = amount_to_send {
         println!("Connect to user address: {:?}", peer_user_node.address);
         node.connect_to(peer_user_node.address).await.unwrap();
-        node.send_address_request(peer_user_node.address, amount_to_send)
+        node.send_address_request(peer_user_node.address, amount_to_send, None)
             .await
             .unwrap();
     }

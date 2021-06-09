@@ -11,9 +11,9 @@ use crate::interfaces::{
 };
 use crate::raft::RaftCommit;
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, get_partition_entry_key,
-    serialize_hashblock_for_pow, validate_pow_block, validate_pow_for_address, LocalEvent,
-    LocalEventChannel, LocalEventSender, ResponseResult,
+    concat_merkle_coinbase, format_parition_pow_address, generate_pow_random_num,
+    get_partition_entry_key, serialize_hashblock_for_pow, validate_pow_block,
+    validate_pow_for_address, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -26,7 +26,6 @@ use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 
 use crate::tracked_utxo::TrackedUtxoSet;
-use rand::{self, Rng};
 use serde::Serialize;
 use sodiumoxide::crypto::secretbox::Key;
 use std::collections::{BTreeMap, BTreeSet};
@@ -180,7 +179,7 @@ impl ComputeNode {
             local_events: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
-            current_random_num: Self::generate_random_num(),
+            current_random_num: generate_pow_random_num(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -375,12 +374,6 @@ impl ComputeNode {
         block_tx: BTreeMap<String, Transaction>,
     ) {
         self.node_raft.set_committed_mining_block(block, block_tx)
-    }
-
-    /// Generates a garbage random num for use in network testing
-    fn generate_random_num() -> Vec<u8> {
-        let mut rng = rand::thread_rng();
-        (0..10).map(|_| rng.gen_range(1, 200)).collect()
     }
 
     /// Gets a decremented socket address of peer for storage
@@ -1077,7 +1070,7 @@ impl ComputeNode {
 
     /// Reset the mining block processing to allow a new block.
     fn reset_mining_block_process(&mut self) {
-        self.current_random_num = Self::generate_random_num();
+        self.current_random_num = generate_pow_random_num();
         self.partition_list = Default::default();
         self.partition_key = None;
         self.current_mined_block = None;

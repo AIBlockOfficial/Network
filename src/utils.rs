@@ -17,6 +17,7 @@ use naom::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
     construct_tx_hash, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
+use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use sodiumoxide::crypto::sign;
@@ -391,6 +392,48 @@ pub async fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> Stri
     } else {
         "".to_string()
     }
+}
+
+/// Generates a random sequence of values for a nonce
+pub fn generate_pow_nonce() -> Vec<u8> {
+    generate_random_num(16)
+}
+
+/// Generates a random num for use for proof of work
+pub fn generate_pow_random_num() -> Vec<u8> {
+    generate_random_num(10)
+}
+
+/// Generates a garbage random num for use in network testing
+pub fn generate_random_num(len: usize) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| rng.gen_range(1, 200)).collect()
+}
+
+/// Generates a ProofOfWork for a given address
+///
+/// ### Arguments
+///
+/// * `peer`      - Peer to send PoW to
+/// * `address`   - Given address to generate the ProofOfWork
+/// * `rand_num`  - A random number used to generate the ProofOfWork in an Option<Vec<u8>>
+pub fn generate_pow_for_address(
+    peer: SocketAddr,
+    address: String,
+    rand_num: Option<Vec<u8>>,
+) -> task::JoinHandle<(ProofOfWork, SocketAddr)> {
+    task::spawn_blocking(move || {
+        let mut pow = ProofOfWork {
+            address,
+            nonce: generate_pow_nonce(),
+        };
+
+        while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
+            pow.nonce = generate_pow_nonce();
+        }
+
+        (pow, peer)
+    })
 }
 
 /// Validate Proof of Work an address with a random number

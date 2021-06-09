@@ -7,8 +7,8 @@ use crate::interfaces::{
     StorageRequest,
 };
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, get_paiments_for_wallet,
-    get_partition_entry_key, validate_pow_block, validate_pow_for_address,
+    self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
+    get_paiments_for_wallet, get_partition_entry_key, validate_pow_block,
     DeserializedBlockchainItem, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
     RunningTaskOrResult,
 };
@@ -20,7 +20,6 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
-use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
 use std::{
@@ -816,9 +815,9 @@ impl MinerNode {
     fn generate_pow_for_block(mut info: BlockPoWInfo) -> task::JoinHandle<BlockPoWInfo> {
         task::spawn_blocking(move || {
             // Mine Block with mining transaction
-            info.nonce = Self::generate_nonce();
+            info.nonce = generate_pow_nonce();
             while !validate_pow_block(&info.unicorn, &info.hash_to_mine, &info.nonce) {
-                info.nonce = Self::generate_nonce();
+                info.nonce = generate_pow_nonce();
             }
 
             info
@@ -834,38 +833,12 @@ impl MinerNode {
     pub async fn start_generate_partition_pow(&mut self, peer: SocketAddr, rand_num: Vec<u8>) {
         let address_proof = format_parition_pow_address(self.address());
 
-        self.mining_partition_task = RunningTaskOrResult::Running(Self::generate_pow_for_address(
+        self.mining_partition_task = RunningTaskOrResult::Running(utils::generate_pow_for_address(
             peer,
             address_proof,
             Some(rand_num.clone()),
         ));
         self.rand_num = rand_num;
-    }
-
-    /// Generates a ProofOfWork for a given address
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`      - Peer to send PoW to
-    /// * `address`   - Given address to generate the ProofOfWork
-    /// * `rand_num`  - A random number used to generate the ProofOfWork in an Option<Vec<u8>>
-    fn generate_pow_for_address(
-        peer: SocketAddr,
-        address: String,
-        rand_num: Option<Vec<u8>>,
-    ) -> task::JoinHandle<(ProofOfWork, SocketAddr)> {
-        task::spawn_blocking(move || {
-            let mut pow = ProofOfWork {
-                address,
-                nonce: Self::generate_nonce(),
-            };
-
-            while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
-                pow.nonce = Self::generate_nonce();
-            }
-
-            (pow, peer)
-        })
     }
 
     /// Generate a valid PoW and return the hashed value
@@ -879,7 +852,7 @@ impl MinerNode {
         peer: SocketAddr,
         address: String,
     ) -> Result<Vec<u8>> {
-        let (pow, _) = Self::generate_pow_for_address(peer, address, None).await?;
+        let (pow, _) = utils::generate_pow_for_address(peer, address, None).await?;
 
         self.last_pow = Some(pow.clone());
         let mut pow_body = pow.address.as_bytes().to_vec();
@@ -891,12 +864,6 @@ impl MinerNode {
     /// Returns the last PoW.
     pub fn last_pow(&self) -> &Option<ProofOfWork> {
         &self.last_pow
-    }
-
-    /// Generates a random sequence of values for a nonce
-    fn generate_nonce() -> Vec<u8> {
-        let mut rng = rand::thread_rng();
-        (0..16).map(|_| rng.gen_range(0, 200)).collect()
     }
 
     // Get the wallet db
@@ -979,12 +946,6 @@ async fn store_last_coinbase(
         wallet_db.delete_db_value(LAST_COINBASE_KEY).await;
     }
     coinbase
-}
-
-///Generates a random number to pick random transations
-fn generate_random_num(upper_limit: usize) -> usize {
-    let mut rng = rand::thread_rng();
-    rng.gen_range(0, upper_limit)
 }
 
 /// Log the received blockchain item

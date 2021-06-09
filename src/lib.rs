@@ -36,7 +36,7 @@ mod wallet;
 pub use api::routes;
 pub use compute::ComputeNode;
 pub use constants::SANC_LIST_PROD;
-pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface, UseInterface};
+pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface};
 pub use miner::MinerNode;
 pub use storage::StorageNode;
 pub use transaction_gen::TransactionGen;
