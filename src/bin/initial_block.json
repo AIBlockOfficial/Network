@@ -76,7 +76,8 @@
         ]
     ],
     "user_test_auto_gen_setup": {
-        "user_initial_transactions": [
+        "user_initial_transactions": [],
+        "_user_initial_transactions": [
             [
                 {
                     "out_point": "0-000000",

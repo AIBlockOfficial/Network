@@ -283,6 +283,27 @@ pub async fn post_make_ip_payment(
     Ok(warp::reply::json(&"Payment processing".to_owned()))
 }
 
+///Post make a donation request from the user node at specified ip address
+pub async fn post_request_donation(
+    peer: Node,
+    address: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    trace!("in request donation");
+
+    let paying_peer: SocketAddr = address
+        .parse::<SocketAddr>()
+        .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
+
+    let request = UserRequest::UserApi(UserApiRequest::RequestDonation { paying_peer });
+
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:equest_donation error: {:?}", e);
+        return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+    }
+
+    Ok(warp::reply::json(&"Donnation processing".to_owned()))
+}
+
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,

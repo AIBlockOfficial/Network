@@ -1352,10 +1352,6 @@ async fn receive_payment_tx_user() {
 
     node_connect_to(&mut network, "user1", "user2").await;
 
-    // Ignore donations:
-    user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
-    user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
-
     // Process requested transactions:
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
@@ -1366,6 +1362,10 @@ async fn receive_payment_tx_user() {
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
     compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
+
+    // Ignore donations:
+    user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
+    user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
 
     let after = node_all_get_wallet_info(&mut network, user_nodes).await;
 

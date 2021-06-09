@@ -486,6 +486,9 @@ pub enum UserApiRequest {
         // TODO: Might need to change this request to a generic type for multiple use cases
         address_list: UtxoFetchType,
     },
+    RequestDonation {
+        paying_peer: SocketAddr,
+    },
     MakeIpPayment {
         payment_peer: SocketAddr,
         amount: TokenAmount,
@@ -524,6 +527,7 @@ impl fmt::Debug for UserRequest {
 
         match *self {
             UserApi(UpdateWalletFromUtxoSet { .. }) => write!(f, "UpdateWalletFromUtxoSet"),
+            UserApi(RequestDonation { .. }) => write!(f, "RequestDonation"),
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
 

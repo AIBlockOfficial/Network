@@ -16,9 +16,9 @@ use naom::primitives::{block::Block, transaction::Transaction};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use warp::http::{HeaderMap, HeaderValue};
+use warp::http::{HeaderMap, HeaderValue, StatusCode};
 
 const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
     "4348536e3d5a13e347262b5023963edf",
@@ -216,52 +216,86 @@ async fn test_get_latest_block() {
 /// Test POST make ip payment with correct address
 #[tokio::test(basic_scheduler)]
 async fn test_post_make_ip_payment() {
-    let self_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12360);
-    let peer_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12361);
+    //
+    // Arrange
+    //
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let self_socket = self_node.address();
 
-    let amount: u64 = 25;
-    let address = String::from("127.0.0.1:12361");
-    let amount = TokenAmount(amount);
-    let passphrase = String::from("");
     let encapdata = EncapsulatedPayment {
-        address,
-        amount,
-        passphrase,
+        address: "127.0.0.1:12345".to_owned(),
+        amount: TokenAmount(25),
+        passphrase: String::new(),
+    };
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(encapdata.passphrase.clone());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+    let encaped_message = {
+        let keys = create_encapsulation_data(&db).await;
+        let message = serde_json::to_vec(&encapdata).unwrap();
+        let ciphered_message = sealedbox::seal(&message, &keys.public_key);
+        EncapsulatedData { ciphered_message }
     };
 
-    let self_node = Node::new(self_socket, 20, NodeType::User).await.unwrap();
-    let _peer_node = Node::new(peer_socket, 20, NodeType::User).await.unwrap();
-
-    let passphrase: Option<String> = Some(String::from(""));
-    let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
-    let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
-
-    let EncapsulationData {
-        public_key,
-        secret_key,
-    } = create_encapsulation_data(&db).await;
-
-    let _unsused_secret_key_to_avoid_warning = secret_key;
-    let message: Vec<u8> = serde_json::to_vec(&encapdata).unwrap();
-    let ciphered_message = sealedbox::seal(&message, &public_key);
-    let encaped_message = EncapsulatedData { ciphered_message };
-    let filter = routes::make_ip_payment(db, self_node);
-
-    let res = warp::test::request()
+    let request = warp::test::request()
         .method("POST")
         .path("/make_ip_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .json(&encaped_message)
-        .reply(&filter)
-        .await;
+        .json(&encaped_message);
 
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
+    //
+    // Act
+    //
+    let filter = routes::make_ip_payment(db, self_node);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Payment processing\"");
+}
+
+/// Test POST make ip payment with correct address
+#[tokio::test(basic_scheduler)]
+async fn test_post_request_donation() {
+    //
+    // Arange
+    //
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let self_socket = self_node.address();
+
+    let address = "127.0.0.1:12345".to_owned();
+    let paying_peer = address.parse::<SocketAddr>().unwrap();
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/request_donation")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&address);
+
+    //
+    // Act
+    //
+    let filter = routes::request_donation(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "\"Donnation processing\"");
+
+    // Frame expected
+    let expected_frame = api_request_as_frame(UserApiRequest::RequestDonation { paying_peer });
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
 }
 
 /// Test POST import key-pairs
@@ -303,40 +337,54 @@ async fn test_import_keypairs_success() {
 /// Test POST update running total successful
 #[tokio::test(basic_scheduler)]
 async fn test_update_running_total() {
-    let self_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12370);
-    let mut self_node = Node::new(self_socket, 20, NodeType::User).await.unwrap();
+    //
+    // Arrange
+    //
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+
     let addresses = PublicKeyAddresses {
         address_list: vec![COMMON_ADDR_STORE.0.to_string()],
     };
+    let address_list = UtxoFetchType::AnyOf(addresses.address_list.clone());
 
-    let filter = routes::update_running_total(self_node.clone());
-
-    let res = warp::test::request()
+    let request = warp::test::request()
         .method("POST")
         .path("/update_running_total")
         .header("Content-Type", "application/json")
-        .json(&addresses)
-        .reply(&filter)
-        .await;
+        .json(&addresses);
 
+    //
+    // Act
+    //
+    let filter = routes::update_running_total(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
     // Assert
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Running total updated\"");
 
-    let expected_frame = {
-        let address_list = UtxoFetchType::AnyOf(addresses.address_list);
-        let sent_request =
-            UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
-        Some(serialize(&sent_request).unwrap())
-    };
-
-    let actual_frame = self_node
-        .next_event()
-        .await
-        .map(|Event::NewFrame { peer: _, frame }| frame.to_vec());
-
+    let expected_frame =
+        api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
+    let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
+}
+
+fn success_json() -> (StatusCode, HeaderMap) {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    (StatusCode::from_u16(200).unwrap(), headers)
+}
+
+fn api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
+    let sent_request = UserRequest::UserApi(request);
+    Some(serialize(&sent_request).unwrap())
+}
+
+async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
+    let evt = node.next_event().await;
+    evt.map(|Event::NewFrame { peer: _, frame }| frame.to_vec())
 }

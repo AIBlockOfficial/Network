@@ -220,6 +220,32 @@ pub fn make_ip_payment(
         .with(cors)
 }
 
+// POST request donation payment
+pub fn request_donation(
+    peer: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "User-Agent",
+            "Sec-Fetch-Mode",
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("request_donation")
+        .and(warp::post())
+        .and(with_node_component(peer))
+        .and(warp::body::json())
+        .and_then(handlers::post_request_donation)
+        .with(cors)
+}
+
 // POST update running total
 pub fn update_running_total(
     peer: Node,

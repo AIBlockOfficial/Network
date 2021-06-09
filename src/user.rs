@@ -244,6 +244,14 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Donation Requested",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Payment transaction received",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "New address ready to be sent",
             }) => {
                 debug!("Sending new payment address");
@@ -445,6 +453,7 @@ impl UserNode {
             UpdateWalletFromUtxoSet { address_list } => {
                 self.request_utxo_set_for_wallet_update(address_list).await
             }
+            RequestDonation { paying_peer } => self.request_donation_from_peer(paying_peer).await,
             MakeIpPayment {
                 payment_peer,
                 amount,
@@ -555,7 +564,27 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `address_list` - Address list of UTXO set/subset to retrieve
+    /// * `payment_peer` - Peer to send request to
+    pub async fn request_donation_from_peer(
+        &mut self,
+        payment_peer: SocketAddr,
+    ) -> Option<Response> {
+        self.connect_to(payment_peer).await.ok()?;
+        self.send_donation_address_to_peer(payment_peer)
+            .await
+            .ok()?;
+        Some(Response {
+            success: true,
+            reason: "Donation Requested",
+        })
+    }
+
+    /// Request a UTXO set/subset from Compute for updating the running total
+    ///
+    /// ### Arguments
+    ///
+    /// * `payment_peer` - Peer to send request to
+    /// * `amount`       - Amount to pay
     pub async fn request_payment_address_for_peer(
         &mut self,
         payment_peer: SocketAddr,

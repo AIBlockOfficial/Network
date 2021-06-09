@@ -96,6 +96,7 @@ async fn main() {
                 routes::wallet_info(db.clone())
                     .or(routes::make_payment(db.clone(), node.clone()))
                     .or(routes::make_ip_payment(db.clone(), node.clone()))
+                    .or(routes::request_donation(node.clone()))
                     .or(routes::wallet_keypairs(db.clone()))
                     .or(routes::import_keypairs(db.clone()))
                     .or(routes::update_running_total(node.clone()))
@@ -215,7 +216,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
 
     if let Some(api_port) = matches.value_of("api_port") {
-        settings.set("api_port", api_port).unwrap();
+        settings.set("user_api_port", api_port).unwrap();
     }
 
     if let Some(index) = matches.value_of("compute_index") {
