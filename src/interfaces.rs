@@ -502,15 +502,10 @@ pub enum UserRequest {
     /// Process an API internal request
     UserApi(UserApiRequest),
 
-    /// Initiate donations request
-    SendDonationRequest,
     /// Request payemt address with optional proof of work
-    SendAddressRequest { rnum: Option<Vec<u8>> },
+    SendAddressRequest,
     /// Provide payment address with optional proof of work
-    SendPaymentAddress {
-        address: String,
-        pow: Option<ProofOfWork>,
-    },
+    SendPaymentAddress { address: String },
     /// Complete payment
     SendPaymentTransaction { transaction: Transaction },
 
@@ -532,7 +527,6 @@ impl fmt::Debug for UserRequest {
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
 
-            SendDonationRequest { .. } => write!(f, "SendDonationRequest"),
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
