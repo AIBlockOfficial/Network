@@ -90,6 +90,12 @@ pub struct PendingPayment {
     amount: TokenAmount,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoDonate {
+    Disabled,
+    Enabled(TokenAmount),
+}
+
 /// An instance of a UserNode
 #[derive(Debug)]
 pub struct UserNode {
@@ -103,7 +109,7 @@ pub struct UserNode {
     last_block_notified: Block,
     test_auto_gen_tx: Option<AutoGenTx>,
     received_utxo_set: Option<UtxoSet>,
-    pending_payments: BTreeMap<SocketAddr, PendingPayment>,
+    pending_payments: (BTreeMap<SocketAddr, PendingPayment>, AutoDonate),
 }
 
 impl UserNode {
@@ -135,6 +141,11 @@ impl UserNode {
         .with_seed(config.user_node_idx, &config.user_wallet_seeds)
         .await;
 
+        let pending_payments = match config.user_auto_donate {
+            0 => (Default::default(), AutoDonate::Disabled),
+            amount => (Default::default(), AutoDonate::Enabled(TokenAmount(amount))),
+        };
+
         let test_auto_gen_tx =
             make_transaction_gen(config.user_test_auto_gen_setup, config.user_node_idx);
 
@@ -149,7 +160,7 @@ impl UserNode {
             last_block_notified: Default::default(),
             test_auto_gen_tx,
             received_utxo_set: None,
-            pending_payments: Default::default(),
+            pending_payments,
         })
     }
 
@@ -246,6 +257,10 @@ impl UserNode {
                     .await
                     .unwrap();
             }
+            Ok(Response {
+                success: false,
+                reason: "Ignore unexpected transaction",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Block mining notified",
@@ -596,9 +611,18 @@ impl UserNode {
         peer: SocketAddr,
         address: String,
     ) -> Option<Response> {
-        let amount = match self.pending_payments.remove(&peer) {
-            Some(PendingPayment { amount }) => amount,
-            _ => return None,
+        let amount = match (
+            self.pending_payments.0.remove(&peer),
+            self.pending_payments.1,
+        ) {
+            (Some(PendingPayment { amount }), _) => amount,
+            (_, AutoDonate::Enabled(amount)) => amount,
+            _ => {
+                return Some(Response {
+                    success: false,
+                    reason: "Ignore unexpected transaction",
+                })
+            }
         };
 
         Some(
@@ -678,6 +702,7 @@ impl UserNode {
         debug!("Sending request for payment address to peer: {:?}", peer);
 
         self.pending_payments
+            .0
             .insert(peer, PendingPayment { amount });
 
         self.node
@@ -702,10 +727,6 @@ impl UserNode {
     }
 
     /// Sends a payment address from a request
-    ///
-    /// ### Arguments
-    ///
-    /// ///* `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
         let peer = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
@@ -715,6 +736,16 @@ impl UserNode {
             .send(peer, UserRequest::SendPaymentAddress { address })
             .await?;
         Ok(())
+    }
+
+    /// Sends a donation payment address
+    ///
+    /// ### Arguments
+    ///
+    ///* `peer`    - Peer to send the address to
+    pub async fn send_donation_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
+        self.trading_peer = Some(peer);
+        self.send_address_to_trading_peer().await
     }
 
     /// Received a mined block notification: allow to update pending transactions
