@@ -96,6 +96,7 @@ async fn main() {
                 routes::wallet_info(db.clone())
                     .or(routes::make_payment(db.clone(), node.clone()))
                     .or(routes::make_ip_payment(db.clone(), node.clone()))
+                    .or(routes::request_donation(node.clone()))
                     .or(routes::wallet_keypairs(db.clone()))
                     .or(routes::import_keypairs(db.clone()))
                     .or(routes::update_running_total(node.clone()))
@@ -149,6 +150,12 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("auto_donate")
+                .long("auto_donate")
+                .help("The amount of tokens to send any requester")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
@@ -189,6 +196,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_setup_tx_max_count", 0).unwrap();
+    settings.set_default("user_auto_donate", 0).unwrap();
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
@@ -208,7 +216,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
 
     if let Some(api_port) = matches.value_of("api_port") {
-        settings.set("api_port", api_port).unwrap();
+        settings.set("user_api_port", api_port).unwrap();
     }
 
     if let Some(index) = matches.value_of("compute_index") {
@@ -221,6 +229,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     if let Some(index) = matches.value_of("passphrase") {
         settings.set("passphrase", index).unwrap();
+    }
+
+    if let Some(api_port) = matches.value_of("auto_donate") {
+        settings.set("user_auto_donate", api_port).unwrap();
     }
 
     settings

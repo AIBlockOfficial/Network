@@ -6,7 +6,7 @@ use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
     ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
-    UserRequest, UtxoFetchType, UtxoSet,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -1352,10 +1352,68 @@ async fn receive_payment_tx_user() {
 
     node_connect_to(&mut network, "user1", "user2").await;
 
+    // Process requested transactions:
     user_send_address_request(&mut network, "user1", "user2", amount).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
 
     user_send_address_to_trading_peer(&mut network, "user2").await;
+    user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
+
+    user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
+    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    user_handle_event(&mut network, "user2", "Payment transaction received").await;
+
+    // Ignore donations:
+    user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
+    user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
+
+    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        before
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(11), TokenAmount(0)]
+    );
+    assert_eq!(
+        after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
+        vec![TokenAmount(6), TokenAmount(5)]
+    );
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn receive_testnet_donation_payment_tx_user() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config(10405);
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
+    network_config.user_auto_donate = 5;
+    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
+    let mut network = Network::create_from_config(&network_config).await;
+    let user_nodes = &network_config.nodes[&NodeType::User];
+
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act/Assert
+    //
+    let before = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    node_connect_to(&mut network, "user1", "user2").await;
+
+    user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
@@ -2836,6 +2894,11 @@ async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) 
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
 }
 
+async fn user_handle_error(network: &mut Network, user: &str, reason_val: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    user_handle_event_for_node(&mut u, false, reason_val, &mut test_timeout()).await;
+}
+
 async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     u: &mut UserNode,
     success_val: bool,
@@ -2910,6 +2973,14 @@ async fn user_send_address_request(
         .unwrap();
 }
 
+async fn user_send_donation_address_to_peer(network: &mut Network, from_user: &str, to_user: &str) {
+    let user_node_addr = network.get_address(to_user).await.unwrap();
+    let mut u = network.user(from_user).unwrap().lock().await;
+    u.send_donation_address_to_peer(user_node_addr)
+        .await
+        .unwrap();
+}
+
 async fn user_send_address_to_trading_peer(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     u.send_address_to_trading_peer().await.unwrap();
@@ -2941,7 +3012,7 @@ async fn user_trigger_update_wallet_from_utxo_set(
     address_list: UtxoFetchType,
 ) {
     let u = network.user(user).unwrap().lock().await;
-    let request = UserRequest::UpdateWalletFromUtxoSet { address_list };
+    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     u.api_inputs()
         .1
         .inject_next_event(u.address(), request)
@@ -3379,6 +3450,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         compute_to_miner_mapping: Default::default(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
+        user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
     }
 }

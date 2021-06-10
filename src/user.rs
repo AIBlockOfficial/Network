@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, NodeType, Response, UseInterface, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, NodeType, Response, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
@@ -84,6 +84,18 @@ pub struct AutoGenTx {
     tx_max_count: usize,
 }
 
+/// info for a pending paiment
+#[derive(Debug)]
+pub struct PendingPayment {
+    amount: TokenAmount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoDonate {
+    Disabled,
+    Enabled(TokenAmount),
+}
+
 /// An instance of a UserNode
 #[derive(Debug)]
 pub struct UserNode {
@@ -92,11 +104,12 @@ pub struct UserNode {
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
     api_addr: SocketAddr,
-    trading_peer: Option<(SocketAddr, TokenAmount)>,
-    next_payment: Option<(SocketAddr, Transaction)>,
+    trading_peer: Option<SocketAddr>,
+    next_payment: Option<(Option<SocketAddr>, Transaction)>,
     last_block_notified: Block,
     test_auto_gen_tx: Option<AutoGenTx>,
     received_utxo_set: Option<UtxoSet>,
+    pending_payments: (BTreeMap<SocketAddr, PendingPayment>, AutoDonate),
 }
 
 impl UserNode {
@@ -128,6 +141,11 @@ impl UserNode {
         .with_seed(config.user_node_idx, &config.user_wallet_seeds)
         .await;
 
+        let pending_payments = match config.user_auto_donate {
+            0 => (Default::default(), AutoDonate::Disabled),
+            amount => (Default::default(), AutoDonate::Enabled(TokenAmount(amount))),
+        };
+
         let test_auto_gen_tx =
             make_transaction_gen(config.user_test_auto_gen_setup, config.user_node_idx);
 
@@ -142,6 +160,7 @@ impl UserNode {
             last_block_notified: Default::default(),
             test_auto_gen_tx,
             received_utxo_set: None,
+            pending_payments,
         })
     }
 
@@ -225,6 +244,14 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Donation Requested",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Payment transaction received",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "New address ready to be sent",
             }) => {
                 debug!("Sending new payment address");
@@ -238,6 +265,10 @@ impl UserNode {
                     .await
                     .unwrap();
             }
+            Ok(Response {
+                success: false,
+                reason: "Ignore unexpected transaction",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Block mining notified",
@@ -374,33 +405,65 @@ impl UserNode {
         Ok(response)
     }
 
-    /// Handles a compute request.
+    /// Handles a request.
     ///
     /// ### Arguments
     ///
-    /// * `peer` - SocketAddress holding the address of the peer sending the request.
-    /// * `req` - UserRequest object containing the compute request.
+    /// * `peer` - Peer sending the request.
+    /// * `req`  - Request to execute
     async fn handle_request(&mut self, peer: SocketAddr, req: UserRequest) -> Option<Response> {
         use UserRequest::*;
         trace!("handle_request: {:?}", req);
 
         match req {
-            UpdateWalletFromUtxoSet { address_list } => {
-                self.request_utxo_set_for_wallet_update(peer, address_list)
-                    .await
-            }
+            UserApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
-            SendAddressRequest { amount } => {
-                Some(self.receive_payment_address_request(peer, amount))
-            }
+            SendAddressRequest => Some(self.receive_payment_address_request(peer)),
             SendPaymentTransaction { transaction } => {
                 Some(self.receive_payment_transaction(transaction).await)
             }
-            SendPaymentAddress { address, amount } => {
-                Some(self.make_payment_transactions(peer, address, amount).await)
+            SendPaymentAddress { address } => {
+                self.process_pending_payment_transactions(peer, address)
+                    .await
             }
             BlockMining { block } => Some(self.notified_block_mining(peer, block)),
             Closing => self.receive_closing(peer),
+        }
+    }
+
+    /// Handles an API internal request.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer sending the request.
+    /// * `req`  - Request to execute
+    async fn handle_api_request(
+        &mut self,
+        peer: SocketAddr,
+        req: UserApiRequest,
+    ) -> Option<Response> {
+        use UserApiRequest::*;
+
+        if peer != self.address() {
+            // Do not process if not internal request
+            return None;
+        }
+
+        match req {
+            UpdateWalletFromUtxoSet { address_list } => {
+                self.request_utxo_set_for_wallet_update(address_list).await
+            }
+            RequestDonation { paying_peer } => self.request_donation_from_peer(paying_peer).await,
+            MakeIpPayment {
+                payment_peer,
+                amount,
+            } => {
+                self.request_payment_address_for_peer(payment_peer, amount)
+                    .await
+            }
+            MakePayment { address, amount } => {
+                Some(self.make_payment_transactions(None, address, amount).await)
+            }
         }
     }
 
@@ -451,7 +514,7 @@ impl UserNode {
             .await?;
 
         self.store_payment_transaction(tx.clone()).await;
-        if peer != self.address() {
+        if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
 
@@ -488,16 +551,49 @@ impl UserNode {
     /// * `address_list` - Address list of UTXO set/subset to retrieve
     pub async fn request_utxo_set_for_wallet_update(
         &mut self,
-        peer: SocketAddr,
         address_list: UtxoFetchType,
     ) -> Option<Response> {
-        if peer != self.address() {
-            return None;
-        }
         self.send_request_utxo_set(address_list).await.ok()?;
         Some(Response {
             success: true,
             reason: "Request UTXO set",
+        })
+    }
+
+    /// Request a UTXO set/subset from Compute for updating the running total
+    ///
+    /// ### Arguments
+    ///
+    /// * `payment_peer` - Peer to send request to
+    pub async fn request_donation_from_peer(
+        &mut self,
+        payment_peer: SocketAddr,
+    ) -> Option<Response> {
+        self.connect_to(payment_peer).await.ok()?;
+        self.send_donation_address_to_peer(payment_peer)
+            .await
+            .ok()?;
+        Some(Response {
+            success: true,
+            reason: "Donation Requested",
+        })
+    }
+
+    /// Request a UTXO set/subset from Compute for updating the running total
+    ///
+    /// ### Arguments
+    ///
+    /// * `payment_peer` - Peer to send request to
+    /// * `amount`       - Amount to pay
+    pub async fn request_payment_address_for_peer(
+        &mut self,
+        payment_peer: SocketAddr,
+        amount: TokenAmount,
+    ) -> Option<Response> {
+        self.send_address_request(payment_peer, amount).await.ok()?;
+        Some(Response {
+            success: true,
+            reason: "Request Payment Address",
         })
     }
 
@@ -533,17 +629,47 @@ impl UserNode {
         debug!("store_payment_transactions: {:?}", our_payments);
     }
 
-    /// Creates a new payment transaction and assigns it as an internal attribute
-    /// Update wallet removing used transactions/addresses, adding return address
+    /// Process pending paiment transaction with received address
     ///
     /// ### Arguments
     ///
-    /// * `peer` -  SocketAdress of the peer recieving the payment.
+    /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    /// * `amount` - TokenAmount object of the price/amount payed
-    pub async fn make_payment_transactions(
+    pub async fn process_pending_payment_transactions(
         &mut self,
         peer: SocketAddr,
+        address: String,
+    ) -> Option<Response> {
+        let amount = match (
+            self.pending_payments.0.remove(&peer),
+            self.pending_payments.1,
+        ) {
+            (Some(PendingPayment { amount }), _) => amount,
+            (_, AutoDonate::Enabled(amount)) => amount,
+            _ => {
+                return Some(Response {
+                    success: false,
+                    reason: "Ignore unexpected transaction",
+                })
+            }
+        };
+
+        Some(
+            self.make_payment_transactions(Some(peer), address, amount)
+                .await,
+        )
+    }
+
+    /// Process specified paiment, updating wallet and next_payment
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Peer recieving the payment.
+    /// * `address` - Address to assign the payment transaction to
+    /// * `amount`  - Price/amount payed
+    pub async fn make_payment_transactions(
+        &mut self,
+        peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
     ) -> Response {
@@ -574,7 +700,7 @@ impl UserNode {
     ///
     /// ### Arguments
     ///
-    /// * `peer`        - socket address of the peer to send the transaction to
+    /// * `peer`        - Peer to send the transaction to
     /// * `transaction` - The transaction to be sent
     pub async fn send_payment_to_receiver(
         &mut self,
@@ -604,8 +730,12 @@ impl UserNode {
         let _peer_span = info_span!("sending payment address request");
         debug!("Sending request for payment address to peer: {:?}", peer);
 
+        self.pending_payments
+            .0
+            .insert(peer, PendingPayment { amount });
+
         self.node
-            .send(peer, UserRequest::SendAddressRequest { amount })
+            .send(peer, UserRequest::SendAddressRequest)
             .await?;
 
         Ok(())
@@ -626,19 +756,25 @@ impl UserNode {
     }
 
     /// Sends a payment address from a request
-    ///
-    /// ### Arguments
-    ///
-    /// ///* `peer`    - Socket address of peer to send the address to
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
-        let (peer, amount) = self.trading_peer.take().unwrap();
+        let peer = self.trading_peer.take().unwrap();
         let (address, _) = self.wallet_db.generate_payment_address().await;
         debug!("Address to send: {:?}", address);
 
         self.node
-            .send(peer, UserRequest::SendPaymentAddress { address, amount })
+            .send(peer, UserRequest::SendPaymentAddress { address })
             .await?;
         Ok(())
+    }
+
+    /// Sends a donation payment address
+    ///
+    /// ### Arguments
+    ///
+    ///* `peer`    - Peer to send the address to
+    pub async fn send_donation_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
+        self.trading_peer = Some(peer);
+        self.send_address_to_trading_peer().await
     }
 
     /// Received a mined block notification: allow to update pending transactions
@@ -739,9 +875,12 @@ impl UserNode {
     pub fn get_last_block_notified(&self) -> &Block {
         &self.last_block_notified
     }
-}
 
-impl UseInterface for UserNode {
+    /// Receive the requested UTXO set/subset from Compute
+    ///
+    /// ### Arguments
+    ///
+    /// * `utxo_set` - The requested UTXO set
     fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response {
         self.received_utxo_set = deserialize(&utxo_set).ok();
         Response {
@@ -750,12 +889,14 @@ impl UseInterface for UserNode {
         }
     }
 
-    fn receive_payment_address_request(
-        &mut self,
-        peer: SocketAddr,
-        amount: TokenAmount,
-    ) -> Response {
-        self.trading_peer = Some((peer, amount));
+    /// Receives a request for a new payment address to be produced
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Peer who made the request
+    /// * `amount`  - Amount the payment will be
+    fn receive_payment_address_request(&mut self, peer: SocketAddr) -> Response {
+        self.trading_peer = Some(peer);
 
         Response {
             success: true,

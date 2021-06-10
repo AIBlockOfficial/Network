@@ -479,65 +479,65 @@ pub trait ComputeInterface {
 
 ///============ USER NODE ============///
 
-/// Encapsulates user requests
+/// Encapsulates user requests injected by API
 #[derive(Deserialize, Serialize, Clone)]
-pub enum UserRequest {
+pub enum UserApiRequest {
     UpdateWalletFromUtxoSet {
         // TODO: Might need to change this request to a generic type for multiple use cases
         address_list: UtxoFetchType,
     },
-    SendUtxoSet {
-        utxo_set: Vec<u8>,
+    RequestDonation {
+        paying_peer: SocketAddr,
     },
-    SendAddressRequest {
+    MakeIpPayment {
+        payment_peer: SocketAddr,
         amount: TokenAmount,
     },
-    SendPaymentAddress {
+    MakePayment {
         address: String,
         amount: TokenAmount,
     },
-    SendPaymentTransaction {
-        transaction: Transaction,
-    },
-    BlockMining {
-        block: Block,
-    },
+}
+
+/// Encapsulates user requests
+#[derive(Deserialize, Serialize, Clone)]
+pub enum UserRequest {
+    /// Process an API internal request
+    UserApi(UserApiRequest),
+
+    /// Request payemt address with optional proof of work
+    SendAddressRequest,
+    /// Provide payment address with optional proof of work
+    SendPaymentAddress { address: String },
+    /// Complete payment
+    SendPaymentTransaction { transaction: Transaction },
+
+    /// Process received utxo set
+    SendUtxoSet { utxo_set: Vec<u8> },
+    /// Process received block being mined
+    BlockMining { block: Block },
+    /// Process closing event
     Closing,
 }
 
 impl fmt::Debug for UserRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use UserApiRequest::*;
         use UserRequest::*;
 
         match *self {
-            UpdateWalletFromUtxoSet { .. } => write!(f, "RequestUtxoSet"),
-            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
+            UserApi(UpdateWalletFromUtxoSet { .. }) => write!(f, "UpdateWalletFromUtxoSet"),
+            UserApi(RequestDonation { .. }) => write!(f, "RequestDonation"),
+            UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
+            UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
+
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
+
+            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),
             Closing => write!(f, "Closing"),
         }
     }
-}
-
-pub trait UseInterface {
-    /// Receives a request for a new payment address to be produced
-    ///
-    /// ### Arguments
-    ///
-    /// * `peer`    - Peer who made the request
-    /// * `amount`  - The amount the payment will be
-    fn receive_payment_address_request(
-        &mut self,
-        peer: SocketAddr,
-        amount: TokenAmount,
-    ) -> Response;
-
-    /// Receive the requested UTXO set/subset from Compute
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response;
 }

@@ -147,6 +147,9 @@ pub struct UserNodeConfig {
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
+    /// Will donate amount to all unkown incomming payment request.
+    /// Only enable in test net for the distribution users.
+    pub user_auto_donate: u64,
     /// Configuration options for auto generating transactions for test
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }

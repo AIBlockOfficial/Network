@@ -76,6 +76,7 @@ pub struct NetworkConfig {
     pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
     pub test_duration_divider: usize,
     pub passphrase: Option<String>,
+    pub user_auto_donate: u64,
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
@@ -1056,6 +1057,7 @@ async fn init_user(
         user_api_port: 3000,
         user_wallet_seeds: config.user_wallet_seeds.clone(),
         passphrase: config.passphrase.clone(),
+        user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
     };
 

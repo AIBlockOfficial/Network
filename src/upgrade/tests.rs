@@ -591,6 +591,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         compute_to_miner_mapping: Default::default(),
         test_duration_divider: 1,
         passphrase: Some(WALLET_PASSWORD.to_owned()),
+        user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
     }
     .with_groups(1, 1)
