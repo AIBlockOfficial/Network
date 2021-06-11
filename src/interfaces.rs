@@ -117,6 +117,7 @@ pub enum NodeType {
     Storage,
     Compute,
     User,
+    PreLaunch,
 }
 
 /// Mined block or transaction as stored in DB.

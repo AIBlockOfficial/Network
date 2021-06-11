@@ -16,8 +16,8 @@ pub enum CommsError {
     PeerInvalidState,
     /// This peer is already connected.
     PeerDuplicate,
-    /// This peer is for a different version.
-    PeerVersionMismatch,
+    /// This peer is not compatible.
+    PeerIncompatible,
     /// Serialization-related error.
     Serialization(bincode::Error),
     /// MPSC channel error.
@@ -33,7 +33,7 @@ impl fmt::Display for CommsError {
             CommsError::PeerNotFound => write!(f, "Peer not found"),
             CommsError::PeerDuplicate => write!(f, "Peer has invalid state"),
             CommsError::PeerInvalidState => write!(f, "Duplicate peer"),
-            CommsError::PeerVersionMismatch => write!(f, "Peer version mismatch"),
+            CommsError::PeerIncompatible => write!(f, "Peer incompatible"),
             CommsError::Serialization(err) => write!(f, "Serialization error: {}", err),
             CommsError::ChannelSendError(err) => write!(f, "MPSC channel send error: {}", err),
         }
@@ -49,7 +49,7 @@ impl Error for CommsError {
             CommsError::PeerNotFound => None,
             CommsError::PeerInvalidState => None,
             CommsError::PeerDuplicate => None,
-            CommsError::PeerVersionMismatch => None,
+            CommsError::PeerIncompatible => None,
             CommsError::Serialization(err) => Some(err),
             CommsError::ChannelSendError(err) => Some(err),
         }

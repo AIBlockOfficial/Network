@@ -246,6 +246,11 @@ impl Node {
         .await?)
     }
 
+    fn is_compatible(&self, node_type: NodeType, network_version: u32) -> bool {
+        self.network_version == network_version
+            && (self.node_type == NodeType::PreLaunch) == (node_type == NodeType::PreLaunch)
+    }
+
     pub fn set_connect_to_handshake_contacts(&mut self, value: bool) {
         self.connect_to_handshake_contacts = value;
     }
@@ -780,8 +785,8 @@ impl Node {
         network_version: u32,
         peer_type: NodeType,
     ) -> Result<()> {
-        if network_version != self.network_version {
-            return Err(CommsError::PeerVersionMismatch);
+        if !self.is_compatible(peer_type, network_version) {
+            return Err(CommsError::PeerIncompatible);
         }
 
         let mut all_peers = self.peers.write().await;
@@ -819,8 +824,8 @@ impl Node {
         peer_type: NodeType,
         contacts: Vec<SocketAddr>,
     ) -> Result<()> {
-        if network_version != self.network_version {
-            return Err(CommsError::PeerVersionMismatch);
+        if !self.is_compatible(peer_type, network_version) {
+            return Err(CommsError::PeerIncompatible);
         }
 
         let mut all_peers = self.peers.write().await;
