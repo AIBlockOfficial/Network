@@ -2,7 +2,7 @@ use crate::api::handlers::{Addresses, EncapsulatedData, EncapsulatedPayment, Pub
 use crate::api::routes;
 use crate::comms_handler::{Event, Node};
 use crate::configurations::DbMode;
-use crate::constants::BLOCK_PREPEND;
+use crate::constants::{BLOCK_PREPEND, DATA_ENCAPSULATION_KEY, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
     BlockchainItemMeta, NodeType, StoredSerializingBlock, UserApiRequest, UserRequest,
@@ -10,9 +10,12 @@ use crate::interfaces::{
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::wallet::{EncapsulationData, WalletDb};
-use bincode::serialize;
+use bincode::{deserialize, serialize};
+use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
+use naom::primitives::transaction::OutPoint;
 use naom::primitives::{block::Block, transaction::Transaction};
+use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
@@ -33,6 +36,8 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
         83, 10, 240, 193, 201, 45, 5, 205, 34, 188, 174, 229, 96,
     ],
 );
+
+/*------- UTILS--------*/
 
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
@@ -92,7 +97,191 @@ async fn create_encapsulation_data(wallet_db: &WalletDb) -> EncapsulationData {
     let _ = wallet_db.generate_encapsulation_data().await;
     wallet_db.get_encapsulation_data().await.unwrap()
 }
-/*------- TESTS --------*/
+
+fn success_json() -> (StatusCode, HeaderMap) {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    (StatusCode::from_u16(200).unwrap(), headers)
+}
+
+fn api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
+    let sent_request = UserRequest::UserApi(request);
+    Some(serialize(&sent_request).unwrap())
+}
+
+async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
+    let evt = node.next_event().await;
+    evt.map(|Event::NewFrame { peer: _, frame }| frame.to_vec())
+}
+
+/*------- GET TESTS--------*/
+
+/// Test GET latest block info
+#[tokio::test(basic_scheduler)]
+async fn test_get_latest_block() {
+    let db = get_db_with_block();
+    let filter = routes::latest_block(db);
+
+    let res = warp::test::request()
+        .method("GET")
+        .path("/latest_block")
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+}
+
+/// Test GET wallet keypairs
+#[tokio::test(basic_scheduler)]
+async fn test_get_wallet_keypairs() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::new());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let (address, keys) = (
+        COMMON_ADDR_STORE.0.to_string(),
+        COMMON_ADDR_STORE.1.to_vec(),
+    );
+
+    db.save_encrypted_address_to_wallet(address.clone(), keys.clone())
+        .await
+        .unwrap();
+
+    let request = warp::test::request().method("GET").path("/wallet_keypairs");
+
+    //
+    // Act
+    //
+    let filter = routes::wallet_keypairs(db);
+    let res = request.reply(&filter).await;
+    let expected_addresses = serde_json::to_string(&json!({
+        "addresses":{
+            address: keys
+        }
+    }))
+    .unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_addresses.as_bytes());
+}
+
+/// Test GET wallet info
+#[tokio::test(basic_scheduler)]
+async fn test_get_wallet_info() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::new());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let mut fund_store = db.get_fund_store();
+    fund_store.store_tx(OutPoint::new("000000".to_string(), 0), TokenAmount(11));
+    db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
+        .await;
+
+    let request = warp::test::request().method("GET").path("/wallet_info");
+
+    //
+    // Act
+    //
+    let filter = routes::wallet_info(db);
+    let res = request.reply(&filter).await;
+    let expected_running_total = serde_json::to_string(&json!({
+        "running_total":fund_store.running_total().0 as f64 / D_DISPLAY_PLACES
+    }))
+    .unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_running_total.as_bytes());
+}
+
+/// Test GET encapsulation data
+#[tokio::test(basic_scheduler)]
+async fn test_get_encapsulation_data() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::new());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let request = warp::test::request()
+        .method("GET")
+        .path("/wallet_encapsulation_data");
+
+    //
+    // Act
+    //
+    let filter = routes::wallet_encapsulation_data(db.clone());
+    let res = request.reply(&filter).await;
+    let expected_data = db.get_db_value(DATA_ENCAPSULATION_KEY).await.unwrap();
+    let generated_encapsulation_data: EncapsulationData = deserialize(&expected_data).unwrap();
+    let expected_encapsulation_data =
+        serde_json::to_string(&json!({ "public_key": generated_encapsulation_data.public_key }))
+            .unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_encapsulation_data.as_bytes());
+}
+
+/// Test GET new payment address
+#[tokio::test(basic_scheduler)]
+async fn test_get_payment_address() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::new());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let request = warp::test::request()
+        .method("GET")
+        .path("/new_payment_address");
+
+    //
+    // Act
+    //
+    let filter = routes::payment_address(db.clone());
+    let res = request.reply(&filter).await;
+    let store_address = db.get_known_addresses().pop().unwrap();
+    let expected_store_address = serde_json::to_string(&json!(store_address)).unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_store_address.as_bytes());
+}
+
+/*------- POST TESTS--------*/
 
 /// Test POST for get blockchain block by key
 #[tokio::test(basic_scheduler)]
@@ -192,25 +381,59 @@ async fn test_post_block_info_by_nums() {
     assert_eq!(res.body(), "[[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
 }
 
-/// Test GET latest block info
+/// Test POST make payment
 #[tokio::test(basic_scheduler)]
-async fn test_get_latest_block() {
-    let db = get_db_with_block();
-    let filter = routes::latest_block(db);
+async fn test_post_make_payment() {
+    //
+    // Arrange
+    //
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let self_socket = self_node.address();
 
-    let res = warp::test::request()
-        .method("GET")
-        .path("/latest_block")
-        .reply(&filter)
-        .await;
+    let encapsulated_data = EncapsulatedPayment {
+        address: COMMON_ADDR_STORE.0.to_string(),
+        amount: TokenAmount(25),
+        passphrase: String::new(),
+    };
 
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(encapsulated_data.passphrase.clone());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
 
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
+    let encapsulated_message = {
+        let keys = create_encapsulation_data(&db).await;
+        let message = serde_json::to_vec(&encapsulated_data).unwrap();
+        let ciphered_message = sealedbox::seal(&message, &keys.public_key);
+        EncapsulatedData { ciphered_message }
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/make_payment")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&encapsulated_message);
+
+    //
+    // Act
+    //
+    let filter = routes::make_payment(db, self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "\"Payment processing\"");
+
+    // Frame expected
+    let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
+    let expected_frame = api_request_as_frame(UserApiRequest::MakePayment { address, amount });
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
 }
 
 /// Test POST make ip payment with correct address
@@ -220,22 +443,24 @@ async fn test_post_make_ip_payment() {
     // Arrange
     //
     let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
     let self_socket = self_node.address();
 
-    let encapdata = EncapsulatedPayment {
+    let encapsulated_data = EncapsulatedPayment {
         address: "127.0.0.1:12345".to_owned(),
         amount: TokenAmount(25),
         passphrase: String::new(),
     };
+
     let db = {
         let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(encapdata.passphrase.clone());
+        let passphrase = Some(encapsulated_data.passphrase.clone());
         WalletDb::new(DbMode::InMemory, simple_db, passphrase)
     };
-    let encaped_message = {
+
+    let encapsulated_message = {
         let keys = create_encapsulation_data(&db).await;
-        let message = serde_json::to_vec(&encapdata).unwrap();
+        let message = serde_json::to_vec(&encapsulated_data).unwrap();
         let ciphered_message = sealedbox::seal(&message, &keys.public_key);
         EncapsulatedData { ciphered_message }
     };
@@ -245,12 +470,12 @@ async fn test_post_make_ip_payment() {
         .path("/make_ip_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .json(&encaped_message);
+        .json(&encapsulated_message);
 
     //
     // Act
     //
-    let filter = routes::make_ip_payment(db, self_node);
+    let filter = routes::make_ip_payment(db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -258,6 +483,18 @@ async fn test_post_make_ip_payment() {
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Payment processing\"");
+
+    // Frame expected
+    let (payment_peer, amount) = (
+        encapsulated_data.address.parse::<SocketAddr>().unwrap(),
+        encapsulated_data.amount,
+    );
+    let expected_frame = api_request_as_frame(UserApiRequest::MakeIpPayment {
+        payment_peer,
+        amount,
+    });
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
 }
 
 /// Test POST make ip payment with correct address
@@ -300,7 +537,7 @@ async fn test_post_request_donation() {
 
 /// Test POST import key-pairs
 #[tokio::test(basic_scheduler)]
-async fn test_import_keypairs_success() {
+async fn test_post_import_keypairs_success() {
     let passphrase: Option<String> = Some(String::from(""));
     let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
     let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
@@ -329,14 +566,13 @@ async fn test_import_keypairs_success() {
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     assert_eq!(wallet_addresses_before, Vec::<String>::new());
     assert_eq!(wallet_addresses_after, vec![COMMON_ADDR_STORE.0]);
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Key/s saved successfully\"");
 }
 
 /// Test POST update running total successful
 #[tokio::test(basic_scheduler)]
-async fn test_update_running_total() {
+async fn test_post_update_running_total() {
     //
     // Arrange
     //
@@ -366,25 +602,9 @@ async fn test_update_running_total() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Running total updated\"");
 
+    // Expected Frame
     let expected_frame =
         api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
-}
-
-fn success_json() -> (StatusCode, HeaderMap) {
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-
-    (StatusCode::from_u16(200).unwrap(), headers)
-}
-
-fn api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
-    let sent_request = UserRequest::UserApi(request);
-    Some(serialize(&sent_request).unwrap())
-}
-
-async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
-    let evt = node.next_event().await;
-    evt.map(|Event::NewFrame { peer: _, frame }| frame.to_vec())
 }
