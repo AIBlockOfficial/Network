@@ -509,6 +509,12 @@ impl ComputeRaft {
         &self.consensused.tx_pool
     }
 
+    /// The current tx_druid_pool that will be used to generate next block
+    /// Returns a Vec<BTreeMap> reference which contains a String and a Transaction.
+    pub fn get_committed_tx_druid_pool(&self) -> &Vec<BTreeMap<String, Transaction>> {
+        &self.consensused.tx_druid_pool
+    }
+
     /// Gets the current number of tokens in circulation
     pub fn get_current_circulation(&self) -> &TokenAmount {
         &self.consensused.current_circulation

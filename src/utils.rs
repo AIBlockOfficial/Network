@@ -586,6 +586,12 @@ pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
     &""
 }
 
+/// Generate a half_druid value
+pub fn generate_half_druid() -> String {
+    let (pk, _) = sign::gen_keypair();
+    construct_address(&pk)
+}
+
 /// Generate utxo_set transactions from seed info
 ///
 /// ### Arguments

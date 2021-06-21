@@ -2,20 +2,26 @@ use crate::comms_handler::{CommsError, Event, Node};
 use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, NodeType, Response, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
-    get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult,
+    generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use crate::wallet::WalletDb;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
+use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
-use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
+use naom::utils::transaction_utils::{
+    construct_payment_tx_ins, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_hash,
+};
+use sha3::{Digest, Sha3_256};
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
@@ -110,6 +116,9 @@ pub struct UserNode {
     test_auto_gen_tx: Option<AutoGenTx>,
     received_utxo_set: Option<UtxoSet>,
     pending_payments: (BTreeMap<SocketAddr, PendingPayment>, AutoDonate),
+    next_rb_payment_response: Option<(SocketAddr, Option<RbPaymentResponseData>)>,
+    next_rb_payment_data: Option<RbPaymentData>,
+    next_rb_payment: Option<(Option<SocketAddr>, Transaction)>,
 }
 
 impl UserNode {
@@ -161,6 +170,9 @@ impl UserNode {
             test_auto_gen_tx,
             received_utxo_set: None,
             pending_payments,
+            next_rb_payment_response: None,
+            next_rb_payment_data: None,
+            next_rb_payment: None,
         })
     }
 
@@ -250,6 +262,22 @@ impl UserNode {
                 success: true,
                 reason: "Payment transaction received",
             }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Received receipt-based payment request",
+            }) => {
+                self.send_rb_payment_response().await.unwrap();
+                self.send_next_rb_transaction_to_destinations(self.compute_address())
+                    .await
+                    .unwrap();
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received receipt-based payment response",
+            }) => self
+                .send_next_rb_transaction_to_destinations(self.compute_address())
+                .await
+                .unwrap(),
             Ok(Response {
                 success: true,
                 reason: "New address ready to be sent",
@@ -426,6 +454,18 @@ impl UserNode {
                 self.process_pending_payment_transactions(peer, address)
                     .await
             }
+            SendRbPaymentRequest {
+                rb_payment_request_data,
+            } => Some(
+                self.receive_rb_payment_request(peer, rb_payment_request_data)
+                    .await,
+            ),
+            SendRbPaymentResponse {
+                rb_payment_response,
+            } => Some(
+                self.receive_rb_payment_response(peer, rb_payment_response)
+                    .await,
+            ),
             BlockMining { block } => Some(self.notified_block_mining(peer, block)),
             Closing => self.receive_closing(peer),
         }
@@ -516,6 +556,36 @@ impl UserNode {
         self.store_payment_transaction(tx.clone()).await;
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Sends the next internal receipt-based payment transaction to be processed by the connected Compute
+    /// node
+    ///
+    /// ### Arguments
+    ///
+    /// * `compute_peer` - Compute peer to send the payment tx to
+    pub async fn send_next_rb_transaction_to_destinations(
+        &mut self,
+        compute_peer: SocketAddr,
+    ) -> Result<()> {
+        let (peer, transaction) = self.next_rb_payment.take().unwrap();
+        self.store_payment_transaction(transaction.clone()).await;
+        let _peer_span =
+            info_span!("sending receipt-based transaction to compute node for processing");
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendRbTransaction {
+                    transaction: transaction.clone(),
+                },
+            )
+            .await?;
+
+        if let Some(peer) = peer {
+            self.send_payment_to_receiver(peer, transaction).await?;
         }
 
         Ok(())
@@ -901,6 +971,207 @@ impl UserNode {
         Response {
             success: true,
             reason: "New address ready to be sent",
+        }
+    }
+
+    /// Sends a request for a new receipt-based payment
+    ///
+    /// ### Nomenclature
+    ///
+    /// The sender(Alice) and receiver(Bob) context stays consistent for
+    /// `send_rb_payment_request`, `receive_rb_payment_request`,
+    /// `send_rb_payment_response`, and `receive_rb_payment_response`
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`            - Peer who made the request
+    /// * `send_asset`       - The asset to be sent
+    pub async fn send_rb_payment_request(
+        &mut self,
+        peer: SocketAddr,
+        sender_asset: Asset,
+    ) -> Result<()> {
+        let (sender_address, _) = self.wallet_db.generate_payment_address().await;
+        let sender_half_druid = generate_half_druid();
+        let amount = sender_asset.token_amount();
+
+        let (tx_cons, total_amount, tx_used) =
+            self.wallet_db.fetch_inputs_for_payment(amount).await;
+
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, tx_used)
+            .await;
+
+        let sender_from_addr = hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
+
+        let rb_payment_request_data = RbPaymentRequestData {
+            sender_address,
+            sender_half_druid: sender_half_druid.clone(),
+            sender_from_addr,
+            sender_asset: sender_asset.clone(),
+        };
+
+        let rb_payment_data = RbPaymentData {
+            sender_asset,
+            sender_half_druid,
+            tx_ins,
+            total_amount,
+        };
+
+        self.next_rb_payment_data = Some(rb_payment_data);
+
+        self.node
+            .send(
+                peer,
+                UserRequest::SendRbPaymentRequest {
+                    rb_payment_request_data,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends a response to a new receipt-based payment request
+    pub async fn send_rb_payment_response(&mut self) -> Result<()> {
+        let (peer, rb_payment_response) = self.next_rb_payment_response.take().unwrap();
+        self.node
+            .send(
+                peer,
+                UserRequest::SendRbPaymentResponse {
+                    rb_payment_response,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Receives a request for a new receipt-based payment
+    /// ### Nomenclature
+    ///
+    /// The sender(Alice) and receiver(Bob) context stays consistent for
+    /// `send_rb_payment_request`, `receive_rb_payment_request`,
+    /// `send_rb_payment_response`, and `receive_rb_payment_response`
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`                         - Peer who made the request
+    /// * `rb_payment_request_data`      - Receipt-based payment request data struct
+    async fn receive_rb_payment_request(
+        &mut self,
+        peer: SocketAddr,
+        rb_payment_request_data: RbPaymentRequestData,
+    ) -> Response {
+        //TODO: Decide if the send/receive assets are acceptable
+        let RbPaymentRequestData {
+            sender_address,
+            sender_half_druid,
+            sender_from_addr,
+            sender_asset,
+        } = rb_payment_request_data;
+
+        let receiver_half_druid = generate_half_druid();
+        let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
+        let druid = sender_half_druid + &receiver_half_druid.clone();
+        //TODO: Sensible receipt asset creation and construction of Vec<TxIn>
+        let tx_ins = construct_payment_tx_ins(vec![]);
+        let receiver_from_addr =
+            hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
+
+        // DruidExpectation for sender(Alice)
+        let sender_druid_expectation = DruidExpectation {
+            from: receiver_from_addr,
+            to: sender_address.clone(),
+            asset: Asset::Receipt(1),
+        };
+
+        // DruidExpectation for receiver(Bob)
+        let receiver_druid_expectation = DruidExpectation {
+            from: sender_from_addr,
+            to: receiver_address.clone(),
+            asset: sender_asset,
+        };
+
+        let rb_receive_tx = construct_rb_receive_payment_tx(
+            tx_ins,
+            sender_address,
+            0,
+            druid,
+            vec![receiver_druid_expectation],
+        );
+
+        let rb_payment_response = Some(RbPaymentResponseData {
+            receiver_address,
+            receiver_half_druid,
+            sender_druid_expectation,
+        });
+
+        self.next_rb_payment = Some((Some(peer), rb_receive_tx));
+        self.next_rb_payment_response = Some((peer, rb_payment_response));
+
+        Response {
+            success: true,
+            reason: "Received receipt-based payment request",
+        }
+    }
+
+    /// Receive a response for a new receipt-based payment
+    ///
+    /// ### Nomenclature
+    ///
+    /// The sender(Alice) and receiver(Bob) context stays consistent for
+    /// `send_rb_payment_request`, `receive_rb_payment_request`,
+    /// `send_rb_payment_response`, and `receive_rb_payment_response`
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`                    - Peer who sent the response
+    /// * `rb_payment_response`     - (receiver address, half druid value, hash value of Vec<TxIn>)
+    async fn receive_rb_payment_response(
+        &mut self,
+        peer: SocketAddr,
+        rb_payment_response: Option<RbPaymentResponseData>,
+    ) -> Response {
+        let rb_payment_data = self.next_rb_payment_data.take().unwrap();
+        //TODO: Handle `None` value upon receipt-based payment rejection
+        if let Some(rb_payment_response) = rb_payment_response {
+            let RbPaymentData {
+                sender_asset,
+                sender_half_druid,
+                tx_ins,
+                total_amount,
+            } = rb_payment_data;
+
+            let RbPaymentResponseData {
+                receiver_address,
+                receiver_half_druid,
+                sender_druid_expectation,
+            } = rb_payment_response;
+
+            let druid = sender_half_druid + &receiver_half_druid;
+            let amount = sender_asset.token_amount();
+
+            let mut rb_send_tx = construct_rb_payments_send_tx(
+                tx_ins,
+                receiver_address.clone(),
+                amount,
+                0,
+                druid,
+                vec![sender_druid_expectation],
+            );
+
+            if total_amount > amount {
+                let excess = total_amount - amount;
+                let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+                rb_send_tx
+                    .outputs
+                    .push(TxOut::new_amount(excess_address, excess));
+            }
+            self.next_rb_payment = Some((Some(peer), rb_send_tx.clone()));
+        }
+        Response {
+            success: true,
+            reason: "Received receipt-based payment response",
         }
     }
 }
