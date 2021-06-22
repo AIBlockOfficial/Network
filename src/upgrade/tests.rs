@@ -281,20 +281,20 @@ async fn open_upgrade_started_compute_common(
 async fn upgrade_restart_network_real_db() {
     let config = real_db(complete_network_config(20200));
     remove_all_node_dbs(&config);
-    upgrade_restart_network_common(config, cfg_upgrade(), Default::default()).await;
+    upgrade_restart_network_common(config, cfg_upgrade(), Default::default(), false).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_restart_network_in_memory() {
     let config = complete_network_config(20210);
-    upgrade_restart_network_common(config, cfg_upgrade(), Default::default()).await;
+    upgrade_restart_network_common(config, cfg_upgrade(), Default::default(), false).await;
 }
 
 #[tokio::test(basic_scheduler)]
 async fn upgrade_restart_network_compute_no_block_in_memory() {
     let config = complete_network_config(20215);
     let upgrade_cfg = cfg_upgrade_no_block();
-    upgrade_restart_network_common(config, upgrade_cfg, Default::default()).await;
+    upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -306,7 +306,7 @@ async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
     let config = complete_network_config(20220).with_groups(raft_len, raft_len);
     let mut upgrade_cfg = cfg_upgrade_no_block();
     upgrade_cfg.raft_len = raft_len;
-    upgrade_restart_network_common(config, upgrade_cfg, Default::default()).await;
+    upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
 }
 
 #[tokio::test(basic_scheduler)]
@@ -321,6 +321,8 @@ async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory(
     let params_filters = vec![
         ("storage1".to_owned(), filter),
         ("storage2".to_owned(), filter),
+        ("compute1".to_owned(), filter),
+        ("compute2".to_owned(), filter),
     ]
     .into_iter()
     .collect();
@@ -328,13 +330,38 @@ async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory(
     let config = complete_network_config(20230).with_groups(raft_len, raft_len - 1);
     let mut upgrade_cfg = cfg_upgrade_no_block();
     upgrade_cfg.raft_len = raft_len;
-    upgrade_restart_network_common(config, upgrade_cfg, params_filters).await;
+    upgrade_restart_network_common(config, upgrade_cfg, params_filters, false).await;
+}
+
+#[tokio::test(basic_scheduler)]
+async fn upgrade_restart_network_compute_no_block_raft_3_pre_launch_only_in_memory() {
+    // Pull raft database during pre-launch, and pull main db
+    let raft_len = 3;
+    let filter = ExtraNodeParamsFilter {
+        db: false,
+        raft_db: false,
+        wallet_db: false,
+    };
+    let params_filters = vec![
+        ("storage2".to_owned(), filter),
+        ("storage3".to_owned(), filter),
+        ("compute2".to_owned(), filter),
+        ("compute3".to_owned(), filter),
+    ]
+    .into_iter()
+    .collect();
+
+    let config = complete_network_config(20240).with_groups(raft_len, raft_len - 1);
+    let mut upgrade_cfg = cfg_upgrade_no_block();
+    upgrade_cfg.raft_len = raft_len;
+    upgrade_restart_network_common(config, upgrade_cfg, params_filters, true).await;
 }
 
 async fn upgrade_restart_network_common(
     mut config: NetworkConfig,
     upgrade_cfg: UpgradeCfg,
     params_filters: ExtraNodeParamsFilterMap,
+    pre_launch: bool,
 ) {
     test_step_start();
 
@@ -346,6 +373,7 @@ async fn upgrade_restart_network_common(
     let compute_nodes = &config.nodes[&NodeType::Compute];
     let storage_nodes = &config.nodes[&NodeType::Storage];
     let miner_nodes = &config.nodes[&NodeType::Miner];
+    let raft_nodes: Vec<String> = compute_nodes.iter().chain(storage_nodes).cloned().collect();
     let extra_blocks = 2usize;
     let expected_block_num = LAST_BLOCK_STORED_NUM + extra_blocks as u64;
 
@@ -361,6 +389,15 @@ async fn upgrade_restart_network_common(
     //
     // Act
     //
+    if pre_launch {
+        network.pre_launch_nodes_named(&raft_nodes).await;
+        let handles = network
+            .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+            .await;
+        node_join_all_checked(handles, &"").await.unwrap();
+        network.close_loops_and_drop_named(&raft_nodes).await;
+    }
+
     network.re_spawn_dead_nodes().await;
     for node_name in compute_nodes {
         node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;

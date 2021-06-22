@@ -15,7 +15,7 @@ pub type InMemoryDb = Vec<BTreeMap<Vec<u8>, Vec<u8>>>;
 pub type Result<T> = std::result::Result<T, SimpleDbError>;
 
 /// Description for a database
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SimpleDbSpec {
     pub db_path: &'static str,
     pub suffix: &'static str,
@@ -248,6 +248,23 @@ impl SimpleDb {
         Ok(())
     }
 
+    /// Write batch imported items to database, if error nothing added.
+    ///
+    /// ### Arguments
+    ///
+    /// * `items` - items to add
+    pub fn import_items<'a>(
+        &mut self,
+        items: impl Iterator<Item = (&'a str, &'a [u8], &'a [u8])>,
+    ) -> Result<()> {
+        let mut writter = self.batch_writer();
+        for (cf, key, value) in items {
+            writter.put_cf_checked(cf, key, value)?;
+        }
+        let writter = writter.done();
+        self.write(writter)
+    }
+
     /// Add entry to database
     ///
     /// ### Arguments
@@ -419,16 +436,37 @@ impl SimpleDbWriteBatch<'_> {
     /// * `key` - reference to the value in database to when the entry is added
     /// * `value` - value to be added to the db
     pub fn put_cf<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, cf: &'static str, key: K, value: V) {
+        self.put_cf_checked(cf, key, value).unwrap();
+    }
+
+    /// Add entry to database on write
+    ///
+    /// ### Arguments
+    ///
+    /// * `cf`  - The column family to use: may not be found not inserting the value
+    /// * `key` - reference to the value in database to when the entry is added
+    /// * `value` - value to be added to the db
+    fn put_cf_checked<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+        &mut self,
+        cf: &str,
+        key: K,
+        value: V,
+    ) -> Result<()> {
         match self {
             Self::File { write, db } => {
-                let cf = db.cf_handle(cf).unwrap();
+                let cf = db
+                    .cf_handle(cf)
+                    .ok_or_else(|| SimpleDbError("Missing column".to_owned()))?;
                 write.put_cf(cf, key, value);
             }
             Self::InMemory { write, columns } => {
-                let cf = columns.get(cf).unwrap();
+                let cf = columns
+                    .get(cf)
+                    .ok_or_else(|| SimpleDbError("Missing column".to_owned()))?;
                 write.push((*cf, key.as_ref().to_vec(), Some(value.as_ref().to_vec())));
             }
         }
+        Ok(())
     }
 
     /// Remove entry from database on write

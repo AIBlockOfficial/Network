@@ -1957,13 +1957,101 @@ async fn catchup_fetch_blockchain_item_raft() {
 }
 
 #[tokio::test(basic_scheduler)]
+async fn relaunch_with_new_raft_nodes() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let extra_params = {
+        let mut network_config = complete_network_config_with_n_compute_raft(11430, 1);
+        network_config.nodes.insert(NodeType::User, vec![]);
+        let mut network = Network::create_from_config(&network_config).await;
+
+        // Create intiial snapshoot in compute and storage
+        create_first_block_act(&mut network).await;
+        proof_of_work_act(&mut network, Cfg::All, CfgNum::All).await;
+        send_block_to_storage_act(&mut network, CfgNum::All).await;
+        network.close_raft_loops_and_drop().await
+    };
+
+    let mut network_config = complete_network_config_with_n_compute_raft(11430, 3);
+    network_config.compute_seed_utxo = Default::default();
+    network_config.nodes.insert(NodeType::User, vec![]);
+
+    let mut network = Network::create_stopped_from_config(&network_config);
+    network.set_all_extra_params(extra_params);
+    network.upgrade_closed_nodes().await;
+
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let storage_nodes = &network_config.nodes[&NodeType::Storage];
+    let raft_nodes: Vec<String> = compute_nodes.iter().chain(storage_nodes).cloned().collect();
+
+    let restart_raft_reasons: BTreeMap<String, Vec<String>> = {
+        let snap_applied = vec!["Snapshot applied".to_owned()];
+        let snap_applied_fetch = vec!["Snapshot applied: Fetch missing blocks".to_owned()];
+        vec![
+            ("storage1".to_owned(), snap_applied.clone()),
+            ("storage2".to_owned(), snap_applied_fetch.clone()),
+            ("storage3".to_owned(), snap_applied_fetch),
+            ("compute1".to_owned(), snap_applied.clone()),
+            ("compute2".to_owned(), snap_applied.clone()),
+            ("compute3".to_owned(), snap_applied),
+        ]
+        .into_iter()
+        .collect()
+    };
+
+    //
+    // Act
+    //
+    let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
+    let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
+
+    network.pre_launch_nodes_named(&raft_nodes).await;
+    for (pre_launch, expected_block_num) in vec![(true, 0u64), (false, 1u64)].into_iter() {
+        if !pre_launch {
+            for node_name in compute_nodes {
+                node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+            }
+        }
+
+        let handles = network
+            .spawn_main_node_loops(TIMEOUT_TEST_WAIT_DURATION)
+            .await;
+        node_join_all_checked(handles, &"").await.unwrap();
+
+        if pre_launch {
+            network.close_loops_and_drop_named(&raft_nodes).await;
+            network.re_spawn_dead_nodes().await;
+            node_all_handle_different_event(&mut network, &raft_nodes, &restart_raft_reasons).await;
+        }
+
+        actual_stored
+            .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
+        actual_compute
+            .push(compute_all_committed_current_block_num(&mut network, compute_nodes).await);
+        expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
+        expected_compute.push(node_all(compute_nodes, Some(expected_block_num)));
+    }
+
+    //
+    // Assert
+    //
+    assert_eq!(actual_stored, expected_stored);
+    assert_eq!(actual_compute, expected_compute);
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(basic_scheduler)]
 async fn request_utxo_set_raft_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11420, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11440, 1);
     network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;
@@ -2063,7 +2151,7 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11440, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11450, 1);
     network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;

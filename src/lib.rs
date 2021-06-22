@@ -15,6 +15,7 @@ mod hash_block;
 mod interfaces;
 pub mod key_creation;
 mod miner;
+mod pre_launch;
 mod raft;
 mod raft_store;
 mod raft_util;
