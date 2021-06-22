@@ -157,6 +157,8 @@ pub struct ComputeRaft {
     proposed_tx_pool_len_max: usize,
     /// Maximum transaction consensused and in flight for proposing more.
     proposed_and_consensused_tx_pool_len_max: usize,
+    /// No longer process commits after shutdown reached
+    shutdown_no_commit_process: bool,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -214,6 +216,7 @@ impl ComputeRaft {
             proposed_tx_pool_len: 0,
             proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
+            shutdown_no_commit_process: false,
         }
     }
 
@@ -588,6 +591,10 @@ impl ComputeRaft {
         debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
         self.raft_active
             .create_snapshot(snapshot_idx, consensused_ser);
+
+        if self.is_shutdown_on_commit() {
+            self.shutdown_no_commit_process = true;
+        }
     }
 
     /// Processes the very first block with utxo_set
@@ -622,6 +629,11 @@ impl ComputeRaft {
     /// Whether to shutdown when block committed
     pub fn is_shutdown_on_commit(&self) -> bool {
         self.consensused.special_handling == Some(SpecialHandling::Shutdown)
+    }
+
+    /// Whether shut down block already processed
+    pub fn is_shutdown_commit_processed(&self) -> bool {
+        self.shutdown_no_commit_process
     }
 }
 

@@ -363,6 +363,7 @@ impl StorageNode {
     ) -> Option<Result<Response>> {
         loop {
             let ready = !self.node_raft.need_initial_state();
+            let shutdown = self.node_raft.is_shutdown_commit_processed();
 
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -374,7 +375,7 @@ impl StorageNode {
                         return res;
                     }
                 }
-                Some(commit_data) = self.node_raft.next_commit() => {
+                Some(commit_data) = self.node_raft.next_commit(), if !shutdown => {
                     trace!("handle_next_event commit {:?}", commit_data);
                     if let res @ Some(_) = self.handle_committed_data(commit_data).await {
                         return res;

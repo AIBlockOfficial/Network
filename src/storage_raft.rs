@@ -101,6 +101,8 @@ pub struct StorageRaft {
     propose_block_timeout_at: ProposeBlockTimeout,
     /// Proposed items in flight.
     proposed_in_flight: RaftInFlightProposals,
+    /// No longer process commits after shutdown reached
+    shutdown_no_commit_process: bool,
 }
 
 impl fmt::Debug for StorageRaft {
@@ -143,6 +145,7 @@ impl StorageRaft {
             propose_block_timeout_duration,
             propose_block_timeout_at,
             proposed_in_flight: Default::default(),
+            shutdown_no_commit_process: false,
         }
     }
 
@@ -362,6 +365,7 @@ impl StorageRaft {
 
     /// Generate a snapshot, needs to happen at the end of the event processing.
     pub fn event_processed_generate_snapshot(&mut self, block_stored: BlockStoredInfo) {
+        let shutdown = block_stored.shutdown;
         self.consensused.last_block_stored = Some(block_stored);
 
         let consensused_ser = serialize(&self.consensused).unwrap();
@@ -370,6 +374,10 @@ impl StorageRaft {
         debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
         self.raft_active
             .create_snapshot(snapshot_idx, consensused_ser);
+
+        if shutdown {
+            self.shutdown_no_commit_process = true;
+        }
     }
 
     ///Creates and returns a complete block
@@ -395,6 +403,11 @@ impl StorageRaft {
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.consensused.get_last_block_stored()
+    }
+
+    /// Whether shut down block already processed
+    pub fn is_shutdown_commit_processed(&self) -> bool {
+        self.shutdown_no_commit_process
     }
 }
 
