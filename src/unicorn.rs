@@ -201,13 +201,10 @@ mod unicorn_tests {
         let mut uni = create_unicorn();
         let _ = uni.eval();
 
-        assert_eq!(
-            uni.verify(
-                Integer::from_str_radix(TEST_HASH, 16).unwrap(),
-                Integer::from(8)
-            ),
-            false
-        );
+        assert!(!uni.verify(
+            Integer::from_str_radix(TEST_HASH, 16).unwrap(),
+            Integer::from(8)
+        ));
     }
 
     #[test]

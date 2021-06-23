@@ -692,12 +692,10 @@ impl ComputeNode {
                     reason,
                 }))
             }
-            Some(CommittedItem::Snapshot) => {
-                return Some(Ok(Response {
-                    success: true,
-                    reason: "Snapshot applied",
-                }))
-            }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,
