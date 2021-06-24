@@ -39,6 +39,7 @@ pub use compute::ComputeNode;
 pub use constants::SANC_LIST_PROD;
 pub use interfaces::{ComputeRequest, MinerInterface, Response, StorageInterface};
 pub use miner::MinerNode;
+pub use pre_launch::PreLaunchNode;
 pub use storage::StorageNode;
 pub use transaction_gen::TransactionGen;
 pub use user::UserNode;

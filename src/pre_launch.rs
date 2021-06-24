@@ -1,5 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node};
-use crate::configurations::{DbMode, ExtraNodeParams, NodeSpec};
+use crate::configurations::{
+    DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType,
+};
 use crate::constants::PEER_LIMIT;
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{DbItem, NodeType, PreLaunchRequest, Response};
@@ -65,7 +67,7 @@ impl From<bincode::Error> for PreLaunchError {
 
 /// Configuration option for a pre-launch node
 #[derive(Debug, Clone)]
-pub struct PreLaunchNodeConfig {
+struct PreLaunchNodeConfigSelected {
     /// Index of the current node in pre_launch_nodes
     pub pre_launch_node_idx: usize,
     /// Use specific database
@@ -76,6 +78,27 @@ pub struct PreLaunchNodeConfig {
     pub db_spec: SimpleDbSpec,
     /// Raft db sepc
     pub raft_db_spec: SimpleDbSpec,
+}
+
+impl PreLaunchNodeConfigSelected {
+    fn new(config: PreLaunchNodeConfig) -> Self {
+        match config.node_type {
+            PreLaunchNodeType::Compute => Self {
+                pre_launch_node_idx: config.compute_node_idx,
+                pre_launch_db_mode: config.compute_db_mode,
+                pre_launch_nodes: config.compute_nodes,
+                db_spec: crate::compute::DB_SPEC,
+                raft_db_spec: crate::compute_raft::DB_SPEC,
+            },
+            PreLaunchNodeType::Storage => Self {
+                pre_launch_node_idx: config.storage_node_idx,
+                pre_launch_db_mode: config.storage_db_mode,
+                pre_launch_nodes: config.storage_nodes,
+                db_spec: crate::storage::DB_SPEC,
+                raft_db_spec: crate::storage_raft::DB_SPEC,
+            },
+        }
+    }
 }
 
 /// An instance of a PreLaunchNode
@@ -101,6 +124,7 @@ impl PreLaunchNode {
         config: PreLaunchNodeConfig,
         mut extra: ExtraNodeParams,
     ) -> Result<PreLaunchNode> {
+        let config = PreLaunchNodeConfigSelected::new(config);
         let addr = config
             .pre_launch_nodes
             .get(config.pre_launch_node_idx)
