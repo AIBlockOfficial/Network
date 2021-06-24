@@ -259,18 +259,18 @@ mod test {
     }
 
     #[test]
-    fn validate_startup_read_user_raft_1() {
+    fn validate_startup_upgrade_user_raft_1() {
         let args = vec![
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
-            "--processing=read",
+            "--processing=upgrade",
             "--index=1",
             "--type=user",
             "--passphrase=TestPassPhrase",
             "--compute_block=discard",
         ];
         let expected = (
-            Processing::Read,
+            Processing::Upgrade,
             vec![("user".to_owned(), DbMode::Test(1001))],
             UpgradeCfg {
                 raft_len: 1,

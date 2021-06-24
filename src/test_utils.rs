@@ -3,18 +3,17 @@
 //! correctness of the compute, miner, & storage modules.
 
 use crate::comms_handler::Node;
-use crate::compute::{self, ComputeNode};
-use crate::compute_raft;
+use crate::compute::ComputeNode;
 use crate::configurations::{
-    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, StorageNodeConfig,
-    UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec, WalletTxSpec,
+    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
+    PreLaunchNodeType, StorageNodeConfig, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
+    WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::Response;
 use crate::miner::MinerNode;
-use crate::pre_launch::{PreLaunchNode, PreLaunchNodeConfig};
-use crate::storage::{self, StorageNode};
-use crate::storage_raft;
+use crate::pre_launch::PreLaunchNode;
+use crate::storage::StorageNode;
 use crate::upgrade::{
     upgrade_same_version_compute_db, upgrade_same_version_storage_db,
     upgrade_same_version_wallet_db,
@@ -1121,26 +1120,20 @@ async fn init_pre_launch(
     extra: ExtraNodeParams,
 ) -> ArcPreLaunchNode {
     let node_info = &info.node_infos[name];
-    let (pre_launch_nodes, db_spec, raft_db_spec) = match node_info.node_type {
-        NodeType::Compute => (
-            info.compute_nodes.clone(),
-            compute::DB_SPEC,
-            compute_raft::DB_SPEC,
-        ),
-        NodeType::Storage => (
-            info.storage_nodes.clone(),
-            storage::DB_SPEC,
-            storage_raft::DB_SPEC,
-        ),
+    let node_type = match node_info.node_type {
+        NodeType::Compute => PreLaunchNodeType::Compute,
+        NodeType::Storage => PreLaunchNodeType::Storage,
         NodeType::Miner | NodeType::User => panic!("No pre launch fot this type"),
     };
 
     let config = PreLaunchNodeConfig {
-        pre_launch_node_idx: node_info.index,
-        pre_launch_db_mode: node_info.db_mode,
-        pre_launch_nodes,
-        db_spec,
-        raft_db_spec,
+        node_type,
+        compute_node_idx: node_info.index,
+        compute_db_mode: node_info.db_mode,
+        storage_node_idx: node_info.index,
+        storage_db_mode: node_info.db_mode,
+        compute_nodes: info.compute_nodes.clone(),
+        storage_nodes: info.storage_nodes.clone(),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);

@@ -154,6 +154,32 @@ pub struct UserNodeConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
 }
 
+/// Configuration option for a pre-launch node
+#[derive(Debug, Clone, Deserialize)]
+pub struct PreLaunchNodeConfig {
+    /// Type of node to launch
+    pub node_type: PreLaunchNodeType,
+    /// Index of the current node in compute_nodes
+    pub compute_node_idx: usize,
+    /// Use specific database
+    pub compute_db_mode: DbMode,
+    /// Index of the current node in compute_nodes
+    pub storage_node_idx: usize,
+    /// Use specific database
+    pub storage_db_mode: DbMode,
+    /// All compute nodes addresses
+    pub compute_nodes: Vec<NodeSpec>,
+    /// All storage nodes addresses: only use first
+    pub storage_nodes: Vec<NodeSpec>,
+}
+
+/// Type of node in pre-launch mode
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub enum PreLaunchNodeType {
+    Compute,
+    Storage,
+}
+
 /// Configuration option for setup of user node
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct UserAutoGenTxSetup {
