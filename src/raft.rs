@@ -1,5 +1,5 @@
 use crate::db_utils::SimpleDb;
-use crate::raft_store::RaftStore;
+use crate::raft_store::{self, RaftStore};
 use crate::utils::MpscTracingSender;
 use raft::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,6 +15,7 @@ pub type RaftCmdSender = mpsc::UnboundedSender<RaftCmd>;
 pub type RaftCmdReceiver = mpsc::UnboundedReceiver<RaftCmd>;
 pub type RaftMsgSender = MpscTracingSender<Message>;
 pub type RaftMsgReceiver = mpsc::Receiver<Message>;
+pub type CommittedIndex = raft_store::CommittedIndex;
 
 /// Raft Commit entry
 #[derive(Default, Clone, Debug, PartialEq, Eq)]

@@ -617,6 +617,7 @@ impl ComputeNode {
     ) -> Option<Result<Response>> {
         loop {
             let ready = !self.node_raft.need_initial_state();
+            let shutdown = self.node_raft.is_shutdown_commit_processed();
 
             // State machines are not keept between iterations or calls.
             // All selection calls (between = and =>), need to be dropable
@@ -628,7 +629,7 @@ impl ComputeNode {
                         return res;
                     }
                 }
-                Some(commit_data) = self.node_raft.next_commit() => {
+                Some(commit_data) = self.node_raft.next_commit(), if !shutdown => {
                     trace!("handle_next_event commit {:?}", commit_data);
                     if let res @ Some(_) = self.handle_committed_data(commit_data).await {
                         return res;
@@ -643,7 +644,7 @@ impl ComputeNode {
                             Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
                         };
                 }
-                _ = self.node_raft.timeout_propose_transactions(), if ready => {
+                _ = self.node_raft.timeout_propose_transactions(), if ready && !shutdown => {
                     trace!("handle_next_event timeout transactions");
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
@@ -691,12 +692,10 @@ impl ComputeNode {
                     reason,
                 }))
             }
-            Some(CommittedItem::Snapshot) => {
-                return Some(Ok(Response {
-                    success: true,
-                    reason: "Snapshot applied",
-                }))
-            }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,

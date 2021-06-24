@@ -22,6 +22,12 @@ pub struct SnapMetadata {
     pub term: u64,
 }
 
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommittedIndex {
+    pub index: u64,
+    pub term: u64,
+}
+
 pub struct RaftStore {
     /// In memory storage used during normal operation
     in_memory: MemStorage,
@@ -370,4 +376,26 @@ fn set_persistent_hardstate(presistent: &mut SimpleDb, bytes: &[u8]) -> RaftResu
         .put_cf(DB_COL_DEFAULT, HARDSTATE_KEY, bytes)
         .map_err(from_db_err)?;
     Ok(())
+}
+
+pub fn get_presistent_committed(presistent: &SimpleDb) -> RaftResult<Option<CommittedIndex>> {
+    if let Some(v) = get_persistent_hardstate(presistent)? {
+        return Ok(Some(CommittedIndex {
+            index: v.commit,
+            term: v.term,
+        }));
+    }
+
+    if let Some(v) = presistent
+        .get_cf(DB_COL_DEFAULT, SNAPSHOT_META_KEY)
+        .map_err(from_db_err)?
+    {
+        let metadata: SnapMetadata = deserialize(&v).map_err(from_ser_err)?;
+        return Ok(Some(CommittedIndex {
+            index: metadata.index,
+            term: metadata.term,
+        }));
+    }
+
+    Ok(None)
 }

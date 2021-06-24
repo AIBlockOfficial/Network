@@ -3,7 +3,8 @@
 //! correctness of the compute, miner, & storage modules.
 
 use crate::comms_handler::Node;
-use crate::compute::ComputeNode;
+use crate::compute::{self, ComputeNode};
+use crate::compute_raft;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, StorageNodeConfig,
     UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec, WalletTxSpec,
@@ -11,7 +12,9 @@ use crate::configurations::{
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::Response;
 use crate::miner::MinerNode;
-use crate::storage::StorageNode;
+use crate::pre_launch::{PreLaunchNode, PreLaunchNodeConfig};
+use crate::storage::{self, StorageNode};
+use crate::storage_raft;
 use crate::upgrade::{
     upgrade_same_version_compute_db, upgrade_same_version_storage_db,
     upgrade_same_version_wallet_db,
@@ -39,6 +42,7 @@ pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
 pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
 pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
 pub type ArcUserNode = Arc<Mutex<UserNode>>;
+pub type ArcPreLaunchNode = Arc<Mutex<PreLaunchNode>>;
 
 /// Represents a virtual configurable Zenotta network.
 pub struct Network {
@@ -141,15 +145,26 @@ impl Network {
     }
 
     /// Kill all nodes.
-    pub async fn close_raft_loops_and_drop(mut self) {
+    pub async fn close_raft_loops_and_drop(mut self) -> BTreeMap<String, ExtraNodeParams> {
         close_raft_loops(&self.arc_nodes, &mut self.raft_loop_handles).await;
         stop_listening(&self.arc_nodes).await;
         disconnect_all_nodes(&self.arc_nodes).await;
+
+        for (name, node) in &self.arc_nodes {
+            let extra = take_closed_extra_params(node).await;
+            self.extra_params.insert(name.clone(), extra);
+        }
+        self.extra_params
     }
 
     /// Add extra params to use
     pub fn add_extra_params(&mut self, name: &str, value: ExtraNodeParams) {
         self.extra_params.insert(name.to_owned(), value);
+    }
+
+    /// Set all extra params
+    pub fn set_all_extra_params(&mut self, extra_params: BTreeMap<String, ExtraNodeParams>) {
+        self.extra_params = extra_params;
     }
 
     /// Re-connect specified nodes.
@@ -163,15 +178,7 @@ impl Network {
             }
         }
         self.update_active_nodes();
-
-        // Re-establish all missing connections
-        let dead_addr: BTreeSet<_> = self
-            .dead_nodes
-            .iter()
-            .map(|n| self.instance_info.node_infos[n].node_spec.address)
-            .collect();
-        connect_all_nodes(&self.arc_nodes, &dead_addr).await;
-        self.update_active_nodes();
+        self.re_establish_all_missing_connections().await;
     }
 
     /// disconnect specified nodes.
@@ -207,18 +214,28 @@ impl Network {
         }
         self.arc_nodes.append(&mut arc_nodes.clone());
         self.update_active_nodes();
-
-        // Re-establish all missing connections
-        let dead_addr: BTreeSet<_> = self
-            .dead_nodes
-            .iter()
-            .map(|n| self.instance_info.node_infos[n].node_spec.address)
-            .collect();
-        connect_all_nodes(&self.arc_nodes, &dead_addr).await;
+        self.re_establish_all_missing_connections().await;
 
         // Spawn new nodes raft loops
         let mut raft_loop_handles = spawn_raft_loops(&arc_nodes).await;
         self.raft_loop_handles.append(&mut raft_loop_handles);
+    }
+
+    /// Re-spawn specified nodes.
+    pub async fn pre_launch_nodes_named(&mut self, names: &[String]) {
+        // Re-spawn specified nodes
+        let mut arc_nodes = BTreeMap::new();
+        for name in names {
+            let extra = self.extra_params.remove(name).unwrap_or_default();
+            let arc_node = ArcNode::PreLaunch(
+                init_pre_launch(name, &self.config, &self.instance_info, extra).await,
+            );
+            arc_nodes.insert(name.clone(), arc_node);
+            self.dead_nodes.remove(name);
+        }
+        self.arc_nodes.append(&mut arc_nodes.clone());
+        self.update_active_nodes();
+        self.re_establish_all_missing_connections().await;
     }
 
     /// Kill specified nodes.
@@ -294,6 +311,16 @@ impl Network {
 
         self.active_compute_to_miner_mapping = active_map;
         self.active_nodes = active_nodes;
+    }
+
+    /// Re-establish all missing connections
+    async fn re_establish_all_missing_connections(&mut self) {
+        let dead_addr: BTreeSet<_> = self
+            .dead_nodes
+            .iter()
+            .map(|n| self.instance_info.node_infos[n].node_spec.address)
+            .collect();
+        connect_all_nodes(&self.arc_nodes, &dead_addr).await;
     }
 
     ///Returns a mutable reference to the miner node with the matching name
@@ -487,6 +514,7 @@ pub enum ArcNode {
     Compute(ArcComputeNode),
     Storage(ArcStorageNode),
     User(ArcUserNode),
+    PreLaunch(ArcPreLaunchNode),
 }
 
 impl ArcNode {
@@ -534,6 +562,7 @@ async fn address(node: &ArcNode) -> SocketAddr {
         ArcNode::Compute(v) => v.lock().await.address(),
         ArcNode::Storage(v) => v.lock().await.address(),
         ArcNode::User(v) => v.lock().await.address(),
+        ArcNode::PreLaunch(v) => v.lock().await.address(),
     }
 }
 
@@ -544,6 +573,7 @@ async fn send_startup_requests(node: &ArcNode) {
         ArcNode::Compute(v) => v.lock().await.send_startup_requests().await.unwrap(),
         ArcNode::Storage(v) => v.lock().await.send_startup_requests().await.unwrap(),
         ArcNode::User(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::PreLaunch(v) => v.lock().await.send_startup_requests().await.unwrap(),
     }
 }
 
@@ -554,6 +584,7 @@ async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
         ArcNode::Compute(v) => v.lock().await.local_event_tx().clone(),
         ArcNode::Storage(v) => v.lock().await.local_event_tx().clone(),
         ArcNode::User(v) => v.lock().await.local_event_tx().clone(),
+        ArcNode::PreLaunch(v) => v.lock().await.local_event_tx().clone(),
     }
 }
 
@@ -564,6 +595,7 @@ async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<Socke
         ArcNode::Compute(n) => n.lock().await.connect_info_peers(),
         ArcNode::Storage(n) => n.lock().await.connect_info_peers(),
         ArcNode::User(n) => n.lock().await.connect_info_peers(),
+        ArcNode::PreLaunch(n) => n.lock().await.connect_info_peers(),
     }
 }
 
@@ -572,7 +604,7 @@ async fn close_raft_loop(node: &ArcNode) {
     match node {
         ArcNode::Compute(n) => n.lock().await.close_raft_loop().await,
         ArcNode::Storage(n) => n.lock().await.close_raft_loop().await,
-        ArcNode::Miner(_) | ArcNode::User(_) => (),
+        ArcNode::Miner(_) | ArcNode::User(_) | ArcNode::PreLaunch(_) => (),
     }
 }
 
@@ -596,7 +628,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
                 node.raft_loop().right_future(),
             ))
         }
-        ArcNode::Miner(_) | ArcNode::User(_) => None,
+        ArcNode::Miner(_) | ArcNode::User(_) | ArcNode::PreLaunch(_) => None,
     }
 }
 
@@ -607,6 +639,7 @@ async fn take_closed_extra_params(node: &ArcNode) -> ExtraNodeParams {
         ArcNode::Storage(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::Miner(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::User(n) => n.lock().await.take_closed_extra_params().await,
+        ArcNode::PreLaunch(n) => n.lock().await.take_closed_extra_params().await,
     }
 }
 
@@ -640,6 +673,13 @@ async fn handle_next_event_and_response(
             Ok(ResponseResult::Exit)
         }
         ArcNode::User(n) => {
+            let mut n = n.lock().await;
+            if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
+                return Ok(n.handle_next_event_response(response).await);
+            }
+            Ok(ResponseResult::Exit)
+        }
+        ArcNode::PreLaunch(n) => {
             let mut n = n.lock().await;
             if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
                 return Ok(n.handle_next_event_response(response).await);
@@ -937,7 +977,7 @@ async fn init_miner(
 
     // Create node
     let node_info = &info.node_infos[name];
-    let miner_config = MinerNodeConfig {
+    let config = MinerNodeConfig {
         miner_node_idx: node_info.index,
         miner_db_mode: node_info.db_mode,
         miner_compute_node_idx,
@@ -951,7 +991,7 @@ async fn init_miner(
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
     Arc::new(Mutex::new(
-        MinerNode::new(miner_config, extra).await.expect(&info_str),
+        MinerNode::new(config, extra).await.expect(&info_str),
     ))
 }
 
@@ -972,7 +1012,7 @@ async fn init_storage(
     let node_info = &info.node_infos[name];
     let storage_raft = if config.storage_raft { 1 } else { 0 };
 
-    let storage_config = StorageNodeConfig {
+    let config = StorageNodeConfig {
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
         compute_nodes: info.compute_nodes.clone(),
@@ -986,7 +1026,7 @@ async fn init_storage(
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
     Arc::new(Mutex::new(
-        StorageNode::new(storage_config, extra).await.expect(&info),
+        StorageNode::new(config, extra).await.expect(&info),
     ))
 }
 
@@ -1007,7 +1047,7 @@ async fn init_compute(
     let node_info = &info.node_infos[name];
     let compute_raft = if config.compute_raft { 1 } else { 0 };
 
-    let compute_config = ComputeNodeConfig {
+    let config = ComputeNodeConfig {
         compute_raft,
         compute_db_mode: node_info.db_mode,
         compute_node_idx: node_info.index,
@@ -1026,7 +1066,7 @@ async fn init_compute(
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
     Arc::new(Mutex::new(
-        ComputeNode::new(compute_config, extra).await.expect(&info),
+        ComputeNode::new(config, extra).await.expect(&info),
     ))
 }
 
@@ -1045,7 +1085,7 @@ async fn init_user(
     extra: ExtraNodeParams,
 ) -> ArcUserNode {
     let node_info = &info.node_infos[name];
-    let user_config = UserNodeConfig {
+    let config = UserNodeConfig {
         user_node_idx: node_info.index,
         user_db_mode: node_info.db_mode,
         user_compute_node_idx: 0,
@@ -1063,8 +1103,50 @@ async fn init_user(
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New User {}", info);
+    Arc::new(Mutex::new(UserNode::new(config, extra).await.expect(&info)))
+}
+
+///Initialize PreLauch node of given name based on network info.
+///
+/// ### Arguments
+///
+/// * `name`   - Name of the node to initialize.
+/// * `config` - &NetworkConfig holding configuration Infomation.
+/// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
+/// * `extra`  - additional parameter for construction
+async fn init_pre_launch(
+    name: &str,
+    _config: &NetworkConfig,
+    info: &NetworkInstanceInfo,
+    extra: ExtraNodeParams,
+) -> ArcPreLaunchNode {
+    let node_info = &info.node_infos[name];
+    let (pre_launch_nodes, db_spec, raft_db_spec) = match node_info.node_type {
+        NodeType::Compute => (
+            info.compute_nodes.clone(),
+            compute::DB_SPEC,
+            compute_raft::DB_SPEC,
+        ),
+        NodeType::Storage => (
+            info.storage_nodes.clone(),
+            storage::DB_SPEC,
+            storage_raft::DB_SPEC,
+        ),
+        NodeType::Miner | NodeType::User => panic!("No pre launch fot this type"),
+    };
+
+    let config = PreLaunchNodeConfig {
+        pre_launch_node_idx: node_info.index,
+        pre_launch_db_mode: node_info.db_mode,
+        pre_launch_nodes,
+        db_spec,
+        raft_db_spec,
+    };
+
+    let info = format!("{} -> {}", name, node_info.node_spec.address);
+    info!("New PreLaunch {}", info);
     Arc::new(Mutex::new(
-        UserNode::new(user_config, extra).await.expect(&info),
+        PreLaunchNode::new(config, extra).await.expect(&info),
     ))
 }
 

@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::hash_block;
-use crate::raft::RaftMessageWrapper;
+use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -117,6 +117,7 @@ pub enum NodeType {
     Storage,
     Compute,
     User,
+    PreLaunch,
 }
 
 /// Mined block or transaction as stored in DB.
@@ -164,6 +165,13 @@ impl BlockchainItemMeta {
 pub enum BlockchainItemType {
     Block,
     Tx,
+}
+
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DbItem {
+    pub column: String,
+    pub key: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 /// Internal protocol messages exchanged between nodes.
@@ -537,6 +545,29 @@ impl fmt::Debug for UserRequest {
 
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),
+            Closing => write!(f, "Closing"),
+        }
+    }
+}
+
+///============ PRE-LAUNCH NODE ============///
+
+/// Encapsulates storage requests
+#[derive(Deserialize, Serialize, Clone)]
+pub enum PreLaunchRequest {
+    SendDbItems {
+        committed: CommittedIndex,
+        items: Vec<DbItem>,
+    },
+    Closing,
+}
+
+impl fmt::Debug for PreLaunchRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use PreLaunchRequest::*;
+
+        match *self {
+            SendDbItems { .. } => write!(f, "SendDbItems"),
             Closing => write!(f, "Closing"),
         }
     }

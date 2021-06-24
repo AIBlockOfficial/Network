@@ -37,6 +37,34 @@ async fn direct_messages() {
     complete_compute_nodes(nodes).await;
 }
 
+/// Check that 2 prelaunch nodes can exchange arbitrary messages in both direction,
+/// using their public address after one node connected to the other.
+#[tokio::test(basic_scheduler)]
+async fn direct_prelaunch_messages() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut nodes = create_compute_nodes(0, 2).await;
+    nodes.push(create_node_type_version(2, NodeType::PreLaunch, NETWORK_VERSION).await);
+    nodes.push(create_node_type_version(2, NodeType::PreLaunch, NETWORK_VERSION).await);
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, _) = tail.split_first_mut().unwrap();
+
+    n2.connect_to(n1.address()).await.unwrap();
+    n2.send(n1.address(), "Hello1").await.unwrap();
+    n1.send(n2.address(), "Hello2").await.unwrap();
+
+    if let Some(Event::NewFrame { peer: _, frame }) = n1.next_event().await {
+        let recv_frame: &str = deserialize(&frame).unwrap();
+        assert_eq!(recv_frame, "Hello1");
+    }
+    if let Some(Event::NewFrame { peer: _, frame }) = n2.next_event().await {
+        let recv_frame: &str = deserialize(&frame).unwrap();
+        assert_eq!(recv_frame, "Hello2");
+    }
+
+    complete_compute_nodes(nodes).await;
+}
+
 /// In this test, we
 /// 1. Start N nodes (e.g., N = 64).
 /// 2. node_1 will send a multicast message to F (= Fanout, e.g. 8) nodes.
@@ -275,39 +303,56 @@ async fn connect_full(from_full: bool) {
     complete_compute_nodes(nodes).await;
 }
 
-/// Check 2 nodes with different version cannot establish connections.
+/// Check incompatible nodes who cannot establish connections.
 #[tokio::test(basic_scheduler)]
-async fn version_mismatch() {
+async fn nodes_incompatible() {
     let _ = tracing_subscriber::fmt::try_init();
 
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(1, 2).await;
-    nodes.push(create_compute_node_version(2, NETWORK_VERSION + 1).await);
+    let mut nodes = create_compute_nodes(1, 4).await;
+    nodes.push(create_compute_node_version(4, NETWORK_VERSION + 1).await);
+    nodes.push(create_node_type_version(4, NodeType::PreLaunch, NETWORK_VERSION).await);
     let (n1, tail) = nodes.split_first_mut().unwrap();
-    let (n2, _) = tail.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
 
     //
     // Act
     //
     let actual_c1_2 = n1.connect_to(n2.address()).await;
     let actual_c2_1 = n2.connect_to(n1.address()).await;
-    let actual_s2_1 = n2.send(n1.address(), "Hello1").await;
+    let actual_c1_3 = n1.connect_to(n3.address()).await;
+    let actual_c3_1 = n3.connect_to(n1.address()).await;
     let actual_s1_2 = n1.send(n2.address(), "Hello2").await;
+    let actual_s2_1 = n2.send(n1.address(), "Hello1").await;
+    let actual_s1_3 = n1.send(n3.address(), "Hello4").await;
+    let actual_s3_1 = n3.send(n1.address(), "Hello3").await;
 
     //
     // Assert
     //
-    let actual = (actual_c1_2, actual_c2_1, actual_s2_1, actual_s1_2);
+    let actual = (
+        (actual_c1_2, actual_c2_1, actual_s1_2, actual_s2_1),
+        (actual_c1_3, actual_c3_1, actual_s1_3, actual_s3_1),
+    );
     assert!(
         matches!(
             actual,
             (
-                Err(CommsError::PeerNotFound),
-                Err(CommsError::PeerNotFound),
-                Err(CommsError::PeerNotFound),
-                Err(CommsError::PeerNotFound)
+                (
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound)
+                ),
+                (
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound)
+                )
             )
         ),
         "{:?}",
@@ -331,8 +376,16 @@ async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> 
 }
 
 async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
+    create_node_type_version(peer_limit, NodeType::Compute, network_version).await
+}
+
+async fn create_node_type_version(
+    peer_limit: usize,
+    node_type: NodeType,
+    network_version: u32,
+) -> Node {
     let addr = "127.0.0.1:0".parse().unwrap();
-    Node::new_with_version(addr, peer_limit, NodeType::Compute, network_version)
+    Node::new_with_version(addr, peer_limit, node_type, network_version)
         .await
         .unwrap()
 }
