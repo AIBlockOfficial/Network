@@ -251,6 +251,11 @@ impl ComputeNode {
         self.node_raft.get_committed_tx_pool()
     }
 
+    /// The current tx_druid_pool that will be used to generate next block
+    pub fn get_committed_tx_druid_pool(&self) -> &Vec<BTreeMap<String, Transaction>> {
+        self.node_raft.get_committed_tx_druid_pool()
+    }
+
     pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
         &self.request_list
     }
@@ -286,7 +291,6 @@ impl ComputeNode {
             #[allow(clippy::map_entry)]
             if self.druid_pool.contains_key(&druid) {
                 self.process_tx_druid(druid, transaction);
-                self.node_raft.propose_local_druid_transactions().await;
 
                 return Response {
                     success: true,
@@ -800,6 +804,7 @@ impl ComputeNode {
                 self.node_raft.received_message(msg).await;
                 None
             }
+            SendRbTransaction { transaction } => Some(self.process_dde_tx(transaction).await),
         }
     }
 

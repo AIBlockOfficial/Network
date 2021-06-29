@@ -2,8 +2,11 @@
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use bytes::Bytes;
+use naom::primitives::asset::Asset;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
+use naom::primitives::druid::DruidExpectation;
+use naom::primitives::transaction::TxIn;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -24,6 +27,32 @@ pub type Token = u64;
 pub enum UtxoFetchType {
     All,
     AnyOf(Vec<String>),
+}
+
+/// Struct used to keep-track of the next receipt-based payment
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RbPaymentData {
+    pub sender_asset: Asset,
+    pub sender_half_druid: String,
+    pub tx_ins: Vec<TxIn>,
+    pub total_amount: TokenAmount,
+}
+
+/// Struct used to make a request for a new receipt-based payment
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RbPaymentRequestData {
+    pub sender_address: String,
+    pub sender_half_druid: String,
+    pub sender_from_addr: String,
+    pub sender_asset: Asset,
+}
+
+/// Struct used to make a response to a new receipt-based payment
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RbPaymentResponseData {
+    pub receiver_address: String,
+    pub receiver_half_druid: String,
+    pub sender_druid_expectation: DruidExpectation,
 }
 
 /// A placeholder struct for sensible feedback
@@ -102,13 +131,6 @@ pub struct Contract;
 
 /// A placeholder Heat struct
 pub struct Heat;
-
-/// A placeholder Asset struct
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
-pub enum Asset {
-    Token(u64),
-    Data(Vec<u8>),
-}
 
 /// Denotes existing node types
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +433,9 @@ pub trait MinerInterface {
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
+    SendRbTransaction {
+        transaction: Transaction,
+    },
     SendUtxoRequest {
         address_list: UtxoFetchType,
     },
@@ -448,6 +473,7 @@ impl fmt::Debug for ComputeRequest {
                 ref partition_entry,
             } => write!(f, "SendPartitionEntry"),
             SendTransactions { ref transactions } => write!(f, "SendTransactions"),
+            SendRbTransaction { ref transaction } => write!(f, "SendRbTransaction"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             Closing => write!(f, "Closing"),
@@ -513,7 +539,15 @@ pub enum UserRequest {
     /// Process an API internal request
     UserApi(UserApiRequest),
 
-    /// Request payemt address with optional proof of work
+    /// Request to make a receipt-based payment
+    SendRbPaymentRequest {
+        rb_payment_request_data: RbPaymentRequestData,
+    },
+    /// Provide response for receipt-based payment request
+    SendRbPaymentResponse {
+        rb_payment_response: Option<RbPaymentResponseData>,
+    },
+    /// Request payment address with optional proof of work
     SendAddressRequest,
     /// Provide payment address with optional proof of work
     SendPaymentAddress { address: String },
@@ -542,6 +576,9 @@ impl fmt::Debug for UserRequest {
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
+
+            SendRbPaymentRequest { .. } => write!(f, "SendRbPaymentRequest"),
+            SendRbPaymentResponse { .. } => write!(f, "SendRbPaymentResponse"),
 
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),

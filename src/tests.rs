@@ -21,7 +21,7 @@ use crate::utils::{
     StringError,
 };
 use bincode::{deserialize, serialize};
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
@@ -2236,6 +2236,144 @@ async fn request_utxo_set_and_update_running_total_act(
     user_update_running_total(network, user).await;
 }
 
+#[tokio::test(basic_scheduler)]
+pub async fn make_receipt_based_payment_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11425, 1);
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
+    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
+    let mut network = Network::create_from_config(&network_config).await;
+    let user_nodes = &network_config.nodes[&NodeType::User];
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+
+    create_first_block_act(&mut network).await;
+    node_connect_to(&mut network, "user1", "user2").await;
+
+    //
+    // Act
+    //
+    let wallet_before = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    make_receipt_based_payment_act(
+        &mut network,
+        "user1",
+        "user2",
+        "compute1",
+        Asset::Token(DEFAULT_SEED_AMOUNT),
+    )
+    .await;
+
+    let wallet_after = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    let committed_tx_druid_pool: Vec<Transaction> =
+        compute_all_committed_tx_druid_pool(&mut network, compute_nodes)
+            .await
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|(_, tx)| tx)
+            .collect();
+
+    let actual_druid_string: Vec<String> = committed_tx_druid_pool
+        .iter()
+        .map(|v| v.druid_info.clone().unwrap().druid)
+        .collect();
+
+    let actual_participants: Vec<usize> = committed_tx_druid_pool
+        .iter()
+        .map(|v| v.druid_info.clone().unwrap().participants)
+        .collect();
+
+    let actual_assets: Vec<Vec<Asset>> = committed_tx_druid_pool
+        .iter()
+        .map(|v| {
+            v.druid_info
+                .clone()
+                .unwrap()
+                .expectations
+                .iter()
+                .map(|ex| ex.clone().asset)
+                .collect()
+        })
+        .collect();
+
+    let expected_participants: usize = 2;
+    let expected_assets = vec![vec![Asset::Token(TokenAmount(3))], vec![Asset::Receipt(1)]];
+
+    //
+    // Assert
+    //
+
+    //Assert wallet before and after
+    assert_eq!(
+        wallet_before
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(11), TokenAmount(0)]
+    );
+
+    assert_eq!(
+        wallet_after
+            .iter()
+            .map(|(total, _, _)| *total)
+            .collect::<Vec<_>>(),
+        vec![TokenAmount(8), TokenAmount(3)]
+    );
+
+    //Assert committed transactions have identical DRUID value
+    assert_eq!(actual_druid_string[0], actual_druid_string[1]);
+
+    //Assert committed transactions contain valid DDE participation count
+    assert!(actual_participants
+        .iter()
+        .all(|v| *v == expected_participants));
+
+    //Assert committed transactions contain valid DDE asset values
+    assert!(actual_assets
+        .iter()
+        .all(|v| *v == expected_assets[0] || *v == expected_assets[1]));
+
+    test_step_complete(network).await;
+}
+
+async fn make_receipt_based_payment_act(
+    network: &mut Network,
+    from: &str,
+    to: &str,
+    compute: &str,
+    send_asset: Asset,
+) {
+    user_send_receipt_based_payment_request(network, from, to, send_asset).await;
+    user_handle_event(network, to, "Received receipt-based payment request").await;
+    user_send_receipt_based_payment_response(network, to).await;
+    user_handle_event(network, from, "Received receipt-based payment response").await;
+    user_send_receipt_based_payment_to_desinations(network, from, compute).await;
+    compute_handle_event(
+        network,
+        compute,
+        "Transaction added to DRUID pool. Awaiting other parties",
+    )
+    .await;
+    user_handle_event(network, to, "Payment transaction received").await;
+    user_send_receipt_based_payment_to_desinations(network, to, compute).await;
+    compute_handle_event(
+        network,
+        compute,
+        "Transaction added to corresponding DRUID droplets",
+    )
+    .await;
+    user_handle_event(network, from, "Payment transaction received").await;
+    compute_handle_event(network, compute, "Transactions committed").await;
+}
+
 //
 // Node helpers
 //
@@ -2650,6 +2788,26 @@ async fn compute_committed_tx_pool(
 ) -> BTreeMap<String, Transaction> {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_tx_pool().clone()
+}
+
+async fn compute_all_committed_tx_druid_pool(
+    network: &mut Network,
+    compute_group: &[String],
+) -> Vec<Vec<BTreeMap<String, Transaction>>> {
+    let mut result = Vec::new();
+    for name in compute_group {
+        let r = compute_committed_tx_druid_pool(network, name).await;
+        result.push(r);
+    }
+    result
+}
+
+async fn compute_committed_tx_druid_pool(
+    network: &mut Network,
+    compute: &str,
+) -> Vec<BTreeMap<String, Transaction>> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_committed_tx_druid_pool().clone()
 }
 
 async fn compute_all_inject_next_event(
@@ -3114,6 +3272,36 @@ async fn user_send_request_utxo_set(
 ) {
     let mut u = network.user(user).unwrap().lock().await;
     u.send_request_utxo_set(address_list).await.unwrap();
+}
+
+async fn user_send_receipt_based_payment_request(
+    network: &mut Network,
+    from: &str,
+    to: &str,
+    send_asset: Asset,
+) {
+    let mut u = network.user(from).unwrap().lock().await;
+    let to_addr = network.get_address(to).await.unwrap();
+    u.send_rb_payment_request(to_addr, send_asset)
+        .await
+        .unwrap();
+}
+
+async fn user_send_receipt_based_payment_response(network: &mut Network, user: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.send_rb_payment_response().await.unwrap();
+}
+
+async fn user_send_receipt_based_payment_to_desinations(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+) {
+    let mut u = network.user(user).unwrap().lock().await;
+    let compute_addr = network.get_address(compute).await.unwrap();
+    u.send_next_rb_transaction_to_destinations(compute_addr)
+        .await
+        .unwrap();
 }
 
 //
