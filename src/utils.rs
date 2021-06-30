@@ -57,6 +57,12 @@ pub struct MpscTracingSender<T> {
     sender: mpsc::Sender<T>,
 }
 
+impl<T> MpscTracingSender<T> {
+    pub fn new(sender: mpsc::Sender<T>) -> Self {
+        Self { sender }
+    }
+}
+
 impl<T> Clone for MpscTracingSender<T> {
     fn clone(&self) -> Self {
         Self {
@@ -225,7 +231,7 @@ pub async fn loop_connnect_to_peers_async(
             }
         }
 
-        let delay_retry = tokio::time::delay_for(Duration::from_millis(500));
+        let delay_retry = tokio::time::sleep(Duration::from_millis(500));
         if let Some(close_rx) = &mut close_rx {
             tokio::select! {
                 _ = delay_retry => (),
@@ -248,7 +254,7 @@ pub async fn loop_connnect_to_peers_async(
 /// * `peers`    - Vec of socket addresses of peers
 pub async fn loop_wait_connnect_to_peers_async(node: Node, peers: Vec<SocketAddr>) {
     while !node.unconnected_peers(&peers).await.is_empty() {
-        tokio::time::delay_for(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -744,7 +750,7 @@ pub fn loops_re_connect_disconnect(
                 println!("Start mode input check");
                 loop {
                     tokio::select! {
-                        _ = tokio::time::delay_for(Duration::from_millis(100)) => (),
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => (),
                         _ = &mut stop_re_connect_rx => break,
                     };
 

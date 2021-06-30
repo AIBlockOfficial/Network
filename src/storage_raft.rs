@@ -287,7 +287,7 @@ impl StorageRaft {
     /// Blocks & waits for a timeout to propose a block.
     pub async fn timeout_propose_block(&self) -> Option<()> {
         if let ProposeBlockTimeout::Some(time) = self.propose_block_timeout_at {
-            time::delay_until(time).await;
+            time::sleep_until(time).await;
             Some(())
         } else {
             None

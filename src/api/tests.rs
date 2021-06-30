@@ -118,7 +118,7 @@ async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
 /*------- GET TESTS--------*/
 
 /// Test GET latest block info
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_get_latest_block() {
     let db = get_db_with_block();
     let filter = routes::latest_block(db);
@@ -139,7 +139,7 @@ async fn test_get_latest_block() {
 }
 
 /// Test GET wallet keypairs
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_get_wallet_keypairs() {
     //
     // Arrange
@@ -181,7 +181,7 @@ async fn test_get_wallet_keypairs() {
 }
 
 /// Test GET wallet info
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_get_wallet_info() {
     //
     // Arrange
@@ -217,7 +217,7 @@ async fn test_get_wallet_info() {
 }
 
 /// Test GET encapsulation data
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_get_encapsulation_data() {
     //
     // Arrange
@@ -251,7 +251,7 @@ async fn test_get_encapsulation_data() {
 }
 
 /// Test GET new payment address
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_get_payment_address() {
     //
     // Arrange
@@ -284,7 +284,7 @@ async fn test_get_payment_address() {
 /*------- POST TESTS--------*/
 
 /// Test POST for get blockchain block by key
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(db);
@@ -307,7 +307,7 @@ async fn test_post_blockchain_entry_by_key_block() {
 }
 
 /// Test POST for get blockchain tx by key
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_tx() {
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(db);
@@ -333,7 +333,7 @@ async fn test_post_blockchain_entry_by_key_tx() {
 }
 
 /// Test POST for get blockchain with wrong key
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_failure() {
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(db);
@@ -359,7 +359,7 @@ async fn test_post_blockchain_entry_by_key_failure() {
 }
 
 /// Test POST for get block info by nums
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_block_info_by_nums() {
     let db = get_db_with_block();
     let filter = routes::block_info_by_nums(db);
@@ -382,7 +382,7 @@ async fn test_post_block_info_by_nums() {
 }
 
 /// Test POST make payment
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_make_payment() {
     //
     // Arrange
@@ -437,7 +437,7 @@ async fn test_post_make_payment() {
 }
 
 /// Test POST make ip payment with correct address
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_make_ip_payment() {
     //
     // Arrange
@@ -498,7 +498,7 @@ async fn test_post_make_ip_payment() {
 }
 
 /// Test POST make ip payment with correct address
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_request_donation() {
     //
     // Arange
@@ -536,7 +536,7 @@ async fn test_post_request_donation() {
 }
 
 /// Test POST import key-pairs
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_import_keypairs_success() {
     let passphrase: Option<String> = Some(String::from(""));
     let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
@@ -571,7 +571,7 @@ async fn test_post_import_keypairs_success() {
 }
 
 /// Test POST update running total successful
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_update_running_total() {
     //
     // Arrange

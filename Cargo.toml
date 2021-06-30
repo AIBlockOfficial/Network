@@ -8,12 +8,14 @@ description = "The NAOM (Notarised Append Only Memory) crate contains all the co
 
 [dependencies]
 async-std = "1.7.0"
+async-stream = "0.3.2"
 bincode = "1.2.1"
-bytes = { version = "0.5.4", features = ["serde"] }
+bytes = { version = "1.0.1", features = ["serde"] }
 chrono = "0.4.10"
 clap = "2.33.0"
 config = { version = "0.10.1", features = ["toml"] }
 futures = "0.3"
+futures-util = "0.3.15"
 hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
@@ -28,12 +30,14 @@ serde = { version = "1.0.104", features = ["derive"] }
 sha3 = "0.9.1"
 serde_json = "1.0.61"
 sodiumoxide = "0.2.5"
-tokio = { version = "0.2.13", features = ["full"] }
-tokio-util = { version = "0.3", features = ["full"] }
+tokio = { version = "1.7.1", features = ["full"] }
+tokio-rustls = "0.22.0"
+tokio-util = { version = "0.6.7", features = ["full"] }
+tokio-stream = "0.1.6"
 tracing = "0.1.13"
 tracing-subscriber = "0.2.3"
 tracing-futures = "0.2.3"
-warp = "0.2.5"
+warp = "0.3.1"
 
 [features]
 mock = []

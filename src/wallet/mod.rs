@@ -763,7 +763,7 @@ mod tests {
         assert_eq!(addr.len(), 32);
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     #[should_panic(expected = "WalletDb: invalid passphrase")]
     async fn incorrect_password() {
         //Arrange
@@ -783,7 +783,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn wallet_life_cycle() {
         //
         // Arrange

@@ -456,22 +456,22 @@ mod tests {
         closed_dbs: HashMap<u64, SimpleDb>,
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_send_proposal_is_commited_1_node() {
         test_send_proposal_check_commited(1).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_send_proposal_is_commited_2_nodes() {
         test_send_proposal_check_commited(2).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_send_proposal_is_commited_3_nodes() {
         test_send_proposal_check_commited(3).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_send_proposal_is_commited_20_nodes() {
         test_send_proposal_check_commited(20).await;
     }
@@ -492,22 +492,22 @@ mod tests {
         close_nodes_loops(test_nodes, join_handles).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snapshot_1_node() {
         test_snapshot(1).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snapshot_2_nodes() {
         test_snapshot(2).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snapshot_3_nodes() {
         test_snapshot(3).await;
     }
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snapshot_20_nodes() {
         test_snapshot(20).await;
     }
@@ -530,7 +530,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node not receiving message can catch up.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_catch_up_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -554,7 +554,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node not receiving message can catch up, snapshot exist but record still there.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_skip_snapshot_catch_up_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -580,7 +580,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node not receiving message can catch up, need to use snapshot as record is gone.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snap_catch_up_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -609,7 +609,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node not receiving message can catch up, and then need to use snapshot as record is gone.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snap_catch_up_after_start_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -646,7 +646,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node killed can catch up, no snapshot needed.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_restart_after_start_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -689,7 +689,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node killed can catch up, and then need to use snapshot as record is gone.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snap_restart_after_start_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -742,7 +742,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node killed after initial snapshot can catch up without getting new snapshot.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_restart_skip_snapshot_after_snapshot_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
@@ -794,7 +794,7 @@ mod tests {
 
     // Setup a peer group running all raft loops and dispatching messages.
     // Node killed after initial snapshot can catch up, and then need to use snapshot as record is gone.
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_snap_restart_after_snapshot_3() {
         let _ = tracing_subscriber::fmt::try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);

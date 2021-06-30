@@ -193,7 +193,7 @@ impl StorageFetch {
     /// Provvide the key to fetch
     pub async fn timeout_fetch_blockchain_item(&self) -> Option<()> {
         if let Some(to_receive) = &self.to_receive {
-            time::delay_until(to_receive.timeout_at.0).await;
+            time::sleep_until(to_receive.timeout_at.0).await;
             Some(())
         } else {
             None

@@ -13,7 +13,7 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
 /// Check that 2 nodes can exchange arbitrary messages in both direction,
 /// using their public address after one node connected to the other.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn direct_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -39,7 +39,7 @@ async fn direct_messages() {
 
 /// Check that 2 prelaunch nodes can exchange arbitrary messages in both direction,
 /// using their public address after one node connected to the other.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn direct_prelaunch_messages() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -70,7 +70,7 @@ async fn direct_prelaunch_messages() {
 /// 2. node_1 will send a multicast message to F (= Fanout, e.g. 8) nodes.
 /// 3. Everyone connects to node_1, and the contact list should be propagated to all other nodes.
 /// 4. We check that all other nodes (node_2, node_3, ... node_N) have received the same message.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn multicast() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -120,13 +120,13 @@ async fn multicast() {
 }
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn disconnect_connection_all() {
     disconnect_connection(false).await;
 }
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn disconnect_connection_some() {
     disconnect_connection(true).await;
 }
@@ -188,7 +188,7 @@ async fn disconnect_connection(subset: bool) {
 }
 
 /// Check a node cannot connect to a node that stopped listening.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn listen_paused_resumed_stopped() {
     let _ = tracing_subscriber::fmt::try_init();
 
@@ -238,12 +238,12 @@ async fn listen_paused_resumed_stopped() {
     complete_compute_nodes(nodes).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn connect_full_from() {
     connect_full(true).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn connect_full_to() {
     connect_full(false).await;
 }
@@ -304,7 +304,7 @@ async fn connect_full(from_full: bool) {
 }
 
 /// Check incompatible nodes who cannot establish connections.
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn nodes_incompatible() {
     let _ = tracing_subscriber::fmt::try_init();
 
