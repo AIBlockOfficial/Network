@@ -394,7 +394,7 @@ impl ComputeRaft {
 
     /// Blocks & waits for a timeout to propose transactions.
     pub async fn timeout_propose_transactions(&self) {
-        time::delay_until(self.propose_transactions_timeout_at).await;
+        time::sleep_until(self.propose_transactions_timeout_at).await;
     }
 
     /// Append new transaction to our local pool from which to propose
@@ -1283,7 +1283,7 @@ mod test {
             loop {
                 tokio::select! {
                     commit = node.next_commit() => {node.received_commit(commit.unwrap()).await;}
-                    _ = time::delay_for(Duration::from_millis(5)) => {break;}
+                    _ = time::sleep(Duration::from_millis(5)) => {break;}
                 }
             }
             collect_info(&node);

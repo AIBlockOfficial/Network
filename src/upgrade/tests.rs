@@ -65,39 +65,39 @@ pub struct ExtraNodeParamsFilter {
     pub wallet_db: bool,
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_compute_real_db() {
     let config = real_db(complete_network_config(20000));
     remove_all_node_dbs(&config);
     upgrade_common(config, "compute1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_compute_in_memory() {
     let config = complete_network_config(20010);
     upgrade_common(config, "compute1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_compute_no_block_in_memory() {
     let config = complete_network_config(20015);
     let upgrade_cfg = cfg_upgrade_no_block();
     upgrade_common(config, "compute1", upgrade_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_storage_in_memory() {
     let config = complete_network_config(20020);
     upgrade_common(config, "storage1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_miner_in_memory() {
     let config = complete_network_config(20030);
     upgrade_common(config, "miner1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_user_in_memory() {
     let config = complete_network_config(20040);
     upgrade_common(config, "user1", cfg_upgrade()).await;
@@ -204,39 +204,39 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_compute_real_db() {
     let config = real_db(complete_network_config(20100));
     remove_all_node_dbs(&config);
     open_upgrade_started_compute_common(config, "compute1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_compute_in_memory() {
     let config = complete_network_config(20110);
     open_upgrade_started_compute_common(config, "compute1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_compute_no_block_in_memory() {
     let config = complete_network_config(20115);
     let upgrade_cfg = cfg_upgrade_no_block();
     open_upgrade_started_compute_common(config, "compute1", upgrade_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_storage_in_memory() {
     let config = complete_network_config(20120);
     open_upgrade_started_compute_common(config, "storage1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_miner_in_memory() {
     let config = complete_network_config(20130);
     open_upgrade_started_compute_common(config, "miner1", cfg_upgrade()).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_user_in_memory() {
     let config = complete_network_config(20140);
     open_upgrade_started_compute_common(config, "user1", cfg_upgrade()).await;
@@ -277,27 +277,27 @@ async fn open_upgrade_started_compute_common(
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_real_db() {
     let config = real_db(complete_network_config(20200));
     remove_all_node_dbs(&config);
     upgrade_restart_network_common(config, cfg_upgrade(), Default::default(), false).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_in_memory() {
     let config = complete_network_config(20210);
     upgrade_restart_network_common(config, cfg_upgrade(), Default::default(), false).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_compute_no_block_in_memory() {
     let config = complete_network_config(20215);
     let upgrade_cfg = cfg_upgrade_no_block();
     upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
     // Create 2 identical copy of the database in memory for each node in raft grup.
     // Upgrade applying the configuration data and run.
@@ -309,7 +309,7 @@ async fn upgrade_restart_network_compute_no_block_raft_2_in_memory() {
     upgrade_restart_network_common(config, upgrade_cfg, Default::default(), false).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory() {
     // Only copy over the upgraded raft database, and pull main db
     let raft_len = 3;
@@ -333,7 +333,7 @@ async fn upgrade_restart_network_compute_no_block_raft_3_raft_db_only_in_memory(
     upgrade_restart_network_common(config, upgrade_cfg, params_filters, false).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_compute_no_block_raft_3_pre_launch_only_in_memory() {
     // Pull raft database during pre-launch, and pull main db
     let raft_len = 3;
@@ -750,7 +750,7 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
 
 fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
     Box::pin(async move {
-        tokio::time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
+        tokio::time::sleep(TIMEOUT_TEST_WAIT_DURATION).await;
         "Test timeout elapsed"
     })
 }

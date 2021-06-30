@@ -119,12 +119,12 @@ fn will_get_sanctioned_addresses() {
     assert_eq!(no_fs_addresses, Vec::<String>::new());
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_no_raft() {
     full_flow(complete_network_config(10500)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_real_db_1_node() {
     let mut cfg = complete_network_config_with_n_compute_raft(10505, 1);
     cfg.in_memory_db = false;
@@ -133,22 +133,22 @@ async fn full_flow_raft_real_db_1_node() {
     full_flow(cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_1_node() {
     full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_2_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10520, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_3_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10530, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_majority_3_nodes() {
     full_flow_common(
         complete_network_config_with_n_compute_raft(10540, 3),
@@ -158,12 +158,12 @@ async fn full_flow_raft_majority_3_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_15_nodes() {
     full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_no_raft() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
         11000, false, 1, 3,
@@ -171,7 +171,7 @@ async fn full_flow_multi_miners_no_raft() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_raft_1_node() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
         11010, true, 1, 3,
@@ -179,7 +179,7 @@ async fn full_flow_multi_miners_raft_1_node() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_raft_2_nodes() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
         11020, true, 2, 6,
@@ -187,7 +187,7 @@ async fn full_flow_multi_miners_raft_2_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_kill_miner_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("miner2")),
@@ -201,7 +201,7 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_kill_compute_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("compute2")),
@@ -220,7 +220,7 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_kill_storage_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Drop("storage2")),
@@ -235,7 +235,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Disconnect("miner2")),
@@ -245,7 +245,7 @@ async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Disconnect("compute2")),
@@ -263,7 +263,7 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
     full_flow_common(network_config, CfgNum::All, modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
     let modify_cfg = vec![
         ("After create block 0", CfgModif::Disconnect("storage2")),
@@ -401,27 +401,27 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
     }
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_first_block_no_raft() {
     create_first_block(complete_network_config(10000)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_1_node() {
     create_first_block(complete_network_config_with_n_compute_raft(10010, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_2_nodes() {
     create_first_block(complete_network_config_with_n_compute_raft(10020, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_3_nodes() {
     create_first_block(complete_network_config_with_n_compute_raft(10030, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_15_nodes() {
     create_first_block(complete_network_config_with_n_compute_raft(10040, 15)).await;
 }
@@ -474,27 +474,27 @@ async fn create_first_block_act(network: &mut Network) {
     node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_no_raft() {
     send_first_block_to_storage(complete_network_config(10800)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_1_node() {
     send_first_block_to_storage(complete_network_config_with_n_compute_raft(10810, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_2_nodes() {
     send_first_block_to_storage(complete_network_config_with_n_compute_raft(10820, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_3_nodes() {
     send_first_block_to_storage(complete_network_config_with_n_compute_raft(10830, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_majority_3_nodes() {
     send_first_block_to_storage_common(
         complete_network_config_with_n_compute_raft(10840, 3),
@@ -503,7 +503,7 @@ async fn send_first_block_to_storage_raft_majority_3_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_15_nodes() {
     send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 15)).await;
 }
@@ -560,17 +560,17 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_no_raft() {
     add_transactions(complete_network_config(10600)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_1_node() {
     add_transactions(complete_network_config_with_n_compute_raft(10610, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_restart_tx_raft_1_node() {
     let tag = "After add local Transactions";
     let modify_cfg = vec![
@@ -586,17 +586,17 @@ async fn add_transactions_restart_tx_raft_1_node() {
     add_transactions_common(network_config, &modify_cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_2_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10620, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_3_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10630, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_15_nodes() {
     add_transactions(complete_network_config_with_n_compute_raft(10640, 15)).await;
 }
@@ -659,27 +659,27 @@ async fn add_transactions_act_with(
     }
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_no_raft() {
     create_block(complete_network_config(10100)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_1_node() {
     create_block(complete_network_config_with_n_compute_raft(10110, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_2_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10120, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_3_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10130, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_majority_3_nodes() {
     create_block_common(
         complete_network_config_with_n_compute_raft(10140, 3),
@@ -688,7 +688,7 @@ async fn create_block_raft_majority_3_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_15_nodes() {
     create_block(complete_network_config_with_n_compute_raft(10150, 15)).await;
 }
@@ -780,27 +780,27 @@ async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum,
     node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_no_raft() {
     proof_of_work(complete_network_config(10200)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_1_node() {
     proof_of_work(complete_network_config_with_n_compute_raft(10210, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_2_nodes() {
     proof_of_work(complete_network_config_with_n_compute_raft(10220, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_3_nodes() {
     proof_of_work(complete_network_config_with_n_compute_raft(10230, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_majority_3_nodes() {
     proof_of_work_common(
         complete_network_config_with_n_compute_raft(10240, 3),
@@ -809,7 +809,7 @@ async fn proof_of_work_raft_majority_3_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_no_raft() {
     let mut cfg = complete_network_config_with_n_compute_miner(10250, false, 1, 3);
     cfg.compute_partition_full_size = 2;
@@ -817,7 +817,7 @@ async fn proof_of_work_multi_no_raft() {
     proof_of_work(cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_raft_1_node() {
     let mut cfg = complete_network_config_with_n_compute_miner(10260, true, 1, 3);
     cfg.compute_partition_full_size = 2;
@@ -825,7 +825,7 @@ async fn proof_of_work_multi_raft_1_node() {
     proof_of_work(cfg).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_raft_2_nodes() {
     let mut cfg = complete_network_config_with_n_compute_miner(10270, true, 2, 6);
     cfg.compute_partition_full_size = 2;
@@ -944,17 +944,17 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
     }
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_winner_no_raft() {
     proof_winner(complete_network_config(10900)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_winner_raft_1_node() {
     proof_winner(complete_network_config_with_n_compute_raft(10910, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_no_raft() {
     proof_winner_multi(complete_network_config_with_n_compute_miner(
         10920, false, 1, 3,
@@ -962,7 +962,7 @@ async fn proof_winner_multi_no_raft() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_raft_1_node() {
     proof_winner_multi(complete_network_config_with_n_compute_miner(
         10930, true, 1, 3,
@@ -970,7 +970,7 @@ async fn proof_winner_multi_raft_1_node() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_raft_2_nodes() {
     proof_winner_multi(complete_network_config_with_n_compute_miner(
         10940, true, 2, 6,
@@ -1057,27 +1057,27 @@ async fn proof_winner_act(network: &mut Network) {
     }
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_no_raft() {
     send_block_to_storage(complete_network_config(10300)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_1_node() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10310, 1)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_2_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10320, 2)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_3_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_majority_3_nodes() {
     send_block_to_storage_common(
         complete_network_config_with_n_compute_raft(10340, 3),
@@ -1086,7 +1086,7 @@ async fn send_block_to_storage_raft_majority_3_nodes() {
     .await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_15_nodes() {
     send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 15)).await;
 }
@@ -1184,19 +1184,19 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(11300, 1);
     main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_2_node() {
     let network_config = complete_network_config_with_n_compute_raft(11310, 2);
     main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_3_node() {
     let network_config = complete_network_config_with_n_compute_raft(11320, 3);
     main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
@@ -1204,7 +1204,7 @@ async fn main_loops_few_txs_raft_3_node() {
 
 // Slow: Only run when explicitely specified for performance and large tests
 // `RUST_LOG="info,raft=warn" cargo test --lib --release -- --ignored --nocapture main_loops_many_txs_threaded_raft_1_node`
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn main_loops_many_txs_threaded_raft_1_node() {
     let mut network_config = complete_network_config_with_n_compute_raft(11330, 1);
@@ -1225,7 +1225,7 @@ async fn main_loops_many_txs_threaded_raft_1_node() {
     .await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(11340, 1);
     let stop_nums = vec![1, 2];
@@ -1234,7 +1234,7 @@ async fn main_loops_few_txs_restart_raft_1_node() {
     main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_raft_3_node() {
     let network_config = complete_network_config_with_n_compute_raft(11350, 3);
     let stop_nums = vec![1, 2];
@@ -1243,7 +1243,7 @@ async fn main_loops_few_txs_restart_raft_3_node() {
     main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(11360, 1);
     let stop_nums = vec![1, 2];
@@ -1252,7 +1252,7 @@ async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
     main_loops_raft_1_node_common(network_config, stop_nums, amount, 20, 1, 1_000, &modify).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_upgrade_raft_3_node() {
     let network_config = complete_network_config_with_n_compute_raft(11370, 3);
     let stop_nums = vec![1, 2];
@@ -1326,7 +1326,7 @@ async fn main_loops_raft_1_node_common(
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn receive_payment_tx_user() {
     test_step_start();
 
@@ -1387,7 +1387,7 @@ async fn receive_payment_tx_user() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn receive_testnet_donation_payment_tx_user() {
     test_step_start();
 
@@ -1440,7 +1440,7 @@ async fn receive_testnet_donation_payment_tx_user() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn reject_payment_txs() {
     test_step_start();
 
@@ -1494,13 +1494,13 @@ async fn reject_payment_txs() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn gen_transactions_no_restart() {
     let network_config = complete_network_config(10420);
     gen_transactions_common(network_config, &[]).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn gen_transactions_restart() {
     let tag = "After block notification request";
     let name = "compute1";
@@ -1567,7 +1567,7 @@ async fn gen_transactions_common(
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_reject() {
     test_step_start();
 
@@ -1631,23 +1631,23 @@ async fn proof_of_work_reject() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_no_restart_no_raft() {
     handle_message_lost_common(complete_network_config(10440), &[]).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_no_restart_raft_1_node() {
     handle_message_lost_common(complete_network_config_with_n_compute_raft(10450, 1), &[]).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_block_stored_raft_1_node() {
     let network_config = complete_network_config_with_n_compute_raft(10460, 1);
     handle_message_lost_restart_block_stored_raft_1_node_common(network_config).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_block_stored_raft_real_db_1_node() {
     let mut network_config = complete_network_config_with_n_compute_raft(10465, 1);
     network_config.in_memory_db = false;
@@ -1670,7 +1670,7 @@ async fn handle_message_lost_restart_block_stored_raft_1_node_common(
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_block_complete_raft_1_node() {
     let modify_cfg = vec![(
         "After create block 1",
@@ -1686,7 +1686,7 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
     let modify_cfg = vec![(
         "After store block 0",
@@ -1769,7 +1769,7 @@ async fn handle_message_lost_common(
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn request_blockchain_item_no_raft() {
     test_step_start();
 
@@ -1865,7 +1865,7 @@ async fn request_blockchain_item_act(
     miner_handle_event(network, &miner_from, "Blockchain item received").await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn catchup_fetch_blockchain_item_raft() {
     test_step_start();
 
@@ -1956,7 +1956,7 @@ async fn catchup_fetch_blockchain_item_raft() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn relaunch_with_new_raft_nodes() {
     test_step_start();
 
@@ -2044,7 +2044,7 @@ async fn relaunch_with_new_raft_nodes() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn request_utxo_set_raft_1_node() {
     test_step_start();
 
@@ -2144,7 +2144,7 @@ async fn request_utxo_set_act(
     user_handle_event(network, user, "Received UTXO set").await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 async fn request_utxo_set_and_update_running_total_raft_1_node() {
     test_step_start();
 
@@ -2236,7 +2236,7 @@ async fn request_utxo_set_and_update_running_total_act(
     user_update_running_total(network, user).await;
 }
 
-#[tokio::test(basic_scheduler)]
+#[tokio::test(flavor = "current_thread")]
 pub async fn make_receipt_based_payment_raft_1_node() {
     test_step_start();
 
@@ -3496,7 +3496,7 @@ fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
 
 fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
     Box::pin(async move {
-        time::delay_for(TIMEOUT_TEST_WAIT_DURATION).await;
+        time::sleep(TIMEOUT_TEST_WAIT_DURATION).await;
         "Test timeout elapsed"
     })
 }

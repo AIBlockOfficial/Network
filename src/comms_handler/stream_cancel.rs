@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::stream::Stream;
+use tokio_stream::Stream;
 
 /// Stream stopping when until become ready.
 #[derive(Clone, Debug)]

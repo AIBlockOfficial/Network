@@ -97,10 +97,10 @@ use std::{fmt, io};
 use tokio::{
     self,
     net::{TcpListener, TcpStream},
-    stream::{Stream, StreamExt},
     sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
+use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
@@ -255,6 +255,15 @@ impl Node {
         self.connect_to_handshake_contacts = value;
     }
 
+    fn listener_as_stream(listener: TcpListener) -> impl Stream<Item = std::io::Result<TcpStream>> {
+        async_stream::try_stream! {
+            loop {
+                let (stream, _addr) = listener.accept().await?;
+                yield stream;
+            }
+        }
+    }
+
     /// Handles the listener.
     async fn listen(self, listener: TcpListener) -> Result<Self> {
         let node = self.clone();
@@ -262,6 +271,9 @@ impl Node {
         let handle = tokio::spawn(
             async move {
                 trace!("listen");
+
+                let listener = Self::listener_as_stream(listener);
+                futures_util::pin_mut!(listener);
 
                 use super::stream_cancel::StreamCancel;
                 use futures::TryFutureExt;
@@ -906,6 +918,13 @@ impl Node {
         // Redirect messages from the mpsc channel into the TCP socket
         let sock_out_h = tokio::spawn(
             async move {
+                let send_rx = async_stream::stream! {
+                    while let Some(item) = send_rx.recv().await {
+                        yield item;
+                    }
+                };
+                futures_util::pin_mut!(send_rx);
+
                 if let Err(error) = sock_out.send_all(&mut send_rx).await {
                     error!(?error, "Error while redirecting messages");
                 }
@@ -1030,7 +1049,7 @@ mod test {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn handshake_processing() {
         //
         // Arrange
@@ -1048,7 +1067,7 @@ mod test {
         n1.connect_to_peer(n2.address()).await.unwrap();
         let n2_n1_addres = {
             while n2.sample_peers(1).await.is_empty() {
-                tokio::time::delay_for(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
             n2.sample_peers(1).await.into_iter().next().unwrap()
         };

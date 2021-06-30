@@ -1181,7 +1181,7 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
 /// Future timeout to use for handle_next_event
 fn test_timeout(timeout: Duration) -> impl Future<Output = &'static str> + Unpin {
     Box::pin(async move {
-        tokio::time::delay_for(timeout).await;
+        tokio::time::sleep(timeout).await;
         "Test timeout elapsed"
     })
 }
