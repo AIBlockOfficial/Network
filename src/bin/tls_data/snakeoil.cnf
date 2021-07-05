@@ -1,0 +1,31 @@
+[ req ]
+default_bits            = 4096
+default_md              = sha256
+default_keyfile         = snakeoil.pem
+distinguished_name      = req_distinguished_name
+x509_extensions = v3_ca # The extentions to add to the self signed cert
+req_extensions  = v3_req
+x509_extensions = usr_cert
+days                   = 999
+
+[ usr_cert ]
+basicConstraints=CA:FALSE
+nsCertType                      = client, server, email
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection
+nsComment                       = "OpenSSL Generated Certificate"
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+subjectAltName         = DNS:zenotta.xyz
+
+[ v3_req ]
+extendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName         = DNS:zenotta.xyz
+
+[req_distinguished_name]
+countryName            = countryName
+countryName_default    = US
+commonName             = commonName
+commonName_default     = zenotta.xyz

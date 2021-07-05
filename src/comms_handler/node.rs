@@ -80,6 +80,7 @@
 //! [serde]: https://serde.rs
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
+use super::tcp_tls::{TcpTlsConfig, TcpTlsConnector, TcpTlsListner, TcpTlsStream};
 use super::{CommsError, Event, Result};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{CommMessage, NodeType, Token};
@@ -96,7 +97,6 @@ use std::sync::Arc;
 use std::{fmt, io};
 use tokio::{
     self,
-    net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
@@ -130,6 +130,8 @@ pub struct Node {
     listener_stop_and_join_handles: Arc<Mutex<CloseListener>>,
     /// Pause accepting and starting connections.
     listener_and_connect_paused: Arc<RwLock<bool>>,
+    /// Connector used to initialize connection.
+    tcp_tls_connector: TcpTlsConnector,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
     /// Node type.
@@ -214,25 +216,20 @@ impl Node {
         network_version: u32,
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let tcp_tls_config = TcpTlsConfig::new_common_config();
 
-        // TODO: wrap this socket with TLS 1.3 - https://github.com/tokio-rs/tls
-        let (listener, listener_address) = {
-            let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-            bind_address.set_port(address.port());
-
-            let listener = TcpListener::bind(bind_address).await?;
-            let mut listener_address = address;
-            listener_address.set_port(listener.local_addr()?.port());
-
-            (listener, listener_address)
-        };
+        let listener = TcpTlsListner::new(&tcp_tls_config, address).await?;
+        let listener_address = listener.listener_address();
         let span = info_span!("node", ?listener_address);
+
+        let tcp_tls_connector = TcpTlsConnector::new(&tcp_tls_config)?;
 
         Ok(Self {
             network_version,
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
             listener_and_connect_paused: Arc::new(RwLock::new(false)),
+            tcp_tls_connector,
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
@@ -255,24 +252,15 @@ impl Node {
         self.connect_to_handshake_contacts = value;
     }
 
-    fn listener_as_stream(listener: TcpListener) -> impl Stream<Item = std::io::Result<TcpStream>> {
-        async_stream::try_stream! {
-            loop {
-                let (stream, _addr) = listener.accept().await?;
-                yield stream;
-            }
-        }
-    }
-
     /// Handles the listener.
-    async fn listen(self, listener: TcpListener) -> Result<Self> {
+    async fn listen(self, listener: TcpTlsListner) -> Result<Self> {
         let node = self.clone();
         let (close_tx, close_rx) = oneshot::channel();
         let handle = tokio::spawn(
             async move {
                 trace!("listen");
 
-                let listener = Self::listener_as_stream(listener);
+                let listener = listener.listener_as_stream();
                 futures_util::pin_mut!(listener);
 
                 use super::stream_cancel::StreamCancel;
@@ -290,7 +278,7 @@ impl Node {
                             // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
-                                peer_addr = tracing::field::debug(conn.peer_addr())
+                                peer_addr = tracing::field::debug(conn.get_ref().0.peer_addr())
                             );
 
                             let new_peer = node.add_peer(conn, false, peer_span, true).await;
@@ -326,7 +314,7 @@ impl Node {
     ///                    connecting to this peer.
     async fn add_peer(
         &self,
-        socket: TcpStream,
+        socket: TcpTlsStream,
         force_add: bool,
         peer_span: Span,
         is_initiator: bool,
@@ -342,7 +330,7 @@ impl Node {
 
         if !is_full {
             // Spawn the tasks to manage the peer
-            let peer_addr = socket.peer_addr().unwrap();
+            let peer_addr = socket.get_ref().0.peer_addr().unwrap();
             let peer = self.handle_peer(socket, peer_span.clone(), is_initiator);
 
             peer_span.in_scope(|| trace!("added new peer: {:?}", peer_addr));
@@ -373,8 +361,8 @@ impl Node {
                 return Err(CommsError::PeerNotFound);
             }
 
-            let stream = TcpStream::connect(peer).await?;
-            let peer_addr = stream.peer_addr()?;
+            let stream = self.tcp_tls_connector.connect(peer).await?;
+            let peer_addr = stream.get_ref().0.peer_addr()?;
 
             let span = info_span!(parent: &self.span, "connect_to", ?peer_addr);
             self.add_peer(stream, false, span, false).await?;
@@ -900,8 +888,8 @@ impl Node {
     ///
     /// ### Returns
     /// A new `Peer` instance.
-    fn handle_peer(&self, socket: TcpStream, span: Span, is_initiator: bool) -> Peer {
-        let peer_addr = socket.peer_addr().unwrap();
+    fn handle_peer(&self, socket: TcpTlsStream, span: Span, is_initiator: bool) -> Peer {
+        let peer_addr = socket.get_ref().0.peer_addr().unwrap();
 
         let (send_tx, mut send_rx) = mpsc::channel(128);
 
@@ -1007,7 +995,7 @@ impl Node {
 
 /// Transforms a stream of incoming TCP frames into a stream of deserialized messages.
 fn get_messages_stream(
-    sock_in: FramedRead<tokio::io::ReadHalf<TcpStream>, LengthDelimitedCodec>,
+    sock_in: FramedRead<tokio::io::ReadHalf<TcpTlsStream>, LengthDelimitedCodec>,
 ) -> (impl Stream<Item = CommMessage>, oneshot::Sender<()>) {
     let messages = sock_in.filter_map(|frame| {
         trace!(?frame, "recv_frame");

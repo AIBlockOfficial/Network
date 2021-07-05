@@ -1,11 +1,16 @@
 use super::Event;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
+use tokio_rustls::rustls::TLSError;
 
 #[derive(Debug)]
 pub enum CommsError {
+    /// Config error when starting up
+    ConfigError(&'static str),
     /// Input/output-related communication error.
     Io(io::Error),
+    /// TLS library error
+    TlsError(TLSError),
     /// The peers list is empty.
     PeerListEmpty,
     /// The peers list is at the limit.
@@ -27,15 +32,17 @@ pub enum CommsError {
 impl fmt::Display for CommsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CommsError::Io(err) => write!(f, "I/O error: {}", err),
-            CommsError::PeerListFull => write!(f, "Peer list is full"),
-            CommsError::PeerListEmpty => write!(f, "Peer list is empty"),
-            CommsError::PeerNotFound => write!(f, "Peer not found"),
-            CommsError::PeerDuplicate => write!(f, "Peer has invalid state"),
-            CommsError::PeerInvalidState => write!(f, "Duplicate peer"),
-            CommsError::PeerIncompatible => write!(f, "Peer incompatible"),
-            CommsError::Serialization(err) => write!(f, "Serialization error: {}", err),
-            CommsError::ChannelSendError(err) => write!(f, "MPSC channel send error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {}", err),
+            Self::Io(err) => write!(f, "I/O error: {}", err),
+            Self::TlsError(err) => write!(f, "TLS error: {}", err),
+            Self::PeerListFull => write!(f, "Peer list is full"),
+            Self::PeerListEmpty => write!(f, "Peer list is empty"),
+            Self::PeerNotFound => write!(f, "Peer not found"),
+            Self::PeerDuplicate => write!(f, "Peer has invalid state"),
+            Self::PeerInvalidState => write!(f, "Duplicate peer"),
+            Self::PeerIncompatible => write!(f, "Peer incompatible"),
+            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ChannelSendError(err) => write!(f, "MPSC channel send error: {}", err),
         }
     }
 }
@@ -43,15 +50,17 @@ impl fmt::Display for CommsError {
 impl Error for CommsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            CommsError::Io(err) => Some(err),
-            CommsError::PeerListFull => None,
-            CommsError::PeerListEmpty => None,
-            CommsError::PeerNotFound => None,
-            CommsError::PeerInvalidState => None,
-            CommsError::PeerDuplicate => None,
-            CommsError::PeerIncompatible => None,
-            CommsError::Serialization(err) => Some(err),
-            CommsError::ChannelSendError(err) => Some(err),
+            Self::ConfigError(_) => None,
+            Self::Io(err) => Some(err),
+            Self::TlsError(err) => Some(err),
+            Self::PeerListFull => None,
+            Self::PeerListEmpty => None,
+            Self::PeerNotFound => None,
+            Self::PeerInvalidState => None,
+            Self::PeerDuplicate => None,
+            Self::PeerIncompatible => None,
+            Self::Serialization(err) => Some(err),
+            Self::ChannelSendError(err) => Some(err),
         }
     }
 }
@@ -71,5 +80,11 @@ impl From<bincode::Error> for CommsError {
 impl From<mpsc::error::SendError<Event>> for CommsError {
     fn from(other: mpsc::error::SendError<Event>) -> Self {
         Self::ChannelSendError(other)
+    }
+}
+
+impl From<TLSError> for CommsError {
+    fn from(other: TLSError) -> Self {
+        Self::TlsError(other)
     }
 }

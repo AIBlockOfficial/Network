@@ -3,6 +3,7 @@
 mod error;
 mod node;
 mod stream_cancel;
+pub mod tcp_tls;
 #[cfg(test)]
 mod tests;
 
