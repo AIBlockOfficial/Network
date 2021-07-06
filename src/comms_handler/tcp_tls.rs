@@ -113,6 +113,7 @@ pub struct TcpTlsConfig {
     pem_certs: String,
     pem_rsa_private_keys: String,
     trusted_pem_certs: Vec<String>,
+    use_tls: bool,
 }
 
 impl TcpTlsConfig {
@@ -121,21 +122,24 @@ impl TcpTlsConfig {
             pem_certs: TEST_PEM_CERTIFICATE.to_owned(),
             pem_rsa_private_keys: TEST_PEM_PRIVATE_KEY.to_owned(),
             trusted_pem_certs: vec![TEST_PEM_CERTIFICATE.to_owned()],
+            use_tls: true,
         }
     }
 }
 
 pub struct TcpTlsListner {
     tcp_listener: TcpListener,
-    tls_acceptor: TlsAcceptor,
+    tls_acceptor: Option<TlsAcceptor>,
     listener_address: SocketAddr,
 }
 
 impl TcpTlsListner {
     pub async fn new(config: &TcpTlsConfig, address: SocketAddr) -> Result<Self> {
-        let tls_acceptor = {
+        let tls_acceptor = if config.use_tls {
             let server_config = new_server_config(config)?;
-            TlsAcceptor::from(Arc::new(server_config))
+            Some(TlsAcceptor::from(Arc::new(server_config)))
+        } else {
+            None
         };
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
@@ -166,22 +170,29 @@ impl TcpTlsListner {
 
     async fn next_tcp_tls_stream(&mut self) -> Result<TcpTlsStream> {
         let (stream, _addr) = self.tcp_listener.accept().await?;
-        let stream = self.tls_acceptor.accept(stream).await?;
-        let peer_addr = stream.get_ref().0.peer_addr()?;
-        Ok(TcpTlsStream::Server(stream, peer_addr))
+        if let Some(tls_acceptor) = &mut self.tls_acceptor {
+            let stream = tls_acceptor.accept(stream).await?;
+            let peer_addr = stream.get_ref().0.peer_addr()?;
+            Ok(TcpTlsStream::Server(stream, peer_addr))
+        } else {
+            let peer_addr = stream.peer_addr()?;
+            Ok(TcpTlsStream::RawTcp(stream, peer_addr))
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct TcpTlsConnector {
-    tls_connector: TlsConnector,
+    tls_connector: Option<TlsConnector>,
 }
 
 impl TcpTlsConnector {
     pub fn new(config: &TcpTlsConfig) -> Result<Self> {
-        let tls_connector = {
+        let tls_connector = if config.use_tls {
             let client_config = new_client_config(config)?;
-            TlsConnector::from(Arc::new(client_config))
+            Some(TlsConnector::from(Arc::new(client_config)))
+        } else {
+            None
         };
 
         Ok(Self { tls_connector })
@@ -190,11 +201,16 @@ impl TcpTlsConnector {
     pub async fn connect(&mut self, addr: SocketAddr) -> Result<TcpTlsStream> {
         let stream = TcpStream::connect(addr).await?;
 
-        let domain = DNSNameRef::try_from_ascii_str("zenotta.xyz")
-            .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
-        let stream = self.tls_connector.connect(domain, stream).await?;
-        let peer_addr = stream.get_ref().0.peer_addr()?;
-        Ok(TcpTlsStream::Client(stream, peer_addr))
+        if let Some(tls_connector) = &mut self.tls_connector {
+            let domain = DNSNameRef::try_from_ascii_str("zenotta.xyz")
+                .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+            let stream = tls_connector.connect(domain, stream).await?;
+            let peer_addr = stream.get_ref().0.peer_addr()?;
+            Ok(TcpTlsStream::Client(stream, peer_addr))
+        } else {
+            let peer_addr = stream.peer_addr()?;
+            Ok(TcpTlsStream::RawTcp(stream, peer_addr))
+        }
     }
 }
 
@@ -257,12 +273,13 @@ fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
 pub enum TcpTlsStream {
     Client(TlsStreamClient, SocketAddr),
     Server(TlsStreamServer, SocketAddr),
+    RawTcp(TcpStream, SocketAddr),
 }
 
 impl TcpTlsStream {
     pub fn peer_addr(&self) -> SocketAddr {
         match self {
-            Self::Client(_, a) | Self::Server(_, a) => *a,
+            Self::Client(_, a) | Self::Server(_, a) | Self::RawTcp(_, a) => *a,
         }
     }
 }
@@ -271,12 +288,13 @@ impl AsyncRead for TcpTlsStream {
     #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
+        ctx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Client(x, _) => Pin::new(x).poll_read(cx, buf),
-            Self::Server(x, _) => Pin::new(x).poll_read(cx, buf),
+            Self::Client(s, _) => Pin::new(s).poll_read(ctx, buffer),
+            Self::Server(s, _) => Pin::new(s).poll_read(ctx, buffer),
+            Self::RawTcp(s, _) => Pin::new(s).poll_read(ctx, buffer),
         }
     }
 }
@@ -285,28 +303,31 @@ impl AsyncWrite for TcpTlsStream {
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
+        ctx: &mut Context<'_>,
+        buffer: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
-            Self::Client(x, _) => Pin::new(x).poll_write(cx, buf),
-            Self::Server(x, _) => Pin::new(x).poll_write(cx, buf),
+            Self::Client(s, _) => Pin::new(s).poll_write(ctx, buffer),
+            Self::Server(s, _) => Pin::new(s).poll_write(ctx, buffer),
+            Self::RawTcp(s, _) => Pin::new(s).poll_write(ctx, buffer),
         }
     }
 
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Client(x, _) => Pin::new(x).poll_flush(cx),
-            Self::Server(x, _) => Pin::new(x).poll_flush(cx),
+            Self::Client(s, _) => Pin::new(s).poll_flush(ctx),
+            Self::Server(s, _) => Pin::new(s).poll_flush(ctx),
+            Self::RawTcp(s, _) => Pin::new(s).poll_flush(ctx),
         }
     }
 
     #[inline]
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Client(x, _) => Pin::new(x).poll_shutdown(cx),
-            Self::Server(x, _) => Pin::new(x).poll_shutdown(cx),
+            Self::Client(s, _) => Pin::new(s).poll_shutdown(ctx),
+            Self::Server(s, _) => Pin::new(s).poll_shutdown(ctx),
+            Self::RawTcp(s, _) => Pin::new(s).poll_shutdown(ctx),
         }
     }
 }
