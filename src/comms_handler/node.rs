@@ -278,7 +278,7 @@ impl Node {
                             // TODO: have a timeout for incoming handshake to disconnect clients who linger on without any communication
                             let peer_span = info_span!(
                                 "accepted peer",
-                                peer_addr = tracing::field::debug(conn.get_ref().0.peer_addr())
+                                peer_addr = tracing::field::debug(conn.peer_addr())
                             );
 
                             let new_peer = node.add_peer(conn, false, peer_span, true).await;
@@ -330,7 +330,7 @@ impl Node {
 
         if !is_full {
             // Spawn the tasks to manage the peer
-            let peer_addr = socket.get_ref().0.peer_addr().unwrap();
+            let peer_addr = socket.peer_addr();
             let peer = self.handle_peer(socket, peer_span.clone(), is_initiator);
 
             peer_span.in_scope(|| trace!("added new peer: {:?}", peer_addr));
@@ -362,7 +362,7 @@ impl Node {
             }
 
             let stream = self.tcp_tls_connector.connect(peer).await?;
-            let peer_addr = stream.get_ref().0.peer_addr()?;
+            let peer_addr = stream.peer_addr();
 
             let span = info_span!(parent: &self.span, "connect_to", ?peer_addr);
             self.add_peer(stream, false, span, false).await?;
@@ -889,7 +889,7 @@ impl Node {
     /// ### Returns
     /// A new `Peer` instance.
     fn handle_peer(&self, socket: TcpTlsStream, span: Span, is_initiator: bool) -> Peer {
-        let peer_addr = socket.get_ref().0.peer_addr().unwrap();
+        let peer_addr = socket.peer_addr();
 
         let (send_tx, mut send_rx) = mpsc::channel(128);
 

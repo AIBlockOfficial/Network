@@ -7,6 +7,9 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 //use tokio_stream::{Stream, StreamExt};
 use std::fmt;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
     AllowAnyAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
@@ -103,7 +106,8 @@ lq2zd/dciIJThWe4lNZeG1hzoOb+BrVXuQnnh2c8fH6tSBbMw1BQzFhh/fvlx+31
 9DdegeXpRZqkVmsEKE65GhcmlLPnHg==
 -----END PRIVATE KEY-----";
 
-pub type TcpTlsStream = tokio_rustls::TlsStream<TcpStream>;
+pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
+pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 
 pub struct TcpTlsConfig {
     pem_certs: String,
@@ -163,8 +167,8 @@ impl TcpTlsListner {
     async fn next_tcp_tls_stream(&mut self) -> Result<TcpTlsStream> {
         let (stream, _addr) = self.tcp_listener.accept().await?;
         let stream = self.tls_acceptor.accept(stream).await?;
-        let _peer_addr = stream.get_ref().0.peer_addr()?;
-        Ok(TcpTlsStream::Server(stream))
+        let peer_addr = stream.get_ref().0.peer_addr()?;
+        Ok(TcpTlsStream::Server(stream, peer_addr))
     }
 }
 
@@ -189,8 +193,8 @@ impl TcpTlsConnector {
         let domain = DNSNameRef::try_from_ascii_str("zenotta.xyz")
             .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
         let stream = self.tls_connector.connect(domain, stream).await?;
-        let _peer_addr = stream.get_ref().0.peer_addr()?;
-        Ok(TcpTlsStream::Client(stream))
+        let peer_addr = stream.get_ref().0.peer_addr()?;
+        Ok(TcpTlsStream::Client(stream, peer_addr))
     }
 }
 
@@ -247,4 +251,62 @@ fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
     client_config.root_store = root_store;
     client_config.set_single_client_cert(certs, keys.remove(0))?;
     Ok(client_config)
+}
+
+#[derive(Debug)]
+pub enum TcpTlsStream {
+    Client(TlsStreamClient, SocketAddr),
+    Server(TlsStreamServer, SocketAddr),
+}
+
+impl TcpTlsStream {
+    pub fn peer_addr(&self) -> SocketAddr {
+        match self {
+            Self::Client(_, a) | Self::Server(_, a) => *a,
+        }
+    }
+}
+
+impl AsyncRead for TcpTlsStream {
+    #[inline]
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Client(x, _) => Pin::new(x).poll_read(cx, buf),
+            Self::Server(x, _) => Pin::new(x).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for TcpTlsStream {
+    #[inline]
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Client(x, _) => Pin::new(x).poll_write(cx, buf),
+            Self::Server(x, _) => Pin::new(x).poll_write(cx, buf),
+        }
+    }
+
+    #[inline]
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Client(x, _) => Pin::new(x).poll_flush(cx),
+            Self::Server(x, _) => Pin::new(x).poll_flush(cx),
+        }
+    }
+
+    #[inline]
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Client(x, _) => Pin::new(x).poll_shutdown(cx),
+            Self::Server(x, _) => Pin::new(x).poll_shutdown(cx),
+        }
+    }
 }
