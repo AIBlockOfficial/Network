@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Event, Node};
+use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
@@ -140,8 +140,9 @@ impl UserNode {
             .ok_or(UserError::ConfigError("Invalid compute index"))?
             .address;
         let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
+        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
 
-        let node = Node::new(addr, PEER_LIMIT, NodeType::User).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
         let wallet_db = WalletDb::new(
             config.user_db_mode,
             extra.wallet_db.take(),

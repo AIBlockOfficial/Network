@@ -110,6 +110,7 @@ pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
 pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 
 pub struct TcpTlsConfig {
+    address: SocketAddr,
     pem_certs: String,
     pem_rsa_private_keys: String,
     trusted_pem_certs: Vec<String>,
@@ -117,12 +118,23 @@ pub struct TcpTlsConfig {
 }
 
 impl TcpTlsConfig {
-    pub fn new_common_config() -> Self {
+    pub fn new_common_config(address: SocketAddr) -> Self {
         Self {
+            address,
             pem_certs: TEST_PEM_CERTIFICATE.to_owned(),
             pem_rsa_private_keys: TEST_PEM_PRIVATE_KEY.to_owned(),
             trusted_pem_certs: vec![TEST_PEM_CERTIFICATE.to_owned()],
             use_tls: true,
+        }
+    }
+
+    pub fn new_no_tls(address: SocketAddr) -> Self {
+        Self {
+            address,
+            pem_certs: Default::default(),
+            pem_rsa_private_keys: Default::default(),
+            trusted_pem_certs: Default::default(),
+            use_tls: false,
         }
     }
 }
@@ -134,7 +146,7 @@ pub struct TcpTlsListner {
 }
 
 impl TcpTlsListner {
-    pub async fn new(config: &TcpTlsConfig, address: SocketAddr) -> Result<Self> {
+    pub async fn new(config: &TcpTlsConfig) -> Result<Self> {
         let tls_acceptor = if config.use_tls {
             let server_config = new_server_config(config)?;
             Some(TlsAcceptor::from(Arc::new(server_config)))
@@ -143,10 +155,10 @@ impl TcpTlsListner {
         };
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-        bind_address.set_port(address.port());
+        bind_address.set_port(config.address.port());
 
         let tcp_listener = TcpListener::bind(bind_address).await?;
-        let mut listener_address = address;
+        let mut listener_address = config.address;
         listener_address.set_port(tcp_listener.local_addr()?.port());
 
         Ok(Self {

@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Event, Node};
+use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{
     DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType,
 };
@@ -130,8 +130,9 @@ impl PreLaunchNode {
             .get(config.pre_launch_node_idx)
             .ok_or(PreLaunchError::ConfigError("Invalid pre-launch index"))?
             .address;
+        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
 
-        let node = Node::new(addr, PEER_LIMIT, NodeType::PreLaunch).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::PreLaunch).await?;
         let db = {
             let spec = &config.db_spec;
             db_utils::new_db(config.pre_launch_db_mode, spec, extra.db.take())

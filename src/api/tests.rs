@@ -1,6 +1,6 @@
 use crate::api::handlers::{Addresses, EncapsulatedData, EncapsulatedPayment, PublicKeyAddresses};
 use crate::api::routes;
-use crate::comms_handler::{Event, Node};
+use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, DATA_ENCAPSULATION_KEY, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
@@ -604,7 +604,10 @@ async fn test_post_update_running_total() {
 
 async fn new_self_user_node() -> (Node, SocketAddr) {
     let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_common_config(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
+        .await
+        .unwrap();
     let self_socket = self_node.address();
     (self_node, self_socket)
 }

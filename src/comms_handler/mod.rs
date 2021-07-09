@@ -9,6 +9,7 @@ mod tests;
 
 pub use error::CommsError;
 pub use node::Node;
+pub use tcp_tls::TcpTlsConfig;
 
 use bytes::Bytes;
 use std::net::SocketAddr;

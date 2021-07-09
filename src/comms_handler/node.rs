@@ -80,8 +80,8 @@
 //! [serde]: https://serde.rs
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
-use super::tcp_tls::{TcpTlsConfig, TcpTlsConnector, TcpTlsListner, TcpTlsStream};
-use super::{CommsError, Event, Result};
+use super::tcp_tls::{TcpTlsConnector, TcpTlsListner, TcpTlsStream};
+use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
@@ -195,34 +195,37 @@ impl Node {
     /// Creates a new node.
     ///
     /// ### Arguments
-    /// * `address`    - socket address the node listener will use.
+    /// * `config`     - socket address and tls config the node listener will use.
     /// * `peer_limit` - the maximum number of peers that this node will handle.
     /// * `node_type`  - the node type that will be broadcasted on the network.
-    pub async fn new(address: SocketAddr, peer_limit: usize, node_type: NodeType) -> Result<Self> {
-        Self::new_with_version(address, peer_limit, node_type, NETWORK_VERSION).await
+    pub async fn new(
+        config: &TcpTlsConfig,
+        peer_limit: usize,
+        node_type: NodeType,
+    ) -> Result<Self> {
+        Self::new_with_version(config, peer_limit, node_type, NETWORK_VERSION).await
     }
 
     /// Creates a new node.
     ///
     /// ### Arguments
-    /// * `address`         - socket address the node listener will use.
+    /// * `config`          - socket address and tls config the node listener will use.
     /// * `peer_limit`      - the maximum number of peers that this node will handle.
     /// * `node_type`       - the node type that will be broadcasted on the network.
     /// * `network_version` - The version of the network the node is running.
     pub async fn new_with_version(
-        address: SocketAddr,
+        config: &TcpTlsConfig,
         peer_limit: usize,
         node_type: NodeType,
         network_version: u32,
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let tcp_tls_config = TcpTlsConfig::new_common_config();
 
-        let listener = TcpTlsListner::new(&tcp_tls_config, address).await?;
+        let listener = TcpTlsListner::new(&config).await?;
         let listener_address = listener.listener_address();
         let span = info_span!("node", ?listener_address);
 
-        let tcp_tls_connector = TcpTlsConnector::new(&tcp_tls_config)?;
+        let tcp_tls_connector = TcpTlsConnector::new(config)?;
 
         Ok(Self {
             network_version,
@@ -1098,9 +1101,15 @@ mod test {
 
     async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
         let addr = "127.0.0.1:0".parse().unwrap();
-        Node::new_with_version(addr, peer_limit, NodeType::Compute, network_version)
-            .await
-            .unwrap()
+        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        Node::new_with_version(
+            &tcp_tls_config,
+            peer_limit,
+            NodeType::Compute,
+            network_version,
+        )
+        .await
+        .unwrap()
     }
 
     async fn complete_compute_nodes(nodes: Vec<Node>) {

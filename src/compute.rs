@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Event};
+use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
 use crate::constants::{DB_PATH, PEER_LIMIT};
@@ -161,8 +161,9 @@ impl ComputeNode {
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
+        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
 
-        let node = Node::new(addr, PEER_LIMIT, NodeType::Compute).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
         let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take());

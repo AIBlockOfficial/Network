@@ -1,6 +1,6 @@
 //! Tests for peer-to-peer communication.
 
-use super::{CommsError, Event, Node};
+use super::{CommsError, Event, Node, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::NodeType;
 use bincode::deserialize;
@@ -366,8 +366,9 @@ async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> 
     let mut nodes = Vec::new();
     for _ in 0..num_nodes {
         let addr = "127.0.0.1:0".parse().unwrap();
+        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
         nodes.push(
-            Node::new(addr, peer_limit, NodeType::Compute)
+            Node::new(&tcp_tls_config, peer_limit, NodeType::Compute)
                 .await
                 .unwrap(),
         );
@@ -385,7 +386,8 @@ async fn create_node_type_version(
     network_version: u32,
 ) -> Node {
     let addr = "127.0.0.1:0".parse().unwrap();
-    Node::new_with_version(addr, peer_limit, node_type, network_version)
+    let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+    Node::new_with_version(&tcp_tls_config, peer_limit, node_type, network_version)
         .await
         .unwrap()
 }
