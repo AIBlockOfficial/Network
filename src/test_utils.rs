@@ -6,7 +6,7 @@ use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
-    PreLaunchNodeType, StorageNodeConfig, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
+    PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
     WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
@@ -81,6 +81,7 @@ pub struct NetworkConfig {
     pub passphrase: Option<String>,
     pub user_auto_donate: u64,
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
+    pub tls_config: TestTlsSpec,
 }
 
 /// Node info to create node
@@ -95,10 +96,27 @@ pub struct NetworkNodeInfo {
 /// Info needed to create all nodes in network
 pub struct NetworkInstanceInfo {
     pub node_infos: BTreeMap<String, NetworkNodeInfo>,
+    pub socket_name_mapping: BTreeMap<SocketAddr, String>,
     pub miner_nodes: Vec<NodeSpec>,
     pub compute_nodes: Vec<NodeSpec>,
     pub storage_nodes: Vec<NodeSpec>,
     pub user_nodes: Vec<NodeSpec>,
+}
+
+#[derive(Clone, Default)]
+pub struct TestTlsSpec {
+    pub pem_certificates: BTreeMap<String, String>,
+    pub pem_rsa_private_keys: BTreeMap<String, String>,
+}
+
+impl TestTlsSpec {
+    fn make_tls_spec(&self, info: &NetworkInstanceInfo) -> TlsSpec {
+        TlsSpec {
+            socket_name_mapping: info.socket_name_mapping.clone(),
+            pem_certificates: self.pem_certificates.clone(),
+            pem_rsa_private_keys: self.pem_rsa_private_keys.clone(),
+        }
+    }
 }
 
 /// Types of nodes to create
@@ -705,14 +723,19 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
     }
 
     let mem_db = config.in_memory_db;
-    let node_infos = nodes
+    let node_infos: BTreeMap<_, _> = nodes
         .iter()
         .flat_map(|(node_type, infos)| node_infos(*node_type, infos, mem_db))
+        .collect();
+    let socket_name_mapping: BTreeMap<_, _> = node_infos
+        .iter()
+        .map(|(name, info)| (info.node_spec.address, name.clone()))
         .collect();
 
     let mut nodes: BTreeMap<_, _> = nodes.into_iter().map(|(k, (_, v))| (k, v)).collect();
     NetworkInstanceInfo {
         node_infos,
+        socket_name_mapping,
         miner_nodes: nodes.remove(&NodeType::Miner).unwrap_or_default(),
         compute_nodes: nodes.remove(&NodeType::Compute).unwrap_or_default(),
         storage_nodes: nodes.remove(&NodeType::Storage).unwrap_or_default(),
@@ -1047,12 +1070,13 @@ async fn init_compute(
     let compute_raft = if config.compute_raft { 1 } else { 0 };
 
     let config = ComputeNodeConfig {
-        compute_raft,
         compute_db_mode: node_info.db_mode,
         compute_node_idx: node_info.index,
+        tls_config: config.tls_config.make_tls_spec(info),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
+        compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_transaction_timeout: 100 / config.test_duration_divider,
         compute_seed_utxo: config.compute_seed_utxo.clone(),

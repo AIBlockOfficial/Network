@@ -3728,6 +3728,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         passphrase: Some("Test Passphrase".to_owned()),
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
+        tls_config: Default::default(),
     }
 }
 

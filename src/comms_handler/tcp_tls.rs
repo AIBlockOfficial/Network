@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 //use tokio_stream::{Stream, StreamExt};
+use crate::configurations::TlsSpec;
 use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -18,6 +19,8 @@ use tokio_rustls::rustls::{
 use tokio_rustls::webpki::DNSNameRef;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
+
+const TEST_TLS_NAME: &str = "zenotta.xyz";
 
 const TEST_PEM_CERTIFICATE: &str = r"-----BEGIN CERTIFICATE-----
 MIIFvDCCA6SgAwIBAgIUaxSy5C/KxCfcqpivSHhDM4OaF0QwDQYJKoZIhvcNAQEL
@@ -111,6 +114,7 @@ pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 
 pub struct TcpTlsConfig {
     address: SocketAddr,
+    name: String,
     pem_certs: String,
     pem_rsa_private_keys: String,
     trusted_pem_certs: Vec<String>,
@@ -121,6 +125,7 @@ impl TcpTlsConfig {
     pub fn new_common_config(address: SocketAddr) -> Self {
         Self {
             address,
+            name: TEST_TLS_NAME.to_owned(),
             pem_certs: TEST_PEM_CERTIFICATE.to_owned(),
             pem_rsa_private_keys: TEST_PEM_PRIVATE_KEY.to_owned(),
             trusted_pem_certs: vec![TEST_PEM_CERTIFICATE.to_owned()],
@@ -131,10 +136,39 @@ impl TcpTlsConfig {
     pub fn new_no_tls(address: SocketAddr) -> Self {
         Self {
             address,
+            name: Default::default(),
             pem_certs: Default::default(),
             pem_rsa_private_keys: Default::default(),
             trusted_pem_certs: Default::default(),
             use_tls: false,
+        }
+    }
+
+    pub fn from_tls_spec(address: SocketAddr, config: &TlsSpec) -> Result<Self> {
+        if config.pem_certificates.is_empty() {
+            Ok(Self::new_no_tls(address))
+        } else {
+            let name = config
+                .socket_name_mapping
+                .get(&address)
+                .ok_or(CommsError::ConfigError("Missing TLS node name mapping"))?;
+
+            Ok(Self {
+                address,
+                name: name.clone(),
+                pem_certs: config
+                    .pem_certificates
+                    .get(name)
+                    .ok_or(CommsError::ConfigError("Missing TLS node certificate"))?
+                    .clone(),
+                pem_rsa_private_keys: config
+                    .pem_rsa_private_keys
+                    .get(name)
+                    .ok_or(CommsError::ConfigError("Missing TLS node keys"))?
+                    .clone(),
+                trusted_pem_certs: config.pem_certificates.values().cloned().collect(),
+                use_tls: true,
+            })
         }
     }
 }
@@ -214,7 +248,7 @@ impl TcpTlsConnector {
         let stream = TcpStream::connect(addr).await?;
 
         if let Some(tls_connector) = &mut self.tls_connector {
-            let domain = DNSNameRef::try_from_ascii_str("zenotta.xyz")
+            let domain = DNSNameRef::try_from_ascii_str(TEST_TLS_NAME)
                 .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
             let stream = tls_connector.connect(domain, stream).await?;
             let peer_addr = stream.get_ref().0.peer_addr()?;
