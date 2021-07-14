@@ -149,6 +149,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(tls_setting_file))
         .unwrap();
+
     if let Some(index) = matches.value_of("index") {
         settings.set("compute_node_idx", index).unwrap();
         let mut db_mode = settings.get_table("compute_db_mode").unwrap();

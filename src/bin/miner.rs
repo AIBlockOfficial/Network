@@ -85,6 +85,12 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("tls_config")
+                .long("tls_config")
+                .help("Use file to provide tls configuration options.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
@@ -122,13 +128,21 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let setting_file = matches
         .value_of("config")
         .unwrap_or("src/bin/node_settings.toml");
+    let tls_setting_file = matches
+        .value_of("tls_config")
+        .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("miner_node_idx", 0).unwrap();
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
+
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
+    settings
+        .merge(config::File::with_name(tls_setting_file))
+        .unwrap();
+
     if let Some(index) = matches.value_of("index") {
         settings.set("miner_node_idx", index).unwrap();
         let mut db_mode = settings.get_table("miner_db_mode").unwrap();

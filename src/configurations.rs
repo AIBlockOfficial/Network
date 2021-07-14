@@ -96,6 +96,8 @@ pub struct StorageNodeConfig {
     pub storage_node_idx: usize,
     /// Use specific database
     pub storage_db_mode: DbMode,
+    /// Configuration for handling TLS
+    pub tls_config: TlsSpec,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
@@ -119,6 +121,8 @@ pub struct MinerNodeConfig {
     pub miner_node_idx: usize,
     /// Use specific database
     pub miner_db_mode: DbMode,
+    /// Configuration for handling TLS
+    pub tls_config: TlsSpec,
     /// Index of the compute node to use in compute_nodes
     pub miner_compute_node_idx: usize,
     /// Index of the storage node to use in storage_nodes
@@ -142,6 +146,8 @@ pub struct UserNodeConfig {
     pub user_node_idx: usize,
     /// Use specific database
     pub user_db_mode: DbMode,
+    /// Configuration for handling TLS
+    pub tls_config: TlsSpec,
     /// Index of the compute node to use in compute_nodes
     pub user_compute_node_idx: usize,
     /// Peer node index in user_nodes
@@ -176,6 +182,8 @@ pub struct PreLaunchNodeConfig {
     pub compute_node_idx: usize,
     /// Use specific database
     pub compute_db_mode: DbMode,
+    /// Configuration for handling TLS
+    pub tls_config: TlsSpec,
     /// Index of the current node in compute_nodes
     pub storage_node_idx: usize,
     /// Use specific database

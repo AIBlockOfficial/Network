@@ -131,6 +131,12 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("tls_config")
+                .long("tls_config")
+                .help("Use file to provide tls configuration options.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .help("Run the compute node using the given initial block config file.")
@@ -190,6 +196,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let intial_block_setting_file = matches
         .value_of("initial_block_config")
         .unwrap_or("src/bin/initial_block.json");
+    let tls_setting_file = matches
+        .value_of("tls_config")
+        .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
@@ -197,11 +206,15 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_setup_tx_max_count", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
+
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
     settings
         .merge(config::File::with_name(intial_block_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(tls_setting_file))
         .unwrap();
 
     if let Some(index) = matches.value_of("index") {

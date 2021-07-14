@@ -147,7 +147,7 @@ impl StorageNode {
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid compute index"))?
             .address;
-        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());

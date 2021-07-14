@@ -140,7 +140,7 @@ impl UserNode {
             .ok_or(UserError::ConfigError("Invalid compute index"))?
             .address;
         let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
-        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
         let wallet_db = WalletDb::new(

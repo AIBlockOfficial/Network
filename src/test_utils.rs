@@ -2,7 +2,6 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
-use crate::comms_handler::tcp_tls;
 use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{
@@ -1003,6 +1002,7 @@ async fn init_miner(
     let config = MinerNodeConfig {
         miner_node_idx: node_info.index,
         miner_db_mode: node_info.db_mode,
+        tls_config: config.tls_config.make_tls_spec(info),
         miner_compute_node_idx,
         miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
@@ -1038,6 +1038,7 @@ async fn init_storage(
     let config = StorageNodeConfig {
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
+        tls_config: config.tls_config.make_tls_spec(info),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
@@ -1112,6 +1113,7 @@ async fn init_user(
     let config = UserNodeConfig {
         user_node_idx: node_info.index,
         user_db_mode: node_info.db_mode,
+        tls_config: config.tls_config.make_tls_spec(info),
         user_compute_node_idx: 0,
         peer_user_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
@@ -1140,7 +1142,7 @@ async fn init_user(
 /// * `extra`  - additional parameter for construction
 async fn init_pre_launch(
     name: &str,
-    _config: &NetworkConfig,
+    config: &NetworkConfig,
     info: &NetworkInstanceInfo,
     extra: ExtraNodeParams,
 ) -> ArcPreLaunchNode {
@@ -1155,6 +1157,7 @@ async fn init_pre_launch(
         node_type,
         compute_node_idx: node_info.index,
         compute_db_mode: node_info.db_mode,
+        tls_config: config.tls_config.make_tls_spec(info),
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
         compute_nodes: info.compute_nodes.clone(),
@@ -1248,8 +1251,8 @@ pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
 }
 
 pub fn get_test_tls_spec() -> TestTlsSpec {
-    let pem_certificates = vec![("zenotta.xyz", tcp_tls::TEST_PEM_CERTIFICATE)];
-    let pem_rsa_private_keys = vec![("zenotta.xyz", tcp_tls::TEST_PEM_PRIVATE_KEY)];
+    let pem_certificates = vec![("zenotta.xyz", "-----BEGIN CERTIFICATE-----\nMIIFvDCCA6SgAwIBAgIUaxSy5C/KxCfcqpivSHhDM4OaF0QwDQYJKoZIhvcNAQEL\nBQAwIzELMAkGA1UEBhMCVVMxFDASBgNVBAMMC3plbm90dGEueHl6MB4XDTIxMDcw\nMjE2NTAxOFoXDTIxMDgwMTE2NTAxOFowIzELMAkGA1UEBhMCVVMxFDASBgNVBAMM\nC3plbm90dGEueHl6MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA7UDU\ncy20aCvGK/6rRIUFMQ+zej/oRCP1JJPNZC7aJqiKVGqZSkhOPcPCrUjiJiaZZBSI\n4g7lm0LhVabZ+OYM3BNFrDbNfHK9bn4NedexhyD4cJ6CEjFLJK0ol4Ye9E7Ag7Wn\nCnyy1q2HE5yCnrN7AGuhxQjAY3HRmzmN4WS18XKch1W6UwEIVqgOmsFR1bRT/WD0\n0IU+XkWYLLGxb/C29hR/75cuZZrezxwjS2xDoh6NByJwbUEUtKPD0SED8HqJ403n\nIkGO5gwViyjwAUnqmCiLYGFw/svgyCqCAcinqTnVl/PsYil931C7jzMRBH3GL9Ed\nXsUMgLNjY1BXhC2odPMNN5ILujddUtHpU22Z8rDIy4jJpgOaVtLkPF/CXW1iO51+\nI9z7v4khYl05oztjkDgpJFN08tKyuMHN0+N4793W1aFIej8zN2b2pAq14ikV+exZ\nc8cFkryrhD0Alq9L5QJrtR3T56AoTbPTq6FC7GSLU5bJIGaFxHM8ujbJwYaCnksF\nKviZmmFfRV6FxsrPwj6pzjfngNvo772Cl5LfSpdAK48R+SK5BAAA5Aq1muhoLLR2\nnvUdxRk+m1US8buYvW23VnbfQodNaP+Y2WZhrcTatzf5MrIYZcMwh/WNrgLRPHjp\nnIcsyQJVZdV329LOluwiXSSJvkvv38y9WoHc/W8CAwEAAaOB5zCB5DAJBgNVHRME\nAjAAMBEGCWCGSAGG+EIBAQQEAwIF4DALBgNVHQ8EBAMCBeAwMQYDVR0lBCowKAYI\nKwYBBQUHAwEGCCsGAQUFBwMCBggrBgEFBQcDAwYIKwYBBQUHAwQwLAYJYIZIAYb4\nQgENBB8WHU9wZW5TU0wgR2VuZXJhdGVkIENlcnRpZmljYXRlMB0GA1UdDgQWBBQx\nGNZG6GgBqZd+Aerz+UCDShYDszAfBgNVHSMEGDAWgBQxGNZG6GgBqZd+Aerz+UCD\nShYDszAWBgNVHREEDzANggt6ZW5vdHRhLnh5ejANBgkqhkiG9w0BAQsFAAOCAgEA\njWR3mwDeXXNypcAuR5Q5Sucax4M7ckgOn+X4FCnHeRE/1dM+ME48U7AP99fAPqfs\n7GCHp1l7gXRL1C2XJMeCLF16dpvm9HDASOQlRCq5zjulJ16sQR3SZmqOqeVNihzg\nMIr9+C+4MF6WDKme4Qkg/31J7Xubp/f3hJb3n3BZZJDmxKvPsCpFFSlWvo1m4zfh\nZaIVLWHCsRIrWUWSHpVmFxY/RD1IX6M9cBSLWj6Zgg5yVraKF5gpTS0tIr4pH/HG\ntIpwC+4s76g1xP8iL6lFwe+9yI8jv5OAK4SIz6X7fsm/BTyopHr/r0DyTbIRhBzO\n8oF+iWL+LMmRoGdIPaORuZGvTcI3qi/vk+VDt73m6Mbm5NypyOM7EooaBfd6Zwkv\nn786pK4g2CrB55UBHDMCszNsipl6VQHuaCD4TF9ddjsOi391y22/6AM/O+am6XpB\nWC2Hd2h+n/iAPzoKXUEn0XE7QSfinPnVx3C91ln6wFIbebyA51dhe35yDQyGL6Ee\nBKCDkxIwm3p3f0LetxRMSct+XtlYzLCdGBCV3kZcLBbzOHjU+gcwGBb+ENFFqRZa\nH0ZiVuIFAD70/dQ6N+gRsJ1I3aI2Cszo/HS1MT6DY0iAGz/K1PLrjKem7C2d5mtv\npMyQv/04bFU3b7008Bec+D57riZUZ60hXUIPwqmv3Ao=\n-----END CERTIFICATE-----\n")];
+    let pem_rsa_private_keys = vec![("zenotta.xyz", "-----BEGIN PRIVATE KEY-----\n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\n9DdegeXpRZqkVmsEKE65GhcmlLPnHg==\n-----END PRIVATE KEY-----\n")];
 
     TestTlsSpec {
         pem_certificates: pem_certificates

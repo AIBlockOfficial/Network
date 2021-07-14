@@ -604,7 +604,7 @@ async fn test_post_update_running_total() {
 
 async fn new_self_user_node() -> (Node, SocketAddr) {
     let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_common_config(bind_address);
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
     let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
         .await
         .unwrap();

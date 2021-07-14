@@ -1,6 +1,6 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{
-    DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType,
+    DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType, TlsSpec,
 };
 use crate::constants::PEER_LIMIT;
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
@@ -72,6 +72,8 @@ struct PreLaunchNodeConfigSelected {
     pub pre_launch_node_idx: usize,
     /// Use specific database
     pub pre_launch_db_mode: DbMode,
+    /// Configuration for handling TLS
+    pub tls_config: TlsSpec,
     /// All nodes addresses
     pub pre_launch_nodes: Vec<NodeSpec>,
     /// Db spec
@@ -86,6 +88,7 @@ impl PreLaunchNodeConfigSelected {
             PreLaunchNodeType::Compute => Self {
                 pre_launch_node_idx: config.compute_node_idx,
                 pre_launch_db_mode: config.compute_db_mode,
+                tls_config: config.tls_config,
                 pre_launch_nodes: config.compute_nodes,
                 db_spec: crate::compute::DB_SPEC,
                 raft_db_spec: crate::compute_raft::DB_SPEC,
@@ -93,6 +96,7 @@ impl PreLaunchNodeConfigSelected {
             PreLaunchNodeType::Storage => Self {
                 pre_launch_node_idx: config.storage_node_idx,
                 pre_launch_db_mode: config.storage_db_mode,
+                tls_config: config.tls_config,
                 pre_launch_nodes: config.storage_nodes,
                 db_spec: crate::storage::DB_SPEC,
                 raft_db_spec: crate::storage_raft::DB_SPEC,
@@ -130,7 +134,7 @@ impl PreLaunchNode {
             .get(config.pre_launch_node_idx)
             .ok_or(PreLaunchError::ConfigError("Invalid pre-launch index"))?
             .address;
-        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::PreLaunch).await?;
         let db = {
