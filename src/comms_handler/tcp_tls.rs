@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 //use tokio_stream::{Stream, StreamExt};
 use crate::configurations::TlsSpec;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -20,101 +21,12 @@ use tokio_rustls::webpki::DNSNameRef;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
-pub const TEST_TLS_NAME: &str = "zenotta.xyz";
-
-pub const TEST_PEM_CERTIFICATE: &str = r"-----BEGIN CERTIFICATE-----
-MIIFvDCCA6SgAwIBAgIUaxSy5C/KxCfcqpivSHhDM4OaF0QwDQYJKoZIhvcNAQEL
-BQAwIzELMAkGA1UEBhMCVVMxFDASBgNVBAMMC3plbm90dGEueHl6MB4XDTIxMDcw
-MjE2NTAxOFoXDTIxMDgwMTE2NTAxOFowIzELMAkGA1UEBhMCVVMxFDASBgNVBAMM
-C3plbm90dGEueHl6MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA7UDU
-cy20aCvGK/6rRIUFMQ+zej/oRCP1JJPNZC7aJqiKVGqZSkhOPcPCrUjiJiaZZBSI
-4g7lm0LhVabZ+OYM3BNFrDbNfHK9bn4NedexhyD4cJ6CEjFLJK0ol4Ye9E7Ag7Wn
-Cnyy1q2HE5yCnrN7AGuhxQjAY3HRmzmN4WS18XKch1W6UwEIVqgOmsFR1bRT/WD0
-0IU+XkWYLLGxb/C29hR/75cuZZrezxwjS2xDoh6NByJwbUEUtKPD0SED8HqJ403n
-IkGO5gwViyjwAUnqmCiLYGFw/svgyCqCAcinqTnVl/PsYil931C7jzMRBH3GL9Ed
-XsUMgLNjY1BXhC2odPMNN5ILujddUtHpU22Z8rDIy4jJpgOaVtLkPF/CXW1iO51+
-I9z7v4khYl05oztjkDgpJFN08tKyuMHN0+N4793W1aFIej8zN2b2pAq14ikV+exZ
-c8cFkryrhD0Alq9L5QJrtR3T56AoTbPTq6FC7GSLU5bJIGaFxHM8ujbJwYaCnksF
-KviZmmFfRV6FxsrPwj6pzjfngNvo772Cl5LfSpdAK48R+SK5BAAA5Aq1muhoLLR2
-nvUdxRk+m1US8buYvW23VnbfQodNaP+Y2WZhrcTatzf5MrIYZcMwh/WNrgLRPHjp
-nIcsyQJVZdV329LOluwiXSSJvkvv38y9WoHc/W8CAwEAAaOB5zCB5DAJBgNVHRME
-AjAAMBEGCWCGSAGG+EIBAQQEAwIF4DALBgNVHQ8EBAMCBeAwMQYDVR0lBCowKAYI
-KwYBBQUHAwEGCCsGAQUFBwMCBggrBgEFBQcDAwYIKwYBBQUHAwQwLAYJYIZIAYb4
-QgENBB8WHU9wZW5TU0wgR2VuZXJhdGVkIENlcnRpZmljYXRlMB0GA1UdDgQWBBQx
-GNZG6GgBqZd+Aerz+UCDShYDszAfBgNVHSMEGDAWgBQxGNZG6GgBqZd+Aerz+UCD
-ShYDszAWBgNVHREEDzANggt6ZW5vdHRhLnh5ejANBgkqhkiG9w0BAQsFAAOCAgEA
-jWR3mwDeXXNypcAuR5Q5Sucax4M7ckgOn+X4FCnHeRE/1dM+ME48U7AP99fAPqfs
-7GCHp1l7gXRL1C2XJMeCLF16dpvm9HDASOQlRCq5zjulJ16sQR3SZmqOqeVNihzg
-MIr9+C+4MF6WDKme4Qkg/31J7Xubp/f3hJb3n3BZZJDmxKvPsCpFFSlWvo1m4zfh
-ZaIVLWHCsRIrWUWSHpVmFxY/RD1IX6M9cBSLWj6Zgg5yVraKF5gpTS0tIr4pH/HG
-tIpwC+4s76g1xP8iL6lFwe+9yI8jv5OAK4SIz6X7fsm/BTyopHr/r0DyTbIRhBzO
-8oF+iWL+LMmRoGdIPaORuZGvTcI3qi/vk+VDt73m6Mbm5NypyOM7EooaBfd6Zwkv
-n786pK4g2CrB55UBHDMCszNsipl6VQHuaCD4TF9ddjsOi391y22/6AM/O+am6XpB
-WC2Hd2h+n/iAPzoKXUEn0XE7QSfinPnVx3C91ln6wFIbebyA51dhe35yDQyGL6Ee
-BKCDkxIwm3p3f0LetxRMSct+XtlYzLCdGBCV3kZcLBbzOHjU+gcwGBb+ENFFqRZa
-H0ZiVuIFAD70/dQ6N+gRsJ1I3aI2Cszo/HS1MT6DY0iAGz/K1PLrjKem7C2d5mtv
-pMyQv/04bFU3b7008Bec+D57riZUZ60hXUIPwqmv3Ao=
------END CERTIFICATE-----";
-
-pub const TEST_PEM_PRIVATE_KEY: &str = r"-----BEGIN PRIVATE KEY-----
-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
-9DdegeXpRZqkVmsEKE65GhcmlLPnHg==
------END PRIVATE KEY-----";
-
 pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
 pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 
 pub struct TcpTlsConfig {
     address: SocketAddr,
-    name: String,
+    socket_name_mapping: BTreeMap<SocketAddr, String>,
     pem_certs: String,
     pem_rsa_private_keys: String,
     trusted_pem_certs: Vec<String>,
@@ -122,21 +34,10 @@ pub struct TcpTlsConfig {
 }
 
 impl TcpTlsConfig {
-    pub fn new_common_config(address: SocketAddr) -> Self {
-        Self {
-            address,
-            name: TEST_TLS_NAME.to_owned(),
-            pem_certs: TEST_PEM_CERTIFICATE.to_owned(),
-            pem_rsa_private_keys: TEST_PEM_PRIVATE_KEY.to_owned(),
-            trusted_pem_certs: vec![TEST_PEM_CERTIFICATE.to_owned()],
-            use_tls: true,
-        }
-    }
-
     pub fn new_no_tls(address: SocketAddr) -> Self {
         Self {
             address,
-            name: Default::default(),
+            socket_name_mapping: Default::default(),
             pem_certs: Default::default(),
             pem_rsa_private_keys: Default::default(),
             trusted_pem_certs: Default::default(),
@@ -155,7 +56,7 @@ impl TcpTlsConfig {
 
             Ok(Self {
                 address,
-                name: name.clone(),
+                socket_name_mapping: config.socket_name_mapping.clone(),
                 pem_certs: config
                     .pem_certificates
                     .get(name)
@@ -170,6 +71,10 @@ impl TcpTlsConfig {
                 use_tls: true,
             })
         }
+    }
+
+    pub fn address(&self) -> SocketAddr {
+        self.address
     }
 }
 
@@ -229,6 +134,7 @@ impl TcpTlsListner {
 
 #[derive(Clone)]
 pub struct TcpTlsConnector {
+    socket_name_mapping: BTreeMap<SocketAddr, String>,
     tls_connector: Option<TlsConnector>,
 }
 
@@ -240,15 +146,28 @@ impl TcpTlsConnector {
         } else {
             None
         };
+        let socket_name_mapping = config.socket_name_mapping.clone();
 
-        Ok(Self { tls_connector })
+        Ok(Self {
+            socket_name_mapping,
+            tls_connector,
+        })
     }
 
     pub async fn connect(&mut self, addr: SocketAddr) -> Result<TcpTlsStream> {
         let stream = TcpStream::connect(addr).await?;
 
         if let Some(tls_connector) = &mut self.tls_connector {
-            let domain = DNSNameRef::try_from_ascii_str(TEST_TLS_NAME)
+            let tls_name = self.socket_name_mapping.get(&addr);
+            let tls_name_auto = {
+                let mut addr = addr;
+                addr.set_port(0);
+                self.socket_name_mapping.get(&addr)
+            };
+            let tls_name = tls_name
+                .or(tls_name_auto)
+                .ok_or(CommsError::ConfigError("SocketAddr dnsname unknown"))?;
+            let domain = DNSNameRef::try_from_ascii_str(tls_name)
                 .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
             let stream = tls_connector.connect(domain, stream).await?;
             let peer_addr = stream.get_ref().0.peer_addr()?;

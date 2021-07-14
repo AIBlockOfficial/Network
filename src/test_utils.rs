@@ -2,7 +2,7 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
-use crate::comms_handler::Node;
+use crate::comms_handler::{Node, TcpTlsConfig};
 use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
@@ -110,9 +110,9 @@ pub struct TestTlsSpec {
 }
 
 impl TestTlsSpec {
-    fn make_tls_spec(&self, info: &NetworkInstanceInfo) -> TlsSpec {
+    pub fn make_tls_spec(&self, socket_name_mapping: &BTreeMap<SocketAddr, String>) -> TlsSpec {
         TlsSpec {
-            socket_name_mapping: info.socket_name_mapping.clone(),
+            socket_name_mapping: socket_name_mapping.clone(),
             pem_certificates: self.pem_certificates.clone(),
             pem_rsa_private_keys: self.pem_rsa_private_keys.clone(),
         }
@@ -1002,7 +1002,7 @@ async fn init_miner(
     let config = MinerNodeConfig {
         miner_node_idx: node_info.index,
         miner_db_mode: node_info.db_mode,
-        tls_config: config.tls_config.make_tls_spec(info),
+        tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         miner_compute_node_idx,
         miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
@@ -1038,7 +1038,7 @@ async fn init_storage(
     let config = StorageNodeConfig {
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
-        tls_config: config.tls_config.make_tls_spec(info),
+        tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
@@ -1074,7 +1074,7 @@ async fn init_compute(
     let config = ComputeNodeConfig {
         compute_db_mode: node_info.db_mode,
         compute_node_idx: node_info.index,
-        tls_config: config.tls_config.make_tls_spec(info),
+        tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
@@ -1113,7 +1113,7 @@ async fn init_user(
     let config = UserNodeConfig {
         user_node_idx: node_info.index,
         user_db_mode: node_info.db_mode,
-        tls_config: config.tls_config.make_tls_spec(info),
+        tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         user_compute_node_idx: 0,
         peer_user_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
@@ -1157,7 +1157,7 @@ async fn init_pre_launch(
         node_type,
         compute_node_idx: node_info.index,
         compute_db_mode: node_info.db_mode,
-        tls_config: config.tls_config.make_tls_spec(info),
+        tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
         compute_nodes: info.compute_nodes.clone(),
@@ -1264,4 +1264,11 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),
     }
+}
+
+pub fn get_common_tls_config() -> TcpTlsConfig {
+    let addr = "127.0.0.1:0".parse().unwrap();
+    let mapping = vec![(addr, "zenotta.xyz".to_owned())].into_iter().collect();
+    let tls_spec = get_test_tls_spec().make_tls_spec(&mapping);
+    TcpTlsConfig::from_tls_spec(addr, &tls_spec).unwrap()
 }

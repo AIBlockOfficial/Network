@@ -1,8 +1,9 @@
 //! Tests for peer-to-peer communication.
 
-use super::{CommsError, Event, Node, TcpTlsConfig};
+use super::{CommsError, Event, Node};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::NodeType;
+use crate::test_utils::get_common_tls_config;
 use bincode::deserialize;
 use futures::future::join_all;
 use std::time::Duration;
@@ -365,8 +366,7 @@ async fn nodes_incompatible() {
 async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
     let mut nodes = Vec::new();
     for _ in 0..num_nodes {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        let tcp_tls_config = get_common_tls_config();
         nodes.push(
             Node::new(&tcp_tls_config, peer_limit, NodeType::Compute)
                 .await
@@ -385,8 +385,7 @@ async fn create_node_type_version(
     node_type: NodeType,
     network_version: u32,
 ) -> Node {
-    let addr = "127.0.0.1:0".parse().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+    let tcp_tls_config = get_common_tls_config();
     Node::new_with_version(&tcp_tls_config, peer_limit, node_type, network_version)
         .await
         .unwrap()

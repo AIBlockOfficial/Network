@@ -1038,6 +1038,7 @@ fn take_join_handles<'a>(peers: impl Iterator<Item = &'a mut Peer>) -> Vec<JoinH
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::test_utils::get_common_tls_config;
     use std::time::Duration;
 
     #[tokio::test(flavor = "current_thread")]
@@ -1100,8 +1101,7 @@ mod test {
     }
 
     async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let tcp_tls_config = TcpTlsConfig::new_common_config(addr);
+        let tcp_tls_config = get_common_tls_config();
         Node::new_with_version(
             &tcp_tls_config,
             peer_limit,
