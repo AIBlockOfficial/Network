@@ -11,7 +11,8 @@ use crate::db_utils::{
 };
 use crate::interfaces::{BlockStoredInfo, BlockchainItem, BlockchainItemMeta, Response};
 use crate::test_utils::{
-    node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NetworkNodeInfo, NodeType,
+    get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig,
+    NetworkNodeInfo, NodeType,
 };
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::TokenAmount;
@@ -630,7 +631,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         passphrase: Some(WALLET_PASSWORD.to_owned()),
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
-        tls_config: Default::default(),
+        tls_config: get_test_tls_spec(),
     }
     .with_groups(1, 1)
 }

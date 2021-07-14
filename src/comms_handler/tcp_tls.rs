@@ -20,9 +20,9 @@ use tokio_rustls::webpki::DNSNameRef;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
-const TEST_TLS_NAME: &str = "zenotta.xyz";
+pub const TEST_TLS_NAME: &str = "zenotta.xyz";
 
-const TEST_PEM_CERTIFICATE: &str = r"-----BEGIN CERTIFICATE-----
+pub const TEST_PEM_CERTIFICATE: &str = r"-----BEGIN CERTIFICATE-----
 MIIFvDCCA6SgAwIBAgIUaxSy5C/KxCfcqpivSHhDM4OaF0QwDQYJKoZIhvcNAQEL
 BQAwIzELMAkGA1UEBhMCVVMxFDASBgNVBAMMC3plbm90dGEueHl6MB4XDTIxMDcw
 MjE2NTAxOFoXDTIxMDgwMTE2NTAxOFowIzELMAkGA1UEBhMCVVMxFDASBgNVBAMM
@@ -56,7 +56,7 @@ H0ZiVuIFAD70/dQ6N+gRsJ1I3aI2Cszo/HS1MT6DY0iAGz/K1PLrjKem7C2d5mtv
 pMyQv/04bFU3b7008Bec+D57riZUZ60hXUIPwqmv3Ao=
 -----END CERTIFICATE-----";
 
-const TEST_PEM_PRIVATE_KEY: &str = r"-----BEGIN PRIVATE KEY-----
+pub const TEST_PEM_PRIVATE_KEY: &str = r"-----BEGIN PRIVATE KEY-----
 MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSwwggkoAgEAAoICAQDtQNRzLbRoK8Yr
 /qtEhQUxD7N6P+hEI/Ukk81kLtomqIpUaplKSE49w8KtSOImJplkFIjiDuWbQuFV
 ptn45gzcE0WsNs18cr1ufg1517GHIPhwnoISMUskrSiXhh70TsCDtacKfLLWrYcT

@@ -2,6 +2,7 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
+use crate::comms_handler::tcp_tls;
 use crate::comms_handler::Node;
 use crate::compute::ComputeNode;
 use crate::configurations::{
@@ -729,7 +730,7 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         .collect();
     let socket_name_mapping: BTreeMap<_, _> = node_infos
         .iter()
-        .map(|(name, info)| (info.node_spec.address, name.clone()))
+        .map(|(_name, info)| (info.node_spec.address, "zenotta.xyz".to_owned()))
         .collect();
 
     let mut nodes: BTreeMap<_, _> = nodes.into_iter().map(|(k, (_, v))| (k, v)).collect();
@@ -1243,5 +1244,21 @@ pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
         )))
     } else {
         Ok(())
+    }
+}
+
+pub fn get_test_tls_spec() -> TestTlsSpec {
+    let pem_certificates = vec![("zenotta.xyz", tcp_tls::TEST_PEM_CERTIFICATE)];
+    let pem_rsa_private_keys = vec![("zenotta.xyz", tcp_tls::TEST_PEM_PRIVATE_KEY)];
+
+    TestTlsSpec {
+        pem_certificates: pem_certificates
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+        pem_rsa_private_keys: pem_rsa_private_keys
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
     }
 }

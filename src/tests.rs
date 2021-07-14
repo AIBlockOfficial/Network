@@ -12,7 +12,7 @@ use crate::miner::MinerNode;
 use crate::storage::StorageNode;
 use crate::storage_raft::CompleteBlock;
 use crate::test_utils::{
-    node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
+    get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig, NodeType,
 };
 use crate::user::UserNode;
 use crate::utils::{
@@ -3728,7 +3728,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         passphrase: Some("Test Passphrase".to_owned()),
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
-        tls_config: Default::default(),
+        tls_config: get_test_tls_spec(),
     }
 }
 
