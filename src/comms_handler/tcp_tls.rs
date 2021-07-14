@@ -1,17 +1,16 @@
 //! Utilities necessary to establish a TCP connection with TLS overay stream.
 
 use super::{CommsError, Result};
-use std::io::Cursor;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
-//use tokio_stream::{Stream, StreamExt};
 use crate::configurations::TlsSpec;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io::Cursor;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
     AllowAnyAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
