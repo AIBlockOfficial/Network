@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Event, Node};
+use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig};
 use crate::constants::{
     BLOCK_PREPEND, DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY,
@@ -147,8 +147,9 @@ impl StorageNode {
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid compute index"))?
             .address;
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
-        let node = Node::new(addr, PEER_LIMIT, NodeType::Storage).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = {
             let timeout_duration = node_raft.propose_block_timeout_duration();

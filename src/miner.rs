@@ -1,4 +1,4 @@
-use crate::comms_handler::{CommsError, Event};
+use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
@@ -154,9 +154,10 @@ impl MinerNode {
             .get(config.miner_storage_node_idx)
             .ok_or(MinerError::ConfigError("Invalid storage index"))?
             .address;
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
         Ok(MinerNode {
-            node: Node::new(addr, PEER_LIMIT, NodeType::Miner).await?,
+            node: Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?,
             local_events: Default::default(),
             wallet_db: WalletDb::new(
                 config.miner_db_mode,

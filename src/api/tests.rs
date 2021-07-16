@@ -1,6 +1,6 @@
 use crate::api::handlers::{Addresses, EncapsulatedData, EncapsulatedPayment, PublicKeyAddresses};
 use crate::api::routes;
-use crate::comms_handler::{Event, Node};
+use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, DATA_ENCAPSULATION_KEY, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
@@ -387,9 +387,7 @@ async fn test_post_make_payment() {
     //
     // Arrange
     //
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
-    let self_socket = self_node.address();
+    let (mut self_node, self_socket) = new_self_user_node().await;
 
     let encapsulated_data = EncapsulatedPayment {
         address: COMMON_ADDR_STORE.0.to_string(),
@@ -442,9 +440,7 @@ async fn test_post_make_ip_payment() {
     //
     // Arrange
     //
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
-    let self_socket = self_node.address();
+    let (mut self_node, self_socket) = new_self_user_node().await;
 
     let encapsulated_data = EncapsulatedPayment {
         address: "127.0.0.1:12345".to_owned(),
@@ -503,9 +499,7 @@ async fn test_post_request_donation() {
     //
     // Arange
     //
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
-    let self_socket = self_node.address();
+    let (mut self_node, self_socket) = new_self_user_node().await;
 
     let address = "127.0.0.1:12345".to_owned();
     let paying_peer = address.parse::<SocketAddr>().unwrap();
@@ -576,8 +570,7 @@ async fn test_post_update_running_total() {
     //
     // Arrange
     //
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let mut self_node = Node::new(bind_address, 20, NodeType::User).await.unwrap();
+    let (mut self_node, _self_socket) = new_self_user_node().await;
 
     let addresses = PublicKeyAddresses {
         address_list: vec![COMMON_ADDR_STORE.0.to_string()],
@@ -607,4 +600,14 @@ async fn test_post_update_running_total() {
         api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
+}
+
+async fn new_self_user_node() -> (Node, SocketAddr) {
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
+        .await
+        .unwrap();
+    let self_socket = self_node.address();
+    (self_node, self_socket)
 }

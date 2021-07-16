@@ -99,11 +99,18 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let setting_file = matches
         .value_of("config")
         .unwrap_or("src/bin/node_settings.toml");
+    let tls_setting_file = matches
+        .value_of("tls_config")
+        .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("storage_node_idx", 0).unwrap();
     settings.set_default("compute_node_idx", 0).unwrap();
+
     settings
         .merge(config::File::with_name(setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(tls_setting_file))
         .unwrap();
 
     if let Some(index) = matches.value_of("index") {
