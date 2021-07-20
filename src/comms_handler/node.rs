@@ -80,7 +80,9 @@
 //! [serde]: https://serde.rs
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
-use super::tcp_tls::{TcpTlsConnector, TcpTlsListner, TcpTlsStream};
+use super::tcp_tls::{
+    verify_is_valid_for_dns_name, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
+};
 use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::{CommMessage, NodeType, Token};
@@ -633,6 +635,7 @@ impl Node {
     async fn handle_peer_recv_handshake(
         &self,
         peer_addr: SocketAddr,
+        peer_cert: Option<TlsCertificate>,
         send_tx: ResultBytesSender,
         mut messages: impl Stream<Item = CommMessage> + std::marker::Unpin,
     ) -> Result<SocketAddr> {
@@ -646,7 +649,14 @@ impl Node {
                     public_address,
                 } => {
                     match self
-                        .handle_handshake_request(peer_addr, public_address, send_tx.clone(), v, t)
+                        .handle_handshake_request(
+                            peer_addr,
+                            public_address,
+                            &peer_cert,
+                            send_tx.clone(),
+                            v,
+                            t,
+                        )
                         .await
                     {
                         Ok(()) => return Ok(public_address),
@@ -784,6 +794,7 @@ impl Node {
         &self,
         peer_out_addr: SocketAddr,
         peer_in_addr: SocketAddr,
+        peer_cert: &Option<TlsCertificate>,
         mut send_tx: ResultBytesSender,
         network_version: u32,
         peer_type: NodeType,
@@ -800,6 +811,15 @@ impl Node {
         let peer = all_peers
             .get_mut(&peer_out_addr)
             .ok_or(CommsError::PeerNotFound)?;
+
+        if let Some(peer_cert) = peer_cert {
+            let peer_name = self
+                .tcp_tls_connector
+                .socket_name_mapping(peer_in_addr)
+                .ok_or(CommsError::PeerNameNotFound)?;
+
+            verify_is_valid_for_dns_name(peer_cert, peer_name)?;
+        }
 
         peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);
@@ -893,6 +913,7 @@ impl Node {
     /// A new `Peer` instance.
     fn handle_peer(&self, socket: TcpTlsStream, span: Span, is_initiator: bool) -> Peer {
         let peer_addr = socket.peer_addr();
+        let peer_cert = socket.peer_tls_certificate();
 
         let (send_tx, mut send_rx) = mpsc::channel(128);
 
@@ -935,7 +956,7 @@ impl Node {
                 let mut messages = messages;
                 let public_address = {
                     match node
-                        .handle_peer_recv_handshake(peer_addr, send_tx, &mut messages)
+                        .handle_peer_recv_handshake(peer_addr, peer_cert, send_tx, &mut messages)
                         .await
                     {
                         Ok(public_address) => {

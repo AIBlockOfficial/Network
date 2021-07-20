@@ -2,6 +2,7 @@ use super::Event;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
 use tokio_rustls::rustls::TLSError;
+use tokio_rustls::webpki;
 
 #[derive(Debug)]
 pub enum CommsError {
@@ -17,6 +18,8 @@ pub enum CommsError {
     PeerListFull,
     /// No such peer found.
     PeerNotFound,
+    /// No such peer found.in TLS mapping.
+    PeerNameNotFound,
     /// Peer is in invalid state.
     PeerInvalidState,
     /// This peer is already connected.
@@ -38,6 +41,7 @@ impl fmt::Display for CommsError {
             Self::PeerListFull => write!(f, "Peer list is full"),
             Self::PeerListEmpty => write!(f, "Peer list is empty"),
             Self::PeerNotFound => write!(f, "Peer not found"),
+            Self::PeerNameNotFound => write!(f, "Peer name not found"),
             Self::PeerDuplicate => write!(f, "Peer has invalid state"),
             Self::PeerInvalidState => write!(f, "Duplicate peer"),
             Self::PeerIncompatible => write!(f, "Peer incompatible"),
@@ -56,6 +60,7 @@ impl Error for CommsError {
             Self::PeerListFull => None,
             Self::PeerListEmpty => None,
             Self::PeerNotFound => None,
+            Self::PeerNameNotFound => None,
             Self::PeerInvalidState => None,
             Self::PeerDuplicate => None,
             Self::PeerIncompatible => None,
@@ -86,5 +91,11 @@ impl From<mpsc::error::SendError<Event>> for CommsError {
 impl From<TLSError> for CommsError {
     fn from(other: TLSError) -> Self {
         Self::TlsError(other)
+    }
+}
+
+impl From<webpki::Error> for CommsError {
+    fn from(other: webpki::Error) -> Self {
+        Self::TlsError(TLSError::WebPKIError(other))
     }
 }

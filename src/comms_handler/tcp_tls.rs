@@ -14,14 +14,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
     AllowAnyAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
-    RootCertStore, ServerConfig,
+    RootCertStore, ServerConfig, Session,
 };
-use tokio_rustls::webpki::DNSNameRef;
+use tokio_rustls::webpki::{DNSNameRef, EndEntityCert};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
 pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
 pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
+pub type TlsCertificate = Certificate;
 
 pub struct TcpTlsConfig {
     address: SocketAddr,
@@ -157,14 +158,7 @@ impl TcpTlsConnector {
         let stream = TcpStream::connect(addr).await?;
 
         if let Some(tls_connector) = &mut self.tls_connector {
-            let tls_name = self.socket_name_mapping.get(&addr);
-            let tls_name_auto = {
-                let mut addr = addr;
-                addr.set_port(0);
-                self.socket_name_mapping.get(&addr)
-            };
-            let tls_name = tls_name
-                .or(tls_name_auto)
+            let tls_name = socket_name_mapping_or_default(&self.socket_name_mapping, addr)
                 .ok_or(CommsError::ConfigError("SocketAddr dnsname unknown"))?;
             let domain = DNSNameRef::try_from_ascii_str(tls_name)
                 .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
@@ -176,6 +170,10 @@ impl TcpTlsConnector {
             Ok(TcpTlsStream::RawTcp(stream, peer_addr))
         }
     }
+
+    pub fn socket_name_mapping(&self, addr: SocketAddr) -> Option<&String> {
+        socket_name_mapping_or_default(&self.socket_name_mapping, addr)
+    }
 }
 
 impl fmt::Debug for TcpTlsConnector {
@@ -184,7 +182,7 @@ impl fmt::Debug for TcpTlsConnector {
     }
 }
 
-fn load_certs(pem: &str) -> Result<Vec<Certificate>> {
+fn load_certs(pem: &str) -> Result<Vec<TlsCertificate>> {
     certs(&mut Cursor::new(pem)).map_err(|_| CommsError::ConfigError("invalid cert"))
 }
 
@@ -192,7 +190,10 @@ fn load_keys(pem: &str) -> Result<Vec<PrivateKey>> {
     pkcs8_private_keys(&mut Cursor::new(pem)).map_err(|_| CommsError::ConfigError("invalid key"))
 }
 
-fn add_cert_to_root(root_store: &mut RootCertStore, trusted_certs: &[Certificate]) -> Result<()> {
+fn add_cert_to_root(
+    root_store: &mut RootCertStore,
+    trusted_certs: &[TlsCertificate],
+) -> Result<()> {
     for cert in trusted_certs {
         root_store
             .add(cert)
@@ -246,6 +247,14 @@ impl TcpTlsStream {
             Self::Client(_, a) | Self::Server(_, a) | Self::RawTcp(_, a) => *a,
         }
     }
+
+    pub fn peer_tls_certificate(&self) -> Option<TlsCertificate> {
+        match self {
+            Self::Client(tls, _) => get_first_certificate(tls.get_ref().1),
+            Self::Server(tls, _) => get_first_certificate(tls.get_ref().1),
+            Self::RawTcp(_, _) => None,
+        }
+    }
 }
 
 impl AsyncRead for TcpTlsStream {
@@ -294,4 +303,29 @@ impl AsyncWrite for TcpTlsStream {
             Self::RawTcp(s, _) => Pin::new(s).poll_shutdown(ctx),
         }
     }
+}
+
+/// verify the dna name is valid for the certificae
+pub fn verify_is_valid_for_dns_name(cert: &TlsCertificate, tls_name: &str) -> Result<()> {
+    let domain = DNSNameRef::try_from_ascii_str(tls_name)
+        .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+    let cert = EndEntityCert::from(&cert.0)?;
+    Ok(cert.verify_is_valid_for_dns_name(domain)?)
+}
+
+fn get_first_certificate(session: &impl Session) -> Option<TlsCertificate> {
+    session
+        .get_peer_certificates()
+        .and_then(|mut v| v.drain(..).next())
+}
+
+pub fn socket_name_mapping_or_default(
+    mapping: &BTreeMap<SocketAddr, String>,
+    addr: SocketAddr,
+) -> Option<&String> {
+    mapping.get(&addr).or_else(|| {
+        let mut addr = addr;
+        addr.set_port(0);
+        mapping.get(&addr)
+    })
 }
