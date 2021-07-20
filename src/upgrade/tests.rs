@@ -15,7 +15,7 @@ use crate::test_utils::{
     NetworkNodeInfo, NodeType,
 };
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -185,19 +185,21 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
         NodeType::User => {
             let user = network.user(name).unwrap().lock().await;
             let wallet = user.get_wallet_db();
-            let payment = wallet.fetch_inputs_for_payment(TokenAmount(123)).await;
+            let payment = wallet.fetch_inputs_for_payment(Asset::token_u64(123)).await;
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
-                (1, TokenAmount(123), 1)
+                (1, Asset::token_u64(123), 1)
             );
         }
         NodeType::Miner => {
             let miner = network.miner(name).unwrap().lock().await;
             let wallet = miner.get_wallet_db();
-            let payment = wallet.fetch_inputs_for_payment(TokenAmount(15020370)).await;
+            let payment = wallet
+                .fetch_inputs_for_payment(Asset::token_u64(15020370))
+                .await;
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
-                (2, TokenAmount(15020370), 2)
+                (2, Asset::token_u64(15020370), 2)
             );
         }
     }
@@ -666,10 +668,7 @@ fn cfg_upgrade_no_block() -> UpgradeCfg {
 }
 
 fn get_expected_last_block_stored() -> BlockStoredInfo {
-    use naom::primitives::{
-        asset::Asset,
-        transaction::{Transaction, TxIn, TxOut},
-    };
+    use naom::primitives::transaction::{Transaction, TxIn, TxOut};
     use naom::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {

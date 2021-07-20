@@ -20,6 +20,7 @@ use crate::utils::{
     create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
     StringError,
 };
+use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -35,6 +36,7 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -1021,7 +1023,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&TokenAmount(0), 1, 0)),
+        node_all(&winning_miners, (&AssetValues::default(), 1, 0)),
         "Info Before: {:?}",
         info_before
     );
@@ -1030,7 +1032,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .iter()
             .map(|i| (&i.0, i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
-        node_all(&winning_miners, (&mining_reward, 2, 1)),
+        node_all(&winning_miners, (&AssetValues::new(mining_reward, 0), 2, 1)),
         "Info After: {:?}",
         info_after
     );
@@ -1377,11 +1379,11 @@ async fn receive_payment_tx_user() {
             .iter()
             .map(|(total, _, _)| *total)
             .collect::<Vec<_>>(),
-        vec![TokenAmount(11), TokenAmount(0)]
+        vec![AssetValues::token_u64(11), AssetValues::token_u64(0),]
     );
     assert_eq!(
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
-        vec![TokenAmount(6), TokenAmount(5)]
+        vec![AssetValues::token_u64(6), AssetValues::token_u64(5)]
     );
 
     test_step_complete(network).await;
@@ -1430,11 +1432,11 @@ async fn receive_testnet_donation_payment_tx_user() {
             .iter()
             .map(|(total, _, _)| *total)
             .collect::<Vec<_>>(),
-        vec![TokenAmount(11), TokenAmount(0)]
+        vec![AssetValues::token_u64(11), AssetValues::token_u64(0)]
     );
     assert_eq!(
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
-        vec![TokenAmount(6), TokenAmount(5)]
+        vec![AssetValues::token_u64(6), AssetValues::token_u64(5)]
     );
 
     test_step_complete(network).await;
@@ -2211,12 +2213,12 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
             .iter()
             .map(|(total, _, _)| *total)
             .collect::<Vec<_>>(),
-        vec![TokenAmount(9)]
+        vec![AssetValues::token_u64(9)]
     );
 
     assert_eq!(
         after.iter().map(|(total, _, _)| *total).collect::<Vec<_>>(),
-        vec![TokenAmount(15),]
+        vec![AssetValues::token_u64(15)]
     );
 
     test_step_complete(network).await;
@@ -2237,29 +2239,74 @@ async fn request_utxo_set_and_update_running_total_act(
 }
 
 #[tokio::test(flavor = "current_thread")]
+pub async fn create_receipt_asset_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11460, 1);
+    network_config.compute_seed_utxo = BTreeMap::new();
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act
+    //
+    let actual_running_total_before = node_get_wallet_info(&mut network, "user1").await.0;
+    create_receipt_asset_act(&mut network, "user1", "compute1", 10).await;
+    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+
+    let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+    let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
+        .into_iter()
+        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .collect();
+
+    let actual_running_total_after = node_get_wallet_info(&mut network, "user1").await.0;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        actual_utxo_receipt,
+        node_all(compute_nodes, vec![Asset::Receipt(10)])
+    );
+    assert_eq!(actual_running_total_before, AssetValues::receipt(0));
+    assert_eq!(actual_running_total_after, AssetValues::receipt(10));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 pub async fn make_receipt_based_payment_raft_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11425, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11470, 1);
     network_config
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
     network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
-    let user_nodes = &network_config.nodes[&NodeType::User];
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
 
     create_first_block_act(&mut network).await;
     node_connect_to(&mut network, "user1", "user2").await;
+    create_receipt_asset_act(&mut network, "user2", "compute1", 5).await;
+    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
     // Act
     //
-    let wallet_before = node_all_get_wallet_info(&mut network, user_nodes).await;
+    let wallet_assets_before_actual =
+        user_get_wallet_asset_totals_for_tx(&mut network, "user1", "user2").await;
 
     make_receipt_based_payment_act(
         &mut network,
@@ -2270,7 +2317,8 @@ pub async fn make_receipt_based_payment_raft_1_node() {
     )
     .await;
 
-    let wallet_after = node_all_get_wallet_info(&mut network, user_nodes).await;
+    let wallet_assets_after_actual =
+        user_get_wallet_asset_totals_for_tx(&mut network, "user1", "user2").await;
 
     let committed_tx_druid_pool: Vec<Transaction> =
         compute_all_committed_tx_druid_pool(&mut network, compute_nodes)
@@ -2292,56 +2340,178 @@ pub async fn make_receipt_based_payment_raft_1_node() {
         .collect();
 
     let actual_assets: Vec<Vec<Asset>> = committed_tx_druid_pool
-        .iter()
+        .into_iter()
         .map(|v| {
             v.druid_info
-                .clone()
                 .unwrap()
                 .expectations
                 .iter()
-                .map(|ex| ex.clone().asset)
+                .map(|ex| ex.asset.clone())
                 .collect()
         })
         .collect();
 
-    let expected_participants: usize = 2;
-    let expected_assets = vec![vec![Asset::Token(TokenAmount(3))], vec![Asset::Receipt(1)]];
+    //
+    // Assert
+    //
+    //Assert wallet asset running total before and after
+    assert_eq!(
+        wallet_assets_before_actual,
+        (AssetValues::token_u64(11), AssetValues::receipt(5))
+    );
+    assert_eq!(
+        wallet_assets_after_actual,
+        (
+            AssetValues::new(TokenAmount(8), 1),
+            AssetValues::new(TokenAmount(3), 4)
+        )
+    );
+
+    //Assert committed DDE transactions have identical DRUID value
+    assert_eq!(actual_druid_string[0], actual_druid_string[1]);
+
+    //Assert committed DDE transactions contain valid DDE participation count
+    assert!(actual_participants.iter().all(|v| *v == 2));
+
+    //Assert committed DDE transactions contain valid DDE asset values
+    let expected_assets = vec![vec![Asset::token_u64(3)], vec![Asset::Receipt(1)]];
+    assert!(actual_assets.iter().all(|v| expected_assets.contains(v)));
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+pub async fn make_multiple_receipt_based_payments_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11480, 1);
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
+    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+        let a = TokenAmount(11);
+        let pk = SOME_PUB_KEYS;
+        &[("000000", vec![(pk[0], a)]), ("000001", vec![(pk[1], a)])]
+    });
+    network_config.user_wallet_seeds = {
+        let pk = SOME_PUB_KEYS;
+        let sk = SOME_SEC_KEYS;
+        vec![
+            vec![WalletTxSpec {
+                out_point: "0-000000".to_string(),
+                secret_key: sk[0].to_string(),
+                public_key: pk[0].to_string(),
+                amount: 11,
+            }],
+            vec![WalletTxSpec {
+                out_point: "0-000001".to_string(),
+                secret_key: sk[1].to_string(),
+                public_key: pk[1].to_string(),
+                amount: 11,
+            }],
+        ]
+    };
+
+    let mut network = Network::create_from_config(&network_config).await;
+    create_first_block_act(&mut network).await;
+    create_receipt_asset_act(&mut network, "user1", "compute1", 5).await;
+    create_receipt_asset_act(&mut network, "user2", "compute1", 10).await;
+    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+    node_connect_to(&mut network, "user1", "user2").await;
+
+    //
+    // Act
+    //
+    let amounts_to_pay = vec![
+        (TokenAmount(3), "user1", "user2", 0),
+        (TokenAmount(4), "user1", "user2", 1),
+        (TokenAmount(2), "user2", "user1", 2),
+        (TokenAmount(6), "user2", "user1", 3),
+    ];
+
+    let mut all_gathered_wallet_asset_info: BTreeMap<
+        (&'static str, &'static str),
+        Vec<(AssetValues, AssetValues)>,
+    > = BTreeMap::new();
+
+    for (payment_amount, from, to, b_num) in amounts_to_pay {
+        create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
+        let infos = all_gathered_wallet_asset_info
+            .entry((from, to))
+            .or_insert(vec![
+                user_get_wallet_asset_totals_for_tx(&mut network, from, to).await,
+            ]);
+
+        make_receipt_based_payment_act(
+            &mut network,
+            from,
+            to,
+            "compute1",
+            Asset::Token(payment_amount),
+        )
+        .await;
+
+        infos.push(user_get_wallet_asset_totals_for_tx(&mut network, from, to).await);
+    }
+
+    let all_wallet_assets_actual = Vec::from_iter(all_gathered_wallet_asset_info.into_iter());
+    let all_wallet_assets_expected = vec![
+        (
+            ("user1", "user2"),
+            vec![
+                (
+                    AssetValues::new(TokenAmount(11), 5),
+                    AssetValues::new(TokenAmount(11), 10),
+                ),
+                (
+                    AssetValues::new(TokenAmount(8), 6),
+                    AssetValues::new(TokenAmount(14), 9),
+                ),
+                (
+                    AssetValues::new(TokenAmount(4), 7),
+                    AssetValues::new(TokenAmount(18), 8),
+                ),
+            ],
+        ),
+        (
+            ("user2", "user1"),
+            vec![
+                (
+                    AssetValues::new(TokenAmount(18), 8),
+                    AssetValues::new(TokenAmount(4), 7),
+                ),
+                (
+                    AssetValues::new(TokenAmount(16), 9),
+                    AssetValues::new(TokenAmount(6), 6),
+                ),
+                (
+                    AssetValues::new(TokenAmount(10), 10),
+                    AssetValues::new(TokenAmount(12), 5),
+                ),
+            ],
+        ),
+    ];
 
     //
     // Assert
     //
 
-    //Assert wallet before and after
-    assert_eq!(
-        wallet_before
-            .iter()
-            .map(|(total, _, _)| *total)
-            .collect::<Vec<_>>(),
-        vec![TokenAmount(11), TokenAmount(0)]
-    );
-
-    assert_eq!(
-        wallet_after
-            .iter()
-            .map(|(total, _, _)| *total)
-            .collect::<Vec<_>>(),
-        vec![TokenAmount(8), TokenAmount(3)]
-    );
-
-    //Assert committed transactions have identical DRUID value
-    assert_eq!(actual_druid_string[0], actual_druid_string[1]);
-
-    //Assert committed transactions contain valid DDE participation count
-    assert!(actual_participants
-        .iter()
-        .all(|v| *v == expected_participants));
-
-    //Assert committed transactions contain valid DDE asset values
-    assert!(actual_assets
-        .iter()
-        .all(|v| *v == expected_assets[0] || *v == expected_assets[1]));
+    assert_eq!(all_wallet_assets_actual, all_wallet_assets_expected);
 
     test_step_complete(network).await;
+}
+
+async fn create_receipt_asset_act(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+    receipt_amount: u64,
+) {
+    user_send_receipt_asset(network, user, compute, receipt_amount).await;
+    compute_handle_event(network, compute, "Transactions added to tx pool").await;
 }
 
 async fn make_receipt_based_payment_act(
@@ -2495,9 +2665,9 @@ async fn node_get_wallet_info(
     network: &mut Network,
     node: &str,
 ) -> (
-    TokenAmount,
+    AssetValues,
     Vec<String>,
-    BTreeMap<OutPoint, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, Asset)>,
 ) {
     let (miner, user) = if let Some(miner) = network.miner(node) {
         (Some(miner.lock().await), None)
@@ -2530,9 +2700,9 @@ async fn node_all_get_wallet_info(
     network: &mut Network,
     miner_group: &[String],
 ) -> Vec<(
-    TokenAmount,
+    AssetValues,
     Vec<String>,
-    BTreeMap<OutPoint, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, Asset)>,
 )> {
     let mut result = Vec::new();
     for name in miner_group {
@@ -2542,15 +2712,26 @@ async fn node_all_get_wallet_info(
     result
 }
 
+async fn user_get_wallet_asset_totals_for_tx(
+    network: &mut Network,
+    from: &str,
+    to: &str,
+) -> (AssetValues, AssetValues) {
+    (
+        node_get_wallet_info(network, from).await.0,
+        node_get_wallet_info(network, to).await.0,
+    )
+}
+
 async fn node_all_combined_get_wallet_info(
     network: &mut Network,
     miner_group: &[String],
 ) -> (
-    TokenAmount,
+    AssetValues,
     Vec<String>,
-    BTreeMap<OutPoint, (String, TokenAmount)>,
+    BTreeMap<OutPoint, (String, Asset)>,
 ) {
-    let mut total = TokenAmount(0);
+    let mut total = AssetValues::default();
     let mut addresses = Vec::new();
     let mut txs_to_address_and_ammount = BTreeMap::new();
     for name in miner_group {
@@ -2566,11 +2747,7 @@ fn node_all_combined_expected_wallet_info(
     miner_group: &[String],
     mining_reward: TokenAmount,
     stored: &[&BlockStoredInfo],
-) -> (
-    TokenAmount,
-    usize,
-    BTreeMap<OutPoint, (String, TokenAmount)>,
-) {
+) -> (AssetValues, usize, BTreeMap<OutPoint, (String, Asset)>) {
     let mining_txs: Vec<_> = {
         let txs = stored.iter().flat_map(|b| b.mining_transactions.iter());
         txs.collect()
@@ -2581,12 +2758,16 @@ fn node_all_combined_expected_wallet_info(
     let txs_to_address_and_ammount = {
         let mining_tx_out = get_tx_out_with_out_point_cloned(mining_txs.iter().copied());
         mining_tx_out
-            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.value.token_amount())))
+            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.value.clone())))
             .map(|(k, (addr, amount))| (k, (addr.unwrap(), amount)))
             .collect()
     };
 
-    (total, addresses, txs_to_address_and_ammount)
+    (
+        AssetValues::new(total, 0),
+        addresses,
+        txs_to_address_and_ammount,
+    )
 }
 
 async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_block: u64) {
@@ -3300,6 +3481,20 @@ async fn user_send_receipt_based_payment_to_desinations(
     let mut u = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
     u.send_next_rb_transaction_to_destinations(compute_addr)
+        .await
+        .unwrap();
+}
+
+async fn user_send_receipt_asset(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+    receipt_amount: u64,
+) {
+    let mut u = network.user(user).unwrap().lock().await;
+    let compute_addr = network.get_address(compute).await.unwrap();
+    u.generate_receipt_asset_tx(receipt_amount).await;
+    u.send_next_payment_to_destinations(compute_addr)
         .await
         .unwrap();
 }

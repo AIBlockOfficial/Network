@@ -12,7 +12,7 @@ mod tests_last_version_db_no_block;
 
 use crate::configurations::{DbMode, ExtraNodeParams};
 use crate::constants::{
-    DB_PATH, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
+    DB_PATH, DB_VERSION_KEY, FUND_KEY, NETWORK_VERSION_SERIALIZED, TX_PREPEND, WALLET_PATH,
 };
 use crate::db_utils::{
     new_db_no_check_version, new_db_with_version, SimpleDb, SimpleDbError, SimpleDbSpec,
@@ -524,10 +524,12 @@ pub fn upgrade_wallet_db_batch<'a>(
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == old::wallet::FUND_KEY.as_bytes() {
-            // Keep as is
             let f: old::wallet::FundStore =
                 tracked_deserialize("FundStore deserialize", &key, &value)?;
             trace!("FundStore: {:?}", f);
+            let f = old::convert_fund_store(f);
+            batch.delete_cf(DB_COL_DEFAULT, FUND_KEY);
+            wallet::set_fund_store(&mut batch, f);
         } else if key == old::wallet::KNOWN_ADDRESS_KEY.as_bytes() {
             // Keep as is
             let _: old::wallet::KnownAddresses =

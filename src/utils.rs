@@ -306,7 +306,7 @@ pub async fn create_and_save_fake_to_wallet(
         &address_keys.secret_key,
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
-    let payment_to_save = TokenAmount(4000);
+    let payment_to_save = Asset::token_u64(4000);
     let payments = vec![(tx_out_p.clone(), payment_to_save, final_address)];
     wallet_db
         .save_usable_payments_to_wallet(payments)
@@ -482,7 +482,7 @@ fn validate_pow(pow: &[u8]) -> bool {
 /// * `txs`   - The transactions
 pub fn get_paiments_for_wallet<'a>(
     txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
-) -> Vec<(OutPoint, TokenAmount, String)> {
+) -> Vec<(OutPoint, Asset, String)> {
     let utxo_iterator = get_tx_out_with_out_point_cloned(txs);
     get_paiments_for_wallet_from_utxo(utxo_iterator)
 }
@@ -494,10 +494,9 @@ pub fn get_paiments_for_wallet<'a>(
 /// * `utxo_set`   - The UTXO set/subset
 pub fn get_paiments_for_wallet_from_utxo(
     utxos: impl Iterator<Item = (OutPoint, TxOut)>,
-) -> Vec<(OutPoint, TokenAmount, String)> {
+) -> Vec<(OutPoint, Asset, String)> {
     utxos
-        .map(|(out_p, tx_out)| (out_p, tx_out.value.token_amount(), tx_out.script_public_key))
-        .map(|(out_p, amount, address)| (out_p, amount, address.unwrap()))
+        .map(|(out_p, tx_out)| (out_p, tx_out.value, tx_out.script_public_key.unwrap()))
         .collect()
 }
 
@@ -632,7 +631,7 @@ pub fn make_utxo_set_from_seed(
                                 addr
                             };
 
-                        TxOut::new_amount(script_public_key, out.amount)
+                        TxOut::new_token_amount(script_public_key, out.amount)
                     })
                     .collect(),
                 inputs: genesis_tx_in.clone().into_iter().collect(),
