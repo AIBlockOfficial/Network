@@ -5,6 +5,8 @@ mod node;
 mod stream_cancel;
 pub mod tcp_tls;
 #[cfg(test)]
+pub mod test_tls_certificates;
+#[cfg(test)]
 mod tests;
 
 pub use error::CommsError;
