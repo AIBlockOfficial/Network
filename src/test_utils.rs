@@ -714,6 +714,7 @@ async fn handle_next_event_and_response(
 pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
     let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     let mut first_port = config.initial_port;
+    let tls_config = &config.tls_config;
 
     let mut nodes = BTreeMap::new();
     for (node_type, names) in &config.nodes {
@@ -729,7 +730,7 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         .collect();
     let socket_name_mapping: BTreeMap<_, _> = node_infos
         .iter()
-        .map(|(_name, info)| (info.node_spec.address, "node.zenotta.xyz".to_owned()))
+        .map(|(name, info)| (info.node_spec.address, get_test_tls_name(name, tls_config)))
         .collect();
 
     let mut nodes: BTreeMap<_, _> = nodes.into_iter().map(|(k, (_, v))| (k, v)).collect();
@@ -1262,6 +1263,14 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
             .copied()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),
+    }
+}
+pub fn get_test_tls_name(name: &str, spec: &TestTlsSpec) -> String {
+    let tls_name = format!("{}.zenotta.xyz", name);
+    if spec.pem_certificates.contains_key(&tls_name) {
+        tls_name
+    } else {
+        "node.zenotta.xyz".to_owned()
     }
 }
 

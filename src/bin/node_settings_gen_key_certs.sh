@@ -67,24 +67,24 @@ done
 printf "            \"node.zenotta.xyz\": %s\n" "$(jq -Rs . <node.key)" >> tls_certificates.json
 echo "        }," >> tls_certificates.json
 echo "        \"socket_name_mapping\": {" >> tls_certificates.json
-echo "            \"127.0.0.1:12300\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12301\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12302\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12330\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12331\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12332\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12340\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12341\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12342\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12343\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12344\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12345\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12346\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12347\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12348\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12349\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12360\": \"node.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12361\": \"node.zenotta.xyz\"" >> tls_certificates.json
+echo "            \"127.0.0.1:12300\": \"compute1.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12301\": \"compute2.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12302\": \"compute3.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12330\": \"storage1.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12331\": \"storage2.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12332\": \"storage3.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12340\": \"miner1.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12341\": \"miner2.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12342\": \"miner3.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12343\": \"miner4.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12344\": \"miner5.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12345\": \"miner6.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12346\": \"miner7.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12347\": \"miner8.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12348\": \"miner9.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12349\": \"miner10.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12360\": \"user1.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12361\": \"user2.zenotta.xyz\"" >> tls_certificates.json
 echo "        }" >> tls_certificates.json
 echo "    }" >> tls_certificates.json
 echo "}" >> tls_certificates.json
