@@ -133,7 +133,7 @@ pub struct Node {
     /// Pause accepting and starting connections.
     listener_and_connect_paused: Arc<RwLock<bool>>,
     /// Connector used to initialize connection.
-    tcp_tls_connector: TcpTlsConnector,
+    tcp_tls_connector: Arc<RwLock<TcpTlsConnector>>,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
     /// Node type.
@@ -234,7 +234,7 @@ impl Node {
             listener_address,
             listener_stop_and_join_handles: Arc::new(Mutex::new(None)),
             listener_and_connect_paused: Arc::new(RwLock::new(false)),
-            tcp_tls_connector,
+            tcp_tls_connector: Arc::new(RwLock::new(tcp_tls_connector)),
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             peer_limit,
@@ -366,7 +366,7 @@ impl Node {
                 return Err(CommsError::PeerNotFound);
             }
 
-            let stream = self.tcp_tls_connector.connect(peer).await?;
+            let stream = self.tcp_tls_connector.read().await.connect(peer).await?;
             let peer_addr = stream.peer_addr();
 
             let span = info_span!(parent: &self.span, "connect_to", ?peer_addr);
@@ -813,8 +813,8 @@ impl Node {
             .ok_or(CommsError::PeerNotFound)?;
 
         if let Some(peer_cert) = peer_cert {
-            let peer_name = self
-                .tcp_tls_connector
+            let connector = self.tcp_tls_connector.read().await;
+            let peer_name = connector
                 .socket_name_mapping(peer_in_addr)
                 .ok_or(CommsError::PeerNameNotFound)?;
 

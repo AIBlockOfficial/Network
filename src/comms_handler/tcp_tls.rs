@@ -2,6 +2,7 @@
 
 use super::{CommsError, Result};
 use crate::configurations::TlsSpec;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Cursor;
@@ -31,6 +32,7 @@ pub struct TcpTlsConfig {
     pem_rsa_private_keys: String,
     trusted_pem_certs: Vec<String>,
     use_tls: bool,
+    listener: Cell<Option<TcpListener>>,
 }
 
 impl TcpTlsConfig {
@@ -42,6 +44,7 @@ impl TcpTlsConfig {
             pem_rsa_private_keys: Default::default(),
             trusted_pem_certs: Default::default(),
             use_tls: false,
+            listener: Default::default(),
         }
     }
 
@@ -69,8 +72,18 @@ impl TcpTlsConfig {
                     .clone(),
                 trusted_pem_certs: config.pem_certificates.values().cloned().collect(),
                 use_tls: true,
+                listener: Default::default(),
             })
         }
+    }
+
+    pub fn mut_socket_name_mapping(&mut self) -> &mut BTreeMap<SocketAddr, String> {
+        &mut self.socket_name_mapping
+    }
+
+    pub fn with_listener(self, listener: TcpListener) -> Self {
+        self.listener.set(Some(listener));
+        self
     }
 
     pub fn address(&self) -> SocketAddr {
@@ -93,10 +106,11 @@ impl TcpTlsListner {
             None
         };
 
-        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-        bind_address.set_port(config.address.port());
-
-        let tcp_listener = TcpListener::bind(bind_address).await?;
+        let tcp_listener = if let Some(listener) = config.listener.replace(None) {
+            listener
+        } else {
+            Self::new_raw_listner(config.address).await?
+        };
         let mut listener_address = config.address;
         listener_address.set_port(tcp_listener.local_addr()?.port());
 
@@ -105,6 +119,12 @@ impl TcpTlsListner {
             tls_acceptor,
             listener_address,
         })
+    }
+
+    pub async fn new_raw_listner(address: SocketAddr) -> Result<TcpListener> {
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(address.port());
+        Ok(TcpListener::bind(bind_address).await?)
     }
 
     pub fn listener_address(&self) -> SocketAddr {
@@ -154,10 +174,10 @@ impl TcpTlsConnector {
         })
     }
 
-    pub async fn connect(&mut self, addr: SocketAddr) -> Result<TcpTlsStream> {
+    pub async fn connect(&self, addr: SocketAddr) -> Result<TcpTlsStream> {
         let stream = TcpStream::connect(addr).await?;
 
-        if let Some(tls_connector) = &mut self.tls_connector {
+        if let Some(tls_connector) = &self.tls_connector {
             let tls_name = socket_name_mapping_or_default(&self.socket_name_mapping, addr)
                 .ok_or(CommsError::ConfigError("SocketAddr dnsname unknown"))?;
             let domain = DNSNameRef::try_from_ascii_str(tls_name)

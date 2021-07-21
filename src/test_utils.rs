@@ -2,7 +2,7 @@
 //! to send a receive requests & responses, and generally to test the behavior and
 //! correctness of the compute, miner, & storage modules.
 
-use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig};
+use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsListner};
 use crate::compute::ComputeNode;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
@@ -1281,4 +1281,29 @@ pub fn get_common_tls_config() -> TcpTlsConfig {
         .collect();
     let tls_spec = get_test_tls_spec().make_tls_spec(&mapping);
     TcpTlsConfig::from_tls_spec(addr, &tls_spec).unwrap()
+}
+
+pub async fn get_bound_common_tls_configs(names: &[&str]) -> Vec<TcpTlsConfig> {
+    let mut mapping = BTreeMap::new();
+    let mut listeners = BTreeMap::new();
+    let tls_spec = get_test_tls_spec();
+    for name in names.iter().copied() {
+        let mut address = "127.0.0.1:0".parse().unwrap();
+        let tcp_listener = TcpTlsListner::new_raw_listner(address).await.unwrap();
+        address.set_port(tcp_listener.local_addr().unwrap().port());
+
+        info!("Bound name address: {}: {:?}", name, address);
+        mapping.insert(address, get_test_tls_name(name, &tls_spec));
+        listeners.insert(address, tcp_listener);
+    }
+
+    let mut configs = Vec::new();
+    let tls_spec = tls_spec.make_tls_spec(&mapping);
+    for address in mapping.keys() {
+        let tcp_listener = listeners.remove(&address).unwrap();
+        let config = TcpTlsConfig::from_tls_spec(*address, &tls_spec).unwrap();
+        let config = config.with_listener(tcp_listener);
+        configs.push(config);
+    }
+    configs
 }
