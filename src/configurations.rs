@@ -2,6 +2,7 @@ use crate::db_utils::SimpleDb;
 use naom::primitives::asset::TokenAmount;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
@@ -13,7 +14,7 @@ pub struct NodeSpec {
 }
 
 /// Configuration info for TLS
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Default, Clone, Deserialize)]
 pub struct TlsSpec {
     /// Trusted names for address
     pub socket_name_mapping: BTreeMap<SocketAddr, String>,
@@ -21,6 +22,12 @@ pub struct TlsSpec {
     pub pem_certificates: BTreeMap<String, String>,
     /// Private keys available to authenticate with
     pub pem_rsa_private_keys: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for TlsSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TlsSpec({:?})", &self.socket_name_mapping)
+    }
 }
 
 /// Configuration info for a TxOut
