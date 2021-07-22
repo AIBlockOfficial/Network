@@ -22,7 +22,7 @@ async fn main() {
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
-    let (db, api_addr) = node.api_inputs();
+    let (db, api_addr, api_tls) = node.api_inputs();
 
     let local_event_tx = node.local_event_tx().clone();
 
@@ -65,6 +65,9 @@ async fn main() {
                     .or(routes::latest_block(db.clone()))
                     .or(routes::blockchain_entry_by_key(db)),
             )
+            .tls()
+            .key(&api_tls.pem_rsa_private_keys)
+            .cert(&api_tls.pem_certs)
             .run(bind_address)
             .await;
         }

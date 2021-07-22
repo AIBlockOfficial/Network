@@ -37,7 +37,7 @@ tokio-stream = "0.1.6"
 tracing = "0.1.13"
 tracing-subscriber = "0.2.3"
 tracing-futures = "0.2.3"
-warp = "0.3.1"
+warp = { version = "0.3.1", features = ["tls"] }
 
 [features]
 mock = []

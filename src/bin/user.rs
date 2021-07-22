@@ -82,7 +82,7 @@ async fn main() {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (db, node, api_addr) = api_inputs;
+        let (db, node, api_addr, api_tls) = api_inputs;
 
         println!("Warp API started on port {:?}", api_addr.port());
         println!();
@@ -103,6 +103,9 @@ async fn main() {
                     .or(routes::wallet_encapsulation_data(db.clone()))
                     .or(routes::payment_address(db)),
             )
+            .tls()
+            .key(&api_tls.pem_rsa_private_keys)
+            .cert(&api_tls.pem_certs)
             .run(bind_address)
             .await;
         }

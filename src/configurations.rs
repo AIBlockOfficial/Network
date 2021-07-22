@@ -24,6 +24,12 @@ pub struct TlsSpec {
     pub pem_rsa_private_keys: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TlsPrivateInfo {
+    pub pem_certs: String,
+    pub pem_rsa_private_keys: String,
+}
+
 impl fmt::Debug for TlsSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TlsSpec({:?})", &self.socket_name_mapping)

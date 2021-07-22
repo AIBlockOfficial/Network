@@ -1,5 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
-use crate::configurations::{ExtraNodeParams, UserAutoGenTxSetup, UserNodeConfig};
+use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
@@ -109,7 +109,7 @@ pub struct UserNode {
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_addr: SocketAddr,
+    api_info: (SocketAddr, TlsPrivateInfo),
     trading_peer: Option<SocketAddr>,
     next_payment: Option<(Option<SocketAddr>, Transaction)>,
     last_block_notified: Block,
@@ -139,8 +139,9 @@ impl UserNode {
             .get(config.user_compute_node_idx)
             .ok_or(UserError::ConfigError("Invalid compute index"))?
             .address;
-        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
+        let api_tls_info = tcp_tls_config.clone_private_info();
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
         let wallet_db = WalletDb::new(
@@ -164,7 +165,7 @@ impl UserNode {
             wallet_db,
             local_events: Default::default(),
             compute_addr,
-            api_addr,
+            api_info: (api_addr, api_tls_info),
             trading_peer: None,
             next_payment: None,
             last_block_notified: Default::default(),
@@ -215,8 +216,14 @@ impl UserNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr) {
-        (self.wallet_db.clone(), self.node.clone(), self.api_addr)
+    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr, TlsPrivateInfo) {
+        let (api_addr, api_tls_info) = self.api_info.clone();
+        (
+            self.wallet_db.clone(),
+            self.node.clone(),
+            api_addr,
+            api_tls_info,
+        )
     }
 
     /// Extract persistent dbs

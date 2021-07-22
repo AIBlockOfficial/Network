@@ -431,7 +431,7 @@ async fn upgrade_restart_network_common(
             actual_count.push(count);
             actual_last_bnum.push(last_bnum);
 
-            let (db, _) = storage.api_inputs();
+            let (db, _, _) = storage.api_inputs();
             let db = db.lock().unwrap();
             info!(
                 "dump_db {}: count:{} b_num:{:?}, \n{}",
