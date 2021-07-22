@@ -36,7 +36,6 @@ use sodiumoxide::crypto::sign;
 use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -2439,11 +2438,10 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
 
     for (payment_amount, from, to, b_num) in amounts_to_pay {
         create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
+        let initial_info = vec![user_get_wallet_asset_totals_for_tx(&mut network, from, to).await];
         let infos = all_gathered_wallet_asset_info
             .entry((from, to))
-            .or_insert(vec![
-                user_get_wallet_asset_totals_for_tx(&mut network, from, to).await,
-            ]);
+            .or_insert(initial_info);
 
         make_receipt_based_payment_act(
             &mut network,
@@ -2457,7 +2455,7 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
         infos.push(user_get_wallet_asset_totals_for_tx(&mut network, from, to).await);
     }
 
-    let all_wallet_assets_actual = Vec::from_iter(all_gathered_wallet_asset_info.into_iter());
+    let all_wallet_assets_actual: Vec<_> = all_gathered_wallet_asset_info.into_iter().collect();
     let all_wallet_assets_expected = vec![
         (
             ("user1", "user2"),
@@ -2717,10 +2715,9 @@ async fn user_get_wallet_asset_totals_for_tx(
     from: &str,
     to: &str,
 ) -> (AssetValues, AssetValues) {
-    (
-        node_get_wallet_info(network, from).await.0,
-        node_get_wallet_info(network, to).await.0,
-    )
+    let from_info = node_get_wallet_info(network, from).await.0;
+    let to_info = node_get_wallet_info(network, to).await.0;
+    (from_info, to_info)
 }
 
 async fn node_all_combined_get_wallet_info(
@@ -2758,7 +2755,7 @@ fn node_all_combined_expected_wallet_info(
     let txs_to_address_and_ammount = {
         let mining_tx_out = get_tx_out_with_out_point_cloned(mining_txs.iter().copied());
         mining_tx_out
-            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.value.clone())))
+            .map(|(k, tx_out)| (k, (tx_out.script_public_key, tx_out.value)))
             .map(|(k, (addr, amount))| (k, (addr.unwrap(), amount)))
             .collect()
     };

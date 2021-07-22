@@ -1183,14 +1183,14 @@ impl UserNode {
             let rb_send_tx = construct_rb_payments_send_tx(
                 tx_ins,
                 tx_outs,
-                receiver_address.clone(),
+                receiver_address,
                 sender_asset.token_amount(),
                 0,
                 druid,
                 vec![sender_druid_expectation],
             );
 
-            self.next_rb_payment = Some((Some(peer), rb_send_tx.clone()));
+            self.next_rb_payment = Some((Some(peer), rb_send_tx));
         }
         Response {
             success: true,
