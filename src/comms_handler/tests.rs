@@ -4,6 +4,7 @@ use super::{CommsError, Event, Node, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::NodeType;
 use crate::test_utils::{get_bound_common_tls_configs, get_common_tls_config};
+use crate::utils::tracing_log_try_init;
 use bincode::deserialize;
 use futures::future::join_all;
 use std::collections::BTreeMap;
@@ -17,7 +18,7 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 /// using their public address after one node connected to the other.
 #[tokio::test(flavor = "current_thread")]
 async fn direct_messages() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     let mut nodes = create_compute_nodes(2, 2).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
@@ -43,7 +44,7 @@ async fn direct_messages() {
 /// using their public address after one node connected to the other.
 #[tokio::test(flavor = "current_thread")]
 async fn direct_prelaunch_messages() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     let mut nodes = create_compute_nodes(0, 2).await;
     nodes.push(create_node_type_version(2, NodeType::PreLaunch, NETWORK_VERSION).await);
@@ -74,7 +75,7 @@ async fn direct_prelaunch_messages() {
 /// 4. We check that all other nodes (node_2, node_3, ... node_N) have received the same message.
 #[tokio::test(flavor = "current_thread")]
 async fn multicast() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     // Initialize nodes.
     let mut nodes = create_compute_nodes(16, 16).await;
@@ -134,7 +135,7 @@ async fn disconnect_connection_some() {
 }
 
 async fn disconnect_connection(subset: bool) {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     //
     // Arrange
@@ -192,7 +193,7 @@ async fn disconnect_connection(subset: bool) {
 /// Check a node cannot connect to a node that stopped listening.
 #[tokio::test(flavor = "current_thread")]
 async fn listen_paused_resumed_stopped() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     //
     // Arrange
@@ -252,7 +253,7 @@ async fn connect_full_to() {
 
 /// Check behaviour when peer list is full.
 async fn connect_full(from_full: bool) {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     //
     // Arrange
@@ -308,7 +309,7 @@ async fn connect_full(from_full: bool) {
 /// Check incompatible nodes who cannot establish connections.
 #[tokio::test(flavor = "current_thread")]
 async fn nodes_incompatible() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     //
     // Arrange
@@ -367,7 +368,7 @@ async fn nodes_incompatible() {
 /// Check nodes who cannot establish connections because of unexpected certificates.
 #[tokio::test(flavor = "current_thread")]
 async fn nodes_tls_mismatch() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
 
     //
     // Arrange

@@ -17,8 +17,8 @@ use crate::test_utils::{
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
-    StringError,
+    create_valid_transaction_with_ins_outs, get_sanction_addresses, tracing_log_try_init,
+    validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -3599,7 +3599,7 @@ async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) 
 //
 
 fn test_step_start() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
     info!("Test Step start");
 }
 
