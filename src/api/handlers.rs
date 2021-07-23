@@ -75,7 +75,7 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
     };
 
     let send_val = WalletInfo {
-        running_total: fund_store.running_total().0 as f64 / D_DISPLAY_PLACES,
+        running_total: fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES,
     };
 
     Ok(warp::reply::json(&send_val))

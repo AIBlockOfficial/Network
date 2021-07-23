@@ -10,15 +10,15 @@ use crate::utils::{
     generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent,
     LocalEventChannel, LocalEventSender, ResponseResult,
 };
-use crate::wallet::WalletDb;
+use crate::wallet::{AddressStore, WalletDb};
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
+use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{
-    construct_payment_tx_ins, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
     construct_tx_core, construct_tx_hash,
 };
 use sha3::{Digest, Sha3_256};
@@ -231,8 +231,7 @@ impl UserNode {
     /// Update the running total from a retrieved UTXO set/subset
     pub async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
-        let payments: Vec<(OutPoint, TokenAmount, String)> =
-            get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
 
         self.wallet_db
             .save_usable_payments_to_wallet(payments)
@@ -265,6 +264,14 @@ impl UserNode {
             }) => {}
             Ok(Response {
                 success: true,
+                reason: "Receipt asset create transaction ready",
+            }) => {
+                self.send_next_payment_to_destinations(self.compute_address())
+                    .await
+                    .unwrap();
+            }
+            Ok(Response {
+                success: true,
                 reason: "Received receipt-based payment request",
             }) => {
                 self.send_rb_payment_response().await.unwrap();
@@ -275,10 +282,11 @@ impl UserNode {
             Ok(Response {
                 success: true,
                 reason: "Received receipt-based payment response",
-            }) => self
-                .send_next_rb_transaction_to_destinations(self.compute_address())
-                .await
-                .unwrap(),
+            }) => {
+                self.send_next_rb_transaction_to_destinations(self.compute_address())
+                    .await
+                    .unwrap();
+            }
             Ok(Response {
                 success: true,
                 reason: "New address ready to be sent",
@@ -447,6 +455,9 @@ impl UserNode {
         match req {
             UserApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
+            SendCreateReceiptRequest { receipt_amount } => {
+                Some(self.generate_receipt_asset_tx(receipt_amount).await)
+            }
             SendAddressRequest => Some(self.receive_payment_address_request(peer)),
             SendPaymentTransaction { transaction } => {
                 Some(self.receive_payment_transaction(transaction).await)
@@ -744,20 +755,9 @@ impl UserNode {
         address: String,
         amount: TokenAmount,
     ) -> Response {
-        let (tx_cons, total_amount, tx_used) =
-            self.wallet_db.fetch_inputs_for_payment(amount).await;
-
-        let mut tx_outs = vec![TxOut::new_amount(address, amount)];
-        if total_amount > amount {
-            let excess = total_amount - amount;
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_amount(excess_address, excess));
-        }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
+        let tx_out = vec![TxOut::new_token_amount(address, amount)];
+        let asset_required = Asset::Token(amount);
+        let (tx_ins, tx_outs) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await;
         let payment_tx = construct_tx_core(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
 
@@ -765,6 +765,35 @@ impl UserNode {
             success: true,
             reason: "Next payment transaction ready",
         }
+    }
+
+    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `asset_required`              - The required `Asset`
+    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
+    pub async fn fetch_tx_ins_and_tx_outs(
+        &mut self,
+        asset_required: Asset,
+        mut tx_outs: Vec<TxOut>,
+    ) -> (Vec<TxIn>, Vec<TxOut>) {
+        let (tx_cons, total_amount, tx_used) = self
+            .wallet_db
+            .fetch_inputs_for_payment(asset_required.clone())
+            .await;
+
+        if let Some(excess) = total_amount.get_excess(&asset_required) {
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_asset(excess_address, excess));
+        }
+
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, tx_used)
+            .await;
+
+        (tx_ins, tx_outs)
     }
 
     /// Sends a payment transaction to the receiving party
@@ -994,14 +1023,9 @@ impl UserNode {
     ) -> Result<()> {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
-        let amount = sender_asset.token_amount();
 
-        let (tx_cons, total_amount, tx_used) =
-            self.wallet_db.fetch_inputs_for_payment(amount).await;
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
+        let (tx_ins, tx_outs) = self
+            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
             .await;
 
         let sender_from_addr = hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
@@ -1017,7 +1041,7 @@ impl UserNode {
             sender_asset,
             sender_half_druid,
             tx_ins,
-            total_amount,
+            tx_outs,
         };
 
         self.next_rb_payment_data = Some(rb_payment_data);
@@ -1074,8 +1098,12 @@ impl UserNode {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
         let druid = sender_half_druid + &receiver_half_druid.clone();
-        //TODO: Sensible receipt asset creation and construction of Vec<TxIn>
-        let tx_ins = construct_payment_tx_ins(vec![]);
+        let asset_required = Asset::Receipt(1);
+
+        let (tx_ins, tx_outs) = self
+            .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
+            .await;
+
         let receiver_from_addr =
             hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
 
@@ -1095,6 +1123,7 @@ impl UserNode {
 
         let rb_receive_tx = construct_rb_receive_payment_tx(
             tx_ins,
+            tx_outs,
             sender_address,
             0,
             druid,
@@ -1140,7 +1169,7 @@ impl UserNode {
                 sender_asset,
                 sender_half_druid,
                 tx_ins,
-                total_amount,
+                tx_outs,
             } = rb_payment_data;
 
             let RbPaymentResponseData {
@@ -1150,29 +1179,41 @@ impl UserNode {
             } = rb_payment_response;
 
             let druid = sender_half_druid + &receiver_half_druid;
-            let amount = sender_asset.token_amount();
 
-            let mut rb_send_tx = construct_rb_payments_send_tx(
+            let rb_send_tx = construct_rb_payments_send_tx(
                 tx_ins,
-                receiver_address.clone(),
-                amount,
+                tx_outs,
+                receiver_address,
+                sender_asset.token_amount(),
                 0,
                 druid,
                 vec![sender_druid_expectation],
             );
 
-            if total_amount > amount {
-                let excess = total_amount - amount;
-                let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-                rb_send_tx
-                    .outputs
-                    .push(TxOut::new_amount(excess_address, excess));
-            }
-            self.next_rb_payment = Some((Some(peer), rb_send_tx.clone()));
+            self.next_rb_payment = Some((Some(peer), rb_send_tx));
         }
         Response {
             success: true,
             reason: "Received receipt-based payment response",
+        }
+    }
+
+    /// Create new receipt-asset transaction to send to compute for processing
+    pub async fn generate_receipt_asset_tx(&mut self, receipt_amount: u64) -> Response {
+        let AddressStore {
+            public_key,
+            secret_key,
+        } = self.wallet_db.generate_payment_address().await.1;
+
+        let block_num = self.last_block_notified.header.b_num;
+        let receipt_asset_tx =
+            construct_receipt_create_tx(block_num, public_key, &secret_key, receipt_amount);
+
+        self.next_payment = Some((None, receipt_asset_tx));
+
+        Response {
+            reason: "Receipt asset create transaction ready",
+            success: true,
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB
 use crate::wallet::{EncapsulationData, WalletDb};
 use bincode::{deserialize, serialize};
 use naom::constants::D_DISPLAY_PLACES;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::OutPoint;
 use naom::primitives::{block::Block, transaction::Transaction};
 use serde_json::json;
@@ -193,7 +193,7 @@ async fn test_get_wallet_info() {
     };
 
     let mut fund_store = db.get_fund_store();
-    fund_store.store_tx(OutPoint::new("000000".to_string(), 0), TokenAmount(11));
+    fund_store.store_tx(OutPoint::new("000000".to_string(), 0), Asset::token_u64(11));
     db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
         .await;
 
@@ -205,7 +205,7 @@ async fn test_get_wallet_info() {
     let filter = routes::wallet_info(db);
     let res = request.reply(&filter).await;
     let expected_running_total = serde_json::to_string(&json!({
-        "running_total":fund_store.running_total().0 as f64 / D_DISPLAY_PLACES
+        "running_total":fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES
     }))
     .unwrap();
 

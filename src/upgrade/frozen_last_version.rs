@@ -267,11 +267,12 @@ pub mod wallet {
         columns: &[],
     };
 
+    pub type WalletSavedTransactions = BTreeMap<OutPoint, TokenAmount>;
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct FundStore {
-        running_total: TokenAmount,
-        transactions: BTreeMap<OutPoint, TokenAmount>,
-        spent_transactions: BTreeMap<OutPoint, TokenAmount>,
+        pub running_total: TokenAmount,
+        pub transactions: WalletSavedTransactions,
+        pub spent_transactions: WalletSavedTransactions,
     }
 
     pub type KnownAddresses = BTreeSet<String>;
@@ -292,7 +293,10 @@ pub mod convert {
     mod old {
         pub use super::super::*;
     }
-    use crate::{compute_raft, interfaces, storage_raft, wallet};
+    use crate::{
+        compute_raft, interfaces, storage_raft,
+        wallet::{self, AssetValues},
+    };
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         block::{Block, BlockHeader},
@@ -397,11 +401,35 @@ pub mod convert {
         TokenAmount(old.0)
     }
 
+    pub fn convert_token_to_asset_value(old: old::naom::TokenAmount) -> AssetValues {
+        AssetValues::new(convert_token_amount(old), 0)
+    }
+
+    pub fn convert_token_to_asset(old: old::naom::TokenAmount) -> Asset {
+        Asset::Token(convert_token_amount(old))
+    }
+
     pub fn convert_address_store(old: old::wallet::AddressStore) -> wallet::AddressStore {
         wallet::AddressStore {
             public_key: old.public_key,
             secret_key: old.secret_key,
         }
+    }
+
+    pub fn convert_saved_wallet_transactions(
+        old: old::wallet::WalletSavedTransactions,
+    ) -> BTreeMap<OutPoint, Asset> {
+        old.into_iter()
+            .map(|(k, v)| (convert_outpoint(k), convert_token_to_asset(v)))
+            .collect()
+    }
+
+    pub fn convert_fund_store(old: old::wallet::FundStore) -> wallet::FundStore {
+        wallet::FundStore::new(
+            convert_token_to_asset_value(old.running_total),
+            convert_saved_wallet_transactions(old.transactions),
+            convert_saved_wallet_transactions(old.spent_transactions),
+        )
     }
 
     pub fn convert_compute_consensused_to_import(

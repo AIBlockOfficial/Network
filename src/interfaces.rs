@@ -35,7 +35,7 @@ pub struct RbPaymentData {
     pub sender_asset: Asset,
     pub sender_half_druid: String,
     pub tx_ins: Vec<TxIn>,
-    pub total_amount: TokenAmount,
+    pub tx_outs: Vec<TxOut>,
 }
 
 /// Struct used to make a request for a new receipt-based payment
@@ -539,6 +539,9 @@ pub enum UserRequest {
     /// Process an API internal request
     UserApi(UserApiRequest),
 
+    /// Request to generate receipt-based asset
+    /// TODO: Needs to be hooked up to UserApi
+    SendCreateReceiptRequest { receipt_amount: u64 },
     /// Request to make a receipt-based payment
     SendRbPaymentRequest {
         rb_payment_request_data: RbPaymentRequestData,
@@ -577,6 +580,7 @@ impl fmt::Debug for UserRequest {
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
 
+            SendCreateReceiptRequest { .. } => write!(f, "SendCreateReceiptRequest"),
             SendRbPaymentRequest { .. } => write!(f, "SendRbPaymentRequest"),
             SendRbPaymentResponse { .. } => write!(f, "SendRbPaymentResponse"),
 

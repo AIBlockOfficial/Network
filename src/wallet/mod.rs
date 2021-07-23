@@ -5,7 +5,7 @@ use crate::db_utils::{
 };
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
 use std::sync::{Arc, Mutex};
 use tokio::task;
-
 mod fund_store;
-pub use fund_store::FundStore;
+pub use fund_store::{AssetValues, FundStore};
 
 ///Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
@@ -134,7 +133,7 @@ impl WalletDb {
         for seed in seeds {
             let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
             let (address, _) = self.store_payment_address(pk, sk).await;
-            let payments = vec![(tx_out_p, amount, address)];
+            let payments = vec![(tx_out_p, Asset::Token(amount), address)];
             self.save_usable_payments_to_wallet(payments).await.unwrap();
         }
         self
@@ -261,11 +260,11 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `payments - Payments OutPoint, amount and receiver key address
+    /// * `payments` - Payments OutPoint, amount and receiver key address
     pub async fn save_usable_payments_to_wallet(
         &self,
-        payments: Vec<(OutPoint, TokenAmount, String)>,
-    ) -> Result<Vec<(OutPoint, TokenAmount, String)>, Error> {
+        payments: Vec<(OutPoint, Asset, String)>,
+    ) -> Result<Vec<(OutPoint, Asset, String)>, Error> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
@@ -278,10 +277,10 @@ impl WalletDb {
                 .filter(|(_, _, a)| addresses.contains(a))
                 .collect();
 
-            for (out_p, amount, key_address) in &usable_payments {
+            for (out_p, asset, key_address) in &usable_payments {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
-                fund_store.store_tx(out_p.clone(), *amount);
+                fund_store.store_tx(out_p.clone(), asset.clone());
                 save_transaction_to_wallet(&mut batch, out_p, &store);
             }
 
@@ -302,16 +301,16 @@ impl WalletDb {
     ///
     /// ### Arguments
     ///
-    /// * `amount_required` - Amount needed
+    /// * `asset_required` - Asset needed
     pub async fn fetch_inputs_for_payment(
         &self,
-        amount_required: TokenAmount,
-    ) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
+        asset_required: Asset,
+    ) -> (Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>) {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, amount_required, &encryption_key)
+            fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key)
         })
         .await
         .unwrap()
@@ -351,7 +350,7 @@ impl WalletDb {
     /// Handle the case where same address is reused for multiple transactions
     pub async fn destroy_spent_transactions_and_keys(
         &mut self,
-    ) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
+    ) -> (BTreeSet<String>, BTreeMap<OutPoint, Asset>) {
         let db = self.db.clone();
         task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
@@ -631,15 +630,15 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
 /// Also return the used info for db cleanup
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
-    amount_required: TokenAmount,
+    asset_required: Asset,
     encryption_key: &secretbox::Key,
-) -> (Vec<TxConstructor>, TokenAmount, Vec<(OutPoint, String)>) {
+) -> (Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
-    let mut amount_made = TokenAmount(0);
+    let fund_store = get_fund_store(&db);
+    let mut amount_made = Asset::default_of_type(&asset_required);
 
-    let fund_store = get_fund_store(db);
-    if fund_store.running_total() < amount_required {
+    if !fund_store.running_total().has_enough(&asset_required) {
         panic!(
             "Not enough funds available for payment!: {:?}",
             fund_store.running_total()
@@ -647,13 +646,12 @@ pub fn fetch_inputs_for_payment_from_db(
     }
 
     for (out_p, amount) in fund_store.into_transactions() {
-        amount_made += amount;
-
-        let (cons, used) = tx_constructor_from_prev_out(db, out_p, &encryption_key);
-        tx_cons.push(cons);
-        tx_used.push(used);
-
-        if amount_made >= amount_required {
+        if amount_made.add_assign(&amount) {
+            let (cons, used) = tx_constructor_from_prev_out(db, out_p, &encryption_key);
+            tx_cons.push(cons);
+            tx_used.push(used);
+        }
+        if let Some(true) = amount_made.is_greater_or_equal_to(&asset_required) {
             break;
         }
     }
@@ -665,7 +663,7 @@ pub fn fetch_inputs_for_payment_from_db(
 /// Handle the case where same address is reused for multiple transactions
 pub fn destroy_spent_transactions_and_keys(
     db: &mut SimpleDb,
-) -> (BTreeSet<String>, BTreeMap<OutPoint, TokenAmount>) {
+) -> (BTreeSet<String>, BTreeMap<OutPoint, Asset>) {
     let mut batch = db.batch_writer();
     let mut fund_store = get_fund_store(db);
     let mut address_store = get_known_key_address(db);
@@ -790,19 +788,19 @@ mod tests {
         //
         let out_p1 = OutPoint::new(String::new(), 1);
         let out_p2 = OutPoint::new(String::new(), 2);
-        let amount1 = TokenAmount(3);
+        let amount1 = Asset::token_u64(3);
 
         let out_p3 = OutPoint::new(String::new(), 3);
-        let amount3 = TokenAmount(5);
+        let amount3 = Asset::token_u64(5);
 
         let out_p4 = OutPoint::new(String::new(), 3);
-        let amount4 = TokenAmount(6);
+        let amount4 = Asset::token_u64(6);
         let key_addr_non_existent = "000000".to_owned();
 
         let out_p_non_pay = OutPoint::new(String::new(), 4);
         let key_addr_non_pay = "".to_owned();
 
-        let amount_out = TokenAmount(4);
+        let amount_out = Asset::token_u64(4);
 
         //
         // Act
@@ -821,8 +819,8 @@ mod tests {
         let (key_addr2, _) = wallet.generate_payment_address().await;
         let stored_usable = wallet
             .save_usable_payments_to_wallet(vec![
-                (out_p1.clone(), amount1, key_addr1.clone()),
-                (out_p2.clone(), amount1, key_addr2.clone()),
+                (out_p1.clone(), amount1.clone(), key_addr1.clone()),
+                (out_p2.clone(), amount1.clone(), key_addr2.clone()),
                 (out_p3, amount3, key_addr2),
                 (out_p4, amount4, key_addr_non_existent),
             ])
@@ -840,15 +838,19 @@ mod tests {
         // Assert
         //
         assert_eq!(stored_usable.len(), 3);
-        assert_eq!(fetched_amount, amount1 + amount1);
+        assert_eq!(
+            fetched_amount,
+            Asset::Token(amount1.token_amount() + amount1.token_amount())
+        );
         assert_eq!(tx_ins.len(), 2);
 
         let expected_destroyed_keys: BTreeSet<_> = vec![key_addr1].into_iter().collect();
         assert_eq!(destroyed_keys, expected_destroyed_keys);
 
-        let expected_destroyedkeys: BTreeMap<_, _> = vec![(out_p1, amount1), (out_p2, amount1)]
-            .into_iter()
-            .collect();
+        let expected_destroyedkeys: BTreeMap<_, _> =
+            vec![(out_p1, amount1.clone()), (out_p2, amount1)]
+                .into_iter()
+                .collect();
         assert_eq!(destroyed_txs, expected_destroyedkeys);
     }
 }
