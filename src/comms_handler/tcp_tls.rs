@@ -1,7 +1,7 @@
 //! Utilities necessary to establish a TCP connection with TLS overay stream.
 
 use super::{CommsError, Result};
-use crate::configurations::TlsSpec;
+use crate::configurations::{TlsPrivateInfo, TlsSpec};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -88,6 +88,13 @@ impl TcpTlsConfig {
 
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    pub fn clone_private_info(&self) -> TlsPrivateInfo {
+        TlsPrivateInfo {
+            pem_certs: self.pem_certs.clone(),
+            pem_rsa_private_keys: self.pem_rsa_private_keys.clone(),
+        }
     }
 }
 

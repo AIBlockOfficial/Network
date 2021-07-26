@@ -186,8 +186,7 @@ impl ComputeRaft {
 
         let propose_transactions_timeout_duration =
             Duration::from_millis(config.compute_transaction_timeout as u64);
-        let propose_transactions_timeout_at =
-            Instant::now() + propose_transactions_timeout_duration;
+        let propose_transactions_timeout_at = Instant::now();
 
         let utxo_set =
             make_utxo_set_from_seed(&config.compute_seed_utxo, &config.compute_genesis_tx_in);
@@ -291,11 +290,13 @@ impl ComputeRaft {
 
         if consensused_ser.is_empty() {
             // Empty initial snapshot
+            self.propose_transactions_timeout_at = self.next_propose_transactions_timeout_at();
             None
         } else {
             // Non empty snapshot
             warn!("apply_snapshot called self.consensused updated");
             self.consensused = deserialize(&consensused_ser).unwrap();
+            self.propose_transactions_timeout_at = self.next_propose_transactions_timeout_at();
             if let Some(proposal) = &mut self.local_initial_proposal {
                 *proposal = InitialProposal::PendingAll;
             }
@@ -436,11 +437,15 @@ impl ComputeRaft {
         }
     }
 
+    ///Returns the clock time after the proposed block time out
+    fn next_propose_transactions_timeout_at(&self) -> Instant {
+        Instant::now() + self.propose_transactions_timeout_duration
+    }
+
     /// Process as a result of timeout_propose_transactions.
     /// Reset timeout, and propose local transactions if available.
     pub async fn propose_local_transactions_at_timeout(&mut self) {
-        self.propose_transactions_timeout_at =
-            Instant::now() + self.propose_transactions_timeout_duration;
+        self.propose_transactions_timeout_at = self.next_propose_transactions_timeout_at();
 
         let max_add = self
             .proposed_and_consensused_tx_pool_len_max
