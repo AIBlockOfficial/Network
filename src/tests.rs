@@ -17,8 +17,8 @@ use crate::test_utils::{
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, get_sanction_addresses, validate_pow_block, LocalEvent,
-    StringError,
+    create_valid_transaction_with_ins_outs, get_sanction_addresses, tracing_log_try_init,
+    validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -135,8 +135,13 @@ async fn full_flow_raft_real_db_1_node() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn full_flow_raft_1_no_tls_node() {
+    full_flow_no_tls(complete_network_config_with_n_compute_raft(10510, 1)).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_1_node() {
-    full_flow(complete_network_config_with_n_compute_raft(10510, 1)).await;
+    full_flow(complete_network_config_with_n_compute_raft(10515, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -151,7 +156,7 @@ async fn full_flow_raft_3_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_majority_3_nodes() {
-    full_flow_common(
+    full_flow_tls(
         complete_network_config_with_n_compute_raft(10540, 3),
         CfgNum::Majority,
         Vec::new(),
@@ -199,7 +204,7 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
         ),
     ];
     let network_config = complete_network_config_with_n_compute_raft(11120, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -218,7 +223,7 @@ async fn full_flow_raft_kill_compute_node_3_nodes() {
     ];
 
     let network_config = complete_network_config_with_n_compute_raft(11140, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -233,7 +238,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
     ];
 
     let network_config = complete_network_config_with_n_compute_raft(11160, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -243,7 +248,7 @@ async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
         ("After create block 1", CfgModif::Reconnect("miner2")),
     ];
     let network_config = complete_network_config_with_n_compute_raft(11180, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -261,7 +266,7 @@ async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
     ];
 
     let network_config = complete_network_config_with_n_compute_raft(11200, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -276,7 +281,7 @@ async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
     ];
 
     let network_config = complete_network_config_with_n_compute_raft(11220, 3);
-    full_flow_common(network_config, CfgNum::All, modify_cfg).await;
+    full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
@@ -286,7 +291,20 @@ async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
 }
 
 async fn full_flow(network_config: NetworkConfig) {
+    full_flow_tls(network_config, CfgNum::All, Vec::new()).await;
+}
+
+async fn full_flow_no_tls(network_config: NetworkConfig) {
     full_flow_common(network_config, CfgNum::All, Vec::new()).await;
+}
+
+async fn full_flow_tls(
+    mut network_config: NetworkConfig,
+    cfg_num: CfgNum,
+    modify_cfg: Vec<(&str, CfgModif)>,
+) {
+    network_config.tls_config = get_test_tls_spec();
+    full_flow_common(network_config, cfg_num, modify_cfg).await;
 }
 
 async fn full_flow_common(
@@ -3599,7 +3617,7 @@ async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) 
 //
 
 fn test_step_start() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
     info!("Test Step start");
 }
 
@@ -3920,7 +3938,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         passphrase: Some("Test Passphrase".to_owned()),
         user_auto_donate: 0,
         user_test_auto_gen_setup: Default::default(),
-        tls_config: get_test_tls_spec(),
+        tls_config: Default::default(),
     }
 }
 

@@ -14,6 +14,7 @@ use crate::test_utils::{
     get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig,
     NetworkNodeInfo, NodeType,
 };
+use crate::utils::tracing_log_try_init;
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
@@ -512,7 +513,7 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
 }
 
 fn test_step_start() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = tracing_log_try_init();
     info!("Test Step start");
 }
 

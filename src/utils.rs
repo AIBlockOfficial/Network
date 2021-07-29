@@ -209,6 +209,23 @@ impl DeserializedBlockchainItem {
     }
 }
 
+/// Install a global tracing subscriber that listens for events and
+/// filters based on the value of the [`RUST_LOG` environment variable],
+/// if one is not already set.
+///
+/// Default to OFF so if not environment varialbe is provided no log is emitted.
+pub fn tracing_log_try_init() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    let dirs = std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "off".to_owned());
+
+    let builder = tracing_subscriber::fmt::Subscriber::builder()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(dirs));
+
+    builder.try_init()
+}
+
 /// Attempts to connect to all peers
 ///
 /// ### Arguments

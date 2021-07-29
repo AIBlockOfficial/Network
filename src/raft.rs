@@ -426,6 +426,7 @@ impl RaftNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::tracing_log_try_init;
     use futures::future::join_all;
     use std::cmp;
     use std::collections::{HashMap, HashSet};
@@ -479,7 +480,7 @@ mod tests {
     // Setup a peer group running all raft loops and dispatching messages.
     // Verify proposal are committed by all peers regardless of the proposer.
     async fn test_send_proposal_check_commited(num_peers: u64) {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
@@ -515,7 +516,7 @@ mod tests {
     // Setup a peer group running all raft loops and dispatching messages.
     // Verify snapshot does not interfer with later proposal.
     async fn test_snapshot(num_peers: u64) {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(num_peers);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
@@ -532,7 +533,7 @@ mod tests {
     // Node not receiving message can catch up.
     #[tokio::test(flavor = "current_thread")]
     async fn test_catch_up_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
@@ -556,7 +557,7 @@ mod tests {
     // Node not receiving message can catch up, snapshot exist but record still there.
     #[tokio::test(flavor = "current_thread")]
     async fn test_skip_snapshot_catch_up_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
@@ -582,7 +583,7 @@ mod tests {
     // Node not receiving message can catch up, need to use snapshot as record is gone.
     #[tokio::test(flavor = "current_thread")]
     async fn test_snap_catch_up_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(Some(3).into_iter().collect::<HashSet<u64>>()));
         let (join_handles, _) = spawn_nodes_loops(&peer_indexes, &mut test_nodes, &peer_msg_lost);
@@ -611,7 +612,7 @@ mod tests {
     // Node not receiving message can catch up, and then need to use snapshot as record is gone.
     #[tokio::test(flavor = "current_thread")]
     async fn test_snap_catch_up_after_start_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost_set: HashSet<u64> = Some(3).into_iter().collect();
         let peer_msg_lost = Arc::new(Mutex::new(peer_msg_lost_set.clone()));
@@ -648,7 +649,7 @@ mod tests {
     // Node killed can catch up, no snapshot needed.
     #[tokio::test(flavor = "current_thread")]
     async fn test_restart_after_start_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
@@ -691,7 +692,7 @@ mod tests {
     // Node killed can catch up, and then need to use snapshot as record is gone.
     #[tokio::test(flavor = "current_thread")]
     async fn test_snap_restart_after_start_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
@@ -744,7 +745,7 @@ mod tests {
     // Node killed after initial snapshot can catch up without getting new snapshot.
     #[tokio::test(flavor = "current_thread")]
     async fn test_restart_skip_snapshot_after_snapshot_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
@@ -796,7 +797,7 @@ mod tests {
     // Node killed after initial snapshot can catch up, and then need to use snapshot as record is gone.
     #[tokio::test(flavor = "current_thread")]
     async fn test_snap_restart_after_snapshot_3() {
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_log_try_init();
         let (peer_indexes, mut test_nodes) = test_configs(3);
         let peer_msg_lost = Arc::new(Mutex::new(HashSet::new()));
         let (mut join_handles, node_hooks) =
