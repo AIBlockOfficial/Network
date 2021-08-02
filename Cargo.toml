@@ -20,7 +20,7 @@ hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
 naom = { path = "../naom" }
-protobuf = "~2.0-2.2"
+protobuf = "~2.0"
 raft = "0.5.0"
 rand = "0.7.3"
 rocksdb = "0.15.0"
@@ -41,3 +41,6 @@ warp = { version = "0.3.1", features = ["tls"] }
 
 [features]
 mock = []
+
+[patch.crates-io]
+raft = {git =  "https://github.com/jeanphilippeD/raft-rs", branch = "0.5.1"}

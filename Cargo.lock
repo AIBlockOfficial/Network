@@ -1481,8 +1481,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92b0ad6ddc649a4ebae9ce484bfd7316c21d1c265fe9ea6733a9fe10a2f1e988"
+source = "git+https://github.com/jeanphilippeD/raft-rs?branch=0.5.1#263257ce9c6541a3598c7200bff0982df1abd71c"
 dependencies = [
  "getset",
  "hashbrown 0.1.8",
