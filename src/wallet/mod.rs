@@ -5,6 +5,7 @@ use crate::db_utils::{
 };
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
+use naom::crypto::pbkdf2 as pwhash;
 use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
@@ -12,7 +13,6 @@ use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::pwhash;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
 use std::sync::{Arc, Mutex};
@@ -563,14 +563,7 @@ pub fn get_or_save_master_key_store(
 /// * `salt` - Salt value added to the passphrase to ensure safe encryption
 pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
     let mut kb = [0; secretbox::KEY_LEN];
-    pwhash::derive_key(
-        &mut kb,
-        passphrase,
-        &salt,
-        pwhash::OPSLIMIT_INTERACTIVE,
-        pwhash::MEMLIMIT_INTERACTIVE,
-    )
-    .unwrap();
+    pwhash::derive_key(&mut kb, passphrase, &salt, pwhash::OPSLIMIT_INTERACTIVE);
     secretbox::Key::from_slice(&kb).unwrap()
 }
 
