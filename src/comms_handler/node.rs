@@ -223,7 +223,7 @@ impl Node {
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        let listener = TcpTlsListner::new(&config).await?;
+        let listener = TcpTlsListner::new(config).await?;
         let listener_address = listener.listener_address();
         let span = info_span!("node", ?listener_address);
 

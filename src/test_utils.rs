@@ -479,7 +479,7 @@ impl Network {
         evts: impl Fn(NodeType, &str) -> Vec<String>,
     ) -> BTreeMap<String, Vec<String>> {
         self.all_active_nodes_flat_iter()
-            .map(|(t, n)| (n.clone(), evts(*t, &n)))
+            .map(|(t, n)| (n.clone(), evts(*t, n)))
             .collect()
     }
 }
@@ -970,10 +970,10 @@ pub async fn init_arc_node(
 ) -> ArcNode {
     let node_info = &info.node_infos[name];
     match node_info.node_type {
-        NodeType::Miner => ArcNode::Miner(init_miner(name, &config, &info, extra).await),
-        NodeType::Compute => ArcNode::Compute(init_compute(name, &config, &info, extra).await),
-        NodeType::Storage => ArcNode::Storage(init_storage(name, &config, &info, extra).await),
-        NodeType::User => ArcNode::User(init_user(name, &config, &info, extra).await),
+        NodeType::Miner => ArcNode::Miner(init_miner(name, config, info, extra).await),
+        NodeType::Compute => ArcNode::Compute(init_compute(name, config, info, extra).await),
+        NodeType::Storage => ArcNode::Storage(init_storage(name, config, info, extra).await),
+        NodeType::User => ArcNode::User(init_user(name, config, info, extra).await),
     }
 }
 
@@ -1301,7 +1301,7 @@ pub async fn get_bound_common_tls_configs(names: &[&str]) -> Vec<TcpTlsConfig> {
     let mut configs = Vec::new();
     let tls_spec = tls_spec.make_tls_spec(&mapping);
     for address in mapping.keys() {
-        let tcp_listener = listeners.remove(&address).unwrap();
+        let tcp_listener = listeners.remove(address).unwrap();
         let config = TcpTlsConfig::from_tls_spec(*address, &tls_spec).unwrap();
         let config = config.with_listener(tcp_listener);
         configs.push(config);

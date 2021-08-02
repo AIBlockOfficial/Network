@@ -105,7 +105,7 @@ impl TransactionGen {
                 chunk_size.unwrap_or(total_tx - all_txs.len())
             };
 
-            while let Some(tx) = self.make_transaction(&from, &to, input_len) {
+            while let Some(tx) = self.make_transaction(from, &to, input_len) {
                 all_txs.push(tx);
                 if all_txs.len() >= total_tx {
                     break;

@@ -95,7 +95,7 @@ impl<'a> Deserialize<'a> for RaftMessageWrapper {
     fn deserialize<D: Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
         let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
         Ok(RaftMessageWrapper(
-            protobuf::parse_from_bytes::<Message>(&bytes).map_err(serde::de::Error::custom)?,
+            protobuf::parse_from_bytes::<Message>(bytes).map_err(serde::de::Error::custom)?,
         ))
     }
 }
@@ -948,7 +948,7 @@ mod tests {
         let node_index = peer_indexes[&node.peer_id];
         node_hooks.lock().await.cmd_txs[node_index] = node.cmd_tx.clone();
 
-        let handles = spawn_node_loops(peer_indexes, &mut node, &node_hooks, peer_msg_lost);
+        let handles = spawn_node_loops(peer_indexes, &mut node, node_hooks, peer_msg_lost);
         test_nodes.insert(node_index, node);
         join_handles.insert(node_index, handles);
 

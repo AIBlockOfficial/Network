@@ -560,7 +560,7 @@ pub fn create_valid_transaction_with_ins_outs(
             let signable = OutPoint::new(t_hash_hex.to_string(), *prev_n);
             let signable_h = hex::encode(serialize(&signable).unwrap());
 
-            let signature = sign::sign_detached(&signable_h.as_bytes(), &secret_key);
+            let signature = sign::sign_detached(signable_h.as_bytes(), secret_key);
             tx_in_cons.push(TxConstructor {
                 t_hash: t_hash_hex.to_string(),
                 prev_n: *prev_n,
@@ -601,11 +601,11 @@ pub fn create_valid_transaction_with_ins_outs(
 pub fn get_genesis_tx_in_display(tx: &Transaction) -> &str {
     if let Some(tx_in) = tx.inputs.first() {
         if let Some(StackEntry::Bytes(v)) = tx_in.script_signature.stack.first() {
-            return &v;
+            return v;
         }
     }
 
-    &""
+    ""
 }
 
 /// Generate a half_druid value

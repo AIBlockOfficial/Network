@@ -404,7 +404,7 @@ async fn upgrade_restart_network_common(
 
     network.re_spawn_dead_nodes().await;
     for node_name in compute_nodes {
-        node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+        node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
     }
 
     let handles = network
@@ -464,18 +464,18 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
                 &old::compute::DB_SPEC,
                 info.db_mode,
                 if db_cfg == DbCfg::ComputeBlockToMine {
-                    &tests_last_version_db::COMPUTE_DB_V0_2_0
+                    tests_last_version_db::COMPUTE_DB_V0_2_0
                 } else {
-                    &tests_last_version_db_no_block::COMPUTE_DB_V0_2_0
+                    tests_last_version_db_no_block::COMPUTE_DB_V0_2_0
                 },
             )),
             raft_db: Some(create_old_db(
                 &old::compute_raft::DB_SPEC,
                 info.db_mode,
                 if db_cfg == DbCfg::ComputeBlockToMine {
-                    &tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0
+                    tests_last_version_db::COMPUTE_RAFT_DB_V0_2_0
                 } else {
-                    &tests_last_version_db_no_block::COMPUTE_RAFT_DB_V0_2_0
+                    tests_last_version_db_no_block::COMPUTE_RAFT_DB_V0_2_0
                 },
             )),
             ..Default::default()
@@ -484,12 +484,12 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             db: Some(create_old_db(
                 &old::storage::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::STORAGE_DB_V0_2_0,
+                tests_last_version_db::STORAGE_DB_V0_2_0,
             )),
             raft_db: Some(create_old_db(
                 &old::storage_raft::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::STORAGE_RAFT_DB_V0_2_0,
+                tests_last_version_db::STORAGE_RAFT_DB_V0_2_0,
             )),
             ..Default::default()
         },
@@ -497,7 +497,7 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::USER_DB_V0_2_0,
+                tests_last_version_db::USER_DB_V0_2_0,
             )),
             ..Default::default()
         },
@@ -505,7 +505,7 @@ fn create_old_node_db(info: &NetworkNodeInfo, db_cfg: DbCfg) -> ExtraNodeParams 
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                &tests_last_version_db::MINER_DB_V0_2_0,
+                tests_last_version_db::MINER_DB_V0_2_0,
             )),
             ..Default::default()
         },
@@ -775,7 +775,7 @@ async fn raft_node_handle_event(network: &mut Network, node: &str, reason_val: &
 
 async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_block: u64) {
     use crate::utils::LocalEvent;
-    let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
+    let mut event_tx = network.get_local_event_tx(node).await.unwrap();
     let event = LocalEvent::CoordinatedShutdown(at_block);
     event_tx.send(event, "test shutdown").await.unwrap();
 }

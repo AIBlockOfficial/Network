@@ -65,6 +65,7 @@ pub enum SpecialHandling {
 }
 
 /// Initial proposal state: Need both miner ready and block info ready
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum InitialProposal {
     PendingAll,
@@ -576,12 +577,12 @@ impl ComputeRaft {
 
     /// Current utxo_set returned as `UtxoSet` including block being mined
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
-        &self.consensused.get_committed_utxo_set()
+        self.consensused.get_committed_utxo_set()
     }
 
     /// Current utxo_set returned as `TrackedUtxoSet`
     pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
-        &self.consensused.get_committed_utxo_tracked_set()
+        self.consensused.get_committed_utxo_tracked_set()
     }
 
     /// Take mining block when mining is completed, use to populate mined block.

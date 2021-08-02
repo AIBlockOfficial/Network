@@ -296,7 +296,7 @@ impl KeyAgreement {
 
         // First sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(a));
 
         // Throw u_i into the concatenation
         for pid in sorted_pid_table.clone() {
@@ -321,7 +321,7 @@ impl KeyAgreement {
 
         // Then sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(a));
 
         // Reconstruct PID table without self
         let index_of_self = sorted_pid_table
@@ -365,7 +365,7 @@ impl KeyAgreement {
 
         // Sort the table
         let mut sorted_pid_table = Vec::from_iter(self.pid_table.clone());
-        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(&a));
+        sorted_pid_table.sort_by(|(a, _), (b, _)| b.cmp(a));
 
         let mut key = Vec::new();
 
