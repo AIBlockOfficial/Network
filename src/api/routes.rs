@@ -50,19 +50,6 @@ pub fn wallet_keypairs(
         .with(cors)
 }
 
-// GET information needed to encapsulate data
-pub fn wallet_encapsulation_data(
-    db: WalletDb,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    let cors = get_cors();
-
-    warp::path("wallet_encapsulation_data")
-        .and(warp::get())
-        .and(with_node_component(db))
-        .and_then(handlers::get_wallet_encapsulation_data)
-        .with(cors)
-}
-
 // GET new payment address
 pub fn payment_address(
     db: WalletDb,

@@ -4,14 +4,12 @@ use crate::db_utils::SimpleDb;
 use crate::interfaces::{StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::utils::DeserializedBlockchainItem;
-use crate::wallet::{EncapsulationData, WalletDb};
+use crate::wallet::WalletDb;
 
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::box_::PublicKey as PK;
-use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
@@ -36,12 +34,6 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
-}
-
-/// Information needed for client-side encapsulation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyEncapsulation {
-    pub public_key: PK,
 }
 
 /// Public key addresses received from client
@@ -100,27 +92,6 @@ pub async fn get_new_payment_address(
     let (address, _) = wallet_db.generate_payment_address().await;
 
     Ok(warp::reply::json(&address))
-}
-
-/// Gets information needed to encapsulate data
-pub async fn get_wallet_encapsulation_data(
-    wallet_db: WalletDb,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    wallet_db
-        .generate_encapsulation_data()
-        .await
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotGenerateEncapsulationData))?;
-
-    let encapsulation_data = wallet_db
-        .get_encapsulation_data()
-        .await
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotAccessEncapsulationData))?;
-
-    let response = KeyEncapsulation {
-        public_key: encapsulation_data.public_key,
-    };
-
-    Ok(warp::reply::json(&response))
 }
 
 /// Gets the latest block information
@@ -197,29 +168,13 @@ pub async fn post_import_keypairs(
 pub async fn post_make_payment(
     db: WalletDb,
     peer: Node,
-    encapsulated_data: EncapsulatedData,
+    encapsulated_data: EncapsulatedPayment,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let encapsulation_data = db
-        .get_encapsulation_data()
-        .await
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotAccessEncapsulationData))?;
-
-    let EncapsulatedData { ciphered_message } = encapsulated_data;
-
-    let EncapsulationData {
-        public_key,
-        secret_key,
-    } = encapsulation_data;
-
-    let deciphered_message = sealedbox::open(&ciphered_message, &public_key, &secret_key)
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
-
     let EncapsulatedPayment {
         address,
         amount,
         passphrase,
-    } = serde_json::from_slice(&deciphered_message)
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
+    } = encapsulated_data;
 
     let request = match db.test_passphrase(passphrase).await {
         Ok(()) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
@@ -238,30 +193,15 @@ pub async fn post_make_payment(
 pub async fn post_make_ip_payment(
     db: WalletDb,
     peer: Node,
-    encapsulated_data: EncapsulatedData,
+    encapsulated_data: EncapsulatedPayment,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     trace!("in the payment");
-    let encapsulation_data = db
-        .get_encapsulation_data()
-        .await
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotAccessEncapsulationData))?;
-
-    let EncapsulatedData { ciphered_message } = encapsulated_data;
-
-    let EncapsulationData {
-        public_key,
-        secret_key,
-    } = encapsulation_data;
-
-    let deciphered_message = sealedbox::open(&ciphered_message, &public_key, &secret_key)
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
 
     let EncapsulatedPayment {
         address,
         amount,
         passphrase,
-    } = serde_json::from_slice(&deciphered_message)
-        .map_err(|_| warp::reject::custom(errors::ErrorCannotDecryptEncapsulatedData))?;
+    } = encapsulated_data;
 
     let payment_peer: SocketAddr = address
         .parse::<SocketAddr>()
