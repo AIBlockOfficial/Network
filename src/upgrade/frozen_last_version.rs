@@ -1,6 +1,5 @@
 use crate::db_utils::SimpleDbSpec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey, Signature};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
@@ -17,6 +16,9 @@ pub mod naom {
     // Block
     //
     pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
+    pub type PublicKey = Vec<u8>;
+    pub type SecretKey = Vec<u8>;
+    pub type Signature = Vec<u8>;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct StoredSerializingBlock {
@@ -254,7 +256,7 @@ pub mod storage_raft {
 }
 
 pub mod wallet {
-    use super::naom::{OutPoint, TokenAmount};
+    use super::naom::{OutPoint, PublicKey, SecretKey, TokenAmount};
     use super::*;
 
     pub const KNOWN_ADDRESS_KEY: &str = "a";
@@ -297,6 +299,7 @@ pub mod convert {
         compute_raft, interfaces, storage_raft,
         wallet::{self, AssetValues},
     };
+    use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use naom::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         block::{Block, BlockHeader},
@@ -356,8 +359,12 @@ pub mod convert {
     pub fn convert_stack_entry(old: old::naom::StackEntry) -> StackEntry {
         match old {
             old::naom::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
-            old::naom::StackEntry::Signature(v) => StackEntry::Signature(v),
-            old::naom::StackEntry::PubKey(v) => StackEntry::PubKey(v),
+            old::naom::StackEntry::Signature(v) => {
+                StackEntry::Signature(Signature::from_slice(&v).unwrap())
+            }
+            old::naom::StackEntry::PubKey(v) => {
+                StackEntry::PubKey(PublicKey::from_slice(&v).unwrap())
+            }
             old::naom::StackEntry::PubKeyHash(v) => StackEntry::PubKeyHash(v),
             old::naom::StackEntry::Num(v) => StackEntry::Num(v),
             old::naom::StackEntry::Bytes(v) => StackEntry::Bytes(v),
@@ -411,9 +418,56 @@ pub mod convert {
 
     pub fn convert_address_store(old: old::wallet::AddressStore) -> wallet::AddressStore {
         wallet::AddressStore {
-            public_key: old.public_key,
-            secret_key: old.secret_key,
+            public_key: convert_public_key(old.public_key),
+            secret_key: convert_secret_key(old.secret_key),
         }
+    }
+
+    pub fn convert_public_key(old: old::naom::PublicKey) -> PublicKey {
+        PublicKey::from_slice(&old).unwrap()
+    }
+
+    pub fn convert_secret_key(old: old::naom::SecretKey) -> SecretKey {
+        //
+        // Format: ring pkcs8_prefix + Private key + pkcs8_separator + Public key
+        //
+
+        // Sequence: 0x30
+        // Size 83: 0x53
+        // Value: remaining byptes
+        //
+        // Integer: 0x02
+        // Size 01: 0x01
+        // Value 01: 0x01  (Version)
+        //
+        // Sequence: 0x30
+        // size 05: 0x05
+        // Value: 0x06 0x03 0x2b 0x65 0x70 (Algo)
+        //
+        // OctetString: 0x04
+        // Size 34 : 0x22
+        // Value: 0x04 0x20 + Private key bytes (nested private key)
+        const PKCS8_PREFIX: &[u8] = &[
+            0x30, 0x53, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+
+        // ContextSpecificConstructed1: 0xa1
+        // Size 35: 0x23
+        // Value: remaining byptes
+        //
+        // BitString: 0x03
+        // Size 33: 0x21
+        // unused_bits_at_end: 0: 0x00
+        // Value: public key bytes
+        const PKCS8_SEPARATOR: &[u8] = &[0xa1, 0x23, 0x03, 0x21, 0x00];
+
+        let mut secret_key = PKCS8_PREFIX.to_vec();
+        secret_key.extend_from_slice(&old[..32]);
+        secret_key.extend_from_slice(PKCS8_SEPARATOR);
+        secret_key.extend_from_slice(&old[32..]);
+
+        SecretKey::from_slice(&secret_key).unwrap()
     }
 
     pub fn convert_saved_wallet_transactions(

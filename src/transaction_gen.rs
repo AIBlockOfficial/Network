@@ -1,10 +1,10 @@
 use crate::configurations::WalletTxSpec;
 use crate::utils::{create_valid_transaction_with_ins_outs, make_wallet_tx_info};
 use bincode::{deserialize, serialize};
+use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::{construct_address, get_tx_out_with_out_point};
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 
 /// Key material to generate transactions

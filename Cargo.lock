@@ -1229,9 +1229,9 @@ dependencies = [
  "hex",
  "merkle-log",
  "rand 0.8.3",
+ "ring",
  "serde 1.0.125",
  "sha3",
- "sodiumoxide",
  "time 0.2.26",
  "tracing",
 ]
@@ -2123,6 +2123,7 @@ dependencies = [
  "protobuf",
  "raft",
  "rand 0.7.3",
+ "ring",
  "rocksdb",
  "rug",
  "rust-crypto",

@@ -1045,8 +1045,8 @@ mod test {
     use super::*;
     use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::create_valid_transaction;
+    use naom::crypto::sign_ed25519 as sign;
     use naom::primitives::asset::TokenAmount;
-    use sodiumoxide::crypto::sign;
     use std::collections::BTreeSet;
 
     #[tokio::test]

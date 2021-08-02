@@ -5,14 +5,14 @@ use crate::db_utils::{
 };
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
+use naom::crypto::sign_ed25519 as sign;
+use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::pwhash;
 use sodiumoxide::crypto::secretbox;
-use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
 use std::sync::{Arc, Mutex};
@@ -689,10 +689,11 @@ mod tests {
     #[test]
     /// Creating a valid payment address
     fn should_construct_address_valid() {
-        let pk = PublicKey([
+        let pk = PublicKey::from_slice(&[
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
-        ]);
+        ])
+        .unwrap();
         let addr = construct_address(&pk);
 
         assert_eq!(addr, "197e990a0e00fd6ae13daecc18180df6".to_string(),);
@@ -701,10 +702,11 @@ mod tests {
     #[test]
     /// Creating a payment address of 25 bytes
     fn should_construct_address_valid_length() {
-        let pk = PublicKey([
+        let pk = PublicKey::from_slice(&[
             196, 234, 50, 92, 76, 102, 62, 4, 231, 81, 211, 133, 33, 164, 134, 52, 44, 68, 174, 18,
             14, 59, 108, 187, 150, 190, 169, 229, 215, 130, 78, 78,
-        ]);
+        ])
+        .unwrap();
         let addr = construct_address(&pk);
 
         assert_eq!(addr.len(), 32);

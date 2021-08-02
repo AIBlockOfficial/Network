@@ -7,6 +7,8 @@ use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
+use naom::crypto::sign_ed25519 as sign;
+use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
@@ -20,8 +22,6 @@ use naom::utils::transaction_utils::{
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
 use sodiumoxide::crypto::secretbox::Key;
-use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;

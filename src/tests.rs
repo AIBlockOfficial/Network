@@ -22,6 +22,8 @@ use crate::utils::{
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
+use naom::crypto::sign_ed25519 as sign;
+use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
@@ -32,8 +34,6 @@ use naom::utils::transaction_utils::{
 use rand::{self, Rng};
 use sha3::Digest;
 use sha3::Sha3_256;
-use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::ed25519::{PublicKey, SecretKey};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -68,8 +68,8 @@ const SOME_PUB_KEYS: [&str; 3] = [
 
 const SOME_SEC_KEYS: [&str; 3] = [
     COMMON_SEC_KEY,
-    "70391d510eb988291d2dca15e5b8a54c552b4f2361bf29b1b945300a3e7cc9b46e86cc1fc5efbe64c2690efbb966b9fe1957facc497dce311981c68dac88e08c",
-    "1842082f6d8b0ecf75a309544980027e15ed1c00e95a14063705b2a4fc3586708b835e00c57ebff6637ec32276f2c6c0df71129c8f0860131a78a4692a0b59dc",
+    "3053020101300506032b65700422042070391d510eb988291d2dca15e5b8a54c552b4f2361bf29b1b945300a3e7cc9b4a1230321006e86cc1fc5efbe64c2690efbb966b9fe1957facc497dce311981c68dac88e08c",
+    "3053020101300506032b6570042204201842082f6d8b0ecf75a309544980027e15ed1c00e95a14063705b2a4fc358670a1230321008b835e00c57ebff6637ec32276f2c6c0df71129c8f0860131a78a4692a0b59dc",
 ];
 
 const SOME_PUB_KEY_ADDRS: [&str; 3] = [
@@ -79,7 +79,7 @@ const SOME_PUB_KEY_ADDRS: [&str; 3] = [
 ];
 
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
-const COMMON_SEC_KEY: &str = "0186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca45371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
