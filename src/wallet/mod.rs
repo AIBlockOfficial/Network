@@ -1,5 +1,5 @@
 use crate::configurations::{DbMode, WalletTxSpec};
-use crate::constants::{DATA_ENCAPSULATION_KEY, FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
+use crate::constants::{FUND_KEY, KNOWN_ADDRESS_KEY, WALLET_PATH};
 use crate::db_utils::{
     self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch, DB_COL_DEFAULT,
 };
@@ -9,9 +9,6 @@ use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::box_;
-use sodiumoxide::crypto::box_::PublicKey as PK;
-use sodiumoxide::crypto::box_::SecretKey as SK;
 use sodiumoxide::crypto::pwhash;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::sign;
@@ -50,12 +47,6 @@ pub struct MasterKeyStore {
     pub enc_master_key: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncapsulationData {
-    pub public_key: PK,
-    pub secret_key: SK,
-}
-
 #[derive(Debug, Clone)]
 pub struct WalletDb {
     db: Arc<Mutex<SimpleDb>>,
@@ -76,30 +67,6 @@ impl WalletDb {
             db: Arc::new(Mutex::new(db)),
             encryption_key: masterkey,
         }
-    }
-
-    /// Generates the information needed to encapsulate data and stores it in the db
-    pub async fn generate_encapsulation_data(&self) -> Result<(), Error> {
-        let db = self.db.clone();
-        Ok(task::spawn_blocking(move || {
-            // Wallet DB handling
-            let mut db = db.lock().unwrap();
-            let mut batch = db.batch_writer();
-            let (public_key, secret_key) = box_::gen_keypair();
-            let data = EncapsulationData {
-                public_key,
-                secret_key,
-            };
-            set_encapsulation_data(&mut batch, data);
-            let batch = batch.done();
-            db.write(batch).unwrap();
-        })
-        .await?)
-    }
-
-    /// Get the encapsulation data stored in the db
-    pub async fn get_encapsulation_data(&self) -> Result<EncapsulationData, ()> {
-        get_encapsulation_data(&self.db.lock().unwrap())
     }
 
     /// Test if an entered passphrase is correct
@@ -433,24 +400,6 @@ impl WalletDb {
     /// Get the wallet transaction address
     pub fn get_transaction_address(&self, out_p: &OutPoint) -> String {
         self.get_transaction_store(out_p).key_address
-    }
-}
-
-// Set data needed for encapsulated communication
-pub fn set_encapsulation_data(db: &mut SimpleDbWriteBatch, data: EncapsulationData) {
-    db.put_cf(
-        DB_COL_DEFAULT,
-        DATA_ENCAPSULATION_KEY,
-        serialize(&data).unwrap(),
-    );
-}
-
-// Get data needed for encapsulated communication
-pub fn get_encapsulation_data(db: &SimpleDb) -> Result<EncapsulationData, ()> {
-    match db.get_cf(DB_COL_DEFAULT, DATA_ENCAPSULATION_KEY) {
-        Ok(Some(data)) => Ok(deserialize(&data).unwrap()),
-        Ok(None) => Err(()),
-        Err(_) => Err(()),
     }
 }
 

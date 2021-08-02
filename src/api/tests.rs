@@ -1,23 +1,22 @@
-use crate::api::handlers::{Addresses, EncapsulatedData, EncapsulatedPayment, PublicKeyAddresses};
+use crate::api::handlers::{Addresses, EncapsulatedPayment, PublicKeyAddresses};
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
-use crate::constants::{BLOCK_PREPEND, DATA_ENCAPSULATION_KEY, FUND_KEY};
+use crate::constants::{BLOCK_PREPEND, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
     BlockchainItemMeta, NodeType, StoredSerializingBlock, UserApiRequest, UserRequest,
     UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
-use crate::wallet::{EncapsulationData, WalletDb};
-use bincode::{deserialize, serialize};
+use crate::wallet::WalletDb;
+use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::transaction::OutPoint;
 use naom::primitives::{block::Block, transaction::Transaction};
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
-use sodiumoxide::crypto::sealedbox;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -91,11 +90,6 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
     let batch = batch.done();
     db.write(batch).unwrap();
     db
-}
-
-async fn create_encapsulation_data(wallet_db: &WalletDb) -> EncapsulationData {
-    let _ = wallet_db.generate_encapsulation_data().await;
-    wallet_db.get_encapsulation_data().await.unwrap()
 }
 
 fn success_json() -> (StatusCode, HeaderMap) {
@@ -214,40 +208,6 @@ async fn test_get_wallet_info() {
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_running_total.as_bytes());
-}
-
-/// Test GET encapsulation data
-#[tokio::test(flavor = "current_thread")]
-async fn test_get_encapsulation_data() {
-    //
-    // Arrange
-    //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
-    let request = warp::test::request()
-        .method("GET")
-        .path("/wallet_encapsulation_data");
-
-    //
-    // Act
-    //
-    let filter = routes::wallet_encapsulation_data(db.clone());
-    let res = request.reply(&filter).await;
-    let expected_data = db.get_db_value(DATA_ENCAPSULATION_KEY).await.unwrap();
-    let generated_encapsulation_data: EncapsulationData = deserialize(&expected_data).unwrap();
-    let expected_encapsulation_data =
-        serde_json::to_string(&json!({ "public_key": generated_encapsulation_data.public_key }))
-            .unwrap();
-
-    //
-    // Assert
-    //
-    assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_encapsulation_data.as_bytes());
 }
 
 /// Test GET new payment address
@@ -401,19 +361,12 @@ async fn test_post_make_payment() {
         WalletDb::new(DbMode::InMemory, simple_db, passphrase)
     };
 
-    let encapsulated_message = {
-        let keys = create_encapsulation_data(&db).await;
-        let message = serde_json::to_vec(&encapsulated_data).unwrap();
-        let ciphered_message = sealedbox::seal(&message, &keys.public_key);
-        EncapsulatedData { ciphered_message }
-    };
-
     let request = warp::test::request()
         .method("POST")
         .path("/make_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .json(&encapsulated_message);
+        .json(&encapsulated_data);
 
     //
     // Act
@@ -454,19 +407,12 @@ async fn test_post_make_ip_payment() {
         WalletDb::new(DbMode::InMemory, simple_db, passphrase)
     };
 
-    let encapsulated_message = {
-        let keys = create_encapsulation_data(&db).await;
-        let message = serde_json::to_vec(&encapsulated_data).unwrap();
-        let ciphered_message = sealedbox::seal(&message, &keys.public_key);
-        EncapsulatedData { ciphered_message }
-    };
-
     let request = warp::test::request()
         .method("POST")
         .path("/make_ip_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .json(&encapsulated_message);
+        .json(&encapsulated_data);
 
     //
     // Act

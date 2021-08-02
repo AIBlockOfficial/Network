@@ -8,16 +8,6 @@ impl warp::reject::Reject for ErrorInvalidPassphrase {}
 pub struct ErrorCannotParseAddress;
 impl warp::reject::Reject for ErrorCannotParseAddress {}
 
-/// API error struct for inability to access encapsulation data
-#[derive(Debug)]
-pub struct ErrorCannotAccessEncapsulationData;
-impl warp::reject::Reject for ErrorCannotAccessEncapsulationData {}
-
-/// API error struct for inability to generate encapsulation data
-#[derive(Debug)]
-pub struct ErrorCannotGenerateEncapsulationData;
-impl warp::reject::Reject for ErrorCannotGenerateEncapsulationData {}
-
 /// API error struct for inability to decrypt data encapsulated by client
 #[derive(Debug)]
 pub struct ErrorCannotDecryptEncapsulatedData;
