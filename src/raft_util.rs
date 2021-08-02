@@ -206,7 +206,7 @@ fn check_deduplication(
             return None;
         }
 
-        let data_hash = Sha3_256::digest(&item_data).to_vec();
+        let data_hash = Sha3_256::digest(item_data).to_vec();
         if let Some((key, num)) = already_proposed_hashes.get(&data_hash) {
             debug!("check_deduplication found: key({:?}), b_num({})", key, num);
             None

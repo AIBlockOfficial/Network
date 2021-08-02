@@ -240,11 +240,11 @@ impl ComputeNode {
 
     /// The current utxo_set including block being mined and previous block mining txs.
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
-        &self.node_raft.get_committed_utxo_set()
+        self.node_raft.get_committed_utxo_set()
     }
 
     pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
-        &self.node_raft.get_committed_utxo_tracked_set()
+        self.node_raft.get_committed_utxo_tracked_set()
     }
 
     /// The current tx_pool that will be used to generate next block
@@ -345,7 +345,7 @@ impl ComputeNode {
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
         let txs_valid = {
             let tx_validator = self.transactions_validator();
-            droplet.tx.values().all(|tx| tx_validator(&tx))
+            droplet.tx.values().all(|tx| tx_validator(tx))
         };
 
         if txs_valid && druid_expectations_are_met(druid, droplet.tx.values()) {
@@ -410,9 +410,9 @@ impl ComputeNode {
             }
 
             !tx.is_coinbase()
-                && tx_is_valid(&tx, |v| {
+                && tx_is_valid(tx, |v| {
                     utxo_set
-                        .get(&v)
+                        .get(v)
                         .filter(|_| !sanction_list.contains(&v.t_hash))
                         .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
@@ -1273,7 +1273,7 @@ impl ComputeInterface for ComputeNode {
                 let utxo_tracked_set = self.get_committed_utxo_tracked_set();
                 let utxo_subset: UtxoSetRef = addresses
                     .iter()
-                    .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(&v))
+                    .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(v))
                     .flatten()
                     .filter_map(|op| utxo_set.get_key_value(op))
                     .collect();
@@ -1313,7 +1313,7 @@ impl ComputeInterface for ComputeNode {
             let tx_validator = self.transactions_validator();
             transactions
                 .into_iter()
-                .filter(|tx| tx_validator(&tx))
+                .filter(|tx| tx_validator(tx))
                 .map(|tx| (construct_tx_hash(&tx), tx))
                 .collect()
         };

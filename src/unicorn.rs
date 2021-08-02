@@ -48,7 +48,7 @@ impl Unicorn {
     /// * `seed`    - Seed to set
     pub fn set_seed(&mut self, seed: Integer) -> String {
         let u = hex::encode(Sha3_256::digest(&serialize(&seed.to_u64()).unwrap()));
-        let c = hex::encode(Sha3_256::digest(&u.as_bytes()));
+        let c = hex::encode(Sha3_256::digest(u.as_bytes()));
 
         self.seed = seed;
 

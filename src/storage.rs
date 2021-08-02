@@ -877,16 +877,16 @@ impl StorageNode {
         let valid = {
             let prev_hash = {
                 let prev_hash = &common.block.header.previous_hash;
-                prev_hash.as_deref().unwrap_or(&"")
+                prev_hash.as_deref().unwrap_or("")
             };
             let merkle_for_pow = {
                 let merkle_root = &common.block.header.merkle_root_hash;
                 let (mining_tx, _) = &mined_info.mining_tx;
-                concat_merkle_coinbase(&merkle_root, mining_tx).await
+                concat_merkle_coinbase(merkle_root, mining_tx).await
             };
             let nonce = &mined_info.nonce;
 
-            validate_pow_block(&prev_hash, &merkle_for_pow, nonce)
+            validate_pow_block(prev_hash, &merkle_for_pow, nonce)
         };
 
         if !valid {

@@ -153,7 +153,7 @@ pub fn upgrade_compute_db(
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
     let (batch, raft_batch) = upgrade_compute_db_batch(
-        (&db, &raft_db),
+        (db, raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
         upgrade_cfg,
     )?;
@@ -187,7 +187,7 @@ pub fn upgrade_compute_db_batch<'a>(
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
         let mut consensus = old::convert_compute_consensused_to_import(
-            tracked_deserialize("ComputeConsensused", &k, &v)?,
+            tracked_deserialize("ComputeConsensused", k, &v)?,
             Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
 
@@ -243,9 +243,9 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
         batch.delete_cf(compute::DB_COL_LOCAL_TXS, &key);
     }
 
-    clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
+    clean_same_raft_db(raft_db, &mut raft_batch, |k, v| {
         let mut consensus = compute_raft::ComputeConsensused::into_import(
-            tracked_deserialize("ComputeConsensused", &k, &v)?,
+            tracked_deserialize("ComputeConsensused", k, &v)?,
             Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
         // Version 0.3.0 coordinated shutdown should never have a block in snapshoot
@@ -294,7 +294,7 @@ pub fn upgrade_storage_db(
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
     let (batch, raft_batch) = upgrade_storage_db_batch(
-        (&db, &raft_db),
+        (db, raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
         upgrade_cfg,
     )?;
@@ -394,7 +394,7 @@ pub fn upgrade_storage_db_batch<'a>(
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
         let consensus = old::convert_storage_consensused_to_import(
-            tracked_deserialize("StorageConsensused", &k, &v)?,
+            tracked_deserialize("StorageConsensused", k, &v)?,
             Some(last_block_stored.clone()),
         );
         let consensus = storage_raft::StorageConsensused::from_import(consensus)
@@ -420,9 +420,9 @@ pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<Extra
         }
     }
 
-    clean_same_raft_db(&raft_db, &mut raft_batch, |k, v| {
+    clean_same_raft_db(raft_db, &mut raft_batch, |k, v| {
         let mut consensus = storage_raft::StorageConsensused::into_import(
-            tracked_deserialize("StorageConsensused", &k, &v)?,
+            tracked_deserialize("StorageConsensused", k, &v)?,
             // last_block_stored already present
         );
         if let Some(v) = &mut consensus.last_block_stored {
@@ -506,7 +506,7 @@ pub fn upgrade_wallet_db(
     upgrade_cfg: &UpgradeCfg,
 ) -> Result<ExtraNodeParams> {
     let db = dbs.wallet_db.as_mut().unwrap();
-    let batch = upgrade_wallet_db_batch(&db, db.batch_writer(), upgrade_cfg)?.done();
+    let batch = upgrade_wallet_db_batch(db, db.batch_writer(), upgrade_cfg)?.done();
     db.write(batch)?;
     Ok(dbs)
 }
@@ -520,7 +520,7 @@ pub fn upgrade_wallet_db_batch<'a>(
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let passphrase = upgrade_cfg.passphrase.as_bytes();
-    let masterkey = wallet::get_or_save_master_key_store(&db, &mut batch, passphrase);
+    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase);
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == old::wallet::FUND_KEY.as_bytes() {

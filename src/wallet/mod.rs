@@ -512,7 +512,7 @@ pub fn get_address_store(
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
             let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
-            let nonce = secretbox::Nonce::from_slice(&nonce).unwrap();
+            let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
             match secretbox::open(&output.to_vec(), &nonce, encryption_key) {
                 Ok(decrypted) => deserialize(&decrypted).unwrap(),
                 _ => panic!("Error accessing wallet"),
@@ -635,7 +635,7 @@ pub fn fetch_inputs_for_payment_from_db(
 ) -> (Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>) {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
-    let fund_store = get_fund_store(&db);
+    let fund_store = get_fund_store(db);
     let mut amount_made = Asset::default_of_type(&asset_required);
 
     if !fund_store.running_total().has_enough(&asset_required) {
@@ -647,7 +647,7 @@ pub fn fetch_inputs_for_payment_from_db(
 
     for (out_p, amount) in fund_store.into_transactions() {
         if amount_made.add_assign(&amount) {
-            let (cons, used) = tx_constructor_from_prev_out(db, out_p, &encryption_key);
+            let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key);
             tx_cons.push(cons);
             tx_used.push(used);
         }
@@ -721,7 +721,7 @@ pub fn tx_constructor_from_prev_out(
     let needed_store = get_address_store(db, &key_address, encryption_key);
 
     let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
-    let signature = sign::sign_detached(&hash_to_sign.as_bytes(), &needed_store.secret_key);
+    let signature = sign::sign_detached(hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
         t_hash: out_p.t_hash.clone(),

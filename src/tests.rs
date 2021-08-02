@@ -640,7 +640,7 @@ async fn add_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&
     // Act
     //
     add_transactions_act_with(&mut network, &transactions, Cfg::IgnoreWaitTxComplete).await;
-    modify_network(&mut network, "After add local Transactions", &modify_cfg).await;
+    modify_network(&mut network, "After add local Transactions", modify_cfg).await;
     add_transactions_act_with(&mut network, &Default::default(), Cfg::All).await;
 
     //
@@ -777,7 +777,7 @@ async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum,
     let (msg_c_nodes, msg_s_nodes) = node_combined_select(
         &network.config().nodes[&NodeType::Compute],
         &network.config().nodes[&NodeType::Storage],
-        &network.dead_nodes(),
+        network.dead_nodes(),
         cfg_num,
     );
 
@@ -1317,10 +1317,10 @@ async fn main_loops_raft_1_node_common(
     let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
     for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
         let tag = format!("Before start {}", idx);
-        modify_network(&mut network, &tag, &modify_cfg).await;
+        modify_network(&mut network, &tag, modify_cfg).await;
 
         for node_name in compute_nodes {
-            node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+            node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
         }
 
         let handles = network
@@ -1551,12 +1551,7 @@ async fn gen_transactions_common(
     //
     node_send_startup_requests(&mut network, "user1").await;
     compute_handle_event(&mut network, "compute1", "Received block notification").await;
-    modify_network(
-        &mut network,
-        "After block notification request",
-        &modify_cfg,
-    )
-    .await;
+    modify_network(&mut network, "After block notification request", modify_cfg).await;
 
     let mut tx_expected = Vec::new();
     let mut tx_committed = Vec::new();
@@ -1766,9 +1761,9 @@ async fn handle_message_lost_common(
     //
     // Act
     //
-    modify_network(&mut network, "After store block 0", &modify_cfg).await;
+    modify_network(&mut network, "After store block 0", modify_cfg).await;
     node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_create).await;
-    modify_network(&mut network, "After create block 1", &modify_cfg).await;
+    modify_network(&mut network, "After create block 1", modify_cfg).await;
     node_all_handle_different_event(&mut network, &all_nodes, &expected_events_b1_stored).await;
 
     //
@@ -1806,7 +1801,7 @@ async fn request_blockchain_item_no_raft() {
     let ((block_keys, _), blocks) = complete_blocks(11, &transactions, 1).await;
 
     for block in &blocks {
-        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &block).await;
+        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", block).await;
         node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
     }
 
@@ -1878,10 +1873,10 @@ async fn request_blockchain_item_act(
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_blockchain_item(network, &miner_from, block_key).await;
-    storage_handle_event(network, &storage_to, "Blockchain item fetched from storage").await;
-    storage_send_blockchain_item(network, &storage_to).await;
-    miner_handle_event(network, &miner_from, "Blockchain item received").await;
+    miner_request_blockchain_item(network, miner_from, block_key).await;
+    storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
+    storage_send_blockchain_item(network, storage_to).await;
+    miner_handle_event(network, miner_from, "Blockchain item received").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2031,7 +2026,7 @@ async fn relaunch_with_new_raft_nodes() {
     for (pre_launch, expected_block_num) in vec![(true, 0u64), (false, 1u64)].into_iter() {
         if !pre_launch {
             for node_name in compute_nodes {
-                node_send_coordinated_shutdown(&mut network, &node_name, expected_block_num).await;
+                node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
             }
         }
 
@@ -2786,7 +2781,7 @@ fn node_all_combined_expected_wallet_info(
 }
 
 async fn node_send_coordinated_shutdown(network: &mut Network, node: &str, at_block: u64) {
-    let mut event_tx = network.get_local_event_tx(&node).await.unwrap();
+    let mut event_tx = network.get_local_event_tx(node).await.unwrap();
     let event = LocalEvent::CoordinatedShutdown(at_block);
     event_tx.send(event, "test shutdown").await.unwrap();
 }
@@ -2856,7 +2851,7 @@ async fn compute_one_handle_event(
 
     let mut compute = compute.lock().await;
     for reason in reason_str {
-        compute_handle_event_for_node(&mut compute, true, &reason, &mut test_timeout()).await;
+        compute_handle_event_for_node(&mut compute, true, reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
@@ -3316,7 +3311,7 @@ async fn storage_one_handle_event(
 
     let mut storage = storage.lock().await;
     for reason in reason_str {
-        storage_handle_event_for_node(&mut storage, true, &reason, &mut test_timeout()).await;
+        storage_handle_event_for_node(&mut storage, true, reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
@@ -3366,7 +3361,7 @@ async fn user_one_handle_event(
 
     let mut user = user.lock().await;
     for reason in reason_str {
-        user_handle_event_for_node(&mut user, true, &reason, &mut test_timeout()).await;
+        user_handle_event_for_node(&mut user, true, reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
@@ -3531,7 +3526,7 @@ async fn miner_get_blockchain_item_received_b_num(
     let mut m = network.miner(miner).unwrap().lock().await;
     let (_, item, _) = m.get_blockchain_item_received().await.as_ref()?;
     let block: StoredSerializingBlock = deserialize(&item.data).ok()?;
-    Some((block.block.header.b_num, miner_blockchain_item_meta(&item)))
+    Some((block.block.header.b_num, miner_blockchain_item_meta(item)))
 }
 
 async fn miner_get_blockchain_item_received_tx_lens(
@@ -3544,7 +3539,7 @@ async fn miner_get_blockchain_item_received_tx_lens(
     Some((
         tx.inputs.len(),
         tx.outputs.len(),
-        miner_blockchain_item_meta(&item),
+        miner_blockchain_item_meta(item),
     ))
 }
 
@@ -3591,7 +3586,7 @@ async fn miner_one_handle_event(
 
     let mut miner = miner.lock().await;
     for reason in reason_str {
-        miner_handle_event_for_node(&mut miner, true, &reason, &mut test_timeout()).await;
+        miner_handle_event_for_node(&mut miner, true, reason, &mut test_timeout()).await;
     }
 
     debug!("Start wait for completion of other in raft group");
@@ -3725,7 +3720,7 @@ fn equal_first<T: Eq>(values: &[T]) -> Vec<bool> {
 }
 
 fn len_and_map<K, V>(values: &BTreeMap<K, V>) -> (usize, &BTreeMap<K, V>) {
-    (values.len(), &values)
+    (values.len(), values)
 }
 
 fn remove_keys<'a, Q: 'a + ?Sized + Ord, K: std::borrow::Borrow<Q> + Ord, V>(
@@ -3785,7 +3780,7 @@ async fn complete_first_block(
     next_block_tx: &BTreeMap<String, Transaction>,
     mining_txs: usize,
 ) -> ((String, String), CompleteBlock) {
-    complete_block(0, None, &next_block_tx, mining_txs).await
+    complete_block(0, None, next_block_tx, mining_txs).await
 }
 
 async fn construct_mining_extra_info(
@@ -3836,7 +3831,7 @@ async fn complete_blocks(
         let previous = block_keys.last().map(|v| v.as_str());
         let transactions = block_txs.get(i).unwrap_or(&no_transactions);
         let ((block_key, complete_str), block) =
-            complete_block(i as u64, previous, &transactions, mining_txs).await;
+            complete_block(i as u64, previous, transactions, mining_txs).await;
 
         block_keys.push(block_key);
         complete_strs.push(complete_str);
