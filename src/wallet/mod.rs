@@ -5,6 +5,7 @@ use crate::db_utils::{
 };
 use crate::utils::make_wallet_tx_info;
 use bincode::{deserialize, serialize};
+use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::Asset;
@@ -12,7 +13,6 @@ use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
 use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::pwhash;
-use sodiumoxide::crypto::secretbox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
 use std::sync::{Arc, Mutex};
@@ -80,9 +80,9 @@ impl WalletDb {
             Ok(Some(store)) => {
                 let store: MasterKeyStore = deserialize(&store).unwrap();
                 let pass_key = make_key(passphrase.as_bytes(), store.salt);
-                match secretbox::open(&store.enc_master_key, &store.nonce, &pass_key) {
-                    Ok(_) => Ok(()),
-                    Err(()) => Err(()),
+                match secretbox::open(store.enc_master_key, &store.nonce, &pass_key) {
+                    Some(_) => Ok(()),
+                    None => Err(()),
                 }
             }
             Ok(None) => Err(()),
@@ -460,10 +460,10 @@ pub fn get_address_store(
 ) -> AddressStore {
     match db.get_cf(DB_COL_DEFAULT, key_addr) {
         Ok(Some(store)) => {
-            let (nonce, output) = store.split_at(secretbox::NONCEBYTES);
+            let (nonce, output) = store.split_at(secretbox::NONCE_LEN);
             let nonce = secretbox::Nonce::from_slice(nonce).unwrap();
-            match secretbox::open(&output.to_vec(), &nonce, encryption_key) {
-                Ok(decrypted) => deserialize(&decrypted).unwrap(),
+            match secretbox::open(output.to_vec(), &nonce, encryption_key) {
+                Some(decrypted) => deserialize(&decrypted).unwrap(),
                 _ => panic!("Error accessing wallet"),
             }
         }
@@ -488,7 +488,7 @@ pub fn save_address_store_to_wallet(
         let store = serialize(&store).unwrap();
         let nonce = secretbox::gen_nonce();
         let mut input: Vec<u8> = nonce.as_ref().to_vec();
-        input.append(&mut secretbox::seal(&store, &nonce, encryption_key));
+        input.append(&mut secretbox::seal(store, &nonce, encryption_key).unwrap());
         input
     };
     db.put_cf(DB_COL_DEFAULT, key_addr, &input);
@@ -530,11 +530,9 @@ pub fn get_or_save_master_key_store(
         Ok(Some(store)) => {
             let store: MasterKeyStore = deserialize(&store).unwrap();
             let pass_key = make_key(passphrase, store.salt);
-            if let Ok(master_key) = secretbox::open(&store.enc_master_key, &store.nonce, &pass_key)
-            {
-                secretbox::Key::from_slice(&master_key).unwrap()
-            } else {
-                panic!("WalletDb: invalid passphrase");
+            match secretbox::open(store.enc_master_key, &store.nonce, &pass_key) {
+                Some(master_key) => secretbox::Key::from_slice(&master_key).unwrap(),
+                None => panic!("WalletDb: invalid passphrase"),
             }
         }
         Ok(None) => {
@@ -542,7 +540,8 @@ pub fn get_or_save_master_key_store(
             let master_key = secretbox::gen_key();
             let nonce = secretbox::gen_nonce();
             let pass_key = make_key(passphrase, salt);
-            let enc_master_key = secretbox::seal(master_key.as_ref(), &nonce, &pass_key);
+            let enc_master_key =
+                secretbox::seal(master_key.as_ref().to_vec(), &nonce, &pass_key).unwrap();
             let store = serialize(&MasterKeyStore {
                 salt,
                 nonce,
@@ -563,7 +562,7 @@ pub fn get_or_save_master_key_store(
 /// * `passphrase` - String used as the password when creating the encryption key
 /// * `salt` - Salt value added to the passphrase to ensure safe encryption
 pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
-    let mut kb = [0; secretbox::KEYBYTES];
+    let mut kb = [0; secretbox::KEY_LEN];
     pwhash::derive_key(
         &mut kb,
         passphrase,
@@ -572,7 +571,7 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
         pwhash::MEMLIMIT_INTERACTIVE,
     )
     .unwrap();
-    secretbox::Key(kb)
+    secretbox::Key::from_slice(&kb).unwrap()
 }
 
 /// Make TxConstructors from stored TxOut

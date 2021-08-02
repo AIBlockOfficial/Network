@@ -7,6 +7,7 @@ use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
+use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::{
@@ -21,7 +22,6 @@ use naom::utils::transaction_utils::{
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
-use sodiumoxide::crypto::secretbox::Key;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -345,10 +345,7 @@ pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
         .copied()
         .collect();
 
-    use std::convert::TryInto;
-    let hashed_key = Sha3_256::digest(&key_sha_seed).to_vec();
-    let key_slice: [u8; 32] = hashed_key[..].try_into().unwrap();
-    Key(key_slice)
+    Key::from_slice(&Sha3_256::digest(&key_sha_seed)).unwrap()
 }
 
 /// Address to be used in Proof of Work
