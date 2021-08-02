@@ -26,8 +26,8 @@ use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 
 use crate::tracked_utxo::TrackedUtxoSet;
+use naom::crypto::secretbox_chacha20_poly1305::Key;
 use serde::Serialize;
-use sodiumoxide::crypto::secretbox::Key;
 use std::collections::{BTreeMap, BTreeSet};
 use std::{
     error::Error,

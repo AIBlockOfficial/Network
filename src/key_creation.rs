@@ -1,14 +1,14 @@
 #![allow(non_snake_case, unused)]
 
 use hex::encode;
+use naom::crypto::sign_ed25519 as sign;
+use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use rug::integer::Order;
 use rug::ops::Pow;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sha3::Sha3_256;
-use sodiumoxide::crypto::sign;
-use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
 
@@ -176,7 +176,7 @@ impl KeyAgreement {
         self.M_iIU = mi_handler;
 
         // Set sigma_i^I to the signed M_i^U
-        self.sigma_iI = sign::sign(&self.M_iIU, &self.s_key);
+        self.sigma_iI = sign::sign_append(&self.M_iIU, &self.s_key);
 
         // Set broadcast_1 = M_i^I || sigma_i^I
         let mut M_iI_clone = self.M_iI.clone();
@@ -402,7 +402,7 @@ impl KeyAgreement {
     /// Computes sigma_iII
     fn compute_sigma_iII(&mut self) {
         let hashed_M_iII = Sha3_256::digest(&self.M_iII).to_vec();
-        self.sigma_iII = sign::sign(&hashed_M_iII, &self.s_key);
+        self.sigma_iII = sign::sign_append(&hashed_M_iII, &self.s_key);
     }
 
     /// Computes M_iIIsigma as M_iII || sigma_iII
@@ -418,9 +418,6 @@ impl KeyAgreement {
     /// * `signed_data` - Signed data to verify
     /// * `pub_key`     - Public key for verification
     fn verify_data(&self, signed_data: Vec<u8>, pub_key: &PublicKey) -> bool {
-        match sign::verify(&signed_data, pub_key) {
-            Ok(_v) => true,
-            Err(_e) => false,
-        }
+        sign::verify_append(&signed_data, pub_key)
     }
 }

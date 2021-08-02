@@ -1047,17 +1047,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libsodium-sys"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a685b64f837b339074115f2e7f7b431ac73681d08d75b389db7498b8892b8a58"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
-
-[[package]]
 name = "linked-hash-map"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1229,9 +1218,9 @@ dependencies = [
  "hex",
  "merkle-log",
  "rand 0.8.3",
+ "ring",
  "serde 1.0.125",
  "sha3",
- "sodiumoxide",
  "time 0.2.26",
  "tracing",
 ]
@@ -1382,12 +1371,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
-name = "pkg-config"
-version = "0.3.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3831453b3449ceb48b6d9c7ad7c96d5ea673e9b470a1dc578c2ce6521230884c"
-
-[[package]]
 name = "polling"
 version = "2.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1481,7 +1464,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.5.0"
-source = "git+https://github.com/jeanphilippeD/raft-rs?branch=0.5.1#263257ce9c6541a3598c7200bff0982df1abd71c"
+source = "git+https://github.com/jeanphilippeD/raft-rs?branch=0.5.1#8396b5581c1378a368a97a58edcf2ad9d8b37af1"
 dependencies = [
  "getset",
  "hashbrown 0.1.8",
@@ -1995,17 +1978,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sodiumoxide"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7038b67c941e23501573cb7242ffb08709abe9b11eb74bceff875bbda024a6a8"
-dependencies = [
- "libc",
- "libsodium-sys",
- "serde 1.0.125",
-]
-
-[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2123,13 +2095,13 @@ dependencies = [
  "protobuf",
  "raft",
  "rand 0.7.3",
+ "ring",
  "rocksdb",
  "rug",
  "rust-crypto",
  "serde 1.0.125",
  "serde_json",
  "sha3",
- "sodiumoxide",
  "tokio",
  "tokio-rustls",
  "tokio-stream",

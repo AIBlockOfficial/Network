@@ -16,12 +16,12 @@ use crate::wallet::WalletDb;
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
 use sha3::{Digest, Sha3_256};
-use sodiumoxide::crypto::secretbox::Key;
 use std::{
     error::Error,
     fmt,

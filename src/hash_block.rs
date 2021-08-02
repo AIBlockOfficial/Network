@@ -8,9 +8,9 @@ use sha3::Digest;
 
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::crypto::sign_ed25519::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha3::Sha3_256;
-use sodiumoxide::crypto::sign::ed25519::PublicKey;
 use std::convert::TryInto;
 
 use std::collections::hash_map::DefaultHasher;
