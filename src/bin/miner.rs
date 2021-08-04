@@ -121,6 +121,13 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Enter a password or passphase for the encryption of the Wallet.")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("tls_private_key_override")
+                .long("tls_private_key_override")
+                .env("ZENOTA_TLS_PRIVATE_KEY")
+                .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -151,6 +158,14 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
             settings.set("miner_db_mode", db_mode).unwrap();
         }
     }
+    if let Some(key) = matches.value_of("tls_private_key_override") {
+        let mut tls_config = settings.get_table("tls_config").unwrap();
+        tls_config.insert(
+            "pem_pkcs8_private_key_override".to_owned(),
+            config::Value::new(None, key),
+        );
+        settings.set("tls_config", tls_config).unwrap();
+    }
     if let Some(index) = matches.value_of("compute_index") {
         settings.set("miner_compute_node_idx", index).unwrap();
     }
@@ -172,10 +187,21 @@ mod test {
     use super::*;
     use system::configurations::DbMode;
 
+    type Expected = (DbMode, Option<String>);
+
     #[test]
     fn validate_startup_no_args() {
         let args = vec!["bin_name"];
-        let expected = DbMode::Test(0);
+        let expected = (DbMode::Test(0), None);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_key_override() {
+        // Use argument instead of std::env as env apply to all tests
+        let args = vec!["bin_name", "--tls_private_key_override=42"];
+        let expected = (DbMode::Test(0), Some("42".to_owned()));
 
         validate_startup_common(args, expected);
     }
@@ -186,7 +212,7 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
         ];
-        let expected = DbMode::Test(0);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -198,7 +224,7 @@ mod test {
             "--config=src/bin/node_settings_local_raft_2.toml",
             "--index=1",
         ];
-        let expected = DbMode::Test(1);
+        let expected = (DbMode::Test(1), None);
 
         validate_startup_common(args, expected);
     }
@@ -209,12 +235,12 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
         ];
-        let expected = DbMode::Test(0);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
 
-    fn validate_startup_common(args: Vec<&str>, expected: DbMode) {
+    fn validate_startup_common(args: Vec<&str>, expected: Expected) {
         //
         // Act
         //
@@ -226,6 +252,11 @@ mod test {
         //
         // Assert
         //
-        assert_eq!(config.miner_db_mode, expected);
+        let (expected_mode, expected_key) = expected;
+        assert_eq!(config.miner_db_mode, expected_mode);
+        assert_eq!(
+            config.tls_config.pem_pkcs8_private_key_override,
+            expected_key
+        );
     }
 }

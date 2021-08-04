@@ -115,6 +115,7 @@ impl TestTlsSpec {
             socket_name_mapping: socket_name_mapping.clone(),
             pem_certificates: self.pem_certificates.clone(),
             pem_pkcs8_private_keys: self.pem_pkcs8_private_keys.clone(),
+            pem_pkcs8_private_key_override: None,
         }
     }
 }

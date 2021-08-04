@@ -79,6 +79,12 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("tls_config")
+                .long("tls_config")
+                .help("Use file to provide tls configuration options.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
@@ -91,6 +97,13 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Run the upgrade for type (compute, storage)")
                 .takes_value(true)
                 .required(true),
+        )
+        .arg(
+            Arg::with_name("tls_private_key_override")
+                .long("tls_private_key_override")
+                .env("ZENOTA_TLS_PRIVATE_KEY")
+                .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
+                .takes_value(true),
         )
 }
 
@@ -129,6 +142,15 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         }
     }
 
+    if let Some(key) = matches.value_of("tls_private_key_override") {
+        let mut tls_config = settings.get_table("tls_config").unwrap();
+        tls_config.insert(
+            "pem_pkcs8_private_key_override".to_owned(),
+            config::Value::new(None, key),
+        );
+        settings.set("tls_config", tls_config).unwrap();
+    }
+
     {
         let node_type = match matches.value_of("type").unwrap() {
             "compute" => "Compute",
@@ -150,10 +172,12 @@ mod test {
     use super::*;
     use system::configurations::{DbMode, PreLaunchNodeType};
 
+    type Expected = (DbMode, Option<String>, PreLaunchNodeType);
+
     #[test]
     fn validate_startup_compute() {
         let args = vec!["bin_name", "--type=compute"];
-        let expected = (DbMode::Test(0), PreLaunchNodeType::Compute);
+        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Compute);
 
         validate_startup_common(args, expected);
     }
@@ -161,7 +185,24 @@ mod test {
     #[test]
     fn validate_startup_storage() {
         let args = vec!["bin_name", "--type=storage"];
-        let expected = (DbMode::Test(0), PreLaunchNodeType::Storage);
+        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Storage);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_key_override() {
+        // Use argument instead of std::env as env apply to all tests
+        let args = vec![
+            "bin_name",
+            "--type=storage",
+            "--tls_private_key_override=42",
+        ];
+        let expected = (
+            DbMode::Test(0),
+            Some("42".to_owned()),
+            PreLaunchNodeType::Storage,
+        );
 
         validate_startup_common(args, expected);
     }
@@ -174,7 +215,7 @@ mod test {
             "--type=compute",
             "--index=1",
         ];
-        let expected = (DbMode::Test(1), PreLaunchNodeType::Compute);
+        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Compute);
 
         validate_startup_common(args, expected);
     }
@@ -187,12 +228,12 @@ mod test {
             "--type=storage",
             "--index=1",
         ];
-        let expected = (DbMode::Test(1), PreLaunchNodeType::Storage);
+        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Storage);
 
         validate_startup_common(args, expected);
     }
 
-    fn validate_startup_common(args: Vec<&str>, expected: (DbMode, PreLaunchNodeType)) {
+    fn validate_startup_common(args: Vec<&str>, expected: Expected) {
         //
         // Act
         //
@@ -204,9 +245,13 @@ mod test {
         //
         // Assert
         //
-        let (expected_mode, expected_type) = expected;
+        let (expected_mode, expected_key, expected_type) = expected;
         assert_eq!(config.storage_db_mode, expected_mode);
         assert_eq!(config.compute_db_mode, expected_mode);
+        assert_eq!(
+            config.tls_config.pem_pkcs8_private_key_override,
+            expected_key
+        );
         assert_eq!(config.node_type, expected_type);
     }
 }
