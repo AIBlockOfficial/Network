@@ -22,6 +22,8 @@ pub struct TlsSpec {
     pub pem_certificates: BTreeMap<String, String>,
     /// Private keys available to authenticate with
     pub pem_pkcs8_private_keys: BTreeMap<String, String>,
+    /// Private key override to use for this node ignoring pem_pkcs8_private_keys
+    pub pem_pkcs8_private_key_override: Option<String>,
 }
 
 #[derive(Debug, Clone)]
