@@ -13,7 +13,8 @@ then
   for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 
   do
     echo "Generating ... n is set to $n"
-    openssl req -config node.cnf -new -newkey rsa:4096 -nodes -keyout $n.key -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
+    openssl genpkey -algorithm Ed25519 -out $n.key
+    openssl req -config node.cnf -new -key $n.key -nodes -keyout $n.key -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
     openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz"
   done
 fi
@@ -49,13 +50,13 @@ done
 
 printf "            \"node.zenotta.xyz\": %s\n" "$(jq -Rs . <node.pem)" >> tls_certificates.json
 echo "        }," >> tls_certificates.json
-echo "        \"pem_rsa_private_keys\": {" >> tls_certificates.json
+echo "        \"pem_pkcs8_private_keys\": {" >> tls_certificates.json
 
 printf "(\"node.zenotta.xyz\", %s),\n" "$(jq -Rs . <node.pem)" >> test_tls_certificates.rs
 echo "];" >> test_tls_certificates.rs
 echo "" >> test_tls_certificates.rs
-echo "/// RSA Keys for node DNS names" >> test_tls_certificates.rs
-echo "pub const TEST_RSA_KEYS: &[(&str, &str)] = &[" >> test_tls_certificates.rs
+echo "/// PKCS8 Keys for node DNS names" >> test_tls_certificates.rs
+echo "pub const TEST_PKCS8_KEYS: &[(&str, &str)] = &[" >> test_tls_certificates.rs
 
 for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 
 do

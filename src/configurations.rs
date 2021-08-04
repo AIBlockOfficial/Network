@@ -21,13 +21,13 @@ pub struct TlsSpec {
     /// Trusted certificates available
     pub pem_certificates: BTreeMap<String, String>,
     /// Private keys available to authenticate with
-    pub pem_rsa_private_keys: BTreeMap<String, String>,
+    pub pem_pkcs8_private_keys: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TlsPrivateInfo {
     pub pem_certs: String,
-    pub pem_rsa_private_keys: String,
+    pub pem_pkcs8_private_keys: String,
 }
 
 impl fmt::Debug for TlsSpec {

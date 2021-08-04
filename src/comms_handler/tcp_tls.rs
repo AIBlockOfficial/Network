@@ -29,7 +29,7 @@ pub struct TcpTlsConfig {
     address: SocketAddr,
     socket_name_mapping: BTreeMap<SocketAddr, String>,
     pem_certs: String,
-    pem_rsa_private_keys: String,
+    pem_pkcs8_private_keys: String,
     trusted_pem_certs: Vec<String>,
     use_tls: bool,
     listener: Cell<Option<TcpListener>>,
@@ -41,7 +41,7 @@ impl TcpTlsConfig {
             address,
             socket_name_mapping: Default::default(),
             pem_certs: Default::default(),
-            pem_rsa_private_keys: Default::default(),
+            pem_pkcs8_private_keys: Default::default(),
             trusted_pem_certs: Default::default(),
             use_tls: false,
             listener: Default::default(),
@@ -65,8 +65,8 @@ impl TcpTlsConfig {
                     .get(name)
                     .ok_or(CommsError::ConfigError("Missing TLS node certificate"))?
                     .clone(),
-                pem_rsa_private_keys: config
-                    .pem_rsa_private_keys
+                pem_pkcs8_private_keys: config
+                    .pem_pkcs8_private_keys
                     .get(name)
                     .ok_or(CommsError::ConfigError("Missing TLS node keys"))?
                     .clone(),
@@ -93,7 +93,7 @@ impl TcpTlsConfig {
     pub fn clone_private_info(&self) -> TlsPrivateInfo {
         TlsPrivateInfo {
             pem_certs: self.pem_certs.clone(),
-            pem_rsa_private_keys: self.pem_rsa_private_keys.clone(),
+            pem_pkcs8_private_keys: self.pem_pkcs8_private_keys.clone(),
         }
     }
 }
@@ -241,7 +241,7 @@ fn new_root_certs(trusted_pem_certs: &[String]) -> Result<RootCertStore> {
 fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
     let root_store = new_root_certs(&config.trusted_pem_certs)?;
     let certs = load_certs(&config.pem_certs)?;
-    let mut keys = load_keys(&config.pem_rsa_private_keys)?;
+    let mut keys = load_keys(&config.pem_pkcs8_private_keys)?;
     let _client_auth = NoClientAuth::new();
     let client_auth = AllowAnyAuthenticatedClient::new(root_store);
 
@@ -253,7 +253,7 @@ fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
 fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
     let root_store = new_root_certs(&config.trusted_pem_certs)?;
     let certs = load_certs(&config.pem_certs)?;
-    let mut keys = load_keys(&config.pem_rsa_private_keys)?;
+    let mut keys = load_keys(&config.pem_pkcs8_private_keys)?;
 
     let mut client_config = ClientConfig::new();
     client_config.root_store = root_store;
