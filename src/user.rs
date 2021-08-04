@@ -144,13 +144,19 @@ impl UserNode {
         let api_tls_info = tcp_tls_config.clone_private_info();
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
-        let wallet_db = WalletDb::new(
-            config.user_db_mode,
-            extra.wallet_db.take(),
-            config.passphrase,
-        )
-        .with_seed(config.user_node_idx, &config.user_wallet_seeds)
-        .await;
+
+        let wallet_db = match extra.shared_wallet_db {
+            Some(shared_db) => shared_db,
+            None => {
+                WalletDb::new(
+                    config.user_db_mode,
+                    extra.wallet_db.take(),
+                    config.passphrase,
+                )
+                .with_seed(config.user_node_idx, &config.user_wallet_seeds)
+                .await
+            }
+        };
 
         let pending_payments = match config.user_auto_donate {
             0 => (Default::default(), AutoDonate::Disabled),
@@ -264,6 +270,10 @@ impl UserNode {
             Ok(Response {
                 success: true,
                 reason: "Donation Requested",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Request Payment Address",
             }) => {}
             Ok(Response {
                 success: true,

@@ -59,17 +59,12 @@ async fn main() {
         bind_address.set_port(api_addr.port());
 
         async move {
-            use warp::Filter;
-            warp::serve(
-                routes::block_info_by_nums(db.clone())
-                    .or(routes::latest_block(db.clone()))
-                    .or(routes::blockchain_entry_by_key(db)),
-            )
-            .tls()
-            .key(&api_tls.pem_pkcs8_private_keys)
-            .cert(&api_tls.pem_certs)
-            .run(bind_address)
-            .await;
+            warp::serve(routes::storage_node_routes(db))
+                .tls()
+                .key(&api_tls.pem_pkcs8_private_keys)
+                .cert(&api_tls.pem_certs)
+                .run(bind_address)
+                .await;
         }
     });
 

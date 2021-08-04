@@ -44,7 +44,7 @@ RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_s
 s0=$!
 RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_1.toml > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_1.toml > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_1.toml --with_user_index=1 --api_port=3010> miner_0.log 2>&1 &
 m0=$!
 RUST_LOG="$USER_LOG" target/release/user --config=src/bin/node_settings_local_raft_1.toml > user_0.log 2>&1 &
 u0=$!

@@ -256,3 +256,27 @@ pub fn update_running_total(
         .and_then(handlers::post_update_running_total)
         .with(cors)
 }
+
+//======= NODE ROUTES =======//
+
+pub fn user_node_routes(
+    db: WalletDb,
+    node: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    wallet_info(db.clone())
+        .or(make_payment(db.clone(), node.clone()))
+        .or(make_ip_payment(db.clone(), node.clone()))
+        .or(request_donation(node.clone()))
+        .or(wallet_keypairs(db.clone()))
+        .or(import_keypairs(db.clone()))
+        .or(update_running_total(node))
+        .or(payment_address(db))
+}
+
+pub fn storage_node_routes(
+    db: Arc<Mutex<SimpleDb>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    block_info_by_nums(db.clone())
+        .or(latest_block(db.clone()))
+        .or(blockchain_entry_by_key(db))
+}

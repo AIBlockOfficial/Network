@@ -58,7 +58,7 @@ RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_
 m2=$!
 RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_2.toml  --index=1 --compute_index=1 > miner_1.log 2>&1 &
 m1=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_2.toml  > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_2.toml  --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
 RUST_LOG="$USER_LOG" target/release/user  --config=src/bin/node_settings_local_raft_2.toml > user_0.log 2>&1 &
 u0=$!

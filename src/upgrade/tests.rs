@@ -731,6 +731,7 @@ fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
         db: dbs.db.and_then(|v| v.in_memory()),
         raft_db: dbs.raft_db.and_then(|v| v.in_memory()),
         wallet_db: dbs.wallet_db.and_then(|v| v.in_memory()),
+        shared_wallet_db: None,
     }
 }
 
@@ -739,6 +740,7 @@ fn filter_dbs(dbs: ExtraNodeParams, filter_dbs: &ExtraNodeParamsFilter) -> Extra
         db: dbs.db.filter(|_| filter_dbs.db),
         raft_db: dbs.raft_db.filter(|_| filter_dbs.raft_db),
         wallet_db: dbs.wallet_db.filter(|_| filter_dbs.wallet_db),
+        shared_wallet_db: None,
     }
 }
 
@@ -747,6 +749,7 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
         db: dbs.db.as_ref().and_then(|v| v.cloned_in_memory()),
         raft_db: dbs.raft_db.as_ref().and_then(|v| v.cloned_in_memory()),
         wallet_db: dbs.wallet_db.as_ref().and_then(|v| v.cloned_in_memory()),
+        shared_wallet_db: None,
     }
 }
 

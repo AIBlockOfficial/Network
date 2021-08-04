@@ -246,6 +246,7 @@ mod test {
                 ("compute".to_owned(), DbMode::Test(0)),
                 ("storage".to_owned(), DbMode::Test(0)),
                 ("user".to_owned(), DbMode::Test(1000)),
+                ("user".to_owned(), DbMode::Test(1001)),
                 ("miner".to_owned(), DbMode::Test(0)),
             ],
             UpgradeCfg {
