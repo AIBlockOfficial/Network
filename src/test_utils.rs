@@ -106,7 +106,7 @@ pub struct NetworkInstanceInfo {
 #[derive(Clone, Default)]
 pub struct TestTlsSpec {
     pub pem_certificates: BTreeMap<String, String>,
-    pub pem_rsa_private_keys: BTreeMap<String, String>,
+    pub pem_pkcs8_private_keys: BTreeMap<String, String>,
 }
 
 impl TestTlsSpec {
@@ -114,7 +114,7 @@ impl TestTlsSpec {
         TlsSpec {
             socket_name_mapping: socket_name_mapping.clone(),
             pem_certificates: self.pem_certificates.clone(),
-            pem_rsa_private_keys: self.pem_rsa_private_keys.clone(),
+            pem_pkcs8_private_keys: self.pem_pkcs8_private_keys.clone(),
         }
     }
 }
@@ -1258,7 +1258,7 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
             .copied()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),
-        pem_rsa_private_keys: test_tls_certificates::TEST_RSA_KEYS
+        pem_pkcs8_private_keys: test_tls_certificates::TEST_PKCS8_KEYS
             .iter()
             .copied()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))

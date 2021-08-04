@@ -66,7 +66,7 @@ async fn main() {
                     .or(routes::blockchain_entry_by_key(db)),
             )
             .tls()
-            .key(&api_tls.pem_rsa_private_keys)
+            .key(&api_tls.pem_pkcs8_private_keys)
             .cert(&api_tls.pem_certs)
             .run(bind_address)
             .await;

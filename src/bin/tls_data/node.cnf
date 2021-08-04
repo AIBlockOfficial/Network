@@ -1,5 +1,4 @@
 [ req ]
-default_bits            = 4096
 default_md              = sha256
 distinguished_name      = req_distinguished_name
 x509_extensions = v3_ca # The extentions to add to the self signed cert
