@@ -1,7 +1,7 @@
-compute_db_mode = {Test = 0}
-storage_db_mode = {Test = 0}
-miner_db_mode = {Test = 0}
-user_db_mode = {Test = 1000}
+compute_db_mode = { Test = 0 }
+storage_db_mode = { Test = 0 }
+miner_db_mode = { Test = 0 }
+user_db_mode = { Test = 1000 }
 user_api_port = 3000
 storage_api_port = 3001
 compute_raft = 1
@@ -27,3 +27,6 @@ address = "127.0.0.1:12340"
 
 [[user_nodes]]
 address = "127.0.0.1:12360"
+
+[[user_nodes]]
+address = "127.0.0.1:12361"

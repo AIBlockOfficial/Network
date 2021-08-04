@@ -572,12 +572,6 @@ impl Node {
             .await
     }
 
-    /// Connects to a peer and sends a serialized message to the given peer.
-    pub async fn connect_and_send(&mut self, peer: SocketAddr, data: impl Serialize) -> Result<()> {
-        let _result = self.connect_to(peer).await;
-        self.send(peer, data).await
-    }
-
     /// Sends a serialized message to given peers.
     pub async fn send_to_all(
         &mut self,

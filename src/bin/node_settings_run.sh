@@ -44,7 +44,7 @@ RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage > storage_0.log 2>&1 &
 s0=$!
 RUST_LOG="$COMPUTE_LOG" target/release/compute > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/miner > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/miner --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
 RUST_LOG="$USER_LOG" target/release/user > user_0.log 2>&1 &
 u0=$!

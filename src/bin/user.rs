@@ -1,4 +1,4 @@
-//! App to run a storage node.
+//! App to run a user node.
 
 use clap::{App, Arg};
 use naom::primitives::asset::TokenAmount;
@@ -91,22 +91,12 @@ async fn main() {
         bind_address.set_port(api_addr.port());
 
         async move {
-            use warp::Filter;
-            warp::serve(
-                routes::wallet_info(db.clone())
-                    .or(routes::make_payment(db.clone(), node.clone()))
-                    .or(routes::make_ip_payment(db.clone(), node.clone()))
-                    .or(routes::request_donation(node.clone()))
-                    .or(routes::wallet_keypairs(db.clone()))
-                    .or(routes::import_keypairs(db.clone()))
-                    .or(routes::update_running_total(node.clone()))
-                    .or(routes::payment_address(db)),
-            )
-            .tls()
-            .key(&api_tls.pem_pkcs8_private_keys)
-            .cert(&api_tls.pem_certs)
-            .run(bind_address)
-            .await;
+            warp::serve(routes::user_node_routes(db, node))
+                .tls()
+                .key(&api_tls.pem_pkcs8_private_keys)
+                .cert(&api_tls.pem_certs)
+                .run(bind_address)
+                .await;
         }
     });
 

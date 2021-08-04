@@ -1,4 +1,5 @@
 use crate::db_utils::SimpleDb;
+use crate::wallet::WalletDb;
 use naom::primitives::asset::TokenAmount;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -235,6 +236,7 @@ pub struct ExtraNodeParams {
     pub db: Option<SimpleDb>,
     pub raft_db: Option<SimpleDb>,
     pub wallet_db: Option<SimpleDb>,
+    pub shared_wallet_db: Option<WalletDb>,
 }
 
 ///Hacky deserializer to work around deserializatio error with u128

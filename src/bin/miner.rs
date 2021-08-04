@@ -1,24 +1,25 @@
 //! App to run a mining node.
 
 use clap::{App, Arg};
-use system::configurations::MinerNodeConfig;
-use system::MinerNode;
+use std::net::SocketAddr;
+use system::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use system::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
+use system::{MinerNode, UserNode};
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
     let matches = clap_app().get_matches();
-    let config = configuration(load_settings(&matches));
-
+    let (config, user_config) = configuration(load_settings(&matches));
     println!("Start node with config {:?}", config);
     let mut node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
+    let shared_wallet_db = Some(node.get_wallet_db().clone());
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
 
@@ -47,6 +48,7 @@ async fn main() {
             .unwrap()
     };
 
+    // Miner main loop
     let main_loop_handle = tokio::spawn({
         let mut node = node;
         let mut node_conn = node_conn;
@@ -67,11 +69,114 @@ async fn main() {
         }
     });
 
-    let (result, conn, disconn) =
-        tokio::join!(main_loop_handle, conn_loop_handle, disconn_loop_handle);
-    result.unwrap();
-    conn.unwrap();
-    disconn.unwrap();
+    match user_config {
+        Some(config) => {
+            let shared_members = ExtraNodeParams {
+                shared_wallet_db,
+                ..Default::default()
+            };
+
+            println!("Start user node with config {:?}", config);
+            let user_node = UserNode::new(config, shared_members).await.unwrap();
+            let api_inputs = user_node.api_inputs();
+            println!("Started user node at {}", user_node.address());
+
+            let (user_node_conn, user_addrs_to_connect, user_expected_connected_addrs) =
+                user_node.connect_info_peers();
+            let user_local_event_tx = user_node.local_event_tx().clone();
+
+            // PERMANENT CONNEXION/DISCONNECTION HANDLING
+            let (
+                (user_conn_loop_handle, user_stop_re_connect_tx),
+                (user_disconn_loop_handle, user_stop_disconnect_tx),
+            ) = {
+                let (user_re_connect, user_disconnect_test) = loops_re_connect_disconnect(
+                    user_node_conn.clone(),
+                    user_addrs_to_connect,
+                    user_local_event_tx,
+                );
+
+                (
+                    (tokio::spawn(user_re_connect.0), user_re_connect.1),
+                    (tokio::spawn(user_disconnect_test.0), user_disconnect_test.1),
+                )
+            };
+
+            // Need to connect first so Raft messages can be sent.
+            loop_wait_connnect_to_peers_async(
+                user_node_conn.clone(),
+                user_expected_connected_addrs,
+            )
+            .await;
+
+            // User main loop
+            let user_main_loop_handle = tokio::spawn({
+                let mut node = user_node;
+                let mut node_conn = user_node_conn;
+
+                async move {
+                    node.send_startup_requests().await.unwrap();
+
+                    let mut exit = std::future::pending();
+                    while let Some(response) = node.handle_next_event(&mut exit).await {
+                        if node.handle_next_event_response(response).await == ResponseResult::Exit {
+                            break;
+                        }
+                    }
+                    user_stop_re_connect_tx.send(()).unwrap();
+                    user_stop_disconnect_tx.send(()).unwrap();
+
+                    shutdown_connections(&mut node_conn).await;
+                }
+            });
+
+            // User warp API
+            let warp_handle = tokio::spawn({
+                let (db, node, api_addr, api_tls) = api_inputs;
+
+                println!("Warp API started on port {:?}", api_addr.port());
+                println!();
+
+                let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+                bind_address.set_port(api_addr.port());
+
+                async move {
+                    warp::serve(routes::user_node_routes(db, node))
+                        .tls()
+                        .key(&api_tls.pem_pkcs8_private_keys)
+                        .cert(&api_tls.pem_certs)
+                        .run(bind_address)
+                        .await;
+                }
+            });
+
+            let (result, result_user, conn, conn_user, disconn, disconn_user, warp_result) = tokio::join!(
+                main_loop_handle,
+                user_main_loop_handle,
+                conn_loop_handle,
+                user_conn_loop_handle,
+                disconn_loop_handle,
+                user_disconn_loop_handle,
+                warp_handle
+            );
+
+            result.unwrap();
+            conn.unwrap();
+            disconn.unwrap();
+            result_user.unwrap();
+            conn_user.unwrap();
+            disconn_user.unwrap();
+            warp_result.unwrap();
+        }
+        None => {
+            let (result, conn, disconn) =
+                tokio::join!(main_loop_handle, conn_loop_handle, disconn_loop_handle,);
+
+            result.unwrap();
+            conn.unwrap();
+            disconn.unwrap();
+        }
+    }
 }
 
 fn clap_app<'a, 'b>() -> App<'a, 'b> {
@@ -91,10 +196,28 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("initial_block_config")
+                .long("initial_block_config")
+                .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("api_port")
+                .long("api_port")
+                .help("The port to run the http API from")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
                 .help("Run the specified miner node index from config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("with_user_index")
+                .long("with_user_index")
+                .help("Run the specified user node index from config file")
                 .takes_value(true),
         )
         .arg(
@@ -130,24 +253,37 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
         )
 }
 
-fn load_settings(matches: &clap::ArgMatches) -> config::Config {
+fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::Config>) {
     let mut settings = config::Config::default();
+
     let setting_file = matches
         .value_of("config")
         .unwrap_or("src/bin/node_settings.toml");
     let tls_setting_file = matches
         .value_of("tls_config")
         .unwrap_or("src/bin/tls_certificates.json");
+    let intial_block_setting_file = matches
+        .value_of("initial_block_config")
+        .unwrap_or("src/bin/initial_block.json");
 
     settings.set_default("miner_node_idx", 0).unwrap();
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
+    settings.set_default("user_api_port", 3000).unwrap();
+    settings.set_default("user_node_idx", 0).unwrap();
+    settings.set_default("user_compute_node_idx", 0).unwrap();
+    settings.set_default("peer_user_node_idx", 0).unwrap();
+    settings.set_default("user_setup_tx_max_count", 0).unwrap();
+    settings.set_default("user_auto_donate", 0).unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
     settings
         .merge(config::File::with_name(tls_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(intial_block_setting_file))
         .unwrap();
 
     if let Some(index) = matches.value_of("index") {
@@ -168,18 +304,46 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
     if let Some(index) = matches.value_of("compute_index") {
         settings.set("miner_compute_node_idx", index).unwrap();
+        settings.set("user_compute_node_idx", index).unwrap();
     }
-    if let Some(index) = matches.value_of("storage_index") {
-        settings.set("miner_storage_node_idx", index).unwrap();
-    }
+
     if let Some(index) = matches.value_of("passphrase") {
         settings.set("passphrase", index).unwrap();
     }
-    settings
+
+    if let Some(index) = matches.value_of("storage_index") {
+        settings.set("miner_storage_node_idx", index).unwrap();
+    }
+
+    if let Some(api_port) = matches.value_of("api_port") {
+        settings.set("user_api_port", api_port).unwrap();
+    }
+
+    let user_settings = match matches.value_of("with_user_index") {
+        Some(index) => {
+            settings.set("user_node_idx", index).unwrap();
+            let mut db_mode = settings.get_table("user_db_mode").unwrap();
+            if let Some(test_idx) = db_mode.get_mut("Test") {
+                let index = index.parse::<usize>().unwrap();
+                let index = index + test_idx.clone().try_into::<usize>().unwrap();
+                *test_idx = config::Value::new(None, index.to_string());
+                settings.set("user_db_mode", db_mode).unwrap();
+            }
+            Some(settings.clone())
+        }
+        None => None,
+    };
+
+    (settings, user_settings)
 }
 
-fn configuration(settings: config::Config) -> MinerNodeConfig {
-    settings.try_into().unwrap()
+fn configuration(
+    settings: (config::Config, Option<config::Config>),
+) -> (MinerNodeConfig, Option<UserNodeConfig>) {
+    (
+        settings.0.try_into::<MinerNodeConfig>().unwrap(),
+        settings.1.map(|v| v.try_into::<UserNodeConfig>().unwrap()),
+    )
 }
 
 #[cfg(test)]
@@ -188,13 +352,23 @@ mod test {
     use system::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
+    type UserExpected = Option<(DbMode, Option<String>)>;
 
     #[test]
     fn validate_startup_no_args() {
         let args = vec!["bin_name"];
         let expected = (DbMode::Test(0), None);
 
-        validate_startup_common(args, expected);
+        validate_startup_common(args, expected, None);
+    }
+
+    #[test]
+    fn validate_startup_with_user_index_1() {
+        let args = vec!["bin_name", "--with_user_index=1"];
+        let expected: Expected = (DbMode::Test(0), None);
+        let user_expected: UserExpected = Some((DbMode::Test(1001), None));
+
+        validate_startup_common(args, expected, user_expected);
     }
 
     #[test]
@@ -203,7 +377,20 @@ mod test {
         let args = vec!["bin_name", "--tls_private_key_override=42"];
         let expected = (DbMode::Test(0), Some("42".to_owned()));
 
-        validate_startup_common(args, expected);
+        validate_startup_common(args, expected, None);
+    }
+
+    #[test]
+    fn validate_startup_key_override_with_user_index_1() {
+        // Use argument instead of std::env as env apply to all tests
+        let args = vec![
+            "bin_name",
+            "--tls_private_key_override=42",
+            "--with_user_index=1",
+        ];
+        let expected: Expected = (DbMode::Test(0), Some("42".to_owned()));
+        let user_expected: UserExpected = Some((DbMode::Test(1001), Some("42".to_owned())));
+        validate_startup_common(args, expected, user_expected);
     }
 
     #[test]
@@ -214,7 +401,7 @@ mod test {
         ];
         let expected = (DbMode::Test(0), None);
 
-        validate_startup_common(args, expected);
+        validate_startup_common(args, expected, None);
     }
 
     #[test]
@@ -226,7 +413,7 @@ mod test {
         ];
         let expected = (DbMode::Test(1), None);
 
-        validate_startup_common(args, expected);
+        validate_startup_common(args, expected, None);
     }
 
     #[test]
@@ -237,10 +424,10 @@ mod test {
         ];
         let expected = (DbMode::Test(0), None);
 
-        validate_startup_common(args, expected);
+        validate_startup_common(args, expected, None);
     }
 
-    fn validate_startup_common(args: Vec<&str>, expected: Expected) {
+    fn validate_startup_common(args: Vec<&str>, expected: Expected, user_expected: UserExpected) {
         //
         // Act
         //
@@ -253,10 +440,21 @@ mod test {
         // Assert
         //
         let (expected_mode, expected_key) = expected;
-        assert_eq!(config.miner_db_mode, expected_mode);
+        assert_eq!(config.0.miner_db_mode, expected_mode);
         assert_eq!(
-            config.tls_config.pem_pkcs8_private_key_override,
+            config.0.tls_config.pem_pkcs8_private_key_override,
             expected_key
         );
+        match user_expected {
+            Some((user_expected_mode, user_expected_key)) => {
+                let user_config = config.1.unwrap();
+                assert_eq!(user_config.user_db_mode, user_expected_mode);
+                assert_eq!(
+                    user_config.tls_config.pem_pkcs8_private_key_override,
+                    user_expected_key
+                );
+            }
+            None => assert!(config.1.is_none()),
+        }
     }
 }
