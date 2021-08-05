@@ -1,40 +1,25 @@
-//! App to run a user node.
+//! App to run a compute node.
 
-use clap::{App, Arg};
-use naom::primitives::asset::TokenAmount;
-use std::net::SocketAddr;
-use system::configurations::UserNodeConfig;
+use clap::{App, Arg, ArgMatches};
+use system::configurations::ComputeNodeConfig;
+use system::ComputeNode;
 use system::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
-    ResponseResult,
+    get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
+    shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
-use system::{routes, UserNode};
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
+pub async fn run_node(matches: &ArgMatches<'_>) {
+    let mut config = configuration(load_settings(matches));
 
-    let matches = clap_app().get_matches();
-    let config = configuration(load_settings(&matches));
+    println!("Start node with config {:?}", config);
 
-    println!("Starting node with config: {:?}", config);
-    println!();
-
-    // Handle a payment amount
-    let amount_to_send = match matches.value_of("amount").map(|a| a.parse::<u64>()) {
-        None => None,
-        Some(Ok(v)) => Some(TokenAmount(v)),
-        Some(Err(e)) => panic!("Unable to pay with amount specified due to error: {:?}", e),
-    };
-
-    let peer_user_node = *config.user_nodes.get(config.peer_user_node_idx).unwrap();
-    let mut node = UserNode::new(config, Default::default()).await.unwrap();
+    config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
+    let node = ComputeNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
-    let api_inputs = node.api_inputs();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
@@ -49,16 +34,17 @@ async fn main() {
 
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
+    println!("Raft and Storage connection complete");
 
-    // Send any requests here
-
-    if let Some(amount_to_send) = amount_to_send {
-        println!("Connect to user address: {:?}", peer_user_node.address);
-        node.connect_to(peer_user_node.address).await.unwrap();
-        node.send_address_request(peer_user_node.address, amount_to_send)
-            .await
-            .unwrap();
-    }
+    // RAFT HANDLING
+    let raft_loop_handle = {
+        let raft_loop = node.raft_loop();
+        tokio::spawn(async move {
+            println!("Peer connect complete, start Raft");
+            raft_loop.await;
+            println!("Raft complete");
+        })
+    };
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -76,50 +62,32 @@ async fn main() {
             }
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();
+
+            node.close_raft_loop().await;
             shutdown_connections(&mut node_conn).await;
         }
     });
 
-    // Warp API
-    let warp_handle = tokio::spawn({
-        let (db, node, api_addr, api_tls) = api_inputs;
-
-        println!("Warp API started on port {:?}", api_addr.port());
-        println!();
-
-        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-        bind_address.set_port(api_addr.port());
-
-        async move {
-            warp::serve(routes::user_node_routes(db, node))
-                .tls()
-                .key(&api_tls.pem_pkcs8_private_keys)
-                .cert(&api_tls.pem_certs)
-                .run(bind_address)
-                .await;
-        }
-    });
-
-    let (main_result, warp_result, conn, disconn) = tokio::join!(
+    let (main, raft, conn, disconn) = tokio::join!(
         main_loop_handle,
-        warp_handle,
+        raft_loop_handle,
         conn_loop_handle,
         disconn_loop_handle
     );
-    main_result.unwrap();
-    warp_result.unwrap();
+    main.unwrap();
+    raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
 }
 
-fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("Zenotta Mining Node")
-        .about("Runs a basic miner node.")
+pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("compute")
+        .about("Runs a basic compute node.")
         .arg(
             Arg::with_name("config")
                 .long("config")
                 .short("c")
-                .help("Run the user node using the given config file.")
+                .help("Run the compute node using the given config file.")
                 .takes_value(true),
         )
         .arg(
@@ -135,47 +103,10 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("api_port")
-                .long("api_port")
-                .help("The port to run the http API from")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("amount")
-                .short("a")
-                .long("amount")
-                .help("The amount of tokens to send to a recipient address")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("auto_donate")
-                .long("auto_donate")
-                .help("The amount of tokens to send any requester")
-                .takes_value(true),
-        )
-        .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
-                .help("Run the specified user node index from config file")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("compute_index")
-                .long("compute_index")
-                .help("Endpoint index of a compute node that the user should connect to")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("peer_user_index")
-                .long("peer_user_index")
-                .help("Endpoint index of a peer user node that the user should connect to")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("passphrase")
-                .long("passphrase")
-                .help("Enter a password or passphase for the encryption of the Wallet.")
+                .help("Run the specified compute node index from config file")
                 .takes_value(true),
         )
         .arg(
@@ -199,12 +130,18 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .value_of("tls_config")
         .unwrap_or("src/bin/tls_certificates.json");
 
-    settings.set_default("user_api_port", 3000).unwrap();
-    settings.set_default("user_node_idx", 0).unwrap();
-    settings.set_default("user_compute_node_idx", 0).unwrap();
-    settings.set_default("peer_user_node_idx", 0).unwrap();
-    settings.set_default("user_setup_tx_max_count", 0).unwrap();
-    settings.set_default("user_auto_donate", 0).unwrap();
+    settings
+        .set_default("sanction_list", Vec::<String>::new())
+        .unwrap();
+    settings.set_default("jurisdiction", "US").unwrap();
+    settings.set_default("compute_node_idx", 0).unwrap();
+    settings.set_default("compute_raft", 0).unwrap();
+    settings
+        .set_default("compute_raft_tick_timeout", 10)
+        .unwrap();
+    settings
+        .set_default("compute_transaction_timeout", 100)
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -217,13 +154,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
 
     if let Some(index) = matches.value_of("index") {
-        settings.set("user_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("user_db_mode").unwrap();
+        settings.set("compute_node_idx", index).unwrap();
+        let mut db_mode = settings.get_table("compute_db_mode").unwrap();
         if let Some(test_idx) = db_mode.get_mut("Test") {
-            let index = index.parse::<usize>().unwrap();
-            let index = index + test_idx.clone().try_into::<usize>().unwrap();
-            *test_idx = config::Value::new(None, index.to_string());
-            settings.set("user_db_mode", db_mode).unwrap();
+            *test_idx = config::Value::new(None, index);
+            settings.set("compute_db_mode", db_mode).unwrap();
         }
     }
 
@@ -236,30 +171,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("tls_config", tls_config).unwrap();
     }
 
-    if let Some(api_port) = matches.value_of("api_port") {
-        settings.set("user_api_port", api_port).unwrap();
-    }
-
-    if let Some(index) = matches.value_of("compute_index") {
-        settings.set("user_compute_node_idx", index).unwrap();
-    }
-
-    if let Some(index) = matches.value_of("peer_user_index") {
-        settings.set("peer_user_node_idx", index).unwrap();
-    }
-
-    if let Some(index) = matches.value_of("passphrase") {
-        settings.set("passphrase", index).unwrap();
-    }
-
-    if let Some(api_port) = matches.value_of("auto_donate") {
-        settings.set("user_auto_donate", api_port).unwrap();
-    }
-
     settings
 }
 
-fn configuration(settings: config::Config) -> UserNodeConfig {
+fn configuration(settings: config::Config) -> ComputeNodeConfig {
     settings.try_into().unwrap()
 }
 
@@ -273,7 +188,7 @@ mod test {
     #[test]
     fn validate_startup_no_args() {
         let args = vec!["bin_name"];
-        let expected = (DbMode::Test(1000), None);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -282,7 +197,7 @@ mod test {
     fn validate_startup_key_override() {
         // Use argument instead of std::env as env apply to all tests
         let args = vec!["bin_name", "--tls_private_key_override=42"];
-        let expected = (DbMode::Test(1000), Some("42".to_owned()));
+        let expected = (DbMode::Test(0), Some("42".to_owned()));
 
         validate_startup_common(args, expected);
     }
@@ -293,7 +208,7 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
         ];
-        let expected = (DbMode::Test(1000), None);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -305,7 +220,7 @@ mod test {
             "--config=src/bin/node_settings_local_raft_2.toml",
             "--index=1",
         ];
-        let expected = (DbMode::Test(1001), None);
+        let expected = (DbMode::Test(1), None);
 
         validate_startup_common(args, expected);
     }
@@ -316,7 +231,7 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_1.toml",
         ];
-        let expected = (DbMode::Test(1000), None);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -334,7 +249,7 @@ mod test {
         // Assert
         //
         let (expected_mode, expected_key) = expected;
-        assert_eq!(config.user_db_mode, expected_mode);
+        assert_eq!(config.compute_db_mode, expected_mode);
         assert_eq!(
             config.tls_config.pem_pkcs8_private_key_override,
             expected_key

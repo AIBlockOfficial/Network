@@ -1,6 +1,6 @@
 //! App to run a mining node.
 
-use clap::{App, Arg};
+use clap::{App, Arg, ArgMatches};
 use std::net::SocketAddr;
 use system::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use system::{
@@ -9,12 +9,8 @@ use system::{
 };
 use system::{MinerNode, UserNode};
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
-
-    let matches = clap_app().get_matches();
-    let (config, user_config) = configuration(load_settings(&matches));
+pub async fn run_node(matches: &ArgMatches<'_>) {
+    let (config, user_config) = configuration(load_settings(matches));
     println!("Start node with config {:?}", config);
     let mut node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
@@ -179,8 +175,8 @@ async fn main() {
     }
 }
 
-fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("Zenotta Mining Node")
+pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("miner")
         .about("Runs a basic miner node.")
         .arg(
             Arg::with_name("config")

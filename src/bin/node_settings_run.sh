@@ -40,13 +40,13 @@ else
     USER_LOG=debug
 fi
 
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage > storage_0.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="$COMPUTE_LOG" target/release/compute > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/miner --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
-RUST_LOG="$USER_LOG" target/release/user > user_0.log 2>&1 &
+RUST_LOG="$USER_LOG" target/release/node user > user_0.log 2>&1 &
 u0=$!
 
 echo $s0 $c0 $m0 $u0

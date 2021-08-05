@@ -56,48 +56,48 @@ fi
 
 if [ "$USE_TEST_GROUPS" = "1" ]
 then
-    RUST_LOG="$STORAGE_LOG,raft=warn" sg test_s2 "target/release/storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
+    RUST_LOG="$STORAGE_LOG,raft=warn" sg test_s2 "target/release/node storage --config=src/bin/node_settings_local_raft_3.toml --index=2" > storage_2.log 2>&1 &
 else
-    RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3001 --index=2 > storage_2.log 2>&1 &
+    RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3001 --index=2 > storage_2.log 2>&1 &
     s2=$!
 fi
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3002 --index=1 > storage_1.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3002 --index=1 > storage_1.log 2>&1 &
 s1=$!
-RUST_LOG="$STORAGE_LOG,raft=warn" target/release/storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3003 > storage_0.log 2>&1 &
+RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_local_raft_3.toml --api_port=3003 > storage_0.log 2>&1 &
 s0=$!
 
 if [ "$USE_TEST_GROUPS" = "1" ]
 then
-    RUST_LOG="$COMPUTE_LOG" sg test_c2 "target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
+    RUST_LOG="$COMPUTE_LOG" sg test_c2 "target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
 else
-    RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=2 > compute_2.log 2>&1 &
+    RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=2 > compute_2.log 2>&1 &
     c2=$!
 fi
-RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_3.toml --index=1 > compute_1.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=1 > compute_1.log 2>&1 &
 c1=$!
-RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_3.toml > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml > compute_0.log 2>&1 &
 c0=$!
 
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=8 --compute_index=2 > miner_8.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=8 --compute_index=2 > miner_8.log 2>&1 &
 m8=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=7 --compute_index=2 > miner_7.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=7 --compute_index=2 > miner_7.log 2>&1 &
 m7=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=6 --compute_index=2 > miner_6.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=6 --compute_index=2 > miner_6.log 2>&1 &
 m6=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=5 --compute_index=1 > miner_5.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=5 --compute_index=1 > miner_5.log 2>&1 &
 m5=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=4 --compute_index=1 > miner_4.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=4 --compute_index=1 > miner_4.log 2>&1 &
 m4=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=3 --compute_index=1 > miner_3.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=3 --compute_index=1 > miner_3.log 2>&1 &
 m3=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=2 --compute_index=0 > miner_2.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=2 --compute_index=0 > miner_2.log 2>&1 &
 m2=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --index=1 --compute_index=0 > miner_1.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=1 --compute_index=0 > miner_1.log 2>&1 &
 m1=$!
-RUST_LOG="$MINER_LOG" target/release/miner --config=src/bin/node_settings_local_raft_3.toml  --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
 
-RUST_LOG="$USER_LOG" target/release/user  --config=src/bin/node_settings_local_raft_3.toml > user_0.log 2>&1 &
+RUST_LOG="$USER_LOG" target/release/node user  --config=src/bin/node_settings_local_raft_3.toml > user_0.log 2>&1 &
 u0=$!
 
 echo $s2 $s1 $s0 $c2 $c1 $c0 $m8 $m7 $m6 $m5 $m4 $m3 $m2 $m1 $m0 $u0
