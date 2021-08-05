@@ -71,25 +71,25 @@ echo " "
 if [ "$NODE_TYPE" = "storage" ]
 then
     set -x
-    RUST_LOG="$LOG_LEVEL" target/release/storage --config=$NODE_CONFIG --index=$INDEX > storage_$INDEX.log 2>&1 &
+    RUST_LOG="$LOG_LEVEL" target/release/node storage --config=$NODE_CONFIG --index=$INDEX > storage_$INDEX.log 2>&1 &
     n0=$!
     set +x
 elif [ "$NODE_TYPE" = "compute" ]
 then
     set -x
-    RUST_LOG="$LOG_LEVEL" target/release/compute --config=$NODE_CONFIG --initial_block_config=$NODE_INIT_BLOCK --index=$INDEX > compute_$INDEX.log 2>&1 &
+    RUST_LOG="$LOG_LEVEL" target/release/node compute --config=$NODE_CONFIG --initial_block_config=$NODE_INIT_BLOCK --index=$INDEX > compute_$INDEX.log 2>&1 &
     n0=$!
     set +x
 elif [ "$NODE_TYPE" = "miner" ]
 then
     set -x
-    RUST_LOG="$LOG_LEVEL" target/release/miner --config=$NODE_CONFIG --index=$INDEX --compute_index=$COMPUTE_INDEX > miner_$INDEX.log 2>&1 &
+    RUST_LOG="$LOG_LEVEL" target/release/node miner --config=$NODE_CONFIG --index=$INDEX --compute_index=$COMPUTE_INDEX > miner_$INDEX.log 2>&1 &
     n0=$!
     set +x
 elif [ "$NODE_TYPE" = "user" ]
 then
     set -x
-    RUST_LOG="$LOG_LEVEL" target/release/user --config=$NODE_CONFIG --initial_block_config=$NODE_INIT_BLOCK --index=$INDEX --compute_index=$COMPUTE_INDEX > user_$INDEX.log 2>&1 &
+    RUST_LOG="$LOG_LEVEL" target/release/node user --config=$NODE_CONFIG --initial_block_config=$NODE_INIT_BLOCK --index=$INDEX --compute_index=$COMPUTE_INDEX > user_$INDEX.log 2>&1 &
     n0=$!
     set +x
 fi

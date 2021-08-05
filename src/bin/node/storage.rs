@@ -1,28 +1,25 @@
-//! App to run a pre-launch node.
+//! App to run a storage node.
 
-use clap::{App, Arg};
-use system::configurations::PreLaunchNodeConfig;
-use system::PreLaunchNode;
+use clap::{App, Arg, ArgMatches};
+use std::net::SocketAddr;
+use system::configurations::StorageNodeConfig;
+use system::StorageNode;
 use system::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
-
-    let matches = clap_app().get_matches();
-    let config = configuration(load_settings(&matches));
+pub async fn run_node(matches: &ArgMatches<'_>) {
+    let config = configuration(load_settings(matches));
 
     println!("Start node with config {:?}", config);
-    let node = PreLaunchNode::new(config, Default::default())
-        .await
-        .unwrap();
+    let node = StorageNode::new(config, Default::default()).await.unwrap();
 
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
+    let (db, api_addr, api_tls) = node.api_inputs();
+
     let local_event_tx = node.local_event_tx().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
@@ -38,6 +35,34 @@ async fn main() {
 
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
+
+    // RAFT HANDLING
+    let raft_loop_handle = {
+        let raft_loop = node.raft_loop();
+        tokio::spawn(async move {
+            println!("Peer connect complete, start Raft");
+            raft_loop.await;
+            println!("Raft complete");
+        })
+    };
+
+    // Warp API
+    let warp_handle = tokio::spawn({
+        println!("Warp API started on port {:?}", api_addr.port());
+        println!();
+
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(api_addr.port());
+
+        async move {
+            warp::serve(routes::storage_node_routes(db))
+                .tls()
+                .key(&api_tls.pem_pkcs8_private_keys)
+                .cert(&api_tls.pem_certs)
+                .run(bind_address)
+                .await;
+        }
+    });
 
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
@@ -56,21 +81,29 @@ async fn main() {
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();
 
+            node.close_raft_loop().await;
             shutdown_connections(&mut node_conn).await;
         }
     });
 
-    let (main, conn, disconn) =
-        tokio::join!(main_loop_handle, conn_loop_handle, disconn_loop_handle);
+    let (main, warp, raft, conn, disconn) = tokio::join!(
+        main_loop_handle,
+        warp_handle,
+        raft_loop_handle,
+        conn_loop_handle,
+        disconn_loop_handle
+    );
 
     main.unwrap();
+    warp.unwrap();
+    raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
 }
 
-fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("Zenotta Storage Node")
-        .about("Runs a pre_launch node.")
+pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
+    App::new("storage")
+        .about("Runs a basic storage node.")
         .arg(
             Arg::with_name("config")
                 .long("config")
@@ -92,11 +125,11 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("type")
-                .long("type")
-                .help("Run the upgrade for type (compute, storage)")
-                .takes_value(true)
-                .required(true),
+            Arg::with_name("api_port")
+                .short("p")
+                .long("api_port")
+                .help("Run the API for the storage node as the specified port")
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_private_key_override")
@@ -117,7 +150,12 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("storage_node_idx", 0).unwrap();
-    settings.set_default("compute_node_idx", 0).unwrap();
+    settings.set_default("storage_raft", 0).unwrap();
+    settings.set_default("storage_api_port", 3001).unwrap();
+    settings
+        .set_default("storage_raft_tick_timeout", 10)
+        .unwrap();
+    settings.set_default("storage_block_timeout", 1000).unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -126,14 +164,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .merge(config::File::with_name(tls_setting_file))
         .unwrap();
 
-    if let Some(index) = matches.value_of("index") {
-        settings.set("compute_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("compute_db_mode").unwrap();
-        if let Some(test_idx) = db_mode.get_mut("Test") {
-            *test_idx = config::Value::new(None, index);
-            settings.set("compute_db_mode", db_mode).unwrap();
-        }
+    if let Some(port) = matches.value_of("api_port") {
+        settings.set("storage_api_port", port).unwrap();
+    }
 
+    if let Some(index) = matches.value_of("index") {
         settings.set("storage_node_idx", index).unwrap();
         let mut db_mode = settings.get_table("storage_db_mode").unwrap();
         if let Some(test_idx) = db_mode.get_mut("Test") {
@@ -151,41 +186,24 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("tls_config", tls_config).unwrap();
     }
 
-    {
-        let node_type = match matches.value_of("type").unwrap() {
-            "compute" => "Compute",
-            "storage" => "Storage",
-            v => panic!("expect type compute or storage: {}", v),
-        };
-        settings.set("node_type", node_type).unwrap();
-    }
-
     settings
 }
 
-fn configuration(settings: config::Config) -> PreLaunchNodeConfig {
+fn configuration(settings: config::Config) -> StorageNodeConfig {
     settings.try_into().unwrap()
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::{DbMode, PreLaunchNodeType};
+    use system::configurations::DbMode;
 
-    type Expected = (DbMode, Option<String>, PreLaunchNodeType);
-
-    #[test]
-    fn validate_startup_compute() {
-        let args = vec!["bin_name", "--type=compute"];
-        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Compute);
-
-        validate_startup_common(args, expected);
-    }
+    type Expected = (DbMode, Option<String>);
 
     #[test]
-    fn validate_startup_storage() {
-        let args = vec!["bin_name", "--type=storage"];
-        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Storage);
+    fn validate_startup_no_args() {
+        let args = vec!["bin_name"];
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -193,42 +211,42 @@ mod test {
     #[test]
     fn validate_startup_key_override() {
         // Use argument instead of std::env as env apply to all tests
-        let args = vec![
-            "bin_name",
-            "--type=storage",
-            "--tls_private_key_override=42",
-        ];
-        let expected = (
-            DbMode::Test(0),
-            Some("42".to_owned()),
-            PreLaunchNodeType::Storage,
-        );
+        let args = vec!["bin_name", "--tls_private_key_override=42"];
+        let expected = (DbMode::Test(0), Some("42".to_owned()));
 
         validate_startup_common(args, expected);
     }
 
     #[test]
-    fn validate_startup_compute_index_1() {
+    fn validate_startup_raft_1() {
         let args = vec![
             "bin_name",
-            "--config=src/bin/node_settings_local_raft_2.toml",
-            "--type=compute",
-            "--index=1",
+            "--config=src/bin/node_settings_local_raft_1.toml",
         ];
-        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Compute);
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
 
     #[test]
-    fn validate_startup_storage_index_1() {
+    fn validate_startup_raft_2_index_1() {
         let args = vec![
             "bin_name",
             "--config=src/bin/node_settings_local_raft_2.toml",
-            "--type=storage",
             "--index=1",
         ];
-        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Storage);
+        let expected = (DbMode::Test(1), None);
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_raft_3() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_local_raft_1.toml",
+        ];
+        let expected = (DbMode::Test(0), None);
 
         validate_startup_common(args, expected);
     }
@@ -245,13 +263,11 @@ mod test {
         //
         // Assert
         //
-        let (expected_mode, expected_key, expected_type) = expected;
+        let (expected_mode, expected_key) = expected;
         assert_eq!(config.storage_db_mode, expected_mode);
-        assert_eq!(config.compute_db_mode, expected_mode);
         assert_eq!(
             config.tls_config.pem_pkcs8_private_key_override,
             expected_key
         );
-        assert_eq!(config.node_type, expected_type);
     }
 }

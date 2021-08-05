@@ -56,18 +56,18 @@ echo "//-----------------------------//"
 echo "Launch network afterward manually for node_settings_local_raft_3.toml"
 echo "//-----------------------------//"
 echo " "
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage --index=2 > pre_launch_storage_2.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage --index=2 > pre_launch_storage_2.log 2>&1 &
 s2=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage --index=1 > pre_launch_storage_1.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage --index=1 > pre_launch_storage_1.log 2>&1 &
 s1=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage > pre_launch_storage_0.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage > pre_launch_storage_0.log 2>&1 &
 s0=$!
 
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=2 > pre_launch_compute_2.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=2 > pre_launch_compute_2.log 2>&1 &
 c2=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=1 > pre_launch_compute_1.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=1 > pre_launch_compute_1.log 2>&1 &
 c1=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute > pre_launch_compute_0.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute > pre_launch_compute_0.log 2>&1 &
 c0=$!
 
 echo $s2 $s1 $s0 $c2 $c1 $c0
