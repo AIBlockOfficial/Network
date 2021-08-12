@@ -8,13 +8,50 @@ echo " "
 
 cd src/bin/tls_data
 
-if [ "$1" = "re_gen_keys" ]
+if [ "$1" = "re_gen_root" ]
 then
-  for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 
+    echo "initial files"
+    echo 01 > ca_serial
+    echo 01 > ca_crlnumber
+    rm ca_index.txt ; touch ca_index.txt
+
+    echo "Generating CA Root cert"
+    openssl genpkey -algorithm Ed25519 -out ca_root.key
+    openssl req -config ca_root.cnf -new -key ca_root.key -nodes -out ca_root.csr -extensions v3_ca
+    openssl req -config ca_root.cnf -new -x509 -in ca_root.csr -key ca_root.key -out ca_root.pem -extensions v3_ca
+
+    echo "Generating CA Intermediate cert"
+    openssl genpkey -algorithm Ed25519 -out ca_intermediate.key
+    openssl req -config ca_root.cnf -new -key ca_intermediate.key -nodes -out ca_intermediate.csr -extensions v3_intermediate_ca -subj "/CN=Zenotta Intermediate CA"
+    openssl ca -config ca_root.cnf -extensions v3_intermediate_ca -days 999 -notext -batch -in ca_intermediate.csr -out ca_intermediate.pem
+    cat ca_intermediate.pem ca_root.pem > ca_intermediate.bundle.pem
+
+    openssl verify -CAfile ca_root.pem ca_intermediate.pem
+    openssl verify -CAfile ca_root.pem ca_intermediate.bundle.pem
+fi
+
+if [ "$1" = "re_gen_leaf_certs" -o "$1" = "re_gen_root" ]
+then
+  for n in  node101 miner101 miner102 user101 user102
   do
     echo "Generating ... n is set to $n"
     openssl genpkey -algorithm Ed25519 -out $n.key
-    openssl req -config node.cnf -new -key $n.key -nodes -keyout $n.key -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
+    openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
+    openssl ca -config ca_root.cnf -extensions usr_cert -extensions v3_req -cert ca_intermediate.pem -keyfile ca_intermediate.key -days 999 -notext -batch -in $n.csr -out $n.pem
+    cat $n.pem ca_intermediate.bundle.pem > $n.bundle.pem
+
+    openssl verify -CAfile ca_intermediate.bundle.pem $n.pem
+    openssl verify -CAfile ca_root.pem -untrusted $n.bundle.pem $n.pem
+  done
+fi
+
+if [ "$1" = "re_gen_keys" ]
+then
+  for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
+  do
+    echo "Generating ... n is set to $n"
+    openssl genpkey -algorithm Ed25519 -out $n.key
+    openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
     openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz"
   done
 fi
@@ -41,7 +78,7 @@ echo "" >> test_tls_certificates.rs
 echo "/// PEM certificates for node DNS names" >> test_tls_certificates.rs
 echo "pub const TEST_PEM_CERTIFICATES: &[(&str, &str)] = &[" >> test_tls_certificates.rs
 
-for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 
+for n in ca_root compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs cert ... n is set to $n"
   printf "            \"$n.zenotta.xyz\": %s,\n" "$(jq -Rs . <$n.pem)" >> tls_certificates.json
@@ -58,7 +95,7 @@ echo "" >> test_tls_certificates.rs
 echo "/// PKCS8 Keys for node DNS names" >> test_tls_certificates.rs
 echo "pub const TEST_PKCS8_KEYS: &[(&str, &str)] = &[" >> test_tls_certificates.rs
 
-for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 
+for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs keys ... n is set to $n"
   printf "            \"$n.zenotta.xyz\": %s,\n" "$(jq -Rs . <$n.key)" >> tls_certificates.json
@@ -85,7 +122,8 @@ echo "            \"127.0.0.1:12347\": \"miner8.zenotta.xyz\"," >> tls_certifica
 echo "            \"127.0.0.1:12348\": \"miner9.zenotta.xyz\"," >> tls_certificates.json
 echo "            \"127.0.0.1:12349\": \"miner10.zenotta.xyz\"," >> tls_certificates.json
 echo "            \"127.0.0.1:12360\": \"user1.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12361\": \"user2.zenotta.xyz\"" >> tls_certificates.json
+echo "            \"127.0.0.1:12361\": \"user2.zenotta.xyz\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12362\": \"user3.zenotta.xyz\"" >> tls_certificates.json
 echo "        }" >> tls_certificates.json
 echo "    }" >> tls_certificates.json
 echo "}" >> tls_certificates.json
