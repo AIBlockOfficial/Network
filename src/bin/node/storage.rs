@@ -134,7 +134,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
-                .env("ZENOTA_TLS_PRIVATE_KEY")
+                .env("ZENOTTA_TLS_PRIVATE_KEY")
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
