@@ -131,5 +131,29 @@ echo "}" >> tls_certificates.json
 printf "(\"node.zenotta.xyz\", %s),\n" "$(jq -Rs . <node.key)" >> test_tls_certificates.rs
 echo "];" >> test_tls_certificates.rs
 
+echo "" >> test_tls_certificates.rs
+echo "/// PEM certificates for node DNS names" >> test_tls_certificates.rs
+echo "pub const TEST_PEM_CERTIFICATES_WITH_CA: &[(&str, &str)] = &[" >> test_tls_certificates.rs
+
+for n in node101 miner101 miner102 user101 user102
+do
+  echo "Generating test rs cert ... n is set to $n"
+  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.pem)" >> test_tls_certificates.rs
+done
+
+echo "];" >> test_tls_certificates.rs
+echo "" >> test_tls_certificates.rs
+echo "/// PKCS8 Keys for node DNS names" >> test_tls_certificates.rs
+echo "pub const TEST_PKCS8_KEYS_WITH_CA: &[(&str, &str)] = &[" >> test_tls_certificates.rs
+
+for n in node101 miner101 miner102 user101 user102
+do
+  echo "Generating test rs keys ... n is set to $n"
+  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.key)" >> test_tls_certificates.rs
+done
+
+echo "];" >> test_tls_certificates.rs
+
+
 mv tls_certificates.json ../tls_certificates.json
 mv test_tls_certificates.rs ../../comms_handler/test_tls_certificates.rs
