@@ -66,8 +66,9 @@ impl TcpTlsConfig {
                     .ok_or(CommsError::ConfigError("Missing TLS node certificate"))?
                     .clone(),
                 pem_pkcs8_private_keys: config
-                    .pem_pkcs8_private_keys
-                    .get(name)
+                    .pem_pkcs8_private_key_override
+                    .as_ref()
+                    .or_else(|| config.pem_pkcs8_private_keys.get(name))
                     .ok_or(CommsError::ConfigError("Missing TLS node keys"))?
                     .clone(),
                 trusted_pem_certs: config.pem_certificates.values().cloned().collect(),
