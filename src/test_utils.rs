@@ -20,8 +20,8 @@ use crate::upgrade::{
 };
 use crate::user::UserNode;
 use crate::utils::{
-    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
-    LocalEventSender, ResponseResult, StringError,
+    concat_maps, loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async,
+    make_utxo_set_from_seed, LocalEventSender, ResponseResult, StringError,
 };
 use futures::future::join_all;
 use naom::primitives::asset::TokenAmount;
@@ -107,14 +107,20 @@ pub struct NetworkInstanceInfo {
 pub struct TestTlsSpec {
     pub pem_certificates: BTreeMap<String, String>,
     pub pem_pkcs8_private_keys: BTreeMap<String, String>,
+    pub pem_certificates_with_ca: BTreeMap<String, String>,
+    pub pem_pkcs8_private_keys_with_ca: BTreeMap<String, String>,
 }
 
 impl TestTlsSpec {
     pub fn make_tls_spec(&self, socket_name_mapping: &BTreeMap<SocketAddr, String>) -> TlsSpec {
         TlsSpec {
             socket_name_mapping: socket_name_mapping.clone(),
-            pem_certificates: self.pem_certificates.clone(),
-            pem_pkcs8_private_keys: self.pem_pkcs8_private_keys.clone(),
+            pem_certificates: concat_maps(&self.pem_certificates, &self.pem_certificates_with_ca),
+            pem_pkcs8_private_keys: concat_maps(
+                &self.pem_pkcs8_private_keys,
+                &self.pem_pkcs8_private_keys_with_ca,
+            ),
+            untrusted_names: Some(self.pem_certificates_with_ca.keys().cloned().collect()),
             pem_pkcs8_private_key_override: None,
         }
     }
@@ -1264,12 +1270,24 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
             .copied()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),
+        pem_certificates_with_ca: test_tls_certificates::TEST_PEM_CERTIFICATES_WITH_CA
+            .iter()
+            .copied()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+        pem_pkcs8_private_keys_with_ca: test_tls_certificates::TEST_PKCS8_KEYS_WITH_CA
+            .iter()
+            .copied()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
     }
 }
 
 pub fn get_test_tls_name(name: &str, spec: &TestTlsSpec) -> String {
     let tls_name = format!("{}.zenotta.xyz", name);
-    if spec.pem_certificates.contains_key(&tls_name) {
+    if spec.pem_certificates.contains_key(&tls_name)
+        || spec.pem_certificates_with_ca.contains_key(&tls_name)
+    {
         tls_name
     } else {
         "node.zenotta.xyz".to_owned()
@@ -1285,9 +1303,12 @@ pub fn get_common_tls_config() -> TcpTlsConfig {
     TcpTlsConfig::from_tls_spec(addr, &tls_spec).unwrap()
 }
 
-pub async fn get_bound_common_tls_configs(names: &[&str]) -> Vec<TcpTlsConfig> {
+pub async fn get_bound_common_tls_configs(
+    names: &[&str],
+    update_spec: impl Fn(&str, TlsSpec) -> TlsSpec,
+) -> Vec<TcpTlsConfig> {
     let mut mapping = BTreeMap::new();
-    let mut listeners = BTreeMap::new();
+    let mut listeners = Vec::new();
     let tls_spec = get_test_tls_spec();
     for name in names.iter().copied() {
         let mut address = "127.0.0.1:0".parse().unwrap();
@@ -1296,14 +1317,14 @@ pub async fn get_bound_common_tls_configs(names: &[&str]) -> Vec<TcpTlsConfig> {
 
         info!("Bound name address: {}: {:?}", name, address);
         mapping.insert(address, get_test_tls_name(name, &tls_spec));
-        listeners.insert(address, tcp_listener);
+        listeners.push((address, tcp_listener));
     }
 
     let mut configs = Vec::new();
-    let tls_spec = tls_spec.make_tls_spec(&mapping);
-    for address in mapping.keys() {
-        let tcp_listener = listeners.remove(address).unwrap();
-        let config = TcpTlsConfig::from_tls_spec(*address, &tls_spec).unwrap();
+    for (address, tcp_listener) in listeners.drain(..) {
+        let name = &mapping[&address];
+        let tls_spec = update_spec(name, tls_spec.make_tls_spec(&mapping));
+        let config = TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap();
         let config = config.with_listener(tcp_listener);
         configs.push(config);
     }

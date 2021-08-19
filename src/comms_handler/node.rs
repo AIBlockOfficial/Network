@@ -1015,25 +1015,28 @@ impl Node {
 fn get_messages_stream(
     sock_in: FramedRead<tokio::io::ReadHalf<TcpTlsStream>, LengthDelimitedCodec>,
 ) -> (impl Stream<Item = CommMessage>, oneshot::Sender<()>) {
-    let messages = sock_in.filter_map(|frame| {
-        trace!(?frame, "recv_frame");
+    let messages = sock_in
+        .map(|frame| {
+            trace!(?frame, "recv_frame");
 
-        let frame = match frame {
-            Ok(inner) => inner,
-            Err(error) => {
-                warn!(?error, "Could not decode frame");
-                return None;
-            }
-        };
+            let frame = match frame {
+                Ok(inner) => inner,
+                Err(error) => {
+                    warn!(?error, "Could not decode frame");
+                    return None;
+                }
+            };
 
-        match deserialize::<CommMessage>(&frame) {
-            Ok(message) => Some(message),
-            Err(error) => {
-                warn!(?error, "Could not deserialize message; ignoring");
-                None
+            match deserialize::<CommMessage>(&frame) {
+                Ok(message) => Some(message),
+                Err(error) => {
+                    warn!(?error, "Could not deserialize message; ignoring");
+                    None
+                }
             }
-        }
-    });
+        })
+        .take_while(|v| v.is_some())
+        .filter_map(|v| v);
 
     use super::stream_cancel::StreamCancel;
     use futures::TryFutureExt;

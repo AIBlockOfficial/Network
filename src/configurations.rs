@@ -2,7 +2,7 @@ use crate::db_utils::SimpleDb;
 use crate::wallet::WalletDb;
 use naom::primitives::asset::TokenAmount;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 
@@ -17,12 +17,14 @@ pub struct NodeSpec {
 /// Configuration info for TLS
 #[derive(Default, Clone, Deserialize)]
 pub struct TlsSpec {
-    /// Trusted names for address
+    /// Trusted names for address (trusted or not)
     pub socket_name_mapping: BTreeMap<SocketAddr, String>,
     /// Trusted certificates available
     pub pem_certificates: BTreeMap<String, String>,
     /// Private keys available to authenticate with
     pub pem_pkcs8_private_keys: BTreeMap<String, String>,
+    /// Untrusted names for which to add certificate to root store (If None trust all)
+    pub untrusted_names: Option<BTreeSet<String>>,
     /// Private key override to use for this node ignoring pem_pkcs8_private_keys
     pub pem_pkcs8_private_key_override: Option<String>,
 }

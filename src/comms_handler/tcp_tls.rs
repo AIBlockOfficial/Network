@@ -56,10 +56,32 @@ impl TcpTlsConfig {
                 .socket_name_mapping
                 .get(&address)
                 .ok_or(CommsError::ConfigError("Missing TLS node name mapping"))?;
+            let (socket_name_mapping, trusted_pem_certs) =
+                if let Some(untrusted_names) = &config.untrusted_names {
+                    (
+                        config
+                            .socket_name_mapping
+                            .clone()
+                            .into_iter()
+                            .filter(|(_, v)| !untrusted_names.contains(v))
+                            .collect(),
+                        config
+                            .pem_certificates
+                            .iter()
+                            .filter(|(k, _)| !untrusted_names.contains(k.as_str()))
+                            .map(|(_, v)| v.clone())
+                            .collect(),
+                    )
+                } else {
+                    (
+                        config.socket_name_mapping.clone(),
+                        config.pem_certificates.values().cloned().collect(),
+                    )
+                };
 
             Ok(Self {
                 address,
-                socket_name_mapping: config.socket_name_mapping.clone(),
+                socket_name_mapping,
                 pem_certs: config
                     .pem_certificates
                     .get(name)
@@ -71,7 +93,7 @@ impl TcpTlsConfig {
                     .or_else(|| config.pem_pkcs8_private_keys.get(name))
                     .ok_or(CommsError::ConfigError("Missing TLS node keys"))?
                     .clone(),
-                trusted_pem_certs: config.pem_certificates.values().cloned().collect(),
+                trusted_pem_certs,
                 use_tls: true,
                 listener: Default::default(),
             })
@@ -80,6 +102,10 @@ impl TcpTlsConfig {
 
     pub fn mut_socket_name_mapping(&mut self) -> &mut BTreeMap<SocketAddr, String> {
         &mut self.socket_name_mapping
+    }
+
+    pub fn mut_trusted_pem_certs(&mut self) -> &mut Vec<String> {
+        &mut self.trusted_pem_certs
     }
 
     pub fn with_listener(self, listener: TcpListener) -> Self {
