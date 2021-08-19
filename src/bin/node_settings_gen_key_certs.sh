@@ -30,14 +30,23 @@ then
     openssl verify -CAfile ca_root.pem ca_intermediate.bundle.pem
 fi
 
-if [ "$1" = "re_gen_leaf_certs" -o "$1" = "re_gen_root" ]
+if [ "$1" = "re_gen_leaf_certs" -o "$1" = "re_gen_leaf_certs_and_keys" -o "$1" = "re_gen_root" ]
 then
+  rm ca_index.txt ; touch ca_index.txt
   for n in  node101 miner101 miner102 user101 user102
   do
     echo "Generating ... n is set to $n"
-    openssl genpkey -algorithm Ed25519 -out $n.key
-    openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
-    openssl ca -config ca_root.cnf -extensions usr_cert -extensions v3_req -cert ca_intermediate.pem -keyfile ca_intermediate.key -days 999 -notext -batch -in $n.csr -out $n.pem
+    if [ "$1" = "re_gen_leaf_certs_and_keys" ]
+    then
+      echo "Generating ... key & csr is set to $n"
+      openssl genpkey -algorithm Ed25519 -out $n.key
+      openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
+    fi
+
+    cp ca_root.cnf temp.cnf
+    printf "\n[SAN]\nsubjectAltName=DNS:$n.zenotta.xyz\nextendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" >> temp.cnf
+
+    openssl ca -config temp.cnf -extensions SAN -cert ca_intermediate.pem -keyfile ca_intermediate.key -days 999 -notext -batch -in $n.csr -out $n.pem
     cat $n.pem ca_intermediate.bundle.pem > $n.bundle.pem
 
     openssl verify -CAfile ca_intermediate.bundle.pem $n.pem
@@ -45,11 +54,10 @@ then
   done
 fi
 
-if [ "$1" = "re_gen_keys" ]
+if [ "$1" = "re_gen_trusted_certs" ]
 then
   for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
   do
-    echo "Generating ... n is set to $n"
     openssl genpkey -algorithm Ed25519 -out $n.key
     openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
     openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz"
@@ -138,7 +146,7 @@ echo "pub const TEST_PEM_CERTIFICATES_WITH_CA: &[(&str, &str)] = &[" >> test_tls
 for n in node101 miner101 miner102 user101 user102
 do
   echo "Generating test rs cert ... n is set to $n"
-  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.pem)" >> test_tls_certificates.rs
+  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.bundle.pem)" >> test_tls_certificates.rs
 done
 
 echo "];" >> test_tls_certificates.rs
@@ -157,3 +165,4 @@ echo "];" >> test_tls_certificates.rs
 
 mv tls_certificates.json ../tls_certificates.json
 mv test_tls_certificates.rs ../../comms_handler/test_tls_certificates.rs
+rm temp.cnf *.old *.attr [0-9A-F]*.pem
