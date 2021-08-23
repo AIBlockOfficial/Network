@@ -81,7 +81,7 @@
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
 use super::tcp_tls::{
-    verify_is_valid_for_dns_name, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
+    verify_is_valid_for_dns_names, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
@@ -808,11 +808,9 @@ impl Node {
 
         if let Some(peer_cert) = peer_cert {
             let connector = self.tcp_tls_connector.read().await;
-            let peer_name = connector
-                .socket_name_mapping(peer_in_addr)
-                .ok_or(CommsError::PeerNameNotFound)?;
+            let peer_name = connector.socket_name_mapping(peer_in_addr);
 
-            verify_is_valid_for_dns_name(peer_cert, peer_name)?;
+            verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
         }
 
         peer.network_version = Some(network_version);

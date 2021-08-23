@@ -212,9 +212,8 @@ impl TcpTlsConnector {
         let stream = TcpStream::connect(addr).await?;
 
         if let Some(tls_connector) = &self.tls_connector {
-            let tls_name = socket_name_mapping_or_default(&self.socket_name_mapping, addr)
-                .ok_or(CommsError::ConfigError("SocketAddr dnsname unknown"))?;
-            let domain = DNSNameRef::try_from_ascii_str(tls_name)
+            let tls_name = socket_name_mapping_or_default(&self.socket_name_mapping, addr);
+            let domain = DNSNameRef::try_from_ascii_str(&tls_name)
                 .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
             let stream = tls_connector.connect(domain, stream).await?;
             let peer_addr = stream.get_ref().0.peer_addr()?;
@@ -225,7 +224,7 @@ impl TcpTlsConnector {
         }
     }
 
-    pub fn socket_name_mapping(&self, addr: SocketAddr) -> Option<&String> {
+    pub fn socket_name_mapping(&self, addr: SocketAddr) -> String {
         socket_name_mapping_or_default(&self.socket_name_mapping, addr)
     }
 }
@@ -360,11 +359,17 @@ impl AsyncWrite for TcpTlsStream {
 }
 
 /// verify the dna name is valid for the certificae
-pub fn verify_is_valid_for_dns_name(cert: &TlsCertificate, tls_name: &str) -> Result<()> {
-    let domain = DNSNameRef::try_from_ascii_str(tls_name)
-        .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+pub fn verify_is_valid_for_dns_names<'a>(
+    cert: &TlsCertificate,
+    tls_names: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let domains: std::result::Result<Vec<_>, _> =
+        tls_names.map(DNSNameRef::try_from_ascii_str).collect();
+    let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+
     let cert = EndEntityCert::from(&cert.0)?;
-    Ok(cert.verify_is_valid_for_dns_name(domain)?)
+    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().copied())?;
+    Ok(())
 }
 
 fn get_first_certificate(session: &impl Session) -> Option<TlsCertificate> {
@@ -376,10 +381,14 @@ fn get_first_certificate(session: &impl Session) -> Option<TlsCertificate> {
 pub fn socket_name_mapping_or_default(
     mapping: &BTreeMap<SocketAddr, String>,
     addr: SocketAddr,
-) -> Option<&String> {
-    mapping.get(&addr).or_else(|| {
-        let mut addr = addr;
-        addr.set_port(0);
-        mapping.get(&addr)
-    })
+) -> String {
+    mapping
+        .get(&addr)
+        .or_else(|| {
+            let mut addr = addr;
+            addr.set_port(0);
+            mapping.get(&addr)
+        })
+        .cloned()
+        .unwrap_or_else(|| format!("{}.{}.nodes.zenotta.xyz", addr.ip(), addr.port()))
 }
