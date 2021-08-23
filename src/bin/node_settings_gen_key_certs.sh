@@ -33,18 +33,22 @@ fi
 if [ "$1" = "re_gen_leaf_certs" -o "$1" = "re_gen_leaf_certs_and_keys" -o "$1" = "re_gen_root" ]
 then
   rm ca_index.txt ; touch ca_index.txt
+  port_v1=12500
   for n in  node101 miner101 miner102 user101 user102
   do
-    echo "Generating ... n is set to $n"
+    port_v1=$(($port_v1+10))
+    port_v2=$(($port_v1+1))
+    port_v3=$(($port_v1+2))
+    echo "Generating ... n is set to $n ($port_v1, $port_v2, $port_v3)"
     if [ "$1" = "re_gen_leaf_certs_and_keys" ]
     then
       echo "Generating ... key & csr is set to $n"
       openssl genpkey -algorithm Ed25519 -out $n.key
-      openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
+      openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName=DNS:$n.zenotta.xyz,DNS:127.0.0.1.$port_v1.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v2.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v3.nodes.zenotta.xyz"
     fi
 
     cp ca_root.cnf temp.cnf
-    printf "\n[SAN]\nsubjectAltName=DNS:$n.zenotta.xyz\nextendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" >> temp.cnf
+    printf "\n[SAN]\nsubjectAltName=DNS:$n.zenotta.xyz,DNS:127.0.0.1.$port_v1.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v2.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v3.nodes.zenotta.xyz\nextendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" >> temp.cnf
 
     openssl ca -config temp.cnf -extensions SAN -cert ca_intermediate.pem -keyfile ca_intermediate.key -days 999 -notext -batch -in $n.csr -out $n.pem
     cat $n.pem ca_intermediate.bundle.pem > $n.bundle.pem
