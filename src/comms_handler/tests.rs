@@ -3,11 +3,12 @@
 use super::{CommsError, Event, Node, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
 use crate::interfaces::NodeType;
-use crate::test_utils::{get_bound_common_tls_configs, get_common_tls_config};
+use crate::test_utils::{get_bound_common_tls_configs, get_common_tls_config, get_test_tls_spec};
 use crate::utils::tracing_log_try_init;
 use bincode::deserialize;
 use futures::future::join_all;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time;
 use tracing::debug;
@@ -373,14 +374,17 @@ async fn nodes_tls_mismatch() {
     //
     // Arrange
     //
-    let configs = {
-        let mut configs = get_bound_common_tls_configs(&["compute1", "compute2", "compute3"]).await;
-        let address1 = configs[1].address();
-        let address2 = configs[2].address();
-        let mut mapping = configs[0].mut_socket_name_mapping();
-        swap_map_values(&mut mapping, &address1, &address2);
-        configs
-    };
+    let configs =
+        get_bound_common_tls_configs(&["compute1", "compute2", "compute3"], |name, mut s| {
+            if name == "compute1.zenotta.xyz" {
+                let mapping = &mut s.socket_name_mapping;
+                let key1 = find_key_with_value(mapping, "compute2.zenotta.xyz").unwrap();
+                let key2 = find_key_with_value(mapping, "compute3.zenotta.xyz").unwrap();
+                swap_map_values(mapping, &key1, &key2);
+            }
+            s
+        })
+        .await;
     let mut nodes = create_config_compute_nodes(configs, 4).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
@@ -414,6 +418,146 @@ async fn nodes_tls_mismatch() {
                     Err(CommsError::PeerNotFound)
                 ),
                 (Ok(_), Ok(_))
+            )
+        ),
+        "{:?}",
+        actual
+    );
+
+    complete_compute_nodes(nodes).await;
+}
+
+/// Check nodes who cannot establish connections because of unexpected root certificates.
+#[tokio::test(flavor = "current_thread")]
+async fn nodes_tls_ca_mismatch() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let configs =
+        get_bound_common_tls_configs(&["compute1", "compute2", "miner101"], |name, mut s| {
+            match name {
+                "compute1.zenotta.xyz" => {
+                    debug!("Socket Mapping: {:?}", &s.socket_name_mapping);
+                    let untrusted_names = s.untrusted_names.as_mut().unwrap();
+                    untrusted_names.insert("ca_root.zenotta.xyz".to_owned());
+                }
+                "compute2.zenotta.xyz" => {
+                    let untrusted_names = s.untrusted_names.as_mut().unwrap();
+                    untrusted_names.remove("miner101.zenotta.xyz");
+                    s.pem_certificates.remove("miner101.zenotta.xyz");
+                }
+                _ => (),
+            }
+            s
+        })
+        .await;
+    let mut nodes = create_config_compute_nodes(configs, 4).await;
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
+
+    //
+    // Act
+    //
+    let actual_c1_3 = n1.connect_to(n3.address()).await;
+    let actual_c3_1 = n3.connect_to(n1.address()).await;
+    let actual_c2_3 = n2.connect_to(n3.address()).await;
+    let actual_c3_2 = n3.connect_to(n2.address()).await;
+    let actual_s1_3 = n1.send(n3.address(), "Hello2").await;
+    let actual_s3_1 = n3.send(n1.address(), "Hello1").await;
+    let actual_s2_3 = n2.send(n3.address(), "Hello4").await;
+    let actual_s3_2 = n3.send(n2.address(), "Hello3").await;
+
+    //
+    // Assert
+    //
+    let actual = (
+        (actual_c1_3, actual_c3_1, actual_s1_3, actual_s3_1),
+        (actual_c2_3, actual_c3_2, actual_s2_3, actual_s3_2),
+    );
+    assert!(
+        matches!(
+            actual,
+            (
+                (
+                    Err(CommsError::Io(_)),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound)
+                ),
+                (Ok(_), Err(CommsError::PeerInvalidState), Ok(_), Ok(_))
+            )
+        ),
+        "{:?}",
+        actual
+    );
+
+    complete_compute_nodes(nodes).await;
+}
+
+/// Check nodes who cannot establish connections because of unexpected root certificates.
+#[tokio::test(flavor = "current_thread")]
+async fn nodes_tls_ca_unmapped_mismatch() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let configs = {
+        let mut configs = Vec::new();
+        let tls_spec = get_test_tls_spec();
+        for (address, name) in [
+            ("127.0.0.1:12515", "node101.zenotta.xyz"),
+            ("127.0.0.1:12520", "miner101.zenotta.xyz"),
+            ("127.0.0.1:12530", "miner102.zenotta.xyz"),
+        ] {
+            let address = address.parse::<SocketAddr>().unwrap();
+
+            let mut mapping = BTreeMap::new();
+            mapping.insert(address, name.to_owned());
+
+            let tls_spec = tls_spec.make_tls_spec(&mapping);
+            configs.push(TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap());
+        }
+        configs
+    };
+    let mut nodes = create_config_compute_nodes(configs, 4).await;
+    let (n1, tail) = nodes.split_first_mut().unwrap();
+    let (n2, tail) = tail.split_first_mut().unwrap();
+    let (n3, _) = tail.split_first_mut().unwrap();
+
+    //
+    // Act
+    //
+    let actual_c1_3 = n1.connect_to(n3.address()).await;
+    let actual_c3_1 = n3.connect_to(n1.address()).await;
+    let actual_c2_3 = n2.connect_to(n3.address()).await;
+    let actual_c3_2 = n3.connect_to(n2.address()).await;
+    let actual_s1_3 = n1.send(n3.address(), "Hello2").await;
+    let actual_s3_1 = n3.send(n1.address(), "Hello1").await;
+    let actual_s2_3 = n2.send(n3.address(), "Hello4").await;
+    let actual_s3_2 = n3.send(n2.address(), "Hello3").await;
+
+    //
+    // Assert
+    //
+    let actual = (
+        (actual_c1_3, actual_c3_1, actual_s1_3, actual_s3_1),
+        (actual_c2_3, actual_c3_2, actual_s2_3, actual_s3_2),
+    );
+    assert!(
+        matches!(
+            actual,
+            (
+                (
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::Io(_)),
+                    Err(CommsError::PeerNotFound),
+                    Err(CommsError::PeerNotFound)
+                ),
+                (Ok(_), Err(CommsError::PeerInvalidState), Ok(_), Ok(_))
             )
         ),
         "{:?}",
@@ -468,4 +612,12 @@ fn swap_map_values<K: Ord, V>(mapping: &mut BTreeMap<K, V>, k1: &K, k2: &K) {
     let (k2, v2) = mapping.remove_entry(k2).unwrap();
     mapping.insert(k1, v2);
     mapping.insert(k2, v1);
+}
+
+fn find_key_with_value<VFind: ?Sized, K: Ord + Clone, V: PartialEq<VFind>>(
+    mapping: &BTreeMap<K, V>,
+    value: &VFind,
+) -> Option<K> {
+    let (key, _) = mapping.iter().find(|(_, v)| v == &value)?;
+    Some(key.clone())
 }

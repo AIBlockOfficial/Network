@@ -2,6 +2,7 @@
 
 use clap::{App, Arg, ArgMatches};
 use naom::primitives::asset::TokenAmount;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use system::configurations::UserNodeConfig;
 use system::{
@@ -174,6 +175,19 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("address")
+                .long("address")
+                .help("Run node index at the given address")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("tls_certificate_override")
+                .long("tls_certificate_override")
+                .env("ZENOTTA_TLS_CERTIFICATE")
+                .help("Use PEM certificate as a string to use for this node TLS certificate.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
                 .env("ZENOTTA_TLS_PRIVATE_KEY")
@@ -222,6 +236,25 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         }
     }
 
+    if let Some(address) = matches.value_of("address") {
+        let mut user_nodes = settings.get_array("user_nodes").unwrap();
+        let mut node = HashMap::new();
+        node.insert("address".to_owned(), address.to_owned());
+        user_nodes.push(config::Value::new(None, node));
+
+        let index = (user_nodes.len() - 1).to_string();
+        settings.set("user_nodes", user_nodes).unwrap();
+        settings.set("user_node_idx", index).unwrap();
+    }
+
+    if let Some(certificate) = matches.value_of("tls_certificate_override") {
+        let mut tls_config = settings.get_table("tls_config").unwrap();
+        tls_config.insert(
+            "pem_certificate_override".to_owned(),
+            config::Value::new(None, certificate),
+        );
+        settings.set("tls_config", tls_config).unwrap();
+    }
     if let Some(key) = matches.value_of("tls_private_key_override") {
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(

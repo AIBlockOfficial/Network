@@ -919,3 +919,19 @@ pub fn get_pk_with_out_point_from_utxo_set_cloned<'a>(
 ) -> impl Iterator<Item = (String, OutPoint)> + 'a {
     get_pk_with_out_point_from_utxo_set(utxo_set).map(|(spk, op)| (spk.clone(), op.clone()))
 }
+
+/// Concatenate 2 maps of K V.
+///
+/// ### Arguments
+///
+/// * `m1` - First map
+/// * `m2` - Second map
+pub fn concat_maps<K: Clone + Ord, V: Clone>(
+    m1: &BTreeMap<K, V>,
+    m2: &BTreeMap<K, V>,
+) -> BTreeMap<K, V> {
+    m1.iter()
+        .chain(m2.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}

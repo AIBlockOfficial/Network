@@ -1,6 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg, ArgMatches};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use system::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use system::{
@@ -241,6 +242,25 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("address")
+                .long("address")
+                .help("Run node index at the given address")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("with_user_address")
+                .long("with_user_address")
+                .help("Run the specified user node index from config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("tls_certificate_override")
+                .long("tls_certificate_override")
+                .env("ZENOTTA_TLS_CERTIFICATE")
+                .help("Use PEM certificate as a string to use for this node TLS certificate.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
                 .env("ZENOTTA_TLS_PRIVATE_KEY")
@@ -287,8 +307,47 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         let mut db_mode = settings.get_table("miner_db_mode").unwrap();
         if let Some(test_idx) = db_mode.get_mut("Test") {
             *test_idx = config::Value::new(None, index);
-            settings.set("miner_db_mode", db_mode).unwrap();
+            settings.set("miner_db_mode", db_mode.clone()).unwrap();
         }
+    }
+
+    if let Some(address) = matches.value_of("address") {
+        let mut user_nodes = settings.get_array("miner_nodes").unwrap();
+        let mut node = HashMap::new();
+        node.insert("address".to_owned(), address.to_owned());
+        user_nodes.push(config::Value::new(None, node));
+
+        let index = (user_nodes.len() - 1).to_string();
+        settings.set("miner_nodes", user_nodes).unwrap();
+        settings.set("miner_node_idx", index).unwrap();
+    }
+
+    let mut has_user_settings = false;
+    if let Some(index) = matches.value_of("with_user_index") {
+        settings.set("user_node_idx", index).unwrap();
+        let db_mode = settings.get_table("miner_db_mode").unwrap();
+        settings.set("user_db_mode", db_mode).unwrap();
+        has_user_settings = true;
+    }
+    if let Some(address) = matches.value_of("with_user_address") {
+        let mut user_nodes = settings.get_array("user_nodes").unwrap();
+        let mut node = HashMap::new();
+        node.insert("address".to_owned(), address.to_owned());
+        user_nodes.push(config::Value::new(None, node));
+
+        let index = (user_nodes.len() - 1).to_string();
+        settings.set("user_nodes", user_nodes).unwrap();
+        settings.set("user_node_idx", index).unwrap();
+        has_user_settings = true;
+    }
+
+    if let Some(certificate) = matches.value_of("tls_certificate_override") {
+        let mut tls_config = settings.get_table("tls_config").unwrap();
+        tls_config.insert(
+            "pem_certificate_override".to_owned(),
+            config::Value::new(None, certificate),
+        );
+        settings.set("tls_config", tls_config).unwrap();
     }
     if let Some(key) = matches.value_of("tls_private_key_override") {
         let mut tls_config = settings.get_table("tls_config").unwrap();
@@ -298,6 +357,7 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         );
         settings.set("tls_config", tls_config).unwrap();
     }
+
     if let Some(index) = matches.value_of("compute_index") {
         settings.set("miner_compute_node_idx", index).unwrap();
         settings.set("user_compute_node_idx", index).unwrap();
@@ -315,21 +375,7 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("user_api_port", api_port).unwrap();
     }
 
-    let user_settings = match matches.value_of("with_user_index") {
-        Some(index) => {
-            settings.set("user_node_idx", index).unwrap();
-            let mut db_mode = settings.get_table("user_db_mode").unwrap();
-            if let Some(test_idx) = db_mode.get_mut("Test") {
-                let index = index.parse::<usize>().unwrap();
-                let index = index + test_idx.clone().try_into::<usize>().unwrap();
-                *test_idx = config::Value::new(None, index.to_string());
-                settings.set("user_db_mode", db_mode).unwrap();
-            }
-            Some(settings.clone())
-        }
-        None => None,
-    };
-
+    let user_settings = has_user_settings.then(|| settings.clone());
     (settings, user_settings)
 }
 
@@ -360,9 +406,9 @@ mod test {
 
     #[test]
     fn validate_startup_with_user_index_1() {
-        let args = vec!["bin_name", "--with_user_index=1"];
-        let expected: Expected = (DbMode::Test(0), None);
-        let user_expected: UserExpected = Some((DbMode::Test(1001), None));
+        let args = vec!["bin_name", "--index=3", "--with_user_index=1"];
+        let expected: Expected = (DbMode::Test(3), None);
+        let user_expected: UserExpected = Some((DbMode::Test(3), None));
 
         validate_startup_common(args, expected, user_expected);
     }
@@ -381,11 +427,12 @@ mod test {
         // Use argument instead of std::env as env apply to all tests
         let args = vec![
             "bin_name",
+            "--index=3",
             "--tls_private_key_override=42",
             "--with_user_index=1",
         ];
-        let expected: Expected = (DbMode::Test(0), Some("42".to_owned()));
-        let user_expected: UserExpected = Some((DbMode::Test(1001), Some("42".to_owned())));
+        let expected: Expected = (DbMode::Test(3), Some("42".to_owned()));
+        let user_expected: UserExpected = Some((DbMode::Test(3), Some("42".to_owned())));
         validate_startup_common(args, expected, user_expected);
     }
 
