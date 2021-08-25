@@ -121,6 +121,7 @@ impl TestTlsSpec {
                 &self.pem_pkcs8_private_keys_with_ca,
             ),
             untrusted_names: Some(self.pem_certificates_with_ca.keys().cloned().collect()),
+            pem_certificate_override: None,
             pem_pkcs8_private_key_override: None,
         }
     }

@@ -52,10 +52,7 @@ impl TcpTlsConfig {
         if config.pem_certificates.is_empty() {
             Ok(Self::new_no_tls(address))
         } else {
-            let name = config
-                .socket_name_mapping
-                .get(&address)
-                .ok_or(CommsError::ConfigError("Missing TLS node name mapping"))?;
+            let name = socket_name_mapping_or_default(&config.socket_name_mapping, address);
             let (socket_name_mapping, trusted_pem_certs) =
                 if let Some(untrusted_names) = &config.untrusted_names {
                     (
@@ -83,14 +80,15 @@ impl TcpTlsConfig {
                 address,
                 socket_name_mapping,
                 pem_certs: config
-                    .pem_certificates
-                    .get(name)
+                    .pem_certificate_override
+                    .as_ref()
+                    .or_else(|| config.pem_certificates.get(&name))
                     .ok_or(CommsError::ConfigError("Missing TLS node certificate"))?
                     .clone(),
                 pem_pkcs8_private_keys: config
                     .pem_pkcs8_private_key_override
                     .as_ref()
-                    .or_else(|| config.pem_pkcs8_private_keys.get(name))
+                    .or_else(|| config.pem_pkcs8_private_keys.get(&name))
                     .ok_or(CommsError::ConfigError("Missing TLS node keys"))?
                     .clone(),
                 trusted_pem_certs,
@@ -390,5 +388,9 @@ pub fn socket_name_mapping_or_default(
             mapping.get(&addr)
         })
         .cloned()
-        .unwrap_or_else(|| format!("{}.{}.nodes.zenotta.xyz", addr.ip(), addr.port()))
+        .unwrap_or_else(|| default_name_mapping(addr))
+}
+
+pub fn default_name_mapping(addr: SocketAddr) -> String {
+    format!("{}.{}.nodes.zenotta.xyz", addr.ip(), addr.port())
 }

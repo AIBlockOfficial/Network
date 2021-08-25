@@ -25,6 +25,8 @@ pub struct TlsSpec {
     pub pem_pkcs8_private_keys: BTreeMap<String, String>,
     /// Untrusted names for which to add certificate to root store (If None trust all)
     pub untrusted_names: Option<BTreeSet<String>>,
+    /// Node certificate override to use for this node ignoring pem_certificates
+    pub pem_certificate_override: Option<String>,
     /// Private key override to use for this node ignoring pem_pkcs8_private_keys
     pub pem_pkcs8_private_key_override: Option<String>,
 }
@@ -37,7 +39,13 @@ pub struct TlsPrivateInfo {
 
 impl fmt::Debug for TlsSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TlsSpec({:?})", &self.socket_name_mapping)
+        write!(
+            f,
+            "TlsSpec({:?}, key({:?}), cert({:?}))",
+            &self.socket_name_mapping,
+            self.pem_pkcs8_private_key_override,
+            self.pem_certificate_override
+        )
     }
 }
 
