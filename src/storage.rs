@@ -121,7 +121,7 @@ pub struct StorageNode {
     db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_info: (SocketAddr, TlsPrivateInfo),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>),
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
@@ -149,7 +149,9 @@ impl StorageNode {
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);
-        let api_tls_info = tcp_tls_config.clone_private_info();
+        let api_tls_info = config
+            .storage_api_use_tls
+            .then(|| tcp_tls_config.clone_private_info());
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
@@ -190,7 +192,7 @@ impl StorageNode {
     }
 
     /// Returns the storage node's API info
-    pub fn api_inputs(&self) -> (Arc<Mutex<SimpleDb>>, SocketAddr, TlsPrivateInfo) {
+    pub fn api_inputs(&self) -> (Arc<Mutex<SimpleDb>>, SocketAddr, Option<TlsPrivateInfo>) {
         let (api_addr, api_tls) = self.api_info.clone();
         (self.db.clone(), api_addr, api_tls)
     }

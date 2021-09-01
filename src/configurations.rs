@@ -134,6 +134,8 @@ pub struct StorageNodeConfig {
     pub storage_raft: usize,
     /// API port
     pub storage_api_port: u16,
+    /// API use TLS
+    pub storage_api_use_tls: bool,
     /// Timeout for ticking raft
     pub storage_raft_tick_timeout: usize,
     /// Timeout for generating a new block
@@ -188,6 +190,8 @@ pub struct UserNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// API port
     pub user_api_port: u16,
+    /// API use TLS
+    pub user_api_use_tls: bool,
     /// Wallet seeds
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     /// Option of the passphrase used for encryption

@@ -55,12 +55,17 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            warp::serve(routes::storage_node_routes(db))
-                .tls()
-                .key(&api_tls.pem_pkcs8_private_keys)
-                .cert(&api_tls.pem_certs)
-                .run(bind_address)
-                .await;
+            let serve = warp::serve(routes::storage_node_routes(db));
+            if let Some(api_tls) = api_tls {
+                serve
+                    .tls()
+                    .key(&api_tls.pem_pkcs8_private_keys)
+                    .cert(&api_tls.pem_certs)
+                    .run(bind_address)
+                    .await;
+            } else {
+                serve.run(bind_address).await;
+            }
         }
     });
 
@@ -132,6 +137,13 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("api_use_tls")
+                .long("api_use_tls")
+                .env("ZENOTTA_API_USE_TLS")
+                .help("Whether to use TLS for API: 0 to disable")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
                 .env("ZENOTTA_TLS_PRIVATE_KEY")
@@ -152,6 +164,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("storage_node_idx", 0).unwrap();
     settings.set_default("storage_raft", 0).unwrap();
     settings.set_default("storage_api_port", 3001).unwrap();
+    settings.set_default("storage_api_use_tls", true).unwrap();
     settings
         .set_default("storage_raft_tick_timeout", 10)
         .unwrap();
@@ -166,6 +179,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     if let Some(port) = matches.value_of("api_port") {
         settings.set("storage_api_port", port).unwrap();
+    }
+    if let Some(use_tls) = matches.value_of("api_use_tls") {
+        settings.set("storage_api_use_tls", use_tls).unwrap();
     }
 
     if let Some(index) = matches.value_of("index") {
