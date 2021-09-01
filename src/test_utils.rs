@@ -1053,6 +1053,7 @@ async fn init_storage(
         user_nodes: info.user_nodes.clone(),
         storage_raft,
         storage_api_port: 3001,
+        storage_api_use_tls: true,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
         storage_block_timeout: 1000 / config.test_duration_divider,
     };
@@ -1130,6 +1131,7 @@ async fn init_user(
         miner_nodes: info.miner_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         user_api_port: 3000,
+        user_api_use_tls: true,
         user_wallet_seeds: config.user_wallet_seeds.clone(),
         passphrase: config.passphrase.clone(),
         user_auto_donate: config.user_auto_donate,

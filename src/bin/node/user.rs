@@ -87,12 +87,17 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            warp::serve(routes::user_node_routes(db, node))
-                .tls()
-                .key(&api_tls.pem_pkcs8_private_keys)
-                .cert(&api_tls.pem_certs)
-                .run(bind_address)
-                .await;
+            let serve = warp::serve(routes::user_node_routes(db, node));
+            if let Some(api_tls) = api_tls {
+                serve
+                    .tls()
+                    .key(&api_tls.pem_pkcs8_private_keys)
+                    .cert(&api_tls.pem_certs)
+                    .run(bind_address)
+                    .await;
+            } else {
+                serve.run(bind_address).await;
+            }
         }
     });
 
@@ -134,6 +139,13 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("api_port")
                 .long("api_port")
                 .help("The port to run the http API from")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("api_use_tls")
+                .long("api_use_tls")
+                .env("ZENOTTA_API_USE_TLS")
+                .help("Whether to use TLS for API: 0 to disable")
                 .takes_value(true),
         )
         .arg(
@@ -209,6 +221,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("user_api_port", 3000).unwrap();
+    settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
@@ -282,6 +295,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     if let Some(api_port) = matches.value_of("auto_donate") {
         settings.set("user_auto_donate", api_port).unwrap();
+    }
+    if let Some(use_tls) = matches.value_of("api_use_tls") {
+        settings.set("user_api_use_tls", use_tls).unwrap();
     }
 
     settings

@@ -109,7 +109,7 @@ pub struct UserNode {
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
     compute_addr: SocketAddr,
-    api_info: (SocketAddr, TlsPrivateInfo),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>),
     trading_peer: Option<SocketAddr>,
     next_payment: Option<(Option<SocketAddr>, Transaction)>,
     last_block_notified: Block,
@@ -141,7 +141,9 @@ impl UserNode {
             .address;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
-        let api_tls_info = tcp_tls_config.clone_private_info();
+        let api_tls_info = config
+            .user_api_use_tls
+            .then(|| tcp_tls_config.clone_private_info());
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
 
@@ -222,7 +224,7 @@ impl UserNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr, TlsPrivateInfo) {
+    pub fn api_inputs(&self) -> (WalletDb, Node, SocketAddr, Option<TlsPrivateInfo>) {
         let (api_addr, api_tls_info) = self.api_info.clone();
         (
             self.wallet_db.clone(),
