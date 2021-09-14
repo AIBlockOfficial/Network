@@ -18,7 +18,7 @@ then
     echo "Generating CA Root cert"
     openssl genpkey -algorithm Ed25519 -out ca_root.key
     openssl req -config ca_root.cnf -new -key ca_root.key -nodes -out ca_root.csr -extensions v3_ca
-    openssl req -config ca_root.cnf -new -x509 -in ca_root.csr -key ca_root.key -out ca_root.pem -extensions v3_ca
+    openssl req -config ca_root.cnf -new -x509 -in ca_root.csr -key ca_root.key -out ca_root.pem -extensions v3_ca -days 999
 
     echo "Generating CA Intermediate cert"
     openssl genpkey -algorithm Ed25519 -out ca_intermediate.key
@@ -64,7 +64,7 @@ then
   do
     openssl genpkey -algorithm Ed25519 -out $n.key
     openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
-    openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz"
+    openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz" -days 999
   done
 fi
 
