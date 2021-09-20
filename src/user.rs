@@ -1000,8 +1000,9 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: Vec<u8>) -> Response {
-        self.received_utxo_set = deserialize(&utxo_set).ok();
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
+        self.received_utxo_set = Some(utxo_set);
+
         Response {
             success: true,
             reason: "Received UTXO set",

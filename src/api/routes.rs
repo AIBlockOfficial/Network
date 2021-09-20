@@ -1,6 +1,7 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
+use crate::tracked_utxo::TrackedUtxoSet;
 use crate::wallet::WalletDb;
 
 use std::convert::Infallible;
@@ -38,15 +39,15 @@ pub fn wallet_info(
 
 // GET all keypairs
 // TODO: Requires password (will move to POST)
-pub fn wallet_keypairs(
+pub fn export_keypairs(
     db: WalletDb,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = get_cors();
 
-    warp::path("wallet_keypairs")
+    warp::path("export_keypairs")
         .and(warp::get())
         .and(with_node_component(db))
-        .and_then(handlers::get_wallet_keypairs)
+        .and_then(handlers::get_export_keypairs)
         .with(cors)
 }
 
@@ -257,6 +258,30 @@ pub fn update_running_total(
         .with(cors)
 }
 
+// POST fetch balance for addresses
+pub fn fetch_utxo_balance(
+    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("fetch_balance")
+        .and(warp::post())
+        .and(with_node_component(tracked_utxo))
+        .and(warp::body::json())
+        .and_then(handlers::post_fetch_utxo_balance)
+        .with(cors)
+}
+
 //======= NODE ROUTES =======//
 
 pub fn user_node_routes(
@@ -267,7 +292,7 @@ pub fn user_node_routes(
         .or(make_payment(db.clone(), node.clone()))
         .or(make_ip_payment(db.clone(), node.clone()))
         .or(request_donation(node.clone()))
-        .or(wallet_keypairs(db.clone()))
+        .or(export_keypairs(db.clone()))
         .or(import_keypairs(db.clone()))
         .or(update_running_total(node))
         .or(payment_address(db))
@@ -279,4 +304,10 @@ pub fn storage_node_routes(
     block_info_by_nums(db.clone())
         .or(latest_block(db.clone()))
         .or(blockchain_entry_by_key(db))
+}
+
+pub fn compute_node_routes(
+    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    fetch_utxo_balance(tracked_utxo)
 }
