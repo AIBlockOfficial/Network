@@ -9,12 +9,15 @@ use crate::interfaces::{
     UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
+use crate::tracked_utxo::TrackedUtxoSet;
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::OutPoint;
-use naom::primitives::{block::Block, transaction::Transaction};
+use naom::primitives::block::Block;
+use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::script::lang::Script;
+use naom::utils::transaction_utils::construct_tx_hash;
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
@@ -92,6 +95,22 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
     db
 }
 
+// Util function to create a transaction.
+// Returns the hash of the tx and the tx itself
+fn get_transaction() -> (String, Transaction) {
+    let asset = TokenAmount(25_200);
+    let mut tx = Transaction::new();
+
+    let tx_in = TxIn::new_from_input(OutPoint::new("bob".to_string(), 0), Script::new());
+    let tx_out = TxOut::new_token_amount(COMMON_ADDR_STORE.0.to_string(), asset);
+    tx.inputs = vec![tx_in];
+    tx.outputs = vec![tx_out];
+
+    let t_hash = construct_tx_hash(&tx);
+
+    (t_hash, tx)
+}
+
 fn success_json() -> (StatusCode, HeaderMap) {
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -107,6 +126,16 @@ fn api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
 async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
     let evt = node.next_event().await;
     evt.map(|Event::NewFrame { peer: _, frame }| frame.to_vec())
+}
+
+async fn new_self_user_node() -> (Node, SocketAddr) {
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
+        .await
+        .unwrap();
+    let self_socket = self_node.address();
+    (self_node, self_socket)
 }
 
 /*------- GET TESTS--------*/
@@ -134,7 +163,7 @@ async fn test_get_latest_block() {
 
 /// Test GET wallet keypairs
 #[tokio::test(flavor = "current_thread")]
-async fn test_get_wallet_keypairs() {
+async fn test_get_export_keypairs() {
     //
     // Arrange
     //
@@ -153,12 +182,12 @@ async fn test_get_wallet_keypairs() {
         .await
         .unwrap();
 
-    let request = warp::test::request().method("GET").path("/wallet_keypairs");
+    let request = warp::test::request().method("GET").path("/export_keypairs");
 
     //
     // Act
     //
-    let filter = routes::wallet_keypairs(db);
+    let filter = routes::export_keypairs(db);
     let res = request.reply(&filter).await;
     let expected_addresses = serde_json::to_string(&json!({
         "addresses":{
@@ -467,7 +496,7 @@ async fn test_post_request_donation() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "\"Donnation processing\"");
+    assert_eq!(res.body(), "\"Donation processing\"");
 
     // Frame expected
     let expected_frame = api_request_as_frame(UserApiRequest::RequestDonation { paying_peer });
@@ -510,6 +539,46 @@ async fn test_post_import_keypairs_success() {
     assert_eq!(res.body(), "\"Key/s saved successfully\"");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_fetch_balance() {
+    //
+    // Arrange
+    //
+    let (_, tx) = get_transaction();
+    let mut bmap = BTreeMap::new();
+
+    bmap.insert(
+        tx.inputs[0].clone().previous_out.unwrap(),
+        tx.outputs[0].clone(),
+    );
+
+    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
+    let addresses = PublicKeyAddresses {
+        address_list: vec![COMMON_ADDR_STORE.0.to_string()],
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/fetch_balance")
+        .header("Content-Type", "application/json")
+        .json(&addresses);
+
+    //
+    // Act
+    //
+    let filter = routes::fetch_utxo_balance(tracked_utxo);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(
+        res.body(),
+        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":25200},\"total\":25200}"
+    );
+}
+
 /// Test POST update running total successful
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_update_running_total() {
@@ -546,14 +615,4 @@ async fn test_post_update_running_total() {
         api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
-}
-
-async fn new_self_user_node() -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
-        .await
-        .unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
 }

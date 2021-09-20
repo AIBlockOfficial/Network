@@ -1,13 +1,13 @@
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
-use crate::configurations::{ComputeNodeConfig, ExtraNodeParams};
+use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
     MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet, UtxoSetRef,
+    UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
 use crate::utils::{
@@ -34,6 +34,7 @@ use std::{
     fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::{Arc, Mutex},
 };
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
@@ -142,7 +143,13 @@ pub struct ComputeNode {
     user_notification_list: BTreeSet<SocketAddr>,
     coordiated_shudown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
-    fetched_utxo_set: Option<(SocketAddr, Vec<u8>)>,
+    current_utxo_set: Arc<Mutex<TrackedUtxoSet>>,
+    fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
+    api_info: (
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        Arc<Mutex<TrackedUtxoSet>>,
+    ),
 }
 
 impl ComputeNode {
@@ -162,6 +169,10 @@ impl ComputeNode {
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?
             .address;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(addr.ip(), config.compute_api_port);
+        let api_tls_info = config
+            .compute_api_use_tls
+            .then(|| tcp_tls_config.clone_private_info());
 
         let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
@@ -172,6 +183,8 @@ impl ComputeNode {
             let raft_peers = node_raft.raft_peer_addrs().copied();
             raft_peers.chain(storage).collect()
         };
+
+        let utxo_set_empty = Arc::new(Mutex::new(TrackedUtxoSet::new(BTreeMap::new())));
 
         Ok(ComputeNode {
             node,
@@ -192,6 +205,8 @@ impl ComputeNode {
             user_notification_list: Default::default(),
             coordiated_shudown: u64::MAX,
             shutdown_group,
+            api_info: (api_addr, api_tls_info, utxo_set_empty.clone()),
+            current_utxo_set: utxo_set_empty,
             fetched_utxo_set: None,
         }
         .load_local_db()?)
@@ -243,8 +258,16 @@ impl ComputeNode {
         self.node_raft.get_committed_utxo_set()
     }
 
+    pub fn get_committed_utxo_set_to_send(&self) -> UtxoSet {
+        self.node_raft.get_committed_utxo_set().clone()
+    }
+
     pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         self.node_raft.get_committed_utxo_tracked_set()
+    }
+
+    pub fn get_committed_utxo_tracked_set_to_send(&self) -> TrackedUtxoSet {
+        self.node_raft.get_committed_utxo_tracked_set().clone()
     }
 
     /// The current tx_pool that will be used to generate next block
@@ -279,6 +302,17 @@ impl ComputeNode {
             raft_db: raft_db.in_memory(),
             ..Default::default()
         }
+    }
+
+    /// Info needed to run the API point.
+    pub fn api_inputs(
+        &self,
+    ) -> (
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        Arc<Mutex<TrackedUtxoSet>>,
+    ) {
+        self.api_info.clone()
     }
 
     /// Processes a dual double entry transaction
@@ -1231,6 +1265,11 @@ impl ComputeNode {
             return None;
         }
 
+        // Update the currently known UTXO set
+        self.current_utxo_set = Arc::new(Mutex::new(
+            self.node_raft.get_committed_utxo_tracked_set().clone(),
+        ));
+
         Some(Response {
             success: true,
             reason: "Received block stored",
@@ -1264,20 +1303,21 @@ impl ComputeNode {
 impl ComputeInterface for ComputeNode {
     fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
         self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((
-                peer,
-                serialize(&self.get_committed_utxo_set()).unwrap_or_default(),
-            )),
+            UtxoFetchType::All => Some((peer, self.get_committed_utxo_set_to_send())),
             UtxoFetchType::AnyOf(addresses) => {
                 let utxo_set = self.get_committed_utxo_set();
-                let utxo_tracked_set = self.get_committed_utxo_tracked_set();
-                let utxo_subset: UtxoSetRef = addresses
+                let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
+                let utxo_subset: UtxoSet = addresses
                     .iter()
                     .filter_map(|v| utxo_tracked_set.get_pk_cache_vec(v))
                     .flatten()
-                    .filter_map(|op| utxo_set.get_key_value(op))
+                    .filter_map(|op| {
+                        utxo_set
+                            .get_key_value(op)
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                    })
                     .collect();
-                Some((peer, serialize(&utxo_subset).unwrap_or_default()))
+                Some((peer, utxo_subset))
             }
         };
         Response {

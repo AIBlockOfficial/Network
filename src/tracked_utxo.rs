@@ -1,10 +1,17 @@
 use crate::interfaces::UtxoSet;
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
+use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Deref;
+
+#[derive(Default, Debug, Clone, Serialize)]
+pub struct TrackedUtxoBalance {
+    total: u64,
+    address_list: BTreeMap<String, u64>,
+}
 
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
 #[derive(Default, Clone, Debug)]
@@ -48,6 +55,40 @@ impl TrackedUtxoSet {
             .remove(key)
             .and_then(|txout| txout.script_public_key)
             .and_then(|spk| self.pk_cache.remove(&spk))
+    }
+
+    /// Calculates the balance of `OutPoint`s based on provided addresses
+    pub fn get_balance_for_addresses(&self, addresses: &[String]) -> TrackedUtxoBalance {
+        let address_list: BTreeMap<String, u64> = addresses
+            .iter()
+            .filter_map(|addr| {
+                self.get_pk_cache_vec(addr).map(|ops| {
+                    ops.iter()
+                        .map(|op| (addr, op))
+                        .collect::<Vec<(&String, &OutPoint)>>()
+                })
+            })
+            .flatten()
+            .filter_map(|(addr, op)| match self.base.get(op) {
+                Some(tx_out) => match tx_out.value {
+                    Asset::Token(t) => Some((addr.clone(), t.0)),
+                    _ => None,
+                },
+                None => None,
+            })
+            .collect();
+
+        let total = address_list
+            .values()
+            .cloned()
+            .collect::<Vec<u64>>()
+            .iter()
+            .sum();
+
+        TrackedUtxoBalance {
+            total,
+            address_list,
+        }
     }
 }
 

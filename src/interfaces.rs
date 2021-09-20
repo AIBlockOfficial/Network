@@ -558,7 +558,7 @@ pub enum UserRequest {
     SendPaymentTransaction { transaction: Transaction },
 
     /// Process received utxo set
-    SendUtxoSet { utxo_set: Vec<u8> },
+    SendUtxoSet { utxo_set: UtxoSet },
     /// Process received block being mined
     BlockMining { block: Block },
     /// Process closing event

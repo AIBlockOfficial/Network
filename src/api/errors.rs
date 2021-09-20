@@ -47,3 +47,8 @@ impl warp::reject::Reject for ErrorCouldNotDeserializeData {}
 #[derive(Debug)]
 pub struct ErrorDataNetworkVersionMismatch;
 impl warp::reject::Reject for ErrorDataNetworkVersionMismatch {}
+
+/// API error struct for bad serialisation of balance data
+#[derive(Debug)]
+pub struct ErrorCannotSerializeBalanceForJson;
+impl warp::reject::Reject for ErrorCannotSerializeBalanceForJson {}

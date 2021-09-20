@@ -3,8 +3,11 @@ use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
+use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::DeserializedBlockchainItem;
 use crate::wallet::WalletDb;
+
+use serde_json::json;
 
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
@@ -74,7 +77,7 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
 }
 
 /// Gets all present keys and sends them out for export
-pub async fn get_wallet_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_export_keypairs(wallet_db: WalletDb) -> Result<impl warp::Reply, warp::Rejection> {
     let known_addr = wallet_db.get_known_addresses();
     let mut addresses = BTreeMap::new();
 
@@ -241,7 +244,7 @@ pub async fn post_request_donation(
         return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
     }
 
-    Ok(warp::reply::json(&"Donnation processing".to_owned()))
+    Ok(warp::reply::json(&"Donation processing".to_owned()))
 }
 
 /// Post to update running total of connected wallet
@@ -259,4 +262,15 @@ pub async fn post_update_running_total(
     }
 
     Ok(warp::reply::json(&"Running total updated".to_owned()))
+}
+
+/// Post to fetch the balance for given addresses in UTXO
+pub async fn post_fetch_utxo_balance(
+    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    addresses: PublicKeyAddresses,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let tutxo = tracked_utxo.lock().unwrap();
+    let balances = tutxo.get_balance_for_addresses(&addresses.address_list);
+
+    Ok(warp::reply::json(&json!(balances)))
 }

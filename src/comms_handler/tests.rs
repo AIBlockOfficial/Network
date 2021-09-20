@@ -512,11 +512,13 @@ async fn nodes_tls_ca_unmapped_mismatch() {
             ("127.0.0.1:12515", "node101.zenotta.xyz"),
             ("127.0.0.1:12520", "miner101.zenotta.xyz"),
             ("127.0.0.1:12530", "miner102.zenotta.xyz"),
-        ] {
+        ]
+        .iter()
+        {
             let address = address.parse::<SocketAddr>().unwrap();
 
             let mut mapping = BTreeMap::new();
-            mapping.insert(address, name.to_owned());
+            mapping.insert(address, name.to_string());
 
             let tls_spec = tls_spec.make_tls_spec(&mapping);
             configs.push(TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap());

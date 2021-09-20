@@ -1,10 +1,11 @@
 //! App to run a compute node.
 
 use clap::{App, Arg, ArgMatches};
+use std::net::SocketAddr;
 use system::configurations::ComputeNodeConfig;
 use system::ComputeNode;
 use system::{
-    get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
+    get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
 
@@ -15,7 +16,9 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = ComputeNode::new(config, Default::default()).await.unwrap();
+    let api_inputs = node.api_inputs();
 
+    println!("API Inputs: {:?}", api_inputs);
     println!("Started node at {}", node.address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
@@ -46,6 +49,31 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         })
     };
 
+    // Warp API
+    let warp_handle = tokio::spawn({
+        let (api_addr, api_tls, tracked_utxo) = api_inputs;
+
+        println!("Warp API started on port {:?}", api_addr.port());
+        println!();
+
+        let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        bind_address.set_port(api_addr.port());
+
+        async move {
+            let serve = warp::serve(routes::compute_node_routes(tracked_utxo));
+            if let Some(api_tls) = api_tls {
+                serve
+                    .tls()
+                    .key(&api_tls.pem_pkcs8_private_keys)
+                    .cert(&api_tls.pem_certs)
+                    .run(bind_address)
+                    .await;
+            } else {
+                serve.run(bind_address).await;
+            }
+        }
+    });
+
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
@@ -68,13 +96,15 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         }
     });
 
-    let (main, raft, conn, disconn) = tokio::join!(
+    let (main, warp, raft, conn, disconn) = tokio::join!(
         main_loop_handle,
+        warp_handle,
         raft_loop_handle,
         conn_loop_handle,
         disconn_loop_handle
     );
     main.unwrap();
+    warp.unwrap();
     raft.unwrap();
     conn.unwrap();
     disconn.unwrap();
@@ -94,6 +124,19 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("tls_config")
                 .long("tls_config")
                 .help("Use file to provide tls configuration options.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("api_port")
+                .long("api_port")
+                .help("The port to run the http API from")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("api_use_tls")
+                .long("api_use_tls")
+                .env("ZENOTTA_API_USE_TLS")
+                .help("Whether to use TLS for API: 0 to disable")
                 .takes_value(true),
         )
         .arg(
@@ -133,6 +176,8 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("sanction_list", Vec::<String>::new())
         .unwrap();
+    settings.set_default("compute_api_port", 3003).unwrap();
+    settings.set_default("compute_api_use_tls", true).unwrap();
     settings.set_default("jurisdiction", "US").unwrap();
     settings.set_default("compute_node_idx", 0).unwrap();
     settings.set_default("compute_raft", 0).unwrap();
@@ -152,6 +197,13 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(tls_setting_file))
         .unwrap();
+
+    if let Some(port) = matches.value_of("api_port") {
+        settings.set("compute_api_port", port).unwrap();
+    }
+    if let Some(use_tls) = matches.value_of("api_use_tls") {
+        settings.set("compute_api_use_tls", use_tls).unwrap();
+    }
 
     if let Some(index) = matches.value_of("index") {
         settings.set("compute_node_idx", index).unwrap();
