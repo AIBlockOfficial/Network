@@ -7,7 +7,7 @@ use crate::constants::{
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, CommonBlockInfo, ComputeRequest, Contract,
-    MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
+    DebugData, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageInterface,
     StorageRequest, StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
@@ -938,6 +938,10 @@ impl StorageNode {
         });
 
         Ok(self)
+    }
+
+    pub async fn node_debug_data(&self) -> DebugData {
+        self.node.clone().get_debug_data().await
     }
 }
 

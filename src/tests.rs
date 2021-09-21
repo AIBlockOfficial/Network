@@ -4,9 +4,9 @@ use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    storage_list, user_list, BlockStoredInfo, BlockchainItem, BlockchainItemMeta,
+    BlockchainItemType, CommonBlockInfo, ComputeRequest, DebugData, MinedBlockExtraInfo, Response,
+    StorageRequest, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -36,6 +36,7 @@ use sha3::Digest;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -2515,6 +2516,35 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
     test_step_complete(network).await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+pub async fn node_debug_api() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11490, 1);
+    network_config
+        .nodes_mut(NodeType::User)
+        .push("user2".to_string());
+    network_config
+        .nodes_mut(NodeType::Miner)
+        .push("miner1".to_string());
+    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
+    let mut network = Network::create_from_config(&network_config).await;
+
+    node_connect_to(&mut network, "user1", "user2").await;
+    node_connect_to(&mut network, "miner1", "storage1").await;
+
+    user_debug_api_act(&mut network, "user1").await;
+    compute_debug_api_act(&mut network, "compute1").await;
+    storage_debug_api_act(&mut network, "storage1").await;
+    miner_debug_api_act(&mut network, "miner1").await;
+
+    test_step_complete(network).await;
+}
+
 async fn create_receipt_asset_act(
     network: &mut Network,
     user: &str,
@@ -3084,6 +3114,27 @@ async fn compute_send_utxo_set(network: &mut Network, compute: &str) {
     c.send_fetched_utxo_set().await.unwrap();
 }
 
+async fn compute_debug_data(network: &mut Network, compute: &str) -> DebugData {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.node_debug_data().await
+}
+
+async fn compute_debug_api_act(network: &mut Network, compute: &str) {
+    /*user to user*/
+    let data = compute_debug_data(network, compute).await;
+    let test_api_vec: Vec<String> = user_list();
+    let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11493);
+    let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
+        String::from("127.0.0.1:11493"),
+        socket2,
+        String::from("Storage"),
+    )];
+
+    assert_eq!("Compute", data.node_type);
+    assert_eq!(test_api_vec, data.node_api);
+    assert_eq!(test_peer_vec, data.node_peers);
+}
+
 //
 // StorageNode helpers
 //
@@ -3322,6 +3373,26 @@ async fn storage_one_handle_event(
     debug!("Stop wait for event");
 }
 
+async fn storage_debug_data(network: &mut Network, storage: &str) -> DebugData {
+    let s = network.storage(storage).unwrap().lock().await;
+    s.node_debug_data().await
+}
+
+async fn storage_debug_api_act(network: &mut Network, storage: &str) {
+    /*user to user*/
+    let data = storage_debug_data(network, storage).await;
+    let test_api_vec: Vec<String> = storage_list();
+    let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
+    let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
+        String::from("127.0.0.1:11492"),
+        socket,
+        String::from("Compute"),
+    )];
+    assert_eq!("Storage", data.node_type);
+    assert_eq!(test_api_vec, data.node_api);
+    assert_eq!(test_peer_vec, data.node_peers);
+}
+
 //
 // UserNode helpers
 //
@@ -3509,6 +3580,27 @@ async fn user_send_receipt_asset(
         .unwrap();
 }
 
+async fn user_debug_data(network: &mut Network, user: &str) -> DebugData {
+    let u = network.user(user).unwrap().lock().await;
+    u.node_debug_data().await
+}
+
+async fn user_debug_api_act(network: &mut Network, user: &str) {
+    /*user to user*/
+    let data = user_debug_data(network, user).await;
+    let test_api_vec: Vec<String> = user_list();
+    let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
+    let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
+        String::from("127.0.0.1:11492"),
+        socket,
+        String::from("Compute"),
+    )];
+
+    assert_eq!("User", data.node_type);
+    assert_eq!(test_api_vec, data.node_api);
+    assert_eq!(test_peer_vec, data.node_peers);
+}
+
 //
 // MinerNode helpers
 //
@@ -3605,6 +3697,35 @@ async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &s
 async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.process_found_block_pow().await;
+}
+
+async fn miner_debug_data(network: &mut Network, miner: &str) -> DebugData {
+    let m = network.miner(miner).unwrap().lock().await;
+    m.node_debug_data().await
+}
+
+async fn miner_debug_api_act(network: &mut Network, miner: &str) {
+    /*user to user*/
+    let data = miner_debug_data(network, miner).await;
+    let test_api_vec: Vec<String> = user_list();
+    let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
+    let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11493);
+    let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![
+        (
+            String::from("127.0.0.1:11492"),
+            socket1,
+            String::from("Compute"),
+        ),
+        (
+            String::from("127.0.0.1:11493"),
+            socket2,
+            String::from("Storage"),
+        ),
+    ];
+
+    assert_eq!("Miner", data.node_type);
+    assert_eq!(test_api_vec, data.node_api);
+    assert_eq!(test_peer_vec, data.node_peers);
 }
 
 //

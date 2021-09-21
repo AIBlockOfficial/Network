@@ -85,7 +85,9 @@ use super::tcp_tls::{
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
-use crate::interfaces::{CommMessage, NodeType, Token};
+use crate::interfaces::{
+    node_type_as_str, storage_list, user_list, CommMessage, DebugData, NodeType, Token,
+};
 use crate::utils::MpscTracingSender;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -106,6 +108,7 @@ use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info_span, trace, warn, Span};
 use tracing_futures::Instrument;
+extern crate serde_json;
 
 pub type ResultBytesSender = MpscTracingSender<io::Result<Bytes>>;
 
@@ -1006,6 +1009,49 @@ impl Node {
             close_receiver_tx,
             sock_in_out_join_handles: (Some(sock_in_h), Some(sock_out_h)),
         }
+    }
+
+    pub async fn get_debug_data(&self) -> DebugData {
+        let node_type = String::from(node_type_as_str(self.node_type));
+        match self.node_type {
+            NodeType::Storage => DebugData {
+                node_type,
+                node_api: storage_list(),
+                node_peers: self.get_peer_list().await,
+            },
+            _ => DebugData {
+                node_type,
+                node_api: user_list(),
+                node_peers: self.get_peer_list().await,
+            },
+        }
+    }
+
+    pub async fn get_peer_list(&self) -> Vec<(String, SocketAddr, String)> {
+        let peer_clone = self.peers.clone();
+        let peers = peer_clone.read().await;
+        let keys = peers.keys();
+        let mut sort_keys: Vec<(String, &SocketAddr)> = Vec::new();
+        let mut return_vec: Vec<(String, SocketAddr, String)> = Vec::new();
+        for key in keys.clone() {
+            sort_keys.push((key.to_string(), key));
+        }
+        for i in 0..(sort_keys.len()) {
+            for j in 0..(sort_keys.len() - i - 1) {
+                if std::cmp::Ordering::Greater == (sort_keys[j].0).cmp(&sort_keys[j + 1].0) {
+                    sort_keys.swap(j, j + 1);
+                }
+            }
+        }
+
+        for key in sort_keys {
+            if let Ok(peertype) = self.get_peer_node_type(*key.1).await {
+                if peertype == NodeType::Compute || peertype == NodeType::Storage {
+                    return_vec.push((key.0, *key.1, String::from(node_type_as_str(peertype))));
+                }
+            }
+        }
+        return_vec
     }
 }
 

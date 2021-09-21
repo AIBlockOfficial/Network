@@ -203,6 +203,52 @@ async fn test_get_export_keypairs() {
     assert_eq!(res.body(), expected_addresses.as_bytes());
 }
 
+/// Test user get debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_debug_data() {
+    //
+    // Arrange
+    //
+    let (self_node, _self_socket) = new_self_user_node().await;
+    let request = warp::test::request().method("GET").path("/debug_data");
+    //
+    // Act
+    //
+    let filter = routes::debug_data(self_node.clone());
+    let res = request.reply(&filter).await;
+    println!("{:?}", res.body());
+
+    //
+    // Assert
+    //
+    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"make_payment\",\"make_ip_payment\",\"request_donation\",\"wallet_keypairs\",\"import_keypairs\",\"update_running_total\",\"payment_address\",\"debug_data\"],\"node_peers\":[]}";
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_string);
+}
+
+/// Test get debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_storage_debug_data() {
+    //
+    // Arrange
+    //
+    let (self_node, _self_socket) = new_self_storage_node().await;
+    let request = warp::test::request().method("GET").path("/debug_data");
+    //
+    // Act
+    //
+    let filter = routes::debug_data(self_node.clone());
+    let res = request.reply(&filter).await;
+    println!("{:?}", res.body());
+
+    //
+    // Assert
+    //
+    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"debug_data\"],\"node_peers\":[]}";
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_string);
+}
+
 /// Test GET wallet info
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_wallet_info() {
@@ -615,4 +661,14 @@ async fn test_post_update_running_total() {
         api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
+}
+
+async fn new_self_storage_node() -> (Node, SocketAddr) {
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Storage)
+        .await
+        .unwrap();
+    let self_socket = self_node.address();
+    (self_node, self_socket)
 }

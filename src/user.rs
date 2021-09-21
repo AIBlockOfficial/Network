@@ -2,8 +2,8 @@ use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
-    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, DebugData, NodeType, RbPaymentData, RbPaymentRequestData,
+    RbPaymentResponseData, Response, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
@@ -1235,6 +1235,10 @@ impl UserNode {
             reason: "Receipt asset create transaction ready",
             success: true,
         }
+    }
+
+    pub async fn node_debug_data(&self) -> DebugData {
+        self.node.clone().get_debug_data().await
     }
 }
 

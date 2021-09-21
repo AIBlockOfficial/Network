@@ -105,6 +105,13 @@ pub async fn get_latest_block(
     Ok(warp::reply::json(&last_block))
 }
 
+/// Post to update running total of connected wallet
+pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Rejection> {
+    let data = node.get_debug_data().await;
+
+    Ok(warp::reply::json(&data))
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve an item from the blockchain db by hash key
