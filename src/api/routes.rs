@@ -77,6 +77,19 @@ pub fn latest_block(
         .with(cors)
 }
 
+// GET debug data
+pub fn debug_data(
+    node: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("debug_data")
+        .and(warp::get())
+        .and(with_node_component(node))
+        .and_then(handlers::get_debug_data)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST get db item by key
@@ -294,16 +307,19 @@ pub fn user_node_routes(
         .or(request_donation(node.clone()))
         .or(export_keypairs(db.clone()))
         .or(import_keypairs(db.clone()))
-        .or(update_running_total(node))
+        .or(update_running_total(node.clone()))
         .or(payment_address(db))
+        .or(debug_data(node))
 }
 
 pub fn storage_node_routes(
     db: Arc<Mutex<SimpleDb>>,
+    node: Node,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     block_info_by_nums(db.clone())
         .or(latest_block(db.clone()))
         .or(blockchain_entry_by_key(db))
+        .or(debug_data(node))
 }
 
 pub fn compute_node_routes(

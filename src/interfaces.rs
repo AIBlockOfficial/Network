@@ -142,6 +142,17 @@ pub enum NodeType {
     PreLaunch,
 }
 
+pub fn node_type_as_str(node_type: NodeType) -> &'static str {
+    match node_type {
+        NodeType::Miner => "Miner",
+        NodeType::Compute => "Compute",
+        NodeType::Storage => "Storage",
+        NodeType::User => "User",
+        NodeType::PreLaunch => "Prelaunch",
+        _ => "The requested node is an unknown node type",
+    }
+}
+
 /// Mined block or transaction as stored in DB.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockchainItem {
@@ -360,6 +371,14 @@ pub trait StorageInterface {
     ///
     /// * `contract`    - Contract to store
     fn receive_contracts(&self, contract: Contract) -> Response;
+}
+
+pub fn storage_list() -> Vec<String> {
+    let storage_list1: String = String::from("latest_block");
+    let storage_list2: String = String::from("blockchain_entry_by_key");
+    let storage_list3: String = String::from("debug_data");
+    let storage_list: Vec<String> = vec![storage_list1, storage_list2, storage_list3];
+    storage_list
 }
 
 ///============ MINER NODE ============///
@@ -591,7 +610,30 @@ impl fmt::Debug for UserRequest {
     }
 }
 
+pub fn user_list() -> Vec<String> {
+    let user_list1: String = String::from("make_payment");
+    let user_list2: String = String::from("make_ip_payment");
+    let user_list3: String = String::from("request_donation");
+    let user_list4: String = String::from("wallet_keypairs");
+    let user_list5: String = String::from("import_keypairs");
+    let user_list6: String = String::from("update_running_total");
+    let user_list7: String = String::from("payment_address");
+    let user_list8: String = String::from("debug_data");
+    let user_list: Vec<String> = vec![
+        user_list1, user_list2, user_list3, user_list4, user_list5, user_list6, user_list7,
+        user_list8,
+    ];
+    user_list
+}
+
 ///============ PRE-LAUNCH NODE ============///
+///
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DebugData {
+    pub node_type: String,
+    pub node_api: Vec<String>,
+    pub node_peers: Vec<(String, SocketAddr, String)>,
+}
 
 /// Encapsulates storage requests
 #[derive(Deserialize, Serialize, Clone)]

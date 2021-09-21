@@ -5,8 +5,8 @@ use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, MineRequest,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, DebugData,
+    MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
@@ -1297,6 +1297,10 @@ impl ComputeNode {
                 error!("Resend partition random number to miners failed {:?}", e);
             }
         }
+    }
+
+    pub async fn node_debug_data(&self) -> DebugData {
+        self.node.clone().get_debug_data().await
     }
 }
 

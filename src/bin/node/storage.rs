@@ -53,9 +53,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());
+        let node_conn_debug = node_conn.clone();
 
         async move {
-            let serve = warp::serve(routes::storage_node_routes(db));
+            let serve = warp::serve(routes::storage_node_routes(db, node_conn_debug));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()
@@ -72,7 +73,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
-        let mut node_conn = node_conn;
+        let mut node_conn = node_conn.clone();
 
         async move {
             node.send_startup_requests().await.unwrap();

@@ -3,8 +3,8 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
-    StorageRequest,
+    BlockchainItem, ComputeRequest, DebugData, MineRequest, MinerInterface, NodeType, ProofOfWork,
+    Response, StorageRequest,
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
@@ -890,6 +890,10 @@ impl MinerNode {
             };
 
         Ok(self)
+    }
+
+    pub async fn node_debug_data(&self) -> DebugData {
+        self.node.clone().get_debug_data().await
     }
 }
 
