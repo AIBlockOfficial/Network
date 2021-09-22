@@ -51,7 +51,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Warp API
     let warp_handle = tokio::spawn({
-        let (api_addr, api_tls, tracked_utxo) = api_inputs;
+        let (api_addr, api_tls, tracked_utxo, peer) = api_inputs;
 
         println!("Warp API started on port {:?}", api_addr.port());
         println!();
@@ -60,7 +60,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::compute_node_routes(tracked_utxo));
+            let serve = warp::serve(routes::compute_node_routes(tracked_utxo, peer));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()

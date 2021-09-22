@@ -142,6 +142,7 @@ pub enum NodeType {
     PreLaunch,
 }
 
+/// Returns a string to represent the specified node type
 pub fn node_type_as_str(node_type: NodeType) -> &'static str {
     match node_type {
         NodeType::Miner => "Miner",
@@ -373,6 +374,7 @@ pub trait StorageInterface {
     fn receive_contracts(&self, contract: Contract) -> Response;
 }
 
+/// Returns a list of storage api routes
 pub fn storage_list() -> Vec<String> {
     let storage_list1: String = String::from("latest_block");
     let storage_list2: String = String::from("blockchain_entry_by_key");
@@ -448,10 +450,24 @@ pub trait MinerInterface {
 
 ///============ COMPUTE NODE ============///
 
+// Encapsulates compute requests injected by API
+#[derive(Deserialize, Serialize, Clone)]
+pub enum ComputeApiRequest {
+    SendCreateReceiptRequest {
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+    },
+}
+
 /// Encapsulates compute requests & responses.
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ComputeRequest {
+    /// Process an API internal request
+    ComputeApi(ComputeApiRequest),
+
     SendRbTransaction {
         transaction: Transaction,
     },
@@ -478,9 +494,12 @@ pub enum ComputeRequest {
 
 impl fmt::Debug for ComputeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ComputeApiRequest::*;
         use ComputeRequest::*;
 
         match *self {
+            ComputeApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
+
             SendUtxoRequest { ref address_list } => write!(f, "SendUtxoRequest"),
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
             SendPoW {
@@ -502,7 +521,7 @@ impl fmt::Debug for ComputeRequest {
 }
 
 pub trait ComputeInterface {
-    ///Fetch UTXO set for given addresses
+    /// Fetch UTXO set for given addresses
     fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response;
 
     /// Partitions a set of provided UUIDs for key creation/agreement
@@ -535,17 +554,25 @@ pub trait ComputeInterface {
 /// Encapsulates user requests injected by API
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserApiRequest {
+    /// Request to generate receipt-based asset
+    SendCreateReceiptRequest { receipt_amount: u64 },
+
+    /// Request to fetch UTXO set and update running total for specified addresses
     UpdateWalletFromUtxoSet {
         // TODO: Might need to change this request to a generic type for multiple use cases
         address_list: UtxoFetchType,
     },
-    RequestDonation {
-        paying_peer: SocketAddr,
-    },
+
+    /// Request donation
+    RequestDonation { paying_peer: SocketAddr },
+
+    /// Request to make a payment to an IP address
     MakeIpPayment {
         payment_peer: SocketAddr,
         amount: TokenAmount,
     },
+
+    /// Request to make a payment to a public key address
     MakePayment {
         address: String,
         amount: TokenAmount,
@@ -558,9 +585,6 @@ pub enum UserRequest {
     /// Process an API internal request
     UserApi(UserApiRequest),
 
-    /// Request to generate receipt-based asset
-    /// TODO: Needs to be hooked up to UserApi
-    SendCreateReceiptRequest { receipt_amount: u64 },
     /// Request to make a receipt-based payment
     SendRbPaymentRequest {
         rb_payment_request_data: RbPaymentRequestData,
@@ -594,12 +618,12 @@ impl fmt::Debug for UserRequest {
             UserApi(RequestDonation { .. }) => write!(f, "RequestDonation"),
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
+            UserApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
 
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
 
-            SendCreateReceiptRequest { .. } => write!(f, "SendCreateReceiptRequest"),
             SendRbPaymentRequest { .. } => write!(f, "SendRbPaymentRequest"),
             SendRbPaymentResponse { .. } => write!(f, "SendRbPaymentResponse"),
 
@@ -610,6 +634,7 @@ impl fmt::Debug for UserRequest {
     }
 }
 
+/// Returns a vector of user API routes
 pub fn user_list() -> Vec<String> {
     let user_list1: String = String::from("make_payment");
     let user_list2: String = String::from("make_ip_payment");

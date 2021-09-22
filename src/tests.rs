@@ -2294,6 +2294,59 @@ pub async fn create_receipt_asset_raft_1_node() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+pub async fn create_receipt_asset_on_compute_raft_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11460, 1);
+    network_config.compute_seed_utxo = BTreeMap::new();
+    let mut network = Network::create_from_config(&network_config).await;
+    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    network_config.compute_seed_utxo =
+        make_compute_seed_utxo_with_info(&[("000000", vec![(COMMON_PUB_KEY, TokenAmount(0))])]);
+    create_first_block_act(&mut network).await;
+
+    //
+    // Act
+    //
+    let asset_hash = hex::encode(Sha3_256::digest(&serialize(&Asset::Receipt(1)).unwrap()));
+    let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
+    let secret_key = SecretKey::from_slice(&sk_slice).unwrap();
+    let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
+
+    compute_create_receipt_asset_tx(
+        &mut network,
+        "compute1",
+        1,
+        COMMON_PUB_ADDR.to_string(),
+        COMMON_PUB_KEY.to_string(),
+        signature,
+    )
+    .await;
+
+    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+    create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
+
+    let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+    let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
+        .into_iter()
+        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .collect();
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        actual_utxo_receipt,
+        node_all(compute_nodes, vec![Asset::Receipt(1)])
+    );
+
+    test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 pub async fn make_receipt_based_payment_raft_1_node() {
     test_step_start();
 
@@ -2553,6 +2606,19 @@ async fn create_receipt_asset_act(
 ) {
     user_send_receipt_asset(network, user, compute, receipt_amount).await;
     compute_handle_event(network, compute, "Transactions added to tx pool").await;
+}
+
+async fn compute_create_receipt_asset_tx(
+    network: &mut Network,
+    compute: &str,
+    receipt_amount: u64,
+    script_public_key: String,
+    public_key: String,
+    signature: String,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.create_receipt_asset_tx(receipt_amount, script_public_key, public_key, signature)
+        .await;
 }
 
 async fn make_receipt_based_payment_act(

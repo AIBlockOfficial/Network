@@ -5,15 +5,16 @@ use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeInterface, ComputeRequest, Contract, DebugData,
-    MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet,
+    BlockStoredInfo, CommonBlockInfo, ComputeApiRequest, ComputeInterface, ComputeRequest,
+    Contract, DebugData, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response,
+    StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
 use crate::utils::{
-    concat_merkle_coinbase, format_parition_pow_address, generate_pow_random_num,
-    get_partition_entry_key, serialize_hashblock_for_pow, validate_pow_block,
-    validate_pow_for_address, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
+    generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow,
+    validate_pow_block, validate_pow_for_address, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
@@ -149,6 +150,7 @@ pub struct ComputeNode {
         SocketAddr,
         Option<TlsPrivateInfo>,
         Arc<Mutex<TrackedUtxoSet>>,
+        Node,
     ),
 }
 
@@ -185,6 +187,7 @@ impl ComputeNode {
         };
 
         let utxo_set_empty = Arc::new(Mutex::new(TrackedUtxoSet::new(BTreeMap::new())));
+        let api_info = (api_addr, api_tls_info, utxo_set_empty.clone(), node.clone());
 
         Ok(ComputeNode {
             node,
@@ -205,7 +208,7 @@ impl ComputeNode {
             user_notification_list: Default::default(),
             coordiated_shudown: u64::MAX,
             shutdown_group,
-            api_info: (api_addr, api_tls_info, utxo_set_empty.clone()),
+            api_info,
             current_utxo_set: utxo_set_empty,
             fetched_utxo_set: None,
         }
@@ -222,6 +225,7 @@ impl ComputeNode {
         &self.current_mined_block
     }
 
+    /// Injects a new event into compute node
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -311,6 +315,7 @@ impl ComputeNode {
         SocketAddr,
         Option<TlsPrivateInfo>,
         Arc<Mutex<TrackedUtxoSet>>,
+        Node,
     ) {
         self.api_info.clone()
     }
@@ -819,6 +824,7 @@ impl ComputeNode {
         trace!("handle_request");
 
         match req {
+            ComputeApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoRequest { address_list } => Some(self.fetch_utxo_set(peer, address_list)),
             SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
@@ -840,6 +846,42 @@ impl ComputeNode {
                 None
             }
             SendRbTransaction { transaction } => Some(self.process_dde_tx(transaction).await),
+        }
+    }
+
+    /// Handles an API internal request.
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Peer sending the request.
+    /// * `req`  - Request to execute
+    async fn handle_api_request(
+        &mut self,
+        peer: SocketAddr,
+        req: ComputeApiRequest,
+    ) -> Option<Response> {
+        use ComputeApiRequest::*;
+
+        if peer != self.address() {
+            // Do not process if not internal request
+            return None;
+        }
+
+        match req {
+            SendCreateReceiptRequest {
+                receipt_amount,
+                script_public_key,
+                public_key,
+                signature,
+            } => {
+                self.create_receipt_asset_tx(
+                    receipt_amount,
+                    script_public_key,
+                    public_key,
+                    signature,
+                )
+                .await
+            }
         }
     }
 
@@ -1295,6 +1337,37 @@ impl ComputeNode {
             info!("Resend partition random number to miners");
             if let Err(e) = self.flood_rand_num_to_requesters().await {
                 error!("Resend partition random number to miners failed {:?}", e);
+            }
+        }
+    }
+
+    /// Create a receipt asset transaction from data received
+    ///
+    /// ### Arguments
+    ///
+    /// * `receipt_amount`      - Amount of receipt assets
+    /// * `script_public_key`   - Public address key
+    /// * `public_key`          - Public key
+    /// * `signature`           - Signature
+    pub async fn create_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+    ) -> Option<Response> {
+        let b_num = self.node_raft.get_current_block_num();
+        match create_receipt_asset_tx_from_sig(
+            b_num,
+            receipt_amount,
+            script_public_key,
+            public_key,
+            signature,
+        ) {
+            Ok(tx) => Some(self.receive_transactions(vec![tx])),
+            Err(e) => {
+                error!("Error creating receipt asset transaction: {:?}", e);
+                None
             }
         }
     }
