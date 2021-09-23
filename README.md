@@ -67,12 +67,14 @@ cargo build --release
 
 This will compile everything into a release state, from which you can then run your nodes locally. The following are example commands for each type to get you up and running quickly:
 
-- **Compute**: `RUST_LOG="$COMPUTE_LOG" target/release/compute --config=src/bin/node_settings_local_raft_1.toml`
-- **Storage**: `RUST_LOG=warp target/release/storage --config=src/bin/node_settings_local_raft_1.toml`
-- **Miner**: `RUST_LOG="$MINER_LOG" target/release/user --config=src/bin/node_settings_local_raft_1.toml`
-- **User**: `RUST_LOG=warp target/release/user --config=src/bin/node_settings_local_raft_1.toml`
+- **Compute**: `RUST_LOG=warp target/release/node compute --config=src/bin/node_settings_local_raft_1.toml`
+- **Storage**: `RUST_LOG=warp target/release/node storage --config=src/bin/node_settings_local_raft_1.toml`
+- **Miner**: `RUST_LOG=warp target/release/node miner --config=src/bin/node_settings_local_raft_1.toml`
+- **User**: `RUST_LOG=warp target/release/node user --config=src/bin/node_settings_local_raft_1.toml`
 
-You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (eg. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs.
+You can provide a number of flags to the command depending on the type of node, and you can view information on the available flags for each node type by running the compiled binary with the `--help` flag (eg. `target/release/storage --help`). You can also run a full, 1 node system in your local environment by running `sh src/bin/node_settings_local_raft_1_run.sh` and perusing the generated logs. 
+
+If you run into TLS problems on the API routes, you can pass `--api_use_tls=0` to the shell script in order to disable TLS. **Note that this will create a security concern**, so it's best not to use this too frequently or for anything public facing.
 
 ..
 
