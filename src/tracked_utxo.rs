@@ -59,24 +59,20 @@ impl TrackedUtxoSet {
 
     /// Calculates the balance of `OutPoint`s based on provided addresses
     pub fn get_balance_for_addresses(&self, addresses: &[String]) -> TrackedUtxoBalance {
-        let address_list: BTreeMap<String, u64> = addresses
-            .iter()
-            .filter_map(|addr| {
-                self.get_pk_cache_vec(addr).map(|ops| {
-                    ops.iter()
-                        .map(|op| (addr, op))
-                        .collect::<Vec<(&String, &OutPoint)>>()
-                })
-            })
-            .flatten()
-            .filter_map(|(addr, op)| match self.base.get(op) {
-                Some(tx_out) => match tx_out.value {
-                    Asset::Token(t) => Some((addr.clone(), t.0)),
-                    _ => None,
-                },
-                None => None,
-            })
-            .collect();
+        let mut address_list: BTreeMap<String, u64> =
+            addresses.iter().map(|a| (a.clone(), 0_u64)).collect();
+
+        for (addr, balance) in address_list.iter_mut() {
+            if let Some(ops) = self.get_pk_cache_vec(addr) {
+                for op in ops {
+                    let t_out = self.base.get(op).unwrap();
+
+                    if let Asset::Token(t) = t_out.value {
+                        *balance += t.0;
+                    }
+                }
+            }
+        }
 
         let total = address_list
             .values()
