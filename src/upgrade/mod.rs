@@ -63,6 +63,13 @@ pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
 /// Result wrapper for upgrade errors
 pub type Result<T> = std::result::Result<T, UpgradeError>;
 
+/// Status info on the upgrade
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpgradeStatus {
+    pub last_block_num: Option<u64>,
+    pub last_raft_block_num: Option<u64>,
+}
+
 /// Configuration passed in to drive upgrade
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbCfg {
@@ -148,11 +155,11 @@ pub fn get_upgrade_compute_db(
 pub fn upgrade_compute_db(
     mut dbs: ExtraNodeParams,
     upgrade_cfg: &UpgradeCfg,
-) -> Result<ExtraNodeParams> {
+) -> Result<(ExtraNodeParams, UpgradeStatus)> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
-    let (batch, raft_batch) = upgrade_compute_db_batch(
+    let (batch, raft_batch, status) = upgrade_compute_db_batch(
         (db, raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
         upgrade_cfg,
@@ -161,7 +168,7 @@ pub fn upgrade_compute_db(
 
     db.write(batch)?;
     raft_db.write(raft_batch)?;
-    Ok(dbs)
+    Ok((dbs, status))
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -169,7 +176,12 @@ pub fn upgrade_compute_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
     upgrade_cfg: &UpgradeCfg,
-) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
+) -> Result<(
+    SimpleDbWriteBatch<'a>,
+    SimpleDbWriteBatch<'a>,
+    UpgradeStatus,
+)> {
+    let mut status = UpgradeStatus::default();
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     batch.put_cf(compute::DB_COL_INTERNAL, compute::RAFT_KEY_RUN, key_run()?);
@@ -191,6 +203,7 @@ pub fn upgrade_compute_db_batch<'a>(
             Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
         );
 
+        status.last_raft_block_num = consensus.tx_current_block_num;
         match upgrade_cfg.db_cfg {
             DbCfg::ComputeBlockInStorage => {
                 // Already mined block it would have been discarded when PoW found.
@@ -218,7 +231,7 @@ pub fn upgrade_compute_db_batch<'a>(
         Ok(serialize(&consensus)?)
     })?;
 
-    Ok((batch, raft_batch))
+    Ok((batch, raft_batch, status))
 }
 
 /// Update the database to be as if it had just been upgraded
@@ -289,11 +302,11 @@ pub fn get_upgrade_storage_db(
 pub fn upgrade_storage_db(
     mut dbs: ExtraNodeParams,
     upgrade_cfg: &UpgradeCfg,
-) -> Result<ExtraNodeParams> {
+) -> Result<(ExtraNodeParams, UpgradeStatus)> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
-    let (batch, raft_batch) = upgrade_storage_db_batch(
+    let (batch, raft_batch, status) = upgrade_storage_db_batch(
         (db, raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
         upgrade_cfg,
@@ -302,7 +315,7 @@ pub fn upgrade_storage_db(
 
     db.write(batch)?;
     raft_db.write(raft_batch)?;
-    Ok(dbs)
+    Ok((dbs, status))
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -310,7 +323,12 @@ pub fn upgrade_storage_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
     upgrade_cfg: &UpgradeCfg,
-) -> Result<(SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>)> {
+) -> Result<(
+    SimpleDbWriteBatch<'a>,
+    SimpleDbWriteBatch<'a>,
+    UpgradeStatus,
+)> {
+    let mut status = UpgradeStatus::default();
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     batch.put_cf(storage::DB_COL_INTERNAL, storage::RAFT_KEY_RUN, key_run()?);
@@ -358,6 +376,7 @@ pub fn upgrade_storage_db_batch<'a>(
     }
 
     let last_block_stored = if let Some((block_num, key, pointer)) = max_block {
+        status.last_block_num = Some(block_num);
         storage::put_named_last_block_to_block_chain(&mut batch, &pointer);
         storage::put_contiguous_block_num(&mut batch, block_num);
 
@@ -397,12 +416,14 @@ pub fn upgrade_storage_db_batch<'a>(
             tracked_deserialize("StorageConsensused", k, &v)?,
             Some(last_block_stored.clone()),
         );
+        status.last_raft_block_num = Some(consensus.current_block_num);
+
         let consensus = storage_raft::StorageConsensused::from_import(consensus)
             .with_peers_len(upgrade_cfg.raft_len);
         Ok(serialize(&consensus)?)
     })?;
 
-    Ok((batch, raft_batch))
+    Ok((batch, raft_batch, status))
 }
 
 /// Update the database to be as if it had just been upgraded
@@ -443,7 +464,7 @@ pub fn upgrade_same_version_storage_db(mut dbs: ExtraNodeParams) -> Result<Extra
 fn clean_raft_db(
     raft_db: &SimpleDb,
     raft_batch: &mut SimpleDbWriteBatch,
-    convert: impl Fn(&[u8], Vec<u8>) -> Result<Vec<u8>>,
+    mut convert: impl FnMut(&[u8], Vec<u8>) -> Result<Vec<u8>>,
 ) -> Result<()> {
     for (key, value) in raft_db.iter_cf_clone(DB_COL_DEFAULT) {
         raft_batch.delete_cf(DB_COL_DEFAULT, &key);
@@ -504,11 +525,12 @@ pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Resul
 pub fn upgrade_wallet_db(
     mut dbs: ExtraNodeParams,
     upgrade_cfg: &UpgradeCfg,
-) -> Result<ExtraNodeParams> {
+) -> Result<(ExtraNodeParams, UpgradeStatus)> {
     let db = dbs.wallet_db.as_mut().unwrap();
-    let batch = upgrade_wallet_db_batch(db, db.batch_writer(), upgrade_cfg)?.done();
+    let (batch, status) = upgrade_wallet_db_batch(db, db.batch_writer(), upgrade_cfg)?;
+    let batch = batch.done();
     db.write(batch)?;
-    Ok(dbs)
+    Ok((dbs, status))
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
@@ -516,7 +538,7 @@ pub fn upgrade_wallet_db_batch<'a>(
     db: &SimpleDb,
     mut batch: SimpleDbWriteBatch<'a>,
     upgrade_cfg: &UpgradeCfg,
-) -> Result<SimpleDbWriteBatch<'a>> {
+) -> Result<(SimpleDbWriteBatch<'a>, UpgradeStatus)> {
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let passphrase = upgrade_cfg.passphrase.as_bytes();
@@ -554,7 +576,7 @@ pub fn upgrade_wallet_db_batch<'a>(
         }
     }
 
-    Ok(batch)
+    Ok((batch, UpgradeStatus::default()))
 }
 
 /// Update the database to be as if it had just been upgraded

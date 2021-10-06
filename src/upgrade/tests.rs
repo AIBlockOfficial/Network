@@ -3,6 +3,7 @@ use super::tests_last_version_db_no_block;
 use super::{
     dump_db, get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old,
     upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbCfg, UpgradeCfg, UpgradeError,
+    UpgradeStatus,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
 use crate::constants::{DB_VERSION_KEY, LAST_BLOCK_HASH_KEY, NETWORK_VERSION_SERIALIZED};
@@ -119,7 +120,7 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     // Act
     //
     let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
-    let db = upgrade_node_db(&n_info, db, &upgrade_cfg).unwrap();
+    let (db, status) = upgrade_node_db(&n_info, db, &upgrade_cfg).unwrap();
     let db = open_as_new_node_db(&n_info, in_memory(db)).unwrap();
 
     network.add_extra_params(name, in_memory(db));
@@ -150,6 +151,8 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let b_num = compute.get_committed_current_block_num();
             assert_eq!(b_num, expected_b_num);
             assert_eq!(compute.get_request_list(), &Default::default());
+            assert_eq!(status.last_block_num, None);
+            assert_eq!(status.last_raft_block_num, expected_b_num);
         }
         NodeType::Storage => {
             let storage = network.storage(name).unwrap().lock().await;
@@ -181,6 +184,8 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                     storage.get_last_block_stored(),
                     &Some(get_expected_last_block_stored())
                 );
+                assert_eq!(status.last_block_num, Some(LAST_BLOCK_STORED_NUM));
+                assert_eq!(status.last_raft_block_num, Some(LAST_BLOCK_STORED_NUM + 1));
             }
         }
         NodeType::User => {
@@ -385,7 +390,7 @@ async fn upgrade_restart_network_common(
         let n_info = network.get_node_info(&name).unwrap();
         let db = create_old_node_db(n_info, upgrade_cfg.db_cfg);
         let db = get_upgrade_node_db(n_info, in_memory(db)).unwrap();
-        let db = upgrade_node_db(n_info, db, &upgrade_cfg).unwrap();
+        let (db, _) = upgrade_node_db(n_info, db, &upgrade_cfg).unwrap();
         let db = filter_dbs(db, params_filters.get(&name).unwrap_or(&KEEP_ALL_FILTER));
         network.add_extra_params(&name, in_memory(db));
     }
@@ -606,7 +611,7 @@ pub fn upgrade_node_db(
     info: &NetworkNodeInfo,
     dbs: ExtraNodeParams,
     upgrade_cfg: &UpgradeCfg,
-) -> Result<ExtraNodeParams, UpgradeError> {
+) -> Result<(ExtraNodeParams, UpgradeStatus), UpgradeError> {
     match info.node_type {
         NodeType::Compute => upgrade_compute_db(dbs, upgrade_cfg),
         NodeType::Storage => upgrade_storage_db(dbs, upgrade_cfg),
