@@ -295,8 +295,32 @@ pub fn fetch_utxo_balance(
         .with(cors)
 }
 
-//======= NODE ROUTES =======//
+// POST create receipt-based asset transaction
+pub fn create_receipt_asset(
+    peer: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
 
+    warp::path("create_receipt_asset")
+        .and(warp::post())
+        .and(with_node_component(peer))
+        .and(warp::body::json())
+        .and_then(handlers::post_create_receipt_asset)
+        .with(cors)
+}
+
+//======= NODE ROUTES =======//
+//TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 pub fn user_node_routes(
     db: WalletDb,
     node: Node,
@@ -308,6 +332,7 @@ pub fn user_node_routes(
         .or(export_keypairs(db.clone()))
         .or(import_keypairs(db.clone()))
         .or(update_running_total(node.clone()))
+        .or(create_receipt_asset(node.clone()))
         .or(payment_address(db))
         .or(debug_data(node))
 }
@@ -324,6 +349,7 @@ pub fn storage_node_routes(
 
 pub fn compute_node_routes(
     tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    peer: Node,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    fetch_utxo_balance(tracked_utxo)
+    fetch_utxo_balance(tracked_utxo).or(create_receipt_asset(peer))
 }

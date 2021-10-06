@@ -44,9 +44,9 @@ RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/n
 s1=$!
 RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_local_raft_2.toml --api_port=3002 > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --index=1 > compute_1.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3003 > compute_1.log 2>&1 &
 c1=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --api_port=3004 > compute_0.log 2>&1 &
 c0=$!
 RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=5 --compute_index=1 > miner_5.log 2>&1 &
 m5=$!

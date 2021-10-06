@@ -575,6 +575,15 @@ impl ComputeRaft {
         self.consensused.get_mining_block()
     }
 
+    /// Current block number
+    pub fn get_current_block_num(&self) -> u64 {
+        if let Some(block) = self.consensused.get_mining_block() {
+            block.header.b_num
+        } else {
+            0
+        }
+    }
+
     /// Current utxo_set returned as `UtxoSet` including block being mined
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         self.consensused.get_committed_utxo_set()

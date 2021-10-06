@@ -474,9 +474,6 @@ impl UserNode {
         match req {
             UserApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
-            SendCreateReceiptRequest { receipt_amount } => {
-                Some(self.generate_receipt_asset_tx(receipt_amount).await)
-            }
             SendAddressRequest => Some(self.receive_payment_address_request(peer)),
             SendPaymentTransaction { transaction } => {
                 Some(self.receive_payment_transaction(transaction).await)
@@ -534,6 +531,9 @@ impl UserNode {
             }
             MakePayment { address, amount } => {
                 Some(self.make_payment_transactions(None, address, amount).await)
+            }
+            SendCreateReceiptRequest { receipt_amount } => {
+                Some(self.generate_receipt_asset_tx(receipt_amount).await)
             }
         }
     }

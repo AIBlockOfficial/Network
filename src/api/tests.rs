@@ -1,18 +1,22 @@
-use crate::api::handlers::{Addresses, EncapsulatedPayment, PublicKeyAddresses};
+use crate::api::handlers::{
+    Addresses, CreateReceiptAssetData, EncapsulatedPayment, PublicKeyAddresses,
+};
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, NodeType, StoredSerializingBlock, UserApiRequest, UserRequest,
-    UtxoFetchType,
+    BlockchainItemMeta, ComputeApiRequest, NodeType, StoredSerializingBlock, UserApiRequest,
+    UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::wallet::WalletDb;
+use crate::wallet::{AddressStore, WalletDb};
+use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
+use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
@@ -118,8 +122,13 @@ fn success_json() -> (StatusCode, HeaderMap) {
     (StatusCode::from_u16(200).unwrap(), headers)
 }
 
-fn api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
+fn user_api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
     let sent_request = UserRequest::UserApi(request);
+    Some(serialize(&sent_request).unwrap())
+}
+
+fn compute_api_request_as_frame(request: ComputeApiRequest) -> Option<Vec<u8>> {
+    let sent_request = ComputeRequest::ComputeApi(request);
     Some(serialize(&sent_request).unwrap())
 }
 
@@ -132,6 +141,26 @@ async fn new_self_user_node() -> (Node, SocketAddr) {
     let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
     let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
+        .await
+        .unwrap();
+    let self_socket = self_node.address();
+    (self_node, self_socket)
+}
+
+async fn new_self_storage_node() -> (Node, SocketAddr) {
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Storage)
+        .await
+        .unwrap();
+    let self_socket = self_node.address();
+    (self_node, self_socket)
+}
+
+async fn new_self_compute_node() -> (Node, SocketAddr) {
+    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
+    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Compute)
         .await
         .unwrap();
     let self_socket = self_node.address();
@@ -457,7 +486,7 @@ async fn test_post_make_payment() {
 
     // Frame expected
     let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
-    let expected_frame = api_request_as_frame(UserApiRequest::MakePayment { address, amount });
+    let expected_frame = user_api_request_as_frame(UserApiRequest::MakePayment { address, amount });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
 }
@@ -506,7 +535,7 @@ async fn test_post_make_ip_payment() {
         encapsulated_data.address.parse::<SocketAddr>().unwrap(),
         encapsulated_data.amount,
     );
-    let expected_frame = api_request_as_frame(UserApiRequest::MakeIpPayment {
+    let expected_frame = user_api_request_as_frame(UserApiRequest::MakeIpPayment {
         payment_peer,
         amount,
     });
@@ -545,7 +574,7 @@ async fn test_post_request_donation() {
     assert_eq!(res.body(), "\"Donation processing\"");
 
     // Frame expected
-    let expected_frame = api_request_as_frame(UserApiRequest::RequestDonation { paying_peer });
+    let expected_frame = user_api_request_as_frame(UserApiRequest::RequestDonation { paying_peer });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
 }
@@ -658,17 +687,203 @@ async fn test_post_update_running_total() {
 
     // Expected Frame
     let expected_frame =
-        api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
+        user_api_request_as_frame(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
 }
 
-async fn new_self_storage_node() -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Storage)
-        .await
-        .unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_receipt_asset_tx_compute() {
+    //
+    // Arrange
+    //
+    let (mut self_node, self_socket) = new_self_compute_node().await;
+
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::new());
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let (
+        script_public_key,
+        AddressStore {
+            public_key,
+            secret_key,
+        },
+    ) = db.generate_payment_address().await;
+
+    let asset_hash = hex::encode(Sha3_256::digest(&serialize(&Asset::Receipt(1)).unwrap()));
+    let public_key = hex::encode(public_key.as_ref());
+    let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
+
+    let json_body = CreateReceiptAssetData {
+        receipt_amount: 1,
+        script_public_key: Some(script_public_key),
+        public_key: Some(public_key),
+        signature: Some(signature),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_receipt_asset")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_receipt_asset(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "\"Creating receipt asset\"");
+
+    // Expected Frame
+    let expected_frame =
+        compute_api_request_as_frame(ComputeApiRequest::SendCreateReceiptRequest {
+            receipt_amount: json_body.receipt_amount,
+            script_public_key: json_body.script_public_key.unwrap(),
+            public_key: json_body.public_key.unwrap(),
+            signature: json_body.signature.unwrap(),
+        });
+
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
+}
+
+/// Test POST create receipt asset on user node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_receipt_asset_tx_user() {
+    //
+    // Arrange
+    //
+    let (mut self_node, self_socket) = new_self_user_node().await;
+
+    let json_body = CreateReceiptAssetData {
+        receipt_amount: 1,
+        script_public_key: None,
+        public_key: None,
+        signature: None,
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_receipt_asset")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_receipt_asset(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "\"Creating receipt asset\"");
+
+    // Expected Frame
+    let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
+        receipt_amount: json_body.receipt_amount,
+    });
+
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
+}
+
+/// Test POST create receipt asset on compute node failure
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_receipt_asset_tx_compute_failure() {
+    //
+    // Arrange
+    //
+    let (self_node, self_socket) = new_self_compute_node().await;
+
+    let json_body = CreateReceiptAssetData {
+        receipt_amount: 1,
+        // These fields should be occupied for compute node
+        script_public_key: None,
+        public_key: None,
+        signature: None,
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_receipt_asset")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_receipt_asset(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+
+    assert_eq!(res.status(), 500);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
+}
+
+/// Test POST create receipt asset on user node failure
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_receipt_asset_tx_user_failure() {
+    //
+    // Arrange
+    //
+    let (self_node, self_socket) = new_self_user_node().await;
+
+    let json_body = CreateReceiptAssetData {
+        receipt_amount: 1,
+        // These fields should be empty for user node
+        script_public_key: Some(String::new()),
+        public_key: Some(String::new()),
+        signature: Some(String::new()),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_receipt_asset")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_receipt_asset(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+
+    assert_eq!(res.status(), 500);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
 }

@@ -8,8 +8,7 @@ use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
 use naom::crypto::secretbox_chacha20_poly1305::Key;
-use naom::crypto::sign_ed25519 as sign;
-use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
+use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use naom::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_merkle_tree, Block},
@@ -51,6 +50,26 @@ pub enum LocalEvent {
 pub enum ResponseResult {
     Exit,
     Continue,
+}
+
+/// Trivial enum for failure to create receipt asset tx
+/// on the compute node.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone)]
+pub enum ComputeReceiptAssetCreateErr {
+    HashingError,
+    HexDecodeError,
+    KeyDerivationError,
+}
+
+impl fmt::Display for ComputeReceiptAssetCreateErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            ComputeReceiptAssetCreateErr::HashingError => write!(f, "HashingError"),
+            ComputeReceiptAssetCreateErr::HexDecodeError => write!(f, "HexDecodeError"),
+            ComputeReceiptAssetCreateErr::KeyDerivationError => write!(f, "KeyDerivationError"),
+        }
+    }
 }
 
 pub struct MpscTracingSender<T> {
@@ -934,4 +953,45 @@ pub fn concat_maps<K: Clone + Ord, V: Clone>(
         .chain(m2.iter())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
+}
+
+/// Create a new receipt asset transaction (only used on Compute node)
+///
+/// ### Arguments
+///
+/// * `receipt_amount`      - Receipt amount
+/// * `script_public_key`   - Public address key
+/// * `public key`          - Public key
+/// * `signature`           - Signature
+pub fn create_receipt_asset_tx_from_sig(
+    b_num: u64,
+    receipt_amount: u64,
+    script_public_key: String,
+    public_key: String,
+    signature: String,
+) -> Result<Transaction, ComputeReceiptAssetCreateErr> {
+    let tx_out = TxOut::new_receipt_amount(script_public_key, receipt_amount);
+
+    let asset_hash = hex::encode(Sha3_256::digest(
+        &serialize(&Asset::Receipt(receipt_amount))
+            .map_err(|_| ComputeReceiptAssetCreateErr::HashingError)?,
+    ));
+
+    let (pk_slice, sig_slice) = (
+        hex::decode(public_key).map_err(|_| ComputeReceiptAssetCreateErr::HexDecodeError)?,
+        hex::decode(signature).map_err(|_| ComputeReceiptAssetCreateErr::HexDecodeError)?,
+    );
+
+    let (public_key, signature) = (
+        PublicKey::from_slice(&pk_slice).ok_or(ComputeReceiptAssetCreateErr::KeyDerivationError)?,
+        Signature::from_slice(&sig_slice)
+            .ok_or(ComputeReceiptAssetCreateErr::KeyDerivationError)?,
+    );
+
+    let tx_in = TxIn {
+        previous_out: None,
+        script_signature: Script::new_create_asset(b_num, asset_hash, signature, public_key),
+    };
+
+    Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
 }

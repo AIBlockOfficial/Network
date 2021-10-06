@@ -70,12 +70,12 @@ if [ "$USE_TEST_GROUPS" = "1" ]
 then
     RUST_LOG="$COMPUTE_LOG" sg test_c2 "target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=2" > compute_2.log 2>&1 &
 else
-    RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=2 > compute_2.log 2>&1 &
+    RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=2 --api_port=3004 > compute_2.log 2>&1 &
     c2=$!
 fi
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=1 > compute_1.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --index=1 --api_port=3005 > compute_1.log 2>&1 &
 c1=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_3.toml --api_port=3006 > compute_0.log 2>&1 &
 c0=$!
 
 RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_3.toml  --index=8 --compute_index=2 > miner_8.log 2>&1 &

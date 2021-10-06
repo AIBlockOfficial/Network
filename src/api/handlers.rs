@@ -1,18 +1,20 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::{StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType};
+use crate::interfaces::{
+    node_type_as_str, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
+    UserApiRequest, UserRequest, UtxoFetchType,
+};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::DeserializedBlockchainItem;
 use crate::wallet::WalletDb;
-
-use serde_json::json;
-
+use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
@@ -44,19 +46,23 @@ struct WalletInfo {
 pub struct PublicKeyAddresses {
     pub address_list: Vec<String>,
 }
-
-/// Ciphered data received from client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncapsulatedData {
-    pub ciphered_message: Vec<u8>,
-}
-
 /// Encapsulated payment received from client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncapsulatedPayment {
     pub address: String,
     pub amount: TokenAmount,
     pub passphrase: String,
+}
+/// Receipt asset creation structure received from client
+///
+/// This structure is used to create a receipt asset on EITHER
+/// the compute or user node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReceiptAssetData {
+    pub receipt_amount: u64,
+    pub script_public_key: Option<String>, /* Not used by user Node */
+    pub public_key: Option<String>,        /* Not used by user Node */
+    pub signature: Option<String>,         /* Not used by user Node */
 }
 
 //======= GET HANDLERS =======//
@@ -280,4 +286,58 @@ pub async fn post_fetch_utxo_balance(
     let balances = tutxo.get_balance_for_addresses(&addresses.address_list);
 
     Ok(warp::reply::json(&json!(balances)))
+}
+
+/// Post to create a receipt asset transaction on EITHER Compute or User node type
+pub async fn post_create_receipt_asset(
+    peer: Node,
+    create_receipt_asset_data: CreateReceiptAssetData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let CreateReceiptAssetData {
+        receipt_amount,
+        script_public_key,
+        public_key,
+        signature,
+    } = create_receipt_asset_data;
+
+    let DebugData {
+        node_type,
+        node_api: _,
+        node_peers: _,
+    } = peer.get_debug_data().await;
+
+    let all_some = script_public_key.is_some() && public_key.is_some() && signature.is_some();
+    let all_none = script_public_key.is_none() && public_key.is_none() && signature.is_none();
+
+    if node_type == node_type_as_str(NodeType::User) && all_none {
+        // Create receipt tx on the user node
+        let request =
+            UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
+        if let Err(e) = peer.inject_next_event(peer.address(), request) {
+            error!("route:post_create_receipt_asset error: {:?}", e);
+            return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
+        }
+    } else if node_type == node_type_as_str(NodeType::Compute) && all_some {
+        // Create receipt tx on the compute node
+        let (script_public_key, public_key, signature) = (
+            script_public_key.unwrap_or_default(),
+            public_key.unwrap_or_default(),
+            signature.unwrap_or_default(),
+        );
+
+        let request = ComputeRequest::ComputeApi(ComputeApiRequest::SendCreateReceiptRequest {
+            receipt_amount,
+            script_public_key,
+            public_key,
+            signature,
+        });
+
+        if let Err(e) = peer.inject_next_event(peer.address(), request) {
+            error!("route:post_create_receipt_asset error: {:?}", e);
+            return Err(warp::reject::custom(errors::ErrorCannotAccessComputeNode));
+        }
+    } else {
+        return Err(warp::reject::custom(errors::ErrorInvalidJSONStructure));
+    }
+    Ok(warp::reply::json(&"Creating receipt asset".to_owned()))
 }
