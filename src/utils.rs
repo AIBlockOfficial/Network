@@ -17,7 +17,8 @@ use naom::primitives::{
 use naom::script::{lang::Script, StackEntry};
 use naom::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    construct_tx_hash, construct_tx_in_signable_hash, get_tx_out_with_out_point,
+    get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -574,7 +575,7 @@ pub fn create_valid_transaction_with_ins_outs(
         let mut tx_in_cons = Vec::new();
         for (prev_n, t_hash_hex) in tx_in {
             let signable = OutPoint::new(t_hash_hex.to_string(), *prev_n);
-            let signable_h = hex::encode(serialize(&signable).unwrap());
+            let signable_h = construct_tx_in_signable_hash(&signable);
 
             let signature = sign::sign_detached(signable_h.as_bytes(), secret_key);
             tx_in_cons.push(TxConstructor {
