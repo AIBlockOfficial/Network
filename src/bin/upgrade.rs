@@ -78,14 +78,27 @@ fn process_upgrade(
     for (node_type, mode) in db_modes {
         println!("Upgrade Database {}, {:?}", node_type, mode);
         let extra = Default::default();
-        match node_type.as_str() {
+        let (_, status) = match node_type.as_str() {
             "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, extra)?, &upgrade_cfg)?,
             "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, extra)?, &upgrade_cfg)?,
             "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
             "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
             _ => return Err(UpgradeError::ConfigError("Type does not exists")),
         };
-        println!("Done Upgrade Database {}, {:?}", node_type, mode);
+
+        let last_block_num = status.last_block_num.as_ref();
+        let last_raft_block_num = status.last_raft_block_num.as_ref();
+        println!(
+            "Done Upgrade Database {}, {:?} {}{}",
+            node_type,
+            mode,
+            last_block_num
+                .map(|num| format!("(Block processed: {})", num))
+                .unwrap_or_else(String::new),
+            last_raft_block_num
+                .map(|num| format!("(Block waited for: {})", num))
+                .unwrap_or_else(String::new),
+        );
     }
     Ok(())
 }
