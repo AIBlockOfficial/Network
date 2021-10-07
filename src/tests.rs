@@ -2300,7 +2300,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11460, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11465, 1);
     network_config.compute_seed_utxo = BTreeMap::new();
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
