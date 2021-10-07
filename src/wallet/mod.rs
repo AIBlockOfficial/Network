@@ -665,8 +665,7 @@ pub fn tx_constructor_from_prev_out(
     let signature = sign::sign_detached(hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
-        t_hash: out_p.t_hash.clone(),
-        prev_n: out_p.n,
+        previous_out: out_p.clone(),
         signatures: vec![signature],
         pub_keys: vec![needed_store.public_key],
     };

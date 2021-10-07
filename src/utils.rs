@@ -578,8 +578,7 @@ pub fn create_valid_transaction_with_ins_outs(
 
             let signature = sign::sign_detached(signable_h.as_bytes(), secret_key);
             tx_in_cons.push(TxConstructor {
-                t_hash: t_hash_hex.to_string(),
-                prev_n: *prev_n,
+                previous_out: signable,
                 signatures: vec![signature],
                 pub_keys: vec![*pub_key],
             });
@@ -689,7 +688,7 @@ pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretK
     (tx_out_p, pk, sk, amount)
 }
 
-/// Decodes a wallet's Outpoint
+/// Decodes a wallet's OutPoint
 ///
 /// ### Arguments
 ///
