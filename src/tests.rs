@@ -17,8 +17,8 @@ use crate::test_utils::{
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, get_sanction_addresses, tracing_log_try_init,
-    validate_pow_block, LocalEvent, StringError,
+    create_valid_transaction_with_ins_outs, decode_secret_key, get_sanction_addresses,
+    tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -2313,8 +2313,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     // Act
     //
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
-    let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
-    let secret_key = SecretKey::from_slice(&sk_slice).unwrap();
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
     compute_create_receipt_asset_tx(
