@@ -701,7 +701,7 @@ pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Pulick key decoding errror: {}", key)))
+    Err(StringError(format!("Public key decoding errror: {}", key)))
 }
 
 /// Decodes a secret key
