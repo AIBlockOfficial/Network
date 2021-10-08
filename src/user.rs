@@ -11,7 +11,7 @@ use crate::utils::{
     LocalEventChannel, LocalEventSender, ResponseResult,
 };
 use crate::wallet::{AddressStore, WalletDb};
-use bincode::{deserialize, serialize};
+use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -19,9 +19,8 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{
     construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
-    construct_tx_core, construct_tx_hash,
+    construct_tx_core, construct_tx_hash, construct_tx_ins_address,
 };
-use sha3::{Digest, Sha3_256};
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
@@ -1048,7 +1047,7 @@ impl UserNode {
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
             .await;
 
-        let sender_from_addr = hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
+        let sender_from_addr = construct_tx_ins_address(&tx_ins);
 
         let rb_payment_request_data = RbPaymentRequestData {
             sender_address,
@@ -1124,8 +1123,7 @@ impl UserNode {
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
 
-        let receiver_from_addr =
-            hex::encode(Sha3_256::digest(&serialize(&tx_ins).unwrap()).to_vec());
+        let receiver_from_addr = construct_tx_ins_address(&tx_ins);
 
         // DruidExpectation for sender(Alice)
         let sender_druid_expectation = DruidExpectation {
