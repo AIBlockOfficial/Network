@@ -29,7 +29,8 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
+    construct_coinbase_tx, construct_tx_hash, construct_tx_in_signable_asset_hash,
+    get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::Digest;
@@ -2311,7 +2312,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     // Act
     //
-    let asset_hash = hex::encode(Sha3_256::digest(&serialize(&Asset::Receipt(1)).unwrap()));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
     let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
     let secret_key = SecretKey::from_slice(&sk_slice).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());

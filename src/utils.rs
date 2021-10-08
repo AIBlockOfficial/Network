@@ -17,8 +17,8 @@ use naom::primitives::{
 use naom::script::{lang::Script, StackEntry};
 use naom::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, construct_tx_in_signable_hash, get_tx_out_with_out_point,
-    get_tx_out_with_out_point_cloned,
+    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -972,10 +972,7 @@ pub fn create_receipt_asset_tx_from_sig(
 ) -> Result<Transaction, ComputeReceiptAssetCreateErr> {
     let tx_out = TxOut::new_receipt_amount(script_public_key, receipt_amount);
 
-    let asset_hash = hex::encode(Sha3_256::digest(
-        &serialize(&Asset::Receipt(receipt_amount))
-            .map_err(|_| ComputeReceiptAssetCreateErr::HashingError)?,
-    ));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(receipt_amount));
 
     let (pk_slice, sig_slice) = (
         hex::decode(public_key).map_err(|_| ComputeReceiptAssetCreateErr::HexDecodeError)?,
