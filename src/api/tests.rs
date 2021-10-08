@@ -21,7 +21,7 @@ use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::construct_tx_hash;
+use naom::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_asset_hash};
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
@@ -714,7 +714,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
         },
     ) = db.generate_payment_address().await;
 
-    let asset_hash = hex::encode(Sha3_256::digest(&serialize(&Asset::Receipt(1)).unwrap()));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
     let public_key = hex::encode(public_key.as_ref());
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 

@@ -11,7 +11,9 @@ use naom::crypto::sign_ed25519 as sign;
 use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use naom::primitives::asset::Asset;
 use naom::primitives::transaction::{OutPoint, TxConstructor, TxIn};
-use naom::utils::transaction_utils::{construct_address, construct_payment_tx_ins};
+use naom::utils::transaction_utils::{
+    construct_address, construct_payment_tx_ins, construct_tx_in_signable_hash,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error;
@@ -661,12 +663,11 @@ pub fn tx_constructor_from_prev_out(
     let key_address = get_transaction_store(db, &out_p).key_address;
     let needed_store = get_address_store(db, &key_address, encryption_key);
 
-    let hash_to_sign = hex::encode(serialize(&out_p).unwrap());
+    let hash_to_sign = construct_tx_in_signable_hash(&out_p);
     let signature = sign::sign_detached(hash_to_sign.as_bytes(), &needed_store.secret_key);
 
     let tx_const = TxConstructor {
-        t_hash: out_p.t_hash.clone(),
-        prev_n: out_p.n,
+        previous_out: out_p.clone(),
         signatures: vec![signature],
         pub_keys: vec![needed_store.public_key],
     };

@@ -17,7 +17,8 @@ use naom::primitives::{
 use naom::script::{lang::Script, StackEntry};
 use naom::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::{Digest, Sha3_256};
@@ -50,26 +51,6 @@ pub enum LocalEvent {
 pub enum ResponseResult {
     Exit,
     Continue,
-}
-
-/// Trivial enum for failure to create receipt asset tx
-/// on the compute node.
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone)]
-pub enum ComputeReceiptAssetCreateErr {
-    HashingError,
-    HexDecodeError,
-    KeyDerivationError,
-}
-
-impl fmt::Display for ComputeReceiptAssetCreateErr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
-            ComputeReceiptAssetCreateErr::HashingError => write!(f, "HashingError"),
-            ComputeReceiptAssetCreateErr::HexDecodeError => write!(f, "HexDecodeError"),
-            ComputeReceiptAssetCreateErr::KeyDerivationError => write!(f, "KeyDerivationError"),
-        }
-    }
 }
 
 pub struct MpscTracingSender<T> {
@@ -574,12 +555,11 @@ pub fn create_valid_transaction_with_ins_outs(
         let mut tx_in_cons = Vec::new();
         for (prev_n, t_hash_hex) in tx_in {
             let signable = OutPoint::new(t_hash_hex.to_string(), *prev_n);
-            let signable_h = hex::encode(serialize(&signable).unwrap());
+            let signable_h = construct_tx_in_signable_hash(&signable);
 
             let signature = sign::sign_detached(signable_h.as_bytes(), secret_key);
             tx_in_cons.push(TxConstructor {
-                t_hash: t_hash_hex.to_string(),
-                prev_n: *prev_n,
+                previous_out: signable,
                 signatures: vec![signature],
                 pub_keys: vec![*pub_key],
             });
@@ -683,13 +663,13 @@ pub fn make_utxo_set_from_seed(
 pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
     let amount = TokenAmount(seed.amount as u64);
-    let sk = decode_secret_key(&seed.secret_key);
-    let pk = decode_pub_key(&seed.public_key);
+    let sk = decode_secret_key(&seed.secret_key).unwrap();
+    let pk = decode_pub_key(&seed.public_key).unwrap();
 
     (tx_out_p, pk, sk, amount)
 }
 
-/// Decodes a wallet's Outpoint
+/// Decodes a wallet's OutPoint
 ///
 /// ### Arguments
 ///
@@ -707,27 +687,49 @@ pub fn decode_wallet_out_point(out_point: &str) -> OutPoint {
 ///
 /// * `key`    - key to be decoded to give the public key
 pub fn decode_pub_key_as_address(key: &str) -> String {
-    construct_address(&decode_pub_key(key))
+    construct_address(&decode_pub_key(key).unwrap())
 }
 
 /// Decodes the public key
 ///
 /// ### Arguments
 ///
-/// * `key`    - key to be decoded to give the public key
-pub fn decode_pub_key(key: &str) -> PublicKey {
-    let key_slice = hex::decode(key).unwrap();
-    PublicKey::from_slice(&key_slice).unwrap()
+/// * `key`    - key to be decode
+pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
+    if let Ok(key_slice) = hex::decode(key) {
+        if let Some(key) = PublicKey::from_slice(&key_slice) {
+            return Ok(key);
+        }
+    }
+    Err(StringError(format!("Public key decoding errror: {}", key)))
 }
 
-/// Decodes a secret key from a given key
+/// Decodes a secret key
 ///
 /// ### Arguments
 ///
-/// * `key`    - key to decoded to give the secret key
-pub fn decode_secret_key(key: &str) -> SecretKey {
-    let key_slice = hex::decode(key).unwrap();
-    SecretKey::from_slice(&key_slice).unwrap()
+/// * `key`    - key to decode
+pub fn decode_secret_key(key: &str) -> Result<SecretKey, StringError> {
+    if let Ok(key_slice) = hex::decode(key) {
+        if let Some(key) = SecretKey::from_slice(&key_slice) {
+            return Ok(key);
+        }
+    }
+    Err(StringError(format!("Secret key decoding errror: {}", key)))
+}
+
+/// Decodes a signature
+///
+/// ### Arguments
+///
+/// * `sig`    - signatre to decode
+pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
+    if let Ok(sig_slice) = hex::decode(sig) {
+        if let Some(sig) = Signature::from_slice(&sig_slice) {
+            return Ok(sig);
+        }
+    }
+    Err(StringError(format!("Signature decoding errror: {}", sig)))
 }
 
 /// Stop listening for connection and disconnect existing ones
@@ -969,24 +971,13 @@ pub fn create_receipt_asset_tx_from_sig(
     script_public_key: String,
     public_key: String,
     signature: String,
-) -> Result<Transaction, ComputeReceiptAssetCreateErr> {
+) -> Result<Transaction, StringError> {
     let tx_out = TxOut::new_receipt_amount(script_public_key, receipt_amount);
 
-    let asset_hash = hex::encode(Sha3_256::digest(
-        &serialize(&Asset::Receipt(receipt_amount))
-            .map_err(|_| ComputeReceiptAssetCreateErr::HashingError)?,
-    ));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(receipt_amount));
 
-    let (pk_slice, sig_slice) = (
-        hex::decode(public_key).map_err(|_| ComputeReceiptAssetCreateErr::HexDecodeError)?,
-        hex::decode(signature).map_err(|_| ComputeReceiptAssetCreateErr::HexDecodeError)?,
-    );
-
-    let (public_key, signature) = (
-        PublicKey::from_slice(&pk_slice).ok_or(ComputeReceiptAssetCreateErr::KeyDerivationError)?,
-        Signature::from_slice(&sig_slice)
-            .ok_or(ComputeReceiptAssetCreateErr::KeyDerivationError)?,
-    );
+    let public_key = decode_pub_key(&public_key)?;
+    let signature = decode_signature(&signature)?;
 
     let tx_in = TxIn {
         previous_out: None,

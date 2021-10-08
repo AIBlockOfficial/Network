@@ -17,8 +17,8 @@ use crate::test_utils::{
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, get_sanction_addresses, tracing_log_try_init,
-    validate_pow_block, LocalEvent, StringError,
+    create_valid_transaction_with_ins_outs, decode_secret_key, get_sanction_addresses,
+    tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -29,7 +29,8 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_coinbase_tx, construct_tx_hash, get_tx_out_with_out_point_cloned,
+    construct_coinbase_tx, construct_tx_hash, construct_tx_in_signable_asset_hash,
+    get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::Digest;
@@ -2300,7 +2301,7 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11460, 1);
+    let mut network_config = complete_network_config_with_n_compute_raft(11465, 1);
     network_config.compute_seed_utxo = BTreeMap::new();
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
@@ -2311,9 +2312,8 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     // Act
     //
-    let asset_hash = hex::encode(Sha3_256::digest(&serialize(&Asset::Receipt(1)).unwrap()));
-    let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
-    let secret_key = SecretKey::from_slice(&sk_slice).unwrap();
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
     compute_create_receipt_asset_tx(
