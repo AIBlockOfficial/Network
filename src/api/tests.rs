@@ -13,7 +13,7 @@ use crate::interfaces::{
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::decode_secret_key;
+use crate::utils::{decode_pub_key, decode_secret_key};
 use crate::wallet::WalletDb;
 use crate::ComputeRequest;
 use bincode::serialize;
@@ -21,10 +21,11 @@ use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::{
-    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
+    construct_payment_tx_ins, construct_tx_hash, construct_tx_in_signable_asset_hash,
+    construct_tx_in_signable_hash,
 };
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
@@ -736,6 +737,74 @@ async fn test_get_signable_transactions() {
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
         (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\"}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
     );
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_transactions() {
+    //
+    // Arrange
+    //
+    let (mut self_node, self_socket) = new_self_compute_node().await;
+
+    let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
+    let signed_data = construct_tx_in_signable_hash(&previous_out);
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
+    let raw_signature = sign::sign_detached(signed_data.as_bytes(), &secret_key);
+    let signature = hex::encode(raw_signature.as_ref());
+    let public_key = COMMON_PUB_KEY.to_owned();
+
+    let json_body = vec![CreateTransaction {
+        inputs: vec![CreateTxIn {
+            previous_out: Some(previous_out.clone()),
+            script_signature: Some(CreateTxInScript::Pay2PkH {
+                signed_data,
+                signature,
+                public_key,
+            }),
+        }],
+        outputs: vec![],
+        version: 1,
+        druid_info: None,
+    }];
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_transactions")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_transactions(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), "\"Creating Transactions\"")
+    );
+
+    // Expected Frame
+    let expected_frame = compute_api_request_as_frame(ComputeApiRequest::SendTransactions {
+        transactions: vec![Transaction {
+            inputs: construct_payment_tx_ins(vec![TxConstructor {
+                previous_out,
+                signatures: vec![raw_signature],
+                pub_keys: vec![decode_pub_key(COMMON_PUB_KEY).unwrap()],
+            }]),
+            outputs: vec![],
+            version: 1,
+            druid_info: None,
+        }],
+    });
+
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
 }
 
 /// Test POST create receipt asset on compute node successfully

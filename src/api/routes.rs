@@ -331,6 +331,30 @@ pub fn create_receipt_asset(
         .with(cors)
 }
 
+// POST create transactions
+pub fn create_transactions(
+    peer: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("create_transactions")
+        .and(warp::post())
+        .and(with_node_component(peer))
+        .and(warp::body::json())
+        .and_then(handlers::post_create_transactions)
+        .with(cors)
+}
+
 //======= NODE ROUTES =======//
 //TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 pub fn user_node_routes(
