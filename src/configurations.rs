@@ -169,6 +169,10 @@ pub struct MinerNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
+    /// API port
+    pub miner_api_port: u16,
+    /// API use TLS
+    pub miner_api_use_tls: bool,
 }
 
 /// Configuration option for a user node

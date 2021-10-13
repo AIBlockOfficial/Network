@@ -701,7 +701,7 @@ pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Public key decoding errror: {}", key)))
+    Err(StringError(format!("Public key decoding error: {}", key)))
 }
 
 /// Decodes a secret key
@@ -715,7 +715,7 @@ pub fn decode_secret_key(key: &str) -> Result<SecretKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Secret key decoding errror: {}", key)))
+    Err(StringError(format!("Secret key decoding error: {}", key)))
 }
 
 /// Decodes a signature
@@ -729,7 +729,7 @@ pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
             return Ok(sig);
         }
     }
-    Err(StringError(format!("Signature decoding errror: {}", sig)))
+    Err(StringError(format!("Signature decoding error: {}", sig)))
 }
 
 /// Stop listening for connection and disconnect existing ones

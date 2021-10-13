@@ -5,13 +5,14 @@ use crate::interfaces::{
     node_type_as_str, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
     UserApiRequest, UserRequest, UtxoFetchType,
 };
+use crate::miner::BlockPoWReceived;
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{decode_pub_key, decode_signature, DeserializedBlockchainItem};
-use crate::wallet::WalletDb;
+use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
-use naom::primitives::asset::TokenAmount;
+use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
@@ -42,6 +43,8 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
+    receipt_total: f64,
+    addresses: BTreeMap<String, Asset>,
 }
 
 /// Public key addresses received from client
@@ -103,6 +106,14 @@ pub struct CreateTransaction {
     pub version: usize,
     pub druid_info: Option<DdeValues>,
 }
+/// Struct received from client to change passphrase
+///
+/// Entries will be encrypted with TLS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePassphraseData {
+    pub old_passphrase: String,
+    pub new_passphrase: String,
+}
 
 //======= GET HANDLERS =======//
 
@@ -114,8 +125,16 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
+    let addresses: BTreeMap<String, Asset> = fund_store
+        .transactions()
+        .iter()
+        .map(|(o, a)| (o.t_hash.clone(), a.clone()))
+        .collect();
+
     let send_val = WalletInfo {
         running_total: fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES,
+        receipt_total: fund_store.running_total().receipts as f64,
+        addresses,
     };
 
     Ok(warp::reply::json(&send_val))
@@ -150,10 +169,41 @@ pub async fn get_latest_block(
     Ok(warp::reply::json(&last_block))
 }
 
-/// Gets debug data for the node
-pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Rejection> {
-    let data = node.get_debug_data().await;
+/// Gets the debug info for a speficied node type
+///
+/// Contains an optional field for an auxiliary `Node`
+/// , i.e a Miner node may or may not have additional User
+/// node capabilities- providing additional API routes.
+pub async fn get_debug_data(
+    node: Node,
+    aux_node: Option<Node>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let data = match aux_node {
+        Some(aux_node) => {
+            let primary_data = node.get_debug_data().await;
+            let aux_data = aux_node.get_debug_data().await;
+            let node_type = format!("{}/{}", primary_data.node_type, aux_data.node_type);
+            let mut node_api = [primary_data.node_api, aux_data.node_api].concat();
+            node_api.sort_by_key(|route| route.to_lowercase());
+            node_api.dedup();
+            let mut node_peers = [primary_data.node_peers, aux_data.node_peers].concat();
+            node_peers.dedup();
+            DebugData {
+                node_type,
+                node_api,
+                node_peers,
+            }
+        }
+        None => node.get_debug_data().await,
+    };
+    Ok(warp::reply::json(&data))
+}
 
+/// Get to fetch information about the current mining block
+pub async fn get_current_mining_block(
+    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
     Ok(warp::reply::json(&data))
 }
 
@@ -232,8 +282,8 @@ pub async fn post_make_payment(
     } = encapsulated_data;
 
     let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
-        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
+        Err(e) => return Err(wallet_db_error(e)),
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
@@ -263,11 +313,11 @@ pub async fn post_make_ip_payment(
         .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
 
     let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
+        Ok(_) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
             payment_peer,
             amount,
         }),
-        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+        Err(e) => return Err(wallet_db_error(e)),
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
@@ -424,7 +474,34 @@ pub async fn post_create_transactions(
     Ok(warp::reply::json(&"Creating Transactions".to_owned()))
 }
 
+// POST to change wallet passphrase
+pub async fn post_change_wallet_passphrase(
+    mut db: WalletDb,
+    passphrase_struct: ChangePassphraseData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let ChangePassphraseData {
+        old_passphrase,
+        new_passphrase,
+    } = passphrase_struct;
+
+    db.change_wallet_passphrase(old_passphrase, new_passphrase)
+        .await
+        .map_err(wallet_db_error)?;
+
+    Ok(warp::reply::json(
+        &"Passphrase changed successfully".to_owned(),
+    ))
+}
+
 //======= Helpers =======//
+
+/// Filters through wallet errors which are internal vs errors caused by user input
+pub fn wallet_db_error(err: WalletDbError) -> warp::Rejection {
+    match err {
+        WalletDbError::PassphraseError => warp::reject::custom(errors::ErrorInvalidPassphrase),
+        _ => warp::reject::custom(errors::InternalError),
+    }
+}
 
 /// Generic static string warp error
 pub fn generic_error(name: &'static str) -> warp::Rejection {

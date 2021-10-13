@@ -176,7 +176,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("sanction_list", Vec::<String>::new())
         .unwrap();
-    settings.set_default("compute_api_port", 3003).unwrap();
+    settings.set_default("compute_api_port", 3002).unwrap();
     settings.set_default("compute_api_use_tls", true).unwrap();
     settings.set_default("jurisdiction", "US").unwrap();
     settings.set_default("compute_node_idx", 0).unwrap();

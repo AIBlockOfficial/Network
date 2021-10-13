@@ -4,7 +4,7 @@ use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    storage_list, user_list, BlockStoredInfo, BlockchainItem, BlockchainItemMeta,
+    self, api_debug_routes, BlockStoredInfo, BlockchainItem, BlockchainItemMeta,
     BlockchainItemType, CommonBlockInfo, ComputeRequest, DebugData, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
@@ -3186,9 +3186,8 @@ async fn compute_debug_data(network: &mut Network, compute: &str) -> DebugData {
 }
 
 async fn compute_debug_api_act(network: &mut Network, compute: &str) {
-    /*user to user*/
     let data = compute_debug_data(network, compute).await;
-    let test_api_vec: Vec<String> = user_list();
+    let test_api_vec: Vec<String> = api_debug_routes(interfaces::NodeType::Compute);
     let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11493);
     let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
         String::from("127.0.0.1:11493"),
@@ -3445,9 +3444,8 @@ async fn storage_debug_data(network: &mut Network, storage: &str) -> DebugData {
 }
 
 async fn storage_debug_api_act(network: &mut Network, storage: &str) {
-    /*user to user*/
     let data = storage_debug_data(network, storage).await;
-    let test_api_vec: Vec<String> = storage_list();
+    let test_api_vec: Vec<String> = api_debug_routes(interfaces::NodeType::Storage);
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
     let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
         String::from("127.0.0.1:11492"),
@@ -3652,9 +3650,8 @@ async fn user_debug_data(network: &mut Network, user: &str) -> DebugData {
 }
 
 async fn user_debug_api_act(network: &mut Network, user: &str) {
-    /*user to user*/
     let data = user_debug_data(network, user).await;
-    let test_api_vec: Vec<String> = user_list();
+    let test_api_vec: Vec<String> = api_debug_routes(interfaces::NodeType::User);
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
     let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![(
         String::from("127.0.0.1:11492"),
@@ -3771,9 +3768,8 @@ async fn miner_debug_data(network: &mut Network, miner: &str) -> DebugData {
 }
 
 async fn miner_debug_api_act(network: &mut Network, miner: &str) {
-    /*user to user*/
     let data = miner_debug_data(network, miner).await;
-    let test_api_vec: Vec<String> = user_list();
+    let test_api_vec: Vec<String> = api_debug_routes(interfaces::NodeType::Miner);
     let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11492);
     let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 11493);
     let test_peer_vec: Vec<(String, SocketAddr, String)> = vec![

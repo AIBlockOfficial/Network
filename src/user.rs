@@ -10,7 +10,7 @@ use crate::utils::{
     generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent,
     LocalEventChannel, LocalEventSender, ResponseResult,
 };
-use crate::wallet::{AddressStore, WalletDb};
+use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -29,7 +29,7 @@ use tracing_futures::Instrument;
 /// Key for last pow coinbase produced
 pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
 
-/// Result wrapper for miner errors
+/// Result wrapper for user errors
 pub type Result<T> = std::result::Result<T, UserError>;
 
 #[derive(Debug)]
@@ -38,6 +38,7 @@ pub enum UserError {
     Network(CommsError),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
+    WalletError(WalletDbError),
 }
 
 impl fmt::Display for UserError {
@@ -47,6 +48,7 @@ impl fmt::Display for UserError {
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::WalletError(err) => write!(f, "Wallet error: {}", err),
         }
     }
 }
@@ -58,6 +60,7 @@ impl Error for UserError {
             Self::Network(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e),
         }
     }
 }
@@ -77,6 +80,12 @@ impl From<task::JoinError> for UserError {
 impl From<bincode::Error> for UserError {
     fn from(other: bincode::Error) -> Self {
         Self::Serialization(other)
+    }
+}
+
+impl From<WalletDbError> for UserError {
+    fn from(other: WalletDbError) -> Self {
+        Self::WalletError(other)
     }
 }
 
@@ -320,6 +329,10 @@ impl UserNode {
                     .await
                     .unwrap();
             }
+            Ok(Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            }) => {}
             Ok(Response {
                 success: false,
                 reason: "Ignore unexpected transaction",
@@ -775,13 +788,17 @@ impl UserNode {
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
-        let (tx_ins, tx_outs) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await;
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
-        self.next_payment = Some((peer, payment_tx));
-
+        if let Ok((tx_ins, tx_outs)) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
+            let payment_tx = construct_tx_core(tx_ins, tx_outs);
+            self.next_payment = Some((peer, payment_tx));
+            return Response {
+                success: true,
+                reason: "Next payment transaction ready",
+            };
+        }
         Response {
-            success: true,
-            reason: "Next payment transaction ready",
+            success: false,
+            reason: "Insufficient funds for payment",
         }
     }
 
@@ -795,23 +812,27 @@ impl UserNode {
         &mut self,
         asset_required: Asset,
         mut tx_outs: Vec<TxOut>,
-    ) -> (Vec<TxIn>, Vec<TxOut>) {
-        let (tx_cons, total_amount, tx_used) = self
+    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
+        match self
             .wallet_db
             .fetch_inputs_for_payment(asset_required.clone())
-            .await;
+            .await
+        {
+            Ok((tx_cons, total_amount, tx_used)) => {
+                if let Some(excess) = total_amount.get_excess(&asset_required) {
+                    let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+                    tx_outs.push(TxOut::new_asset(excess_address, excess));
+                }
 
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
+                let tx_ins = self
+                    .wallet_db
+                    .consume_inputs_for_payment(tx_cons, tx_used)
+                    .await;
+
+                Ok((tx_ins, tx_outs))
+            }
+            Err(e) => Err(e.into()),
         }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
-
-        (tx_ins, tx_outs)
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1045,7 +1066,7 @@ impl UserNode {
 
         let (tx_ins, tx_outs) = self
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
-            .await;
+            .await?;
 
         let sender_from_addr = construct_tx_ins_address(&tx_ins);
 
@@ -1119,47 +1140,53 @@ impl UserNode {
         let druid = sender_half_druid + &receiver_half_druid.clone();
         let asset_required = Asset::Receipt(1);
 
-        let (tx_ins, tx_outs) = self
+        let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
 
-        let receiver_from_addr = construct_tx_ins_address(&tx_ins);
+        if let Ok((tx_ins, tx_outs)) = tx_ins_and_outs {
+            let receiver_from_addr = construct_tx_ins_address(&tx_ins);
 
-        // DruidExpectation for sender(Alice)
-        let sender_druid_expectation = DruidExpectation {
-            from: receiver_from_addr,
-            to: sender_address.clone(),
-            asset: Asset::Receipt(1),
-        };
+            // DruidExpectation for sender(Alice)
+            let sender_druid_expectation = DruidExpectation {
+                from: receiver_from_addr,
+                to: sender_address.clone(),
+                asset: Asset::Receipt(1),
+            };
 
-        // DruidExpectation for receiver(Bob)
-        let receiver_druid_expectation = DruidExpectation {
-            from: sender_from_addr,
-            to: receiver_address.clone(),
-            asset: sender_asset,
-        };
+            // DruidExpectation for receiver(Bob)
+            let receiver_druid_expectation = DruidExpectation {
+                from: sender_from_addr,
+                to: receiver_address.clone(),
+                asset: sender_asset,
+            };
 
-        let rb_receive_tx = construct_rb_receive_payment_tx(
-            tx_ins,
-            tx_outs,
-            sender_address,
-            0,
-            druid,
-            vec![receiver_druid_expectation],
-        );
+            let rb_receive_tx = construct_rb_receive_payment_tx(
+                tx_ins,
+                tx_outs,
+                sender_address,
+                0,
+                druid,
+                vec![receiver_druid_expectation],
+            );
 
-        let rb_payment_response = Some(RbPaymentResponseData {
-            receiver_address,
-            receiver_half_druid,
-            sender_druid_expectation,
-        });
+            let rb_payment_response = Some(RbPaymentResponseData {
+                receiver_address,
+                receiver_half_druid,
+                sender_druid_expectation,
+            });
 
-        self.next_rb_payment = Some((Some(peer), rb_receive_tx));
-        self.next_rb_payment_response = Some((peer, rb_payment_response));
+            self.next_rb_payment = Some((Some(peer), rb_receive_tx));
+            self.next_rb_payment_response = Some((peer, rb_payment_response));
 
+            return Response {
+                success: true,
+                reason: "Received receipt-based payment request",
+            };
+        }
         Response {
-            success: true,
-            reason: "Received receipt-based payment request",
+            success: false,
+            reason: "Insufficient funds for payment",
         }
     }
 
