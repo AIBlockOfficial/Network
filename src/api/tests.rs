@@ -12,7 +12,8 @@ use crate::interfaces::{
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::wallet::{AddressStore, WalletDb};
+use crate::utils::decode_secret_key;
+use crate::wallet::WalletDb;
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
@@ -28,6 +29,10 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use warp::http::{HeaderMap, HeaderValue, StatusCode};
+
+const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
 
 const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
     "4348536e3d5a13e347262b5023963edf",
@@ -195,6 +200,7 @@ async fn test_get_latest_block() {
 async fn test_get_export_keypairs() {
     //
     // Arrange
+
     //
     let db = {
         let simple_db = Some(get_db_with_block_no_mutex());
@@ -700,28 +706,14 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     let (mut self_node, self_socket) = new_self_compute_node().await;
 
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
-    let (
-        script_public_key,
-        AddressStore {
-            public_key,
-            secret_key,
-        },
-    ) = db.generate_payment_address().await;
-
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
-    let public_key = hex::encode(public_key.as_ref());
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
-        script_public_key: Some(script_public_key),
-        public_key: Some(public_key),
+        script_public_key: Some(COMMON_PUB_ADDR.to_owned()),
+        public_key: Some(COMMON_PUB_KEY.to_owned()),
         signature: Some(signature),
     };
 
