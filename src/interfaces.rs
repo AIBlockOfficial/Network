@@ -459,6 +459,9 @@ pub enum ComputeApiRequest {
         public_key: String,
         signature: String,
     },
+    SendTransactions {
+        transactions: Vec<Transaction>,
+    },
 }
 
 /// Encapsulates compute requests & responses.
@@ -494,11 +497,15 @@ pub enum ComputeRequest {
 
 impl fmt::Debug for ComputeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ComputeApiRequest::*;
         use ComputeRequest::*;
 
         match *self {
-            ComputeApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
+            ComputeApi(ComputeApiRequest::SendCreateReceiptRequest { .. }) => {
+                write!(f, "Api::SendCreateReceiptRequest")
+            }
+            ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
+                write!(f, "Api::SendTransactions")
+            }
 
             SendUtxoRequest { ref address_list } => write!(f, "SendUtxoRequest"),
             SendBlockStored(ref _info) => write!(f, "SendBlockStored"),

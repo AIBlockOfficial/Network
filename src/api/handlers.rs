@@ -414,7 +414,7 @@ pub async fn post_create_transactions(
         transactions
     };
 
-    let request = ComputeRequest::SendTransactions { transactions };
+    let request = ComputeRequest::ComputeApi(ComputeApiRequest::SendTransactions { transactions });
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
         error!("route:post_create_transactions error: {:?}", e);

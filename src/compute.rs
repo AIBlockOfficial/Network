@@ -882,6 +882,7 @@ impl ComputeNode {
                 )
                 .await
             }
+            SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
         }
     }
 
