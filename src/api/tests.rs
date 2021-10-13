@@ -1,5 +1,6 @@
 use crate::api::handlers::{
-    Addresses, CreateReceiptAssetData, EncapsulatedPayment, PublicKeyAddresses,
+    Addresses, CreateReceiptAssetData, CreateTransaction, CreateTxIn, CreateTxInScript,
+    EncapsulatedPayment, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -22,7 +23,9 @@ use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_asset_hash};
+use naom::utils::transaction_utils::{
+    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
+};
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
@@ -700,6 +703,43 @@ async fn test_post_update_running_total() {
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
+async fn test_get_signable_transactions() {
+    //
+    // Arrange
+    //
+    let json_body = vec![CreateTransaction {
+        inputs: vec![CreateTxIn {
+            previous_out: Some(OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0)),
+            script_signature: None,
+        }],
+        outputs: vec![],
+        version: 1,
+        druid_info: None,
+    }];
+
+    let request = warp::test::request()
+        .method("GET")
+        .path("/signable_transactions")
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::signable_transactions();
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\"}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
+    );
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Arrange
@@ -878,4 +918,8 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
+}
+
+fn from_utf8(data: &[u8]) -> &str {
+    std::str::from_utf8(data).unwrap()
 }

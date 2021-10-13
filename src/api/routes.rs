@@ -90,6 +90,18 @@ pub fn debug_data(
         .with(cors)
 }
 
+// GET signable transaction
+pub fn signable_transactions(
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("signable_transactions")
+        .and(warp::get())
+        .and(warp::body::json())
+        .and_then(handlers::get_signable_transactions)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST get db item by key
