@@ -1,5 +1,6 @@
 use crate::api::handlers::{
-    Addresses, CreateReceiptAssetData, EncapsulatedPayment, PublicKeyAddresses,
+    Addresses, CreateReceiptAssetData, CreateTransaction, CreateTxIn, CreateTxInScript,
+    EncapsulatedPayment, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -12,22 +13,30 @@ use crate::interfaces::{
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::wallet::{AddressStore, WalletDb};
+use crate::utils::{decode_pub_key, decode_secret_key};
+use crate::wallet::WalletDb;
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_asset_hash};
+use naom::utils::transaction_utils::{
+    construct_payment_tx_ins, construct_tx_hash, construct_tx_in_signable_asset_hash,
+    construct_tx_in_signable_hash,
+};
 use serde_json::json;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use warp::http::{HeaderMap, HeaderValue, StatusCode};
+
+const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
+const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
 
 const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
     "4348536e3d5a13e347262b5023963edf",
@@ -44,6 +53,10 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
 );
 
 /*------- UTILS--------*/
+
+fn from_utf8(data: &[u8]) -> &str {
+    std::str::from_utf8(data).unwrap()
+}
 
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
@@ -694,34 +707,125 @@ async fn test_post_update_running_total() {
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
+async fn test_get_signable_transactions() {
+    //
+    // Arrange
+    //
+    let json_body = vec![CreateTransaction {
+        inputs: vec![CreateTxIn {
+            previous_out: Some(OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0)),
+            script_signature: None,
+        }],
+        outputs: vec![],
+        version: 1,
+        druid_info: None,
+    }];
+
+    let request = warp::test::request()
+        .method("GET")
+        .path("/signable_transactions")
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::signable_transactions();
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\"}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
+    );
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_transactions() {
+    //
+    // Arrange
+    //
+    let (mut self_node, self_socket) = new_self_compute_node().await;
+
+    let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
+    let signed_data = construct_tx_in_signable_hash(&previous_out);
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
+    let raw_signature = sign::sign_detached(signed_data.as_bytes(), &secret_key);
+    let signature = hex::encode(raw_signature.as_ref());
+    let public_key = COMMON_PUB_KEY.to_owned();
+
+    let json_body = vec![CreateTransaction {
+        inputs: vec![CreateTxIn {
+            previous_out: Some(previous_out.clone()),
+            script_signature: Some(CreateTxInScript::Pay2PkH {
+                signed_data,
+                signature,
+                public_key,
+            }),
+        }],
+        outputs: vec![],
+        version: 1,
+        druid_info: None,
+    }];
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/create_transactions")
+        .remote_addr(self_socket)
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::create_transactions(self_node.clone());
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), "\"Creating Transactions\"")
+    );
+
+    // Expected Frame
+    let expected_frame = compute_api_request_as_frame(ComputeApiRequest::SendTransactions {
+        transactions: vec![Transaction {
+            inputs: construct_payment_tx_ins(vec![TxConstructor {
+                previous_out,
+                signatures: vec![raw_signature],
+                pub_keys: vec![decode_pub_key(COMMON_PUB_KEY).unwrap()],
+            }]),
+            outputs: vec![],
+            version: 1,
+            druid_info: None,
+        }],
+    });
+
+    let actual_frame = next_event_frame(&mut self_node).await;
+    assert_eq!(expected_frame, actual_frame);
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Arrange
     //
     let (mut self_node, self_socket) = new_self_compute_node().await;
 
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
-    let (
-        script_public_key,
-        AddressStore {
-            public_key,
-            secret_key,
-        },
-    ) = db.generate_payment_address().await;
-
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
-    let public_key = hex::encode(public_key.as_ref());
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
-        script_public_key: Some(script_public_key),
-        public_key: Some(public_key),
+        script_public_key: Some(COMMON_PUB_ADDR.to_owned()),
+        public_key: Some(COMMON_PUB_KEY.to_owned()),
         signature: Some(signature),
     };
 

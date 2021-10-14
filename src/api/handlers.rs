@@ -7,12 +7,15 @@ use crate::interfaces::{
 };
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::DeserializedBlockchainItem;
+use crate::utils::{decode_pub_key, decode_signature, DeserializedBlockchainItem};
 use crate::wallet::WalletDb;
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::transaction::Transaction;
+use naom::primitives::druid::DdeValues;
+use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use naom::script::lang::Script;
+use naom::utils::transaction_utils::construct_tx_in_signable_hash;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -46,6 +49,7 @@ struct WalletInfo {
 pub struct PublicKeyAddresses {
     pub address_list: Vec<String>,
 }
+
 /// Encapsulated payment received from client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncapsulatedPayment {
@@ -53,6 +57,7 @@ pub struct EncapsulatedPayment {
     pub amount: TokenAmount,
     pub passphrase: String,
 }
+
 /// Receipt asset creation structure received from client
 ///
 /// This structure is used to create a receipt asset on EITHER
@@ -63,6 +68,40 @@ pub struct CreateReceiptAssetData {
     pub script_public_key: Option<String>, /* Not used by user Node */
     pub public_key: Option<String>,        /* Not used by user Node */
     pub signature: Option<String>,         /* Not used by user Node */
+}
+
+/// Information needed for the creaion of TxIn script.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CreateTxInScript {
+    Pay2PkH {
+        /// Signed data to sign
+        signed_data: String,
+        /// Hex encoded signature
+        signature: String,
+        /// Hex encoded complete public key
+        public_key: String,
+    },
+}
+
+/// Information needed for the creaion of TxIn.
+/// This API would change if types are modified.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTxIn {
+    /// The previous_out to use
+    pub previous_out: Option<OutPoint>,
+    /// script info
+    pub script_signature: Option<CreateTxInScript>,
+}
+
+/// Information necessary for the creation of a Transaction
+/// This API would change if types are modified.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTransaction {
+    /// String to sign in each inputs
+    pub inputs: Vec<CreateTxIn>,
+    pub outputs: Vec<TxOut>,
+    pub version: usize,
+    pub druid_info: Option<DdeValues>,
 }
 
 //======= GET HANDLERS =======//
@@ -111,9 +150,28 @@ pub async fn get_latest_block(
     Ok(warp::reply::json(&last_block))
 }
 
-/// Post to update running total of connected wallet
+/// Gets debug data for the node
 pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Rejection> {
     let data = node.get_debug_data().await;
+
+    Ok(warp::reply::json(&data))
+}
+
+/// Gets transactions info to sign to create a Transaction
+pub async fn get_signable_transactions(
+    mut data: Vec<CreateTransaction>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    for tx in &mut data {
+        for input in &mut tx.inputs {
+            if let Some(previous_out) = &input.previous_out {
+                input.script_signature = Some(CreateTxInScript::Pay2PkH {
+                    signed_data: construct_tx_in_signable_hash(previous_out),
+                    signature: Default::default(),
+                    public_key: Default::default(),
+                })
+            }
+        }
+    }
 
     Ok(warp::reply::json(&data))
 }
@@ -340,4 +398,84 @@ pub async fn post_create_receipt_asset(
         return Err(warp::reject::custom(errors::ErrorInvalidJSONStructure));
     }
     Ok(warp::reply::json(&"Creating receipt asset".to_owned()))
+}
+
+/// Post transactions to compute node
+pub async fn post_create_transactions(
+    peer: Node,
+    data: Vec<CreateTransaction>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let transactions = {
+        let mut transactions = Vec::new();
+        for tx in data {
+            let tx = to_transaction(tx)?;
+            transactions.push(tx);
+        }
+        transactions
+    };
+
+    let request = ComputeRequest::ComputeApi(ComputeApiRequest::SendTransactions { transactions });
+
+    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+        error!("route:post_create_transactions error: {:?}", e);
+        return Err(warp::reject::custom(errors::ErrorCannotAccessComputeNode));
+    }
+
+    Ok(warp::reply::json(&"Creating Transactions".to_owned()))
+}
+
+//======= Helpers =======//
+
+/// Generic static string warp error
+pub fn generic_error(name: &'static str) -> warp::Rejection {
+    warp::reject::custom(errors::ErrorGeneric::new(name))
+}
+
+/// Expect optional field
+pub fn with_opt_field<T>(field: Option<T>, err: &'static str) -> Result<T, warp::Rejection> {
+    field.ok_or_else(|| generic_error(err))
+}
+
+pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Rejection> {
+    let CreateTransaction {
+        inputs,
+        outputs,
+        version,
+        druid_info,
+    } = data;
+
+    let inputs = {
+        let mut tx_ins = Vec::new();
+        for i in inputs {
+            let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
+            let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
+            let tx_in = {
+                let CreateTxInScript::Pay2PkH {
+                    signed_data,
+                    signature,
+                    public_key,
+                } = script_signature;
+
+                let signature =
+                    with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
+                let public_key =
+                    with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
+
+                TxIn {
+                    previous_out: Some(previous_out),
+                    script_signature: Script::pay2pkh(signed_data, signature, public_key),
+                }
+            };
+
+            tx_ins.push(tx_in);
+        }
+        tx_ins
+    };
+
+    Ok(Transaction {
+        inputs,
+        outputs,
+        version,
+        druid_info,
+    })
 }

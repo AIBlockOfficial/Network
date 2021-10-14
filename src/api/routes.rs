@@ -90,6 +90,18 @@ pub fn debug_data(
         .with(cors)
 }
 
+// GET signable transaction
+pub fn signable_transactions(
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = get_cors();
+
+    warp::path("signable_transactions")
+        .and(warp::get())
+        .and(warp::body::json())
+        .and_then(handlers::get_signable_transactions)
+        .with(cors)
+}
+
 //======= POST ROUTES =======//
 
 // POST get db item by key
@@ -316,6 +328,30 @@ pub fn create_receipt_asset(
         .and(with_node_component(peer))
         .and(warp::body::json())
         .and_then(handlers::post_create_receipt_asset)
+        .with(cors)
+}
+
+// POST create transactions
+pub fn create_transactions(
+    peer: Node,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec![
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Content-Type",
+        ])
+        .allow_methods(vec!["POST"]);
+
+    warp::path("create_transactions")
+        .and(warp::post())
+        .and(with_node_component(peer))
+        .and(warp::body::json())
+        .and_then(handlers::post_create_transactions)
         .with(cors)
 }
 

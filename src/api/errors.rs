@@ -1,3 +1,21 @@
+/// Generic error
+#[derive(Debug)]
+pub struct ErrorGeneric {
+    pub name: &'static str,
+}
+impl ErrorGeneric {
+    pub fn new(name: &'static str) -> Self {
+        ErrorGeneric { name }
+    }
+}
+impl ::std::fmt::Display for ErrorGeneric {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "Generic error: {:?}", self.name)
+    }
+}
+impl ::std::error::Error for ErrorGeneric {}
+impl warp::reject::Reject for ErrorGeneric {}
+
 /// API error struct for invalid passphrase entered
 #[derive(Debug)]
 pub struct ErrorInvalidPassphrase;
