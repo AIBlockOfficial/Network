@@ -54,6 +54,10 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
 
 /*------- UTILS--------*/
 
+fn from_utf8(data: &[u8]) -> &str {
+    std::str::from_utf8(data).unwrap()
+}
+
 /// Util function to create a stub DB containing a single block
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
     let db = get_db_with_block_no_mutex();
@@ -204,7 +208,6 @@ async fn test_get_latest_block() {
 async fn test_get_export_keypairs() {
     //
     // Arrange
-
     //
     let db = {
         let simple_db = Some(get_db_with_block_no_mutex());
@@ -987,8 +990,4 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
-}
-
-fn from_utf8(data: &[u8]) -> &str {
-    std::str::from_utf8(data).unwrap()
 }

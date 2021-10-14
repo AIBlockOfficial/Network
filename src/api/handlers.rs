@@ -150,7 +150,7 @@ pub async fn get_latest_block(
     Ok(warp::reply::json(&last_block))
 }
 
-/// Gets to update running total of connected wallet
+/// Gets debug data for the node
 pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Rejection> {
     let data = node.get_debug_data().await;
 
