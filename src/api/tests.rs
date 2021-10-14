@@ -707,7 +707,7 @@ async fn test_post_update_running_total() {
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_get_signable_transactions() {
+async fn test_post_signable_transactions() {
     //
     // Arrange
     //
@@ -722,7 +722,7 @@ async fn test_get_signable_transactions() {
     }];
 
     let request = warp::test::request()
-        .method("GET")
+        .method("POST")
         .path("/signable_transactions")
         .header("Content-Type", "application/json")
         .json(&json_body.clone());

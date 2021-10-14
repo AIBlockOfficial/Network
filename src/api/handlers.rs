@@ -157,25 +157,6 @@ pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Reject
     Ok(warp::reply::json(&data))
 }
 
-/// Gets transactions info to sign to create a Transaction
-pub async fn get_signable_transactions(
-    mut data: Vec<CreateTransaction>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    for tx in &mut data {
-        for input in &mut tx.inputs {
-            if let Some(previous_out) = &input.previous_out {
-                input.script_signature = Some(CreateTxInScript::Pay2PkH {
-                    signed_data: construct_tx_in_signable_hash(previous_out),
-                    signature: Default::default(),
-                    public_key: Default::default(),
-                })
-            }
-        }
-    }
-
-    Ok(warp::reply::json(&data))
-}
-
 //======= POST HANDLERS =======//
 
 /// Post to retrieve an item from the blockchain db by hash key
@@ -398,6 +379,25 @@ pub async fn post_create_receipt_asset(
         return Err(warp::reject::custom(errors::ErrorInvalidJSONStructure));
     }
     Ok(warp::reply::json(&"Creating receipt asset".to_owned()))
+}
+
+/// Post to get transactions info to sign to create a Transaction
+pub async fn post_signable_transactions(
+    mut data: Vec<CreateTransaction>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    for tx in &mut data {
+        for input in &mut tx.inputs {
+            if let Some(previous_out) = &input.previous_out {
+                input.script_signature = Some(CreateTxInScript::Pay2PkH {
+                    signed_data: construct_tx_in_signable_hash(previous_out),
+                    signature: Default::default(),
+                    public_key: Default::default(),
+                })
+            }
+        }
+    }
+
+    Ok(warp::reply::json(&data))
 }
 
 /// Post transactions to compute node
