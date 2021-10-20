@@ -16,6 +16,9 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::{error, fmt};
 
+/// Simple BTreeMap structure used to hold `(OutPoint, Asset)` pairs with respect to a public key address
+pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
+
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 pub type UtxoSetRef<'a> = BTreeMap<&'a OutPoint, &'a TxOut>;

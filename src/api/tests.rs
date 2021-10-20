@@ -117,7 +117,7 @@ fn get_transaction() -> (String, Transaction) {
     let asset = TokenAmount(25_200);
     let mut tx = Transaction::new();
 
-    let tx_in = TxIn::new_from_input(OutPoint::new("bob".to_string(), 0), Script::new());
+    let tx_in = TxIn::new_from_input(OutPoint::new("tx_hash".to_string(), 0), Script::new());
     let tx_out = TxOut::new_token_amount(COMMON_ADDR_STORE.0.to_string(), asset);
     tx.inputs = vec![tx_in];
     tx.outputs = vec![tx_out];
@@ -301,9 +301,16 @@ async fn test_get_wallet_info() {
     };
 
     let mut fund_store = db.get_fund_store();
-    fund_store.store_tx(OutPoint::new("000000".to_string(), 0), Asset::token_u64(11));
+    let out_point = OutPoint::new("tx_hash".to_string(), 0);
+    let asset = Asset::token_u64(11);
+    fund_store.store_tx(out_point.clone(), asset.clone());
+
     db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
         .await;
+
+    db.save_transaction_to_wallet(out_point, "public_address".to_string())
+        .await
+        .unwrap();
 
     let request = warp::test::request().method("GET").path("/wallet_info");
 
@@ -317,7 +324,7 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":[[\"000000\",{\"Token\":11}]]}");
+    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":11}]]}}");
 }
 
 /// Test GET new payment address
@@ -656,7 +663,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":25200},\"total\":25200}"
+        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"n\":0,\"t_hash\":\"tx_hash\"},{\"Token\":25200}]]},\"total\":{\"receipts\":0,\"tokens\":25200}}"
     );
 }
 
@@ -1015,9 +1022,7 @@ async fn test_post_change_passphrase() {
     //
     let filter = routes::change_passphrase(db.clone());
     let res = request.reply(&filter).await;
-    let actual = db
-        .get_master_key_store(String::from("new_passphrase"))
-        .await;
+    let actual = db.test_passphrase(String::from("new_passphrase")).await;
     let actual_address_store = db.get_address_store(&payment_address);
 
     //
@@ -1028,7 +1033,7 @@ async fn test_post_change_passphrase() {
         "Not able to decrypt addresses stored in WalletDb"
     );
 
-    assert!(actual.is_ok());
+    assert!(matches!(actual, Ok(())), "{:?}", actual);
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Passphrase changed successfully\"");
 }
@@ -1060,6 +1065,7 @@ async fn test_post_change_passphrase_failure() {
     // Act
     //
     let filter = routes::change_passphrase(db.clone());
+    let actual = db.test_passphrase(String::from("new_passphrase")).await;
     let res = request.reply(&filter).await;
 
     //
@@ -1071,10 +1077,6 @@ async fn test_post_change_passphrase_failure() {
         "content-type",
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
-
-    let actual = db
-        .get_master_key_store(String::from("new_passphrase"))
-        .await;
 
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),

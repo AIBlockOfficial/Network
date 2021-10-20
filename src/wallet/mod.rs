@@ -198,10 +198,10 @@ impl WalletDb {
         new_passphrase: String,
     ) -> Result<()> {
         let db = self.db.clone();
-        let master_key = self.get_master_key_store(old_passphrase).await?;
-        Ok(task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
             let mut batch = db.batch_writer();
+            let master_key = get_master_key_store(&db, old_passphrase.as_bytes())?;
             let salt = pwhash::gen_salt();
             let nonce = secretbox::gen_nonce();
             let pass_key = make_key(new_passphrase.as_bytes(), salt);
@@ -216,8 +216,9 @@ impl WalletDb {
             batch.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store);
             let batch = batch.done();
             db.write(batch).unwrap();
+            Ok(())
         })
-        .await?)
+        .await?
     }
 
     pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {

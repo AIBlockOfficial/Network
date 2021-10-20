@@ -2,8 +2,8 @@ use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    api_debug_routes, node_type_as_str, ComputeApiRequest, DebugData, NodeType,
-    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    api_debug_routes, node_type_as_str, AddressesWithOutPoints, ComputeApiRequest, DebugData,
+    NodeType, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
@@ -14,7 +14,7 @@ use crate::utils::{
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
-use naom::primitives::asset::{Asset, TokenAmount};
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
@@ -46,7 +46,7 @@ pub struct Addresses {
 struct WalletInfo {
     running_total: f64,
     receipt_total: u64,
-    addresses: Vec<(String, Asset)>,
+    addresses: AddressesWithOutPoints,
 }
 
 /// Public key addresses received from client
@@ -127,11 +127,13 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
-    let addresses: Vec<(String, Asset)> = fund_store
-        .transactions()
-        .iter()
-        .map(|(o, a)| (o.t_hash.clone(), a.clone()))
-        .collect();
+    let mut addresses = AddressesWithOutPoints::new();
+    for (out_point, asset) in fund_store.transactions() {
+        addresses
+            .entry(wallet_db.get_transaction_address(out_point))
+            .or_insert_with(Vec::new)
+            .push((out_point.clone(), asset.clone()))
+    }
 
     let total = fund_store.running_total();
     let (running_total, receipt_total) = (
@@ -377,7 +379,6 @@ pub async fn post_fetch_utxo_balance(
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let tutxo = tracked_utxo.lock().unwrap();
     let balances = tutxo.get_balance_for_addresses(&addresses.address_list);
-
     Ok(warp::reply::json(&json!(balances)))
 }
 
