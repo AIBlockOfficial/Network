@@ -48,19 +48,19 @@ RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settin
 c1=$!
 RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --api_port=3004 > compute_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=5 --compute_index=1 > miner_5.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=5 --api_port=3005 --compute_index=1 > miner_5.log 2>&1 &
 m5=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=4 --compute_index=0 > miner_4.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=4 --api_port=3006 --compute_index=0 > miner_4.log 2>&1 &
 m4=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=3 --compute_index=1 > miner_3.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=3 --api_port=3007 --compute_index=1 > miner_3.log 2>&1 &
 m3=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=2 --compute_index=0 > miner_2.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=2 --api_port=3008 --compute_index=0 > miner_2.log 2>&1 &
 m2=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --index=1 --compute_index=1 > miner_1.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3009 --compute_index=1 > miner_1.log 2>&1 &
 m1=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml  --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!
-RUST_LOG="$USER_LOG" target/release/node user  --config=src/bin/node_settings_local_raft_2.toml > user_0.log 2>&1 &
+RUST_LOG="$USER_LOG" target/release/node user --config=src/bin/node_settings_local_raft_2.toml > user_0.log 2>&1 &
 u0=$!
 
 echo $s1 $s0 $c1 $c0 $m5 $m4 $m3 $m2 $m1 $m0 $u0

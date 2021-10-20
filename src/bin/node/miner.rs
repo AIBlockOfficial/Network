@@ -9,7 +9,6 @@ use system::{
     ResponseResult,
 };
 use system::{MinerNode, UserNode};
-use warp::Filter;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
@@ -141,15 +140,12 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 bind_address.set_port(api_addr.port());
 
                 async move {
-                    let serve = warp::serve(
-                        routes::miner_node_routes(
-                            current_block,
-                            db.clone(),
-                            miner_node,
-                            Some(user_node.clone()),
-                        )
-                        .or(routes::miner_node_with_user_routes(db, user_node)),
-                    );
+                    let serve = warp::serve(routes::miner_node_with_user_routes(
+                        db,
+                        current_block,
+                        miner_node,
+                        user_node,
+                    ));
                     if let Some(api_tls) = api_tls {
                         serve
                             .tls()
@@ -193,12 +189,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 bind_address.set_port(api_addr.port());
 
                 async move {
-                    let serve = warp::serve(routes::miner_node_routes(
-                        current_block,
-                        db,
-                        miner_node,
-                        None,
-                    ));
+                    let serve =
+                        warp::serve(routes::miner_node_routes(current_block, db, miner_node));
                     if let Some(api_tls) = api_tls {
                         serve
                             .tls()
@@ -343,8 +335,8 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings.set_default("miner_node_idx", 0).unwrap();
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
-    settings.set_default("user_api_port", 3003).unwrap();
-    settings.set_default("miner_api_port", 3003).unwrap();
+    settings.set_default("user_api_port", 3000).unwrap();
+    settings.set_default("miner_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("miner_api_use_tls", true).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();

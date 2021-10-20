@@ -36,6 +36,8 @@ pub enum WalletDbError {
     Database(SimpleDbError),
     PassphraseError,
     InsufficientFundsError,
+    MasterKeyRetrievalError,
+    MasterKeyMissingError,
 }
 
 impl fmt::Display for WalletDbError {
@@ -47,6 +49,8 @@ impl fmt::Display for WalletDbError {
             Self::Database(err) => write!(f, "Database Error: {}", err),
             Self::PassphraseError => write!(f, "PassphraseError"),
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
+            Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
+            Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
         }
     }
 }
@@ -60,6 +64,8 @@ impl error::Error for WalletDbError {
             Self::Database(ref e) => Some(e),
             Self::PassphraseError => None,
             Self::InsufficientFundsError => None,
+            Self::MasterKeyRetrievalError => None,
+            Self::MasterKeyMissingError => None,
         }
     }
 }
@@ -149,13 +155,36 @@ impl WalletDb {
         old_passphrase: String,
         new_passphrase: String,
     ) -> Result<()> {
-        // Get existing master key store with old passphrase
-        let master_key_store = self.test_passphrase(old_passphrase).await?;
-        // Re-encrypt master key store with new passphrase
-        let encryption_key = self.encryption_key.clone();
-        self.re_encrypt_master_key(master_key_store, encryption_key, new_passphrase)
+        self.re_encrypt_master_key(old_passphrase, new_passphrase)
             .await?;
         Ok(())
+    }
+
+    /// Test passphrase
+    ///
+    /// This function is used to test the `WalletDb` passphrase
+    /// without unnecessarily exposing the master key
+    ///
+    /// ### Arguments
+    ///
+    /// * `passphrase` - Current wallet passphrase
+    pub async fn test_passphrase(&self, passphrase: String) -> Result<()> {
+        self.get_master_key_store(passphrase).await?;
+        Ok(())
+    }
+
+    /// Get the master key store using a given passphrase
+    ///
+    ///  ### Arguments
+    ///
+    /// * `passphrase` - Current wallet passphrase
+    pub async fn get_master_key_store(&self, passphrase: String) -> Result<secretbox::Key> {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            get_master_key_store(&db, passphrase.as_bytes())
+        })
+        .await?
     }
 
     /// Re-encrypt the master key with a new passphrase
@@ -163,21 +192,18 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `new_passphrase`      - Passphrase for master key store.
-    pub async fn re_encrypt_master_key(
+    async fn re_encrypt_master_key(
         &self,
-        master_key_store: MasterKeyStore,
-        master_key: secretbox::Key,
+        old_passphrase: String,
         new_passphrase: String,
     ) -> Result<()> {
         let db = self.db.clone();
+        let master_key = self.get_master_key_store(old_passphrase).await?;
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
             let mut batch = db.batch_writer();
-            let MasterKeyStore {
-                salt,
-                nonce,
-                enc_master_key: _,
-            } = master_key_store;
+            let salt = pwhash::gen_salt();
+            let nonce = secretbox::gen_nonce();
             let pass_key = make_key(new_passphrase.as_bytes(), salt);
             let enc_master_key =
                 secretbox::seal(master_key.as_ref().to_vec(), &nonce, &pass_key).unwrap();
@@ -192,28 +218,6 @@ impl WalletDb {
             db.write(batch).unwrap();
         })
         .await?)
-    }
-
-    /// Test an entered passphrase and return existing master key.
-    ///
-    /// This function assumes that the master key has already been created,
-    /// and can also be used to test a wallet passphrase
-    ///
-    /// ### Arguments
-    ///
-    /// * `passphrase`      - Passphrase to test
-    pub async fn test_passphrase(&self, passphrase: String) -> Result<MasterKeyStore> {
-        let store = self
-            .db
-            .lock()
-            .unwrap()
-            .get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY)?;
-        let store = store.unwrap_or_default();
-        let store: MasterKeyStore = deserialize(&store)?;
-        let pass_key = make_key(passphrase.as_bytes(), store.salt);
-        secretbox::open(store.clone().enc_master_key, &store.nonce, &pass_key)
-            .ok_or(WalletDbError::PassphraseError)?;
-        Ok(store)
     }
 
     pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {
@@ -661,22 +665,32 @@ pub fn set_new_master_key_store(
     master_key
 }
 
-/// Get or save master key store on `WalletDb` startup
+/// Get master store key with given passphrase
+pub fn get_master_key_store(db: &SimpleDb, passphrase: &[u8]) -> Result<secretbox::Key> {
+    let store = db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY)?;
+    let store = store.ok_or(WalletDbError::MasterKeyMissingError)?;
+    let store: MasterKeyStore = deserialize(&store)?;
+
+    let pass_key = make_key(passphrase, store.salt);
+    let master_key = secretbox::open(store.clone().enc_master_key, &store.nonce, &pass_key)
+        .ok_or(WalletDbError::PassphraseError)?;
+    let key =
+        secretbox::Key::from_slice(&master_key).ok_or(WalletDbError::MasterKeyRetrievalError)?;
+    Ok(key)
+}
+
+/// Get or save master key store
+///
+/// This function is used during the initial node startup,
+/// and should panic on errors.
 pub fn get_or_save_master_key_store(
     db: &SimpleDb,
     batch: &mut SimpleDbWriteBatch,
     passphrase: &[u8],
 ) -> secretbox::Key {
-    match db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY) {
-        Ok(Some(store)) => {
-            let store: MasterKeyStore = deserialize(&store).unwrap();
-            let pass_key = make_key(passphrase, store.salt);
-            match secretbox::open(store.enc_master_key, &store.nonce, &pass_key) {
-                Some(master_key) => secretbox::Key::from_slice(&master_key).unwrap(),
-                None => panic!("WalletDb: invalid passphrase"),
-            }
-        }
-        Ok(None) => set_new_master_key_store(batch, passphrase),
+    match get_master_key_store(db, passphrase) {
+        Ok(key) => key,
+        Err(WalletDbError::MasterKeyMissingError) => set_new_master_key_store(batch, passphrase),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }
@@ -828,7 +842,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[should_panic(expected = "WalletDb: invalid passphrase")]
+    #[should_panic(expected = "Error accessing wallet: PassphraseError")]
     async fn incorrect_password() {
         //Arrange
         let db = WalletDb::new(

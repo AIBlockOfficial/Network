@@ -2,8 +2,8 @@ use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, DebugData, NodeType, RbPaymentData, RbPaymentRequestData,
-    RbPaymentResponseData, Response, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
@@ -788,17 +788,21 @@ impl UserNode {
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
-        if let Ok((tx_ins, tx_outs)) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
-            let payment_tx = construct_tx_core(tx_ins, tx_outs);
-            self.next_payment = Some((peer, payment_tx));
-            return Response {
-                success: true,
-                reason: "Next payment transaction ready",
+        let (tx_ins, tx_outs) =
+            if let Ok(value) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
+                value
+            } else {
+                return Response {
+                    success: false,
+                    reason: "Insufficient funds for payment",
+                };
             };
-        }
+        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        self.next_payment = Some((peer, payment_tx));
+
         Response {
-            success: false,
-            reason: "Insufficient funds for payment",
+            success: true,
+            reason: "Next payment transaction ready",
         }
     }
 
@@ -813,26 +817,22 @@ impl UserNode {
         asset_required: Asset,
         mut tx_outs: Vec<TxOut>,
     ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        match self
+        let (tx_cons, total_amount, tx_used) = self
             .wallet_db
             .fetch_inputs_for_payment(asset_required.clone())
-            .await
-        {
-            Ok((tx_cons, total_amount, tx_used)) => {
-                if let Some(excess) = total_amount.get_excess(&asset_required) {
-                    let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-                    tx_outs.push(TxOut::new_asset(excess_address, excess));
-                }
+            .await?;
 
-                let tx_ins = self
-                    .wallet_db
-                    .consume_inputs_for_payment(tx_cons, tx_used)
-                    .await;
-
-                Ok((tx_ins, tx_outs))
-            }
-            Err(e) => Err(e.into()),
+        if let Some(excess) = total_amount.get_excess(&asset_required) {
+            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
+            tx_outs.push(TxOut::new_asset(excess_address, excess));
         }
+
+        let tx_ins = self
+            .wallet_db
+            .consume_inputs_for_payment(tx_cons, tx_used)
+            .await;
+
+        Ok((tx_ins, tx_outs))
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1144,49 +1144,52 @@ impl UserNode {
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
 
-        if let Ok((tx_ins, tx_outs)) = tx_ins_and_outs {
-            let receiver_from_addr = construct_tx_ins_address(&tx_ins);
-
-            // DruidExpectation for sender(Alice)
-            let sender_druid_expectation = DruidExpectation {
-                from: receiver_from_addr,
-                to: sender_address.clone(),
-                asset: Asset::Receipt(1),
-            };
-
-            // DruidExpectation for receiver(Bob)
-            let receiver_druid_expectation = DruidExpectation {
-                from: sender_from_addr,
-                to: receiver_address.clone(),
-                asset: sender_asset,
-            };
-
-            let rb_receive_tx = construct_rb_receive_payment_tx(
-                tx_ins,
-                tx_outs,
-                sender_address,
-                0,
-                druid,
-                vec![receiver_druid_expectation],
-            );
-
-            let rb_payment_response = Some(RbPaymentResponseData {
-                receiver_address,
-                receiver_half_druid,
-                sender_druid_expectation,
-            });
-
-            self.next_rb_payment = Some((Some(peer), rb_receive_tx));
-            self.next_rb_payment_response = Some((peer, rb_payment_response));
-
+        let (tx_ins, tx_outs) = if let Ok(value) = tx_ins_and_outs {
+            value
+        } else {
             return Response {
-                success: true,
-                reason: "Received receipt-based payment request",
+                success: false,
+                reason: "Insufficient funds for payment",
             };
-        }
+        };
+
+        let receiver_from_addr = construct_tx_ins_address(&tx_ins);
+
+        // DruidExpectation for sender(Alice)
+        let sender_druid_expectation = DruidExpectation {
+            from: receiver_from_addr,
+            to: sender_address.clone(),
+            asset: Asset::Receipt(1),
+        };
+
+        // DruidExpectation for receiver(Bob)
+        let receiver_druid_expectation = DruidExpectation {
+            from: sender_from_addr,
+            to: receiver_address.clone(),
+            asset: sender_asset,
+        };
+
+        let rb_receive_tx = construct_rb_receive_payment_tx(
+            tx_ins,
+            tx_outs,
+            sender_address,
+            0,
+            druid,
+            vec![receiver_druid_expectation],
+        );
+
+        let rb_payment_response = Some(RbPaymentResponseData {
+            receiver_address,
+            receiver_half_druid,
+            sender_druid_expectation,
+        });
+
+        self.next_rb_payment = Some((Some(peer), rb_receive_tx));
+        self.next_rb_payment_response = Some((peer, rb_payment_response));
+
         Response {
-            success: false,
-            reason: "Insufficient funds for payment",
+            success: true,
+            reason: "Received receipt-based payment request",
         }
     }
 
@@ -1262,8 +1265,9 @@ impl UserNode {
         }
     }
 
-    pub async fn node_debug_data(&self) -> DebugData {
-        self.node.clone().get_debug_data().await
+    /// Get `Node` member
+    pub fn get_node(&self) -> &Node {
+        &self.node
     }
 }
 

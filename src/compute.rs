@@ -6,8 +6,8 @@ use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApiRequest, ComputeInterface, ComputeRequest,
-    Contract, DebugData, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response,
-    StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
+    Contract, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
+    UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
 use crate::utils::{
@@ -1373,8 +1373,9 @@ impl ComputeNode {
         }
     }
 
-    pub async fn node_debug_data(&self) -> DebugData {
-        self.node.clone().get_debug_data().await
+    /// Get `Node` member
+    pub fn get_node(&self) -> &Node {
+        &self.node
     }
 }
 

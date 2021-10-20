@@ -1019,7 +1019,7 @@ async fn init_miner(
         miner_nodes: info.miner_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         passphrase: config.passphrase.clone(),
-        miner_api_port: 3003,
+        miner_api_port: 3004,
         miner_api_use_tls: true,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);

@@ -2,13 +2,15 @@ use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    node_type_as_str, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    api_debug_routes, node_type_as_str, ComputeApiRequest, DebugData, NodeType,
+    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
-use crate::miner::BlockPoWReceived;
+use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::{decode_pub_key, decode_signature, DeserializedBlockchainItem};
+use crate::utils::{
+    decode_pub_key, decode_signature, get_node_debug_data, DeserializedBlockchainItem,
+};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
@@ -43,8 +45,8 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
-    receipt_total: f64,
-    addresses: BTreeMap<String, Asset>,
+    receipt_total: u64,
+    addresses: Vec<(String, Asset)>,
 }
 
 /// Public key addresses received from client
@@ -125,15 +127,20 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
-    let addresses: BTreeMap<String, Asset> = fund_store
+    let addresses: Vec<(String, Asset)> = fund_store
         .transactions()
         .iter()
         .map(|(o, a)| (o.t_hash.clone(), a.clone()))
         .collect();
 
+    let total = fund_store.running_total();
+    let (running_total, receipt_total) = (
+        total.tokens.0 as f64 / D_DISPLAY_PLACES,
+        total.receipts as u64,
+    );
     let send_val = WalletInfo {
-        running_total: fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES,
-        receipt_total: fund_store.running_total().receipts as f64,
+        running_total,
+        receipt_total,
         addresses,
     };
 
@@ -173,35 +180,32 @@ pub async fn get_latest_block(
 ///
 /// Contains an optional field for an auxiliary `Node`
 /// , i.e a Miner node may or may not have additional User
-/// node capabilities- providing additional API routes.
+/// node capabilities- providing additional debug data.
 pub async fn get_debug_data(
     node: Node,
     aux_node: Option<Node>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let data = match aux_node {
         Some(aux_node) => {
-            let primary_data = node.get_debug_data().await;
-            let aux_data = aux_node.get_debug_data().await;
-            let node_type = format!("{}/{}", primary_data.node_type, aux_data.node_type);
-            let mut node_api = [primary_data.node_api, aux_data.node_api].concat();
-            node_api.sort_by_key(|route| route.to_lowercase());
-            node_api.dedup();
-            let mut node_peers = [primary_data.node_peers, aux_data.node_peers].concat();
-            node_peers.dedup();
+            let node_type = format!(
+                "{}/{}",
+                node_type_as_str(node.get_node_type()),
+                node_type_as_str(aux_node.get_node_type())
+            );
             DebugData {
-                node_type,
-                node_api,
-                node_peers,
+                node_type: node_type.clone(),
+                node_api: api_debug_routes(&node_type),
+                node_peers: [node.get_peer_list().await, aux_node.get_peer_list().await].concat(),
             }
         }
-        None => node.get_debug_data().await,
+        None => get_node_debug_data(&node).await,
     };
     Ok(warp::reply::json(&data))
 }
 
 /// Get to fetch information about the current mining block
 pub async fn get_current_mining_block(
-    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    current_block: CurrentBlockWithMutex,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
     Ok(warp::reply::json(&data))
@@ -389,16 +393,12 @@ pub async fn post_create_receipt_asset(
         signature,
     } = create_receipt_asset_data;
 
-    let DebugData {
-        node_type,
-        node_api: _,
-        node_peers: _,
-    } = peer.get_debug_data().await;
+    let node_type = peer.get_node_type();
 
     let all_some = script_public_key.is_some() && public_key.is_some() && signature.is_some();
     let all_none = script_public_key.is_none() && public_key.is_none() && signature.is_none();
 
-    if node_type == node_type_as_str(NodeType::User) && all_none {
+    if node_type == NodeType::User && all_none {
         // Create receipt tx on the user node
         let request =
             UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
@@ -406,7 +406,7 @@ pub async fn post_create_receipt_asset(
             error!("route:post_create_receipt_asset error: {:?}", e);
             return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
         }
-    } else if node_type == node_type_as_str(NodeType::Compute) && all_some {
+    } else if node_type == NodeType::Compute && all_some {
         // Create receipt tx on the compute node
         let (script_public_key, public_key, signature) = (
             script_public_key.unwrap_or_default(),

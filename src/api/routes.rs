@@ -1,7 +1,7 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::miner::BlockPoWReceived;
+use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::wallet::WalletDb;
 
@@ -302,13 +302,12 @@ pub fn compute_node_routes(
 
 // API routes for Miner nodes
 pub fn miner_node_routes(
-    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    current_block: CurrentBlockWithMutex,
     db: WalletDb,
     node: Node,
-    aux_node: Option<Node>, /* Miner nodes optionally contain User node capabilities */
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     current_mining_block(current_block)
-        .or(debug_data(node, aux_node))
+        .or(debug_data(node, None))
         .or(change_passphrase(db.clone()))
         .or(export_keypairs(db.clone()))
         .or(import_keypairs(db.clone()))
@@ -316,14 +315,23 @@ pub fn miner_node_routes(
         .or(payment_address(db))
 }
 
-// Additional API routes for Miner nodes with User node capabilities
+// API routes for Miner nodes with User node capabilities
 pub fn miner_node_with_user_routes(
-    db: WalletDb,
-    node: Node, /* Additional User `Node` */
+    db: WalletDb, /* Shared WalletDb */
+    current_block: CurrentBlockWithMutex,
+    miner_node: Node,
+    user_node: Node, /* Additional User `Node` */
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    make_payment(db.clone(), node.clone())
-        .or(make_ip_payment(db, node.clone()))
-        .or(request_donation(node.clone()))
-        .or(update_running_total(node.clone()))
-        .or(create_receipt_asset(node))
+    current_mining_block(current_block)
+        .or(debug_data(miner_node, Some(user_node.clone())))
+        .or(change_passphrase(db.clone()))
+        .or(export_keypairs(db.clone()))
+        .or(import_keypairs(db.clone()))
+        .or(wallet_info(db.clone()))
+        .or(payment_address(db.clone()))
+        .or(make_payment(db.clone(), user_node.clone()))
+        .or(make_ip_payment(db, user_node.clone()))
+        .or(request_donation(user_node.clone()))
+        .or(update_running_total(user_node.clone()))
+        .or(create_receipt_asset(user_node))
 }

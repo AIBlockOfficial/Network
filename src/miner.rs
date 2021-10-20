@@ -3,8 +3,8 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, DebugData, MineRequest, MinerInterface, NodeType, ProofOfWork,
-    Response, StorageRequest,
+    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    StorageRequest,
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
@@ -45,6 +45,11 @@ pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
+
+/// Wrapper for current block
+///
+/// TODO: Circumvent using a Mutex just for API purposes.
+pub type CurrentBlockWithMutex = Arc<Mutex<Option<BlockPoWReceived>>>;
 
 /// Block Pow task input/output
 #[derive(Debug, Clone)]
@@ -123,7 +128,7 @@ pub struct MinerNode {
     storage_addr: SocketAddr,
     partition_key: Option<Key>,
     rand_num: Vec<u8>,
-    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
     partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
@@ -193,7 +198,6 @@ impl MinerNode {
     }
 
     /// Info needed to run the API point.
-    #[allow(clippy::type_complexity)]
     pub fn api_inputs(
         &self,
     ) -> (
@@ -201,7 +205,7 @@ impl MinerNode {
         Node,
         SocketAddr,
         Option<TlsPrivateInfo>,
-        Arc<Mutex<Option<BlockPoWReceived>>>,
+        CurrentBlockWithMutex,
     ) {
         let (api_addr, api_tls_info) = self.api_info.clone();
         (
@@ -930,8 +934,9 @@ impl MinerNode {
         Ok(self)
     }
 
-    pub async fn node_debug_data(&self) -> DebugData {
-        self.node.clone().get_debug_data().await
+    /// Get `Node` member
+    pub fn get_node(&self) -> &Node {
+        &self.node
     }
 }
 

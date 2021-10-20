@@ -157,9 +157,9 @@ pub fn node_type_as_str(node_type: NodeType) -> &'static str {
 
 // Returns a vector of possible API routes for the specified node type
 // TODO: Isn't there way we don't have to hard code this?
-pub fn api_debug_routes(node_type: NodeType) -> Vec<String> {
+pub fn api_debug_routes(node_type: &str) -> Vec<String> {
     match node_type {
-        NodeType::Miner => vec![
+        "Miner" => vec![
             "current_mining_block".to_owned(),
             "change_passphrase".to_owned(),
             "export_keypairs".to_owned(),
@@ -168,17 +168,17 @@ pub fn api_debug_routes(node_type: NodeType) -> Vec<String> {
             "new_payment_address".to_owned(),
             "debug_data".to_owned(),
         ],
-        NodeType::Storage => vec![
+        "Storage" => vec![
             "latest_block".to_owned(),
             "blockchain_entry_by_key".to_owned(),
             "debug_data".to_owned(),
         ],
-        NodeType::Compute => vec![
+        "Compute" => vec![
             "fetch_balance".to_owned(),
             "create_receipt_asset".to_owned(),
             "debug_data".to_owned(),
         ],
-        NodeType::User => vec![
+        "User" => vec![
             "make_payment".to_owned(),
             "make_ip_payment".to_owned(),
             "request_donation".to_owned(),
@@ -190,7 +190,21 @@ pub fn api_debug_routes(node_type: NodeType) -> Vec<String> {
             "change_passphrase".to_owned(),
             "debug_data".to_owned(),
         ],
-        NodeType::PreLaunch => Vec::new(),
+        /* Miner node with User node capabilities */
+        "Miner/User" => vec![
+            "make_payment".to_owned(),
+            "make_ip_payment".to_owned(),
+            "request_donation".to_owned(),
+            "export_keypairs".to_owned(),
+            "import_keypairs".to_owned(),
+            "update_running_total".to_owned(),
+            "new_payment_address".to_owned(),
+            "create_receipt_asset".to_owned(),
+            "change_passphrase".to_owned(),
+            "current_mining_block".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -673,7 +687,7 @@ impl fmt::Debug for UserRequest {
 }
 ///============ PRE-LAUNCH NODE ============///
 ///
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DebugData {
     pub node_type: String,
     pub node_api: Vec<String>,

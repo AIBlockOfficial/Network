@@ -14,7 +14,7 @@ use crate::interfaces::{
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{decode_pub_key, decode_secret_key};
-use crate::wallet::{MasterKeyStore, WalletDb, WalletDbError};
+use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::crypto::sign_ed25519::{self as sign};
@@ -317,7 +317,7 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0.0,\"addresses\":{\"000000\":{\"Token\":11}}}");
+    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":[[\"000000\",{\"Token\":11}]]}");
 }
 
 /// Test GET new payment address
@@ -997,6 +997,8 @@ async fn test_post_change_passphrase() {
         WalletDb::new(DbMode::InMemory, simple_db, passphrase)
     };
 
+    let (payment_address, expected_address_store) = db.generate_payment_address().await;
+
     let json_body = ChangePassphraseData {
         old_passphrase: String::from("old_passphrase"),
         new_passphrase: String::from("new_passphrase"),
@@ -1013,14 +1015,20 @@ async fn test_post_change_passphrase() {
     //
     let filter = routes::change_passphrase(db.clone());
     let res = request.reply(&filter).await;
+    let actual = db
+        .get_master_key_store(String::from("new_passphrase"))
+        .await;
+    let actual_address_store = db.get_address_store(&payment_address);
 
     //
     // Assert
     //
-    assert!(db
-        .test_passphrase(String::from("new_passphrase"))
-        .await
-        .is_ok());
+    assert_eq!(
+        expected_address_store.secret_key, actual_address_store.secret_key,
+        "Not able to decrypt addresses stored in WalletDb"
+    );
+
+    assert!(actual.is_ok());
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "\"Passphrase changed successfully\"");
 }
@@ -1063,11 +1071,15 @@ async fn test_post_change_passphrase_failure() {
         "content-type",
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
-    let actual = db.test_passphrase(String::from("new_passphrase")).await;
-    let expected: Result<MasterKeyStore, WalletDbError> = Err(WalletDbError::PassphraseError);
-    assert_eq!(
-        std::mem::discriminant(&actual),
-        std::mem::discriminant(&expected)
+
+    let actual = db
+        .get_master_key_store(String::from("new_passphrase"))
+        .await;
+
+    assert!(
+        matches!(actual, Err(WalletDbError::PassphraseError)),
+        "{:?}",
+        actual
     );
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
