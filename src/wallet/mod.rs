@@ -16,13 +16,85 @@ use naom::utils::transaction_utils::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Error;
 use std::sync::{Arc, Mutex};
+use std::{error, fmt, io};
 use tokio::task;
 mod fund_store;
 pub use fund_store::{AssetValues, FundStore};
 
-///Storage key for a &[u8] of the word 'MasterKeyStore'
+/// Result wrapper for WalletDb errors
+///
+/// TODO: Determine the remaining functions that require the `Result` wrapper for error handling
+pub type Result<T> = std::result::Result<T, WalletDbError>;
+
+/// Enum for errors that occur during WalletDb operations
+#[derive(Debug)]
+pub enum WalletDbError {
+    IO(io::Error),
+    AsyncTask(task::JoinError),
+    Serialization(bincode::Error),
+    Database(SimpleDbError),
+    PassphraseError,
+    InsufficientFundsError,
+    MasterKeyRetrievalError,
+    MasterKeyMissingError,
+}
+
+impl fmt::Display for WalletDbError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IO(err) => write!(f, "I/O Error: {}", err),
+            Self::AsyncTask(err) => write!(f, "Async Error: {}", err),
+            Self::Serialization(err) => write!(f, "Serialization Error: {}", err),
+            Self::Database(err) => write!(f, "Database Error: {}", err),
+            Self::PassphraseError => write!(f, "PassphraseError"),
+            Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
+            Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
+            Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
+        }
+    }
+}
+
+impl error::Error for WalletDbError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::IO(ref e) => Some(e),
+            Self::Serialization(ref e) => Some(e),
+            Self::AsyncTask(ref e) => Some(e),
+            Self::Database(ref e) => Some(e),
+            Self::PassphraseError => None,
+            Self::InsufficientFundsError => None,
+            Self::MasterKeyRetrievalError => None,
+            Self::MasterKeyMissingError => None,
+        }
+    }
+}
+
+impl From<io::Error> for WalletDbError {
+    fn from(other: io::Error) -> Self {
+        Self::IO(other)
+    }
+}
+
+impl From<task::JoinError> for WalletDbError {
+    fn from(other: task::JoinError) -> Self {
+        Self::AsyncTask(other)
+    }
+}
+
+impl From<bincode::Error> for WalletDbError {
+    fn from(other: bincode::Error) -> Self {
+        Self::Serialization(other)
+    }
+}
+
+impl From<SimpleDbError> for WalletDbError {
+    fn from(other: SimpleDbError) -> Self {
+        Self::Database(other)
+    }
+}
+
+/// Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &[u8] = "MasterKeyStore".as_bytes();
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
@@ -71,25 +143,82 @@ impl WalletDb {
         }
     }
 
-    /// Test if an entered passphrase is correct
-    pub async fn test_passphrase(&self, passphrase: String) -> Result<(), ()> {
-        match self
-            .db
-            .lock()
-            .unwrap()
-            .get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY)
-        {
-            Ok(Some(store)) => {
-                let store: MasterKeyStore = deserialize(&store).unwrap();
-                let pass_key = make_key(passphrase.as_bytes(), store.salt);
-                match secretbox::open(store.enc_master_key, &store.nonce, &pass_key) {
-                    Some(_) => Ok(()),
-                    None => Err(()),
-                }
-            }
-            Ok(None) => Err(()),
-            Err(_) => Err(()),
-        }
+    /// Test old passphrase and then change to a new passphrase
+    ///
+    /// ### Arguments
+    ///
+    /// * `old_passphrase`      - Previous passphrase
+    /// * `new_passphrase`      - New passphrase
+    ///
+    pub async fn change_wallet_passphrase(
+        &mut self,
+        old_passphrase: String,
+        new_passphrase: String,
+    ) -> Result<()> {
+        self.re_encrypt_master_key(old_passphrase, new_passphrase)
+            .await?;
+        Ok(())
+    }
+
+    /// Test passphrase
+    ///
+    /// This function is used to test the `WalletDb` passphrase
+    /// without unnecessarily exposing the master key
+    ///
+    /// ### Arguments
+    ///
+    /// * `passphrase` - Current wallet passphrase
+    pub async fn test_passphrase(&self, passphrase: String) -> Result<()> {
+        self.get_master_key_store(passphrase).await?;
+        Ok(())
+    }
+
+    /// Get the master key store using a given passphrase
+    ///
+    ///  ### Arguments
+    ///
+    /// * `passphrase` - Current wallet passphrase
+    pub async fn get_master_key_store(&self, passphrase: String) -> Result<secretbox::Key> {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            get_master_key_store(&db, passphrase.as_bytes())
+        })
+        .await?
+    }
+
+    /// Re-encrypt the master key with a new passphrase
+    ///
+    /// ### Arguments
+    ///
+    /// * `new_passphrase`      - Passphrase for master key store.
+    async fn re_encrypt_master_key(
+        &self,
+        old_passphrase: String,
+        new_passphrase: String,
+    ) -> Result<()> {
+        let db = self.db.clone();
+        task::spawn_blocking(move || {
+            let mut db = db.lock().unwrap();
+            let mut batch = db.batch_writer();
+            let master_key = get_master_key_store(&db, old_passphrase.as_bytes())?;
+            let salt = pwhash::gen_salt();
+            let nonce = secretbox::gen_nonce();
+            let pass_key = make_key(new_passphrase.as_bytes(), salt);
+            let enc_master_key =
+                secretbox::seal(master_key.as_ref().to_vec(), &nonce, &pass_key).unwrap();
+            let store = serialize(&MasterKeyStore {
+                salt,
+                nonce,
+                enc_master_key,
+            })
+            .unwrap();
+            batch.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store);
+            let batch = batch.done();
+            db.write(batch).unwrap();
+            Ok(())
+        })
+        .await?
     }
 
     pub async fn with_seed(self, index: usize, seeds: &[Vec<WalletTxSpec>]) -> Self {
@@ -148,11 +277,7 @@ impl WalletDb {
     ///
     /// * `address` - Address to save to wallet
     /// * `keys`    - Address-related keys to save
-    async fn save_address_to_wallet(
-        &self,
-        address: String,
-        keys: AddressStore,
-    ) -> Result<(), Error> {
+    async fn save_address_to_wallet(&self, address: String, keys: AddressStore) -> Result<()> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         Ok(task::spawn_blocking(move || {
@@ -182,7 +307,7 @@ impl WalletDb {
         &self,
         address: String,
         keys: Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
@@ -210,7 +335,7 @@ impl WalletDb {
         &self,
         out_p: OutPoint,
         key_address: String,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
@@ -233,7 +358,7 @@ impl WalletDb {
     pub async fn save_usable_payments_to_wallet(
         &self,
         payments: Vec<(OutPoint, Asset, String)>,
-    ) -> Result<Vec<(OutPoint, Asset, String)>, Error> {
+    ) -> Result<Vec<(OutPoint, Asset, String)>> {
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || {
             let mut db = db.lock().unwrap();
@@ -274,15 +399,14 @@ impl WalletDb {
     pub async fn fetch_inputs_for_payment(
         &self,
         asset_required: Asset,
-    ) -> (Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>) {
+    ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         task::spawn_blocking(move || {
             let db = db.lock().unwrap();
             fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key)
         })
-        .await
-        .unwrap()
+        .await?
     }
 
     /// Consume given used transaction and produce TxIns
@@ -364,7 +488,7 @@ impl WalletDb {
     }
 
     /// Get the wallet fund store with errors
-    pub fn get_fund_store_err(&self) -> Result<FundStore, SimpleDbError> {
+    pub fn get_fund_store_err(&self) -> Result<FundStore> {
         get_fund_store_err(&self.db.lock().unwrap())
     }
 
@@ -414,11 +538,11 @@ pub fn get_fund_store(db: &SimpleDb) -> FundStore {
 }
 
 /// Get the wallet fund store
-pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore, SimpleDbError> {
+pub fn get_fund_store_err(db: &SimpleDb) -> Result<FundStore> {
     match db.get_cf(DB_COL_DEFAULT, FUND_KEY) {
         Ok(Some(list)) => Ok(deserialize(&list).unwrap()),
         Ok(None) => Ok(FundStore::default()),
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -522,37 +646,52 @@ pub fn save_transaction_to_wallet(
     db.put_cf(DB_COL_DEFAULT, &key, &input);
 }
 
-/// Get the wallet salt store
+// Set a new master key store
+pub fn set_new_master_key_store(
+    batch: &mut SimpleDbWriteBatch,
+    passphrase: &[u8],
+) -> secretbox::Key {
+    let salt = pwhash::gen_salt();
+    let master_key = secretbox::gen_key();
+    let nonce = secretbox::gen_nonce();
+    let pass_key = make_key(passphrase, salt);
+    let enc_master_key = secretbox::seal(master_key.as_ref().to_vec(), &nonce, &pass_key).unwrap();
+    let store = serialize(&MasterKeyStore {
+        salt,
+        nonce,
+        enc_master_key,
+    })
+    .unwrap();
+    batch.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store);
+    master_key
+}
+
+/// Get master store key with given passphrase
+pub fn get_master_key_store(db: &SimpleDb, passphrase: &[u8]) -> Result<secretbox::Key> {
+    let store = db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY)?;
+    let store = store.ok_or(WalletDbError::MasterKeyMissingError)?;
+    let store: MasterKeyStore = deserialize(&store)?;
+
+    let pass_key = make_key(passphrase, store.salt);
+    let master_key = secretbox::open(store.clone().enc_master_key, &store.nonce, &pass_key)
+        .ok_or(WalletDbError::PassphraseError)?;
+    let key =
+        secretbox::Key::from_slice(&master_key).ok_or(WalletDbError::MasterKeyRetrievalError)?;
+    Ok(key)
+}
+
+/// Get or save master key store
+///
+/// This function is used during the initial node startup,
+/// and should panic on errors.
 pub fn get_or_save_master_key_store(
     db: &SimpleDb,
     batch: &mut SimpleDbWriteBatch,
     passphrase: &[u8],
 ) -> secretbox::Key {
-    match db.get_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY) {
-        Ok(Some(store)) => {
-            let store: MasterKeyStore = deserialize(&store).unwrap();
-            let pass_key = make_key(passphrase, store.salt);
-            match secretbox::open(store.enc_master_key, &store.nonce, &pass_key) {
-                Some(master_key) => secretbox::Key::from_slice(&master_key).unwrap(),
-                None => panic!("WalletDb: invalid passphrase"),
-            }
-        }
-        Ok(None) => {
-            let salt = pwhash::gen_salt();
-            let master_key = secretbox::gen_key();
-            let nonce = secretbox::gen_nonce();
-            let pass_key = make_key(passphrase, salt);
-            let enc_master_key =
-                secretbox::seal(master_key.as_ref().to_vec(), &nonce, &pass_key).unwrap();
-            let store = serialize(&MasterKeyStore {
-                salt,
-                nonce,
-                enc_master_key,
-            })
-            .unwrap();
-            batch.put_cf(DB_COL_DEFAULT, MASTER_KEY_STORE_KEY, &store);
-            master_key
-        }
+    match get_master_key_store(db, passphrase) {
+        Ok(key) => key,
+        Err(WalletDbError::MasterKeyMissingError) => set_new_master_key_store(batch, passphrase),
         Err(e) => panic!("Error accessing wallet: {:?}", e),
     }
 }
@@ -571,21 +710,19 @@ pub fn make_key(passphrase: &[u8], salt: pwhash::Salt) -> secretbox::Key {
 
 /// Make TxConstructors from stored TxOut
 /// Also return the used info for db cleanup
+#[allow(clippy::type_complexity)]
 pub fn fetch_inputs_for_payment_from_db(
     db: &SimpleDb,
     asset_required: Asset,
     encryption_key: &secretbox::Key,
-) -> (Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>) {
+) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
     let mut tx_cons = Vec::new();
     let mut tx_used = Vec::new();
     let fund_store = get_fund_store(db);
     let mut amount_made = Asset::default_of_type(&asset_required);
 
     if !fund_store.running_total().has_enough(&asset_required) {
-        panic!(
-            "Not enough funds available for payment!: {:?}",
-            fund_store.running_total()
-        );
+        return Err(WalletDbError::InsufficientFundsError);
     }
 
     for (out_p, amount) in fund_store.into_transactions() {
@@ -599,7 +736,7 @@ pub fn fetch_inputs_for_payment_from_db(
         }
     }
 
-    (tx_cons, amount_made, tx_used)
+    Ok((tx_cons, amount_made, tx_used))
 }
 
 /// Destroy the used transactions with keys purging them from the wallet
@@ -706,7 +843,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[should_panic(expected = "WalletDb: invalid passphrase")]
+    #[should_panic(expected = "Error accessing wallet: PassphraseError")]
     async fn incorrect_password() {
         //Arrange
         let db = WalletDb::new(
@@ -772,7 +909,8 @@ mod tests {
             .unwrap();
 
         // Pay out
-        let (tx_cons, fetched_amount, tx_used) = wallet.fetch_inputs_for_payment(amount_out).await;
+        let (tx_cons, fetched_amount, tx_used) =
+            wallet.fetch_inputs_for_payment(amount_out).await.unwrap();
         let tx_ins = wallet.consume_inputs_for_payment(tx_cons, tx_used).await;
 
         // clean up db

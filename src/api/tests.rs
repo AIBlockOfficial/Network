@@ -1,6 +1,6 @@
 use crate::api::handlers::{
-    Addresses, CreateReceiptAssetData, CreateTransaction, CreateTxIn, CreateTxInScript,
-    EncapsulatedPayment, PublicKeyAddresses,
+    Addresses, ChangePassphraseData, CreateReceiptAssetData, CreateTransaction, CreateTxIn,
+    CreateTxInScript, EncapsulatedPayment, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -14,10 +14,9 @@ use crate::interfaces::{
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{decode_pub_key, decode_secret_key};
-use crate::wallet::WalletDb;
+use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
-use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -118,7 +117,7 @@ fn get_transaction() -> (String, Transaction) {
     let asset = TokenAmount(25_200);
     let mut tx = Transaction::new();
 
-    let tx_in = TxIn::new_from_input(OutPoint::new("bob".to_string(), 0), Script::new());
+    let tx_in = TxIn::new_from_input(OutPoint::new("tx_hash".to_string(), 0), Script::new());
     let tx_out = TxOut::new_token_amount(COMMON_ADDR_STORE.0.to_string(), asset);
     tx.inputs = vec![tx_in];
     tx.outputs = vec![tx_out];
@@ -256,14 +255,13 @@ async fn test_get_debug_data() {
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone());
+    let filter = routes::debug_data(self_node.clone(), None);
     let res = request.reply(&filter).await;
-    println!("{:?}", res.body());
 
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"make_payment\",\"make_ip_payment\",\"request_donation\",\"wallet_keypairs\",\"import_keypairs\",\"update_running_total\",\"payment_address\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"new_payment_address\",\"create_receipt_asset\",\"change_passphrase\",\"debug_data\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -279,9 +277,8 @@ async fn test_get_storage_debug_data() {
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone());
+    let filter = routes::debug_data(self_node.clone(), None);
     let res = request.reply(&filter).await;
-    println!("{:?}", res.body());
 
     //
     // Assert
@@ -304,9 +301,16 @@ async fn test_get_wallet_info() {
     };
 
     let mut fund_store = db.get_fund_store();
-    fund_store.store_tx(OutPoint::new("000000".to_string(), 0), Asset::token_u64(11));
+    let out_point = OutPoint::new("tx_hash".to_string(), 0);
+    let asset = Asset::token_u64(11);
+    fund_store.store_tx(out_point.clone(), asset.clone());
+
     db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
         .await;
+
+    db.save_transaction_to_wallet(out_point, "public_address".to_string())
+        .await
+        .unwrap();
 
     let request = warp::test::request().method("GET").path("/wallet_info");
 
@@ -315,16 +319,12 @@ async fn test_get_wallet_info() {
     //
     let filter = routes::wallet_info(db);
     let res = request.reply(&filter).await;
-    let expected_running_total = serde_json::to_string(&json!({
-        "running_total":fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES
-    }))
-    .unwrap();
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_running_total.as_bytes());
+    assert_eq!(res.body(), "{\"running_total\":0.0004365079365079365,\"receipt_total\":0,\"addresses\":{\"public_address\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":11}]]}}");
 }
 
 /// Test GET new payment address
@@ -663,7 +663,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":25200},\"total\":25200}"
+        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"n\":0,\"t_hash\":\"tx_hash\"},{\"Token\":25200}]]},\"total\":{\"receipts\":0,\"tokens\":25200}}"
     );
 }
 
@@ -990,4 +990,100 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidJSONStructure");
+}
+
+/// Test POST change passphrase successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_change_passphrase() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::from("old_passphrase"));
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let (payment_address, expected_address_store) = db.generate_payment_address().await;
+
+    let json_body = ChangePassphraseData {
+        old_passphrase: String::from("old_passphrase"),
+        new_passphrase: String::from("new_passphrase"),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/change_passphrase")
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::change_passphrase(db.clone());
+    let res = request.reply(&filter).await;
+    let actual = db.test_passphrase(String::from("new_passphrase")).await;
+    let actual_address_store = db.get_address_store(&payment_address);
+
+    //
+    // Assert
+    //
+    assert_eq!(
+        expected_address_store.secret_key, actual_address_store.secret_key,
+        "Not able to decrypt addresses stored in WalletDb"
+    );
+
+    assert!(matches!(actual, Ok(())), "{:?}", actual);
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "\"Passphrase changed successfully\"");
+}
+
+/// Test POST change passphrase failure
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_change_passphrase_failure() {
+    //
+    // Arrange
+    //
+    let db = {
+        let simple_db = Some(get_db_with_block_no_mutex());
+        let passphrase = Some(String::from("old"));
+        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    };
+
+    let json_body = ChangePassphraseData {
+        old_passphrase: String::from("invalid_passphrase"),
+        new_passphrase: String::from("new_passphrase"),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/change_passphrase")
+        .header("Content-Type", "application/json")
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let filter = routes::change_passphrase(db.clone());
+    let actual = db.test_passphrase(String::from("new_passphrase")).await;
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+
+    assert!(
+        matches!(actual, Err(WalletDbError::PassphraseError)),
+        "{:?}",
+        actual
+    );
+    assert_eq!(res.status(), 500);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidPassphrase");
 }

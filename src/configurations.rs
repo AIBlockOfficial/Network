@@ -97,6 +97,10 @@ pub struct ComputeNodeConfig {
     pub user_nodes: Vec<NodeSpec>,
     /// Whether compute node will use raft or act independently (0)
     pub compute_raft: usize,
+    /// API port
+    pub compute_api_port: u16,
+    /// API use TLS
+    pub compute_api_use_tls: bool,
     /// Timeout for ticking raft
     pub compute_raft_tick_timeout: usize,
     /// Index of the current node in compute_nodes
@@ -111,10 +115,6 @@ pub struct ComputeNodeConfig {
     pub compute_minimum_miner_pool_len: usize,
     /// Node's legal jurisdiction
     pub jurisdiction: String,
-    /// API port
-    pub compute_api_port: u16,
-    /// API use TLS
-    pub compute_api_use_tls: bool,
     /// Node's address sanction list
     pub sanction_list: Vec<String>,
 }
@@ -167,6 +167,10 @@ pub struct MinerNodeConfig {
     pub miner_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
+    /// API port
+    pub miner_api_port: u16,
+    /// API use TLS
+    pub miner_api_use_tls: bool,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
 }

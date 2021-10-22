@@ -16,6 +16,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut node = MinerNode::new(config, Default::default()).await.unwrap();
     println!("Started node at {}", node.address());
 
+    let miner_api_inputs = node.api_inputs();
     let shared_wallet_db = Some(node.get_wallet_db().clone());
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
@@ -75,7 +76,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
             println!("Start user node with config {:?}", config);
             let user_node = UserNode::new(config, shared_members).await.unwrap();
-            let api_inputs = user_node.api_inputs();
+            let api_inputs = (user_node.api_inputs(), miner_api_inputs);
             println!("Started user node at {}", user_node.address());
 
             let (user_node_conn, user_addrs_to_connect, user_expected_connected_addrs) =
@@ -127,9 +128,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 }
             });
 
-            // User warp API
+            // User / Miner combined warp API
             let warp_handle = tokio::spawn({
-                let (db, node, api_addr, api_tls) = api_inputs;
+                let ((db, user_node, api_addr, api_tls), (_, miner_node, _, _, current_block)) =
+                    api_inputs;
 
                 println!("Warp API started on port {:?}", api_addr.port());
                 println!();
@@ -138,7 +140,12 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 bind_address.set_port(api_addr.port());
 
                 async move {
-                    let serve = warp::serve(routes::user_node_routes(db, node));
+                    let serve = warp::serve(routes::miner_node_with_user_routes(
+                        db,
+                        current_block,
+                        miner_node,
+                        user_node,
+                    ));
                     if let Some(api_tls) = api_tls {
                         serve
                             .tls()
@@ -171,12 +178,43 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
             warp_result.unwrap();
         }
         None => {
-            let (result, conn, disconn) =
-                tokio::join!(main_loop_handle, conn_loop_handle, disconn_loop_handle,);
+            // Miner warp API
+            let warp_handle = tokio::spawn({
+                let (db, miner_node, api_addr, api_tls, current_block) = miner_api_inputs;
+
+                println!("Warp API started on port {:?}", api_addr.port());
+                println!();
+
+                let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+                bind_address.set_port(api_addr.port());
+
+                async move {
+                    let serve =
+                        warp::serve(routes::miner_node_routes(current_block, db, miner_node));
+                    if let Some(api_tls) = api_tls {
+                        serve
+                            .tls()
+                            .key(&api_tls.pem_pkcs8_private_keys)
+                            .cert(&api_tls.pem_certs)
+                            .run(bind_address)
+                            .await;
+                    } else {
+                        serve.run(bind_address).await;
+                    }
+                }
+            });
+
+            let (result, conn, disconn, warp_result) = tokio::join!(
+                main_loop_handle,
+                conn_loop_handle,
+                disconn_loop_handle,
+                warp_handle
+            );
 
             result.unwrap();
             conn.unwrap();
             disconn.unwrap();
+            warp_result.unwrap();
         }
     }
 }
@@ -298,7 +336,9 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings.set_default("miner_compute_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
+    settings.set_default("miner_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
+    settings.set_default("miner_api_use_tls", true).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
@@ -384,11 +424,14 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("miner_storage_node_idx", index).unwrap();
     }
 
+    // Only one API instance will run- there will be no port conflict
     if let Some(api_port) = matches.value_of("api_port") {
         settings.set("user_api_port", api_port).unwrap();
+        settings.set("miner_api_port", api_port).unwrap();
     }
     if let Some(use_tls) = matches.value_of("api_use_tls") {
         settings.set("user_api_use_tls", use_tls).unwrap();
+        settings.set("miner_api_use_tls", use_tls).unwrap();
     }
 
     let user_settings = has_user_settings.then(|| settings.clone());
@@ -403,7 +446,6 @@ fn configuration(
         settings.1.map(|v| v.try_into::<UserNodeConfig>().unwrap()),
     )
 }
-
 #[cfg(test)]
 mod test {
     use super::*;

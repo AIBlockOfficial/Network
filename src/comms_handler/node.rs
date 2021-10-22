@@ -85,9 +85,7 @@ use super::tcp_tls::{
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::constants::NETWORK_VERSION;
-use crate::interfaces::{
-    node_type_as_str, storage_list, user_list, CommMessage, DebugData, NodeType, Token,
-};
+use crate::interfaces::{node_type_as_str, CommMessage, NodeType, Token};
 use crate::utils::MpscTracingSender;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -1011,22 +1009,12 @@ impl Node {
         }
     }
 
-    pub async fn get_debug_data(&self) -> DebugData {
-        let node_type = String::from(node_type_as_str(self.node_type));
-        match self.node_type {
-            NodeType::Storage => DebugData {
-                node_type,
-                node_api: storage_list(),
-                node_peers: self.get_peer_list().await,
-            },
-            _ => DebugData {
-                node_type,
-                node_api: user_list(),
-                node_peers: self.get_peer_list().await,
-            },
-        }
+    /// Get node type
+    pub fn get_node_type(&self) -> NodeType {
+        self.node_type
     }
 
+    /// Get list of node peers
     pub async fn get_peer_list(&self) -> Vec<(String, SocketAddr, String)> {
         let peer_clone = self.peers.clone();
         let peers = peer_clone.read().await;

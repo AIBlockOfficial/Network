@@ -2,13 +2,16 @@ use crate::api::errors;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    node_type_as_str, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    api_debug_routes, node_type_as_str, AddressesWithOutPoints, ComputeApiRequest, DebugData,
+    NodeType, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
+use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::{decode_pub_key, decode_signature, DeserializedBlockchainItem};
-use crate::wallet::WalletDb;
+use crate::utils::{
+    decode_pub_key, decode_signature, get_node_debug_data, DeserializedBlockchainItem,
+};
+use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::primitives::asset::TokenAmount;
@@ -42,6 +45,8 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
+    receipt_total: u64,
+    addresses: AddressesWithOutPoints,
 }
 
 /// Public key addresses received from client
@@ -103,6 +108,14 @@ pub struct CreateTransaction {
     pub version: usize,
     pub druid_info: Option<DdeValues>,
 }
+/// Struct received from client to change passphrase
+///
+/// Entries will be encrypted with TLS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePassphraseData {
+    pub old_passphrase: String,
+    pub new_passphrase: String,
+}
 
 //======= GET HANDLERS =======//
 
@@ -114,8 +127,23 @@ pub async fn get_wallet_info(wallet_db: WalletDb) -> Result<impl warp::Reply, wa
         Err(_) => return Err(warp::reject::custom(errors::ErrorCannotAccessWallet)),
     };
 
+    let mut addresses = AddressesWithOutPoints::new();
+    for (out_point, asset) in fund_store.transactions() {
+        addresses
+            .entry(wallet_db.get_transaction_address(out_point))
+            .or_insert_with(Vec::new)
+            .push((out_point.clone(), asset.clone()))
+    }
+
+    let total = fund_store.running_total();
+    let (running_total, receipt_total) = (
+        total.tokens.0 as f64 / D_DISPLAY_PLACES,
+        total.receipts as u64,
+    );
     let send_val = WalletInfo {
-        running_total: fund_store.running_total().tokens.0 as f64 / D_DISPLAY_PLACES,
+        running_total,
+        receipt_total,
+        addresses,
     };
 
     Ok(warp::reply::json(&send_val))
@@ -150,10 +178,38 @@ pub async fn get_latest_block(
     Ok(warp::reply::json(&last_block))
 }
 
-/// Gets debug data for the node
-pub async fn get_debug_data(node: Node) -> Result<impl warp::Reply, warp::Rejection> {
-    let data = node.get_debug_data().await;
+/// Gets the debug info for a speficied node type
+///
+/// Contains an optional field for an auxiliary `Node`
+/// , i.e a Miner node may or may not have additional User
+/// node capabilities- providing additional debug data.
+pub async fn get_debug_data(
+    node: Node,
+    aux_node: Option<Node>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let data = match aux_node {
+        Some(aux_node) => {
+            let node_type = format!(
+                "{}/{}",
+                node_type_as_str(node.get_node_type()),
+                node_type_as_str(aux_node.get_node_type())
+            );
+            DebugData {
+                node_type: node_type.clone(),
+                node_api: api_debug_routes(&node_type),
+                node_peers: [node.get_peer_list().await, aux_node.get_peer_list().await].concat(),
+            }
+        }
+        None => get_node_debug_data(&node).await,
+    };
+    Ok(warp::reply::json(&data))
+}
 
+/// Get to fetch information about the current mining block
+pub async fn get_current_mining_block(
+    current_block: CurrentBlockWithMutex,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
     Ok(warp::reply::json(&data))
 }
 
@@ -232,8 +288,8 @@ pub async fn post_make_payment(
     } = encapsulated_data;
 
     let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
-        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment { address, amount }),
+        Err(e) => return Err(wallet_db_error(e)),
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
@@ -263,11 +319,11 @@ pub async fn post_make_ip_payment(
         .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;
 
     let request = match db.test_passphrase(passphrase).await {
-        Ok(()) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
+        Ok(_) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
             payment_peer,
             amount,
         }),
-        Err(()) => return Err(warp::reject::custom(errors::ErrorInvalidPassphrase)),
+        Err(e) => return Err(wallet_db_error(e)),
     };
 
     if let Err(e) = peer.inject_next_event(peer.address(), request) {
@@ -323,7 +379,6 @@ pub async fn post_fetch_utxo_balance(
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let tutxo = tracked_utxo.lock().unwrap();
     let balances = tutxo.get_balance_for_addresses(&addresses.address_list);
-
     Ok(warp::reply::json(&json!(balances)))
 }
 
@@ -339,16 +394,12 @@ pub async fn post_create_receipt_asset(
         signature,
     } = create_receipt_asset_data;
 
-    let DebugData {
-        node_type,
-        node_api: _,
-        node_peers: _,
-    } = peer.get_debug_data().await;
+    let node_type = peer.get_node_type();
 
     let all_some = script_public_key.is_some() && public_key.is_some() && signature.is_some();
     let all_none = script_public_key.is_none() && public_key.is_none() && signature.is_none();
 
-    if node_type == node_type_as_str(NodeType::User) && all_none {
+    if node_type == NodeType::User && all_none {
         // Create receipt tx on the user node
         let request =
             UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest { receipt_amount });
@@ -356,7 +407,7 @@ pub async fn post_create_receipt_asset(
             error!("route:post_create_receipt_asset error: {:?}", e);
             return Err(warp::reject::custom(errors::ErrorCannotAccessUserNode));
         }
-    } else if node_type == node_type_as_str(NodeType::Compute) && all_some {
+    } else if node_type == NodeType::Compute && all_some {
         // Create receipt tx on the compute node
         let (script_public_key, public_key, signature) = (
             script_public_key.unwrap_or_default(),
@@ -424,7 +475,34 @@ pub async fn post_create_transactions(
     Ok(warp::reply::json(&"Creating Transactions".to_owned()))
 }
 
+// POST to change wallet passphrase
+pub async fn post_change_wallet_passphrase(
+    mut db: WalletDb,
+    passphrase_struct: ChangePassphraseData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let ChangePassphraseData {
+        old_passphrase,
+        new_passphrase,
+    } = passphrase_struct;
+
+    db.change_wallet_passphrase(old_passphrase, new_passphrase)
+        .await
+        .map_err(wallet_db_error)?;
+
+    Ok(warp::reply::json(
+        &"Passphrase changed successfully".to_owned(),
+    ))
+}
+
 //======= Helpers =======//
+
+/// Filters through wallet errors which are internal vs errors caused by user input
+pub fn wallet_db_error(err: WalletDbError) -> warp::Rejection {
+    match err {
+        WalletDbError::PassphraseError => warp::reject::custom(errors::ErrorInvalidPassphrase),
+        _ => warp::reject::custom(errors::InternalError),
+    }
+}
 
 /// Generic static string warp error
 pub fn generic_error(name: &'static str) -> warp::Rejection {

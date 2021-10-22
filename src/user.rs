@@ -2,15 +2,15 @@ use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
-    ComputeRequest, DebugData, NodeType, RbPaymentData, RbPaymentRequestData,
-    RbPaymentResponseData, Response, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::transaction_gen::TransactionGen;
 use crate::utils::{
     generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, LocalEvent,
     LocalEventChannel, LocalEventSender, ResponseResult,
 };
-use crate::wallet::{AddressStore, WalletDb};
+use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -29,7 +29,7 @@ use tracing_futures::Instrument;
 /// Key for last pow coinbase produced
 pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
 
-/// Result wrapper for miner errors
+/// Result wrapper for user errors
 pub type Result<T> = std::result::Result<T, UserError>;
 
 #[derive(Debug)]
@@ -38,6 +38,7 @@ pub enum UserError {
     Network(CommsError),
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
+    WalletError(WalletDbError),
 }
 
 impl fmt::Display for UserError {
@@ -47,6 +48,7 @@ impl fmt::Display for UserError {
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::WalletError(err) => write!(f, "Wallet error: {}", err),
         }
     }
 }
@@ -58,6 +60,7 @@ impl Error for UserError {
             Self::Network(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e),
         }
     }
 }
@@ -77,6 +80,12 @@ impl From<task::JoinError> for UserError {
 impl From<bincode::Error> for UserError {
     fn from(other: bincode::Error) -> Self {
         Self::Serialization(other)
+    }
+}
+
+impl From<WalletDbError> for UserError {
+    fn from(other: WalletDbError) -> Self {
+        Self::WalletError(other)
     }
 }
 
@@ -320,6 +329,10 @@ impl UserNode {
                     .await
                     .unwrap();
             }
+            Ok(Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            }) => {}
             Ok(Response {
                 success: false,
                 reason: "Ignore unexpected transaction",
@@ -775,7 +788,15 @@ impl UserNode {
     ) -> Response {
         let tx_out = vec![TxOut::new_token_amount(address, amount)];
         let asset_required = Asset::Token(amount);
-        let (tx_ins, tx_outs) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await;
+        let (tx_ins, tx_outs) =
+            if let Ok(value) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
+                value
+            } else {
+                return Response {
+                    success: false,
+                    reason: "Insufficient funds for payment",
+                };
+            };
         let payment_tx = construct_tx_core(tx_ins, tx_outs);
         self.next_payment = Some((peer, payment_tx));
 
@@ -795,11 +816,11 @@ impl UserNode {
         &mut self,
         asset_required: Asset,
         mut tx_outs: Vec<TxOut>,
-    ) -> (Vec<TxIn>, Vec<TxOut>) {
+    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
         let (tx_cons, total_amount, tx_used) = self
             .wallet_db
             .fetch_inputs_for_payment(asset_required.clone())
-            .await;
+            .await?;
 
         if let Some(excess) = total_amount.get_excess(&asset_required) {
             let (excess_address, _) = self.wallet_db.generate_payment_address().await;
@@ -811,7 +832,7 @@ impl UserNode {
             .consume_inputs_for_payment(tx_cons, tx_used)
             .await;
 
-        (tx_ins, tx_outs)
+        Ok((tx_ins, tx_outs))
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1045,7 +1066,7 @@ impl UserNode {
 
         let (tx_ins, tx_outs) = self
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
-            .await;
+            .await?;
 
         let sender_from_addr = construct_tx_ins_address(&tx_ins);
 
@@ -1119,9 +1140,18 @@ impl UserNode {
         let druid = sender_half_druid + &receiver_half_druid.clone();
         let asset_required = Asset::Receipt(1);
 
-        let (tx_ins, tx_outs) = self
+        let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
+
+        let (tx_ins, tx_outs) = if let Ok(value) = tx_ins_and_outs {
+            value
+        } else {
+            return Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            };
+        };
 
         let receiver_from_addr = construct_tx_ins_address(&tx_ins);
 
@@ -1235,8 +1265,9 @@ impl UserNode {
         }
     }
 
-    pub async fn node_debug_data(&self) -> DebugData {
-        self.node.clone().get_debug_data().await
+    /// Get `Node` member
+    pub fn get_node(&self) -> &Node {
+        &self.node
     }
 }
 

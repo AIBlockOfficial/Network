@@ -1019,6 +1019,8 @@ async fn init_miner(
         miner_nodes: info.miner_nodes.clone(),
         user_nodes: info.user_nodes.clone(),
         passphrase: config.passphrase.clone(),
+        miner_api_port: 3004,
+        miner_api_use_tls: true,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1097,7 +1099,7 @@ async fn init_compute(
         compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
         jurisdiction: "US".to_string(),
         sanction_list: Vec::new(),
-        compute_api_port: 3003,
+        compute_api_port: 3002,
         compute_api_use_tls: true,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);

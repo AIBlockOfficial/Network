@@ -1,6 +1,6 @@
-use crate::interfaces::UtxoSet;
+use crate::interfaces::{AddressesWithOutPoints, UtxoSet};
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
-use naom::primitives::asset::Asset;
+use crate::wallet::AssetValues;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -9,8 +9,8 @@ use std::ops::Deref;
 
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct TrackedUtxoBalance {
-    total: u64,
-    address_list: BTreeMap<String, u64>,
+    total: AssetValues,
+    address_list: AddressesWithOutPoints,
 }
 
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
@@ -59,27 +59,21 @@ impl TrackedUtxoSet {
 
     /// Calculates the balance of `OutPoint`s based on provided addresses
     pub fn get_balance_for_addresses(&self, addresses: &[String]) -> TrackedUtxoBalance {
-        let mut address_list: BTreeMap<String, u64> =
-            addresses.iter().map(|a| (a.clone(), 0_u64)).collect();
+        let mut address_list = AddressesWithOutPoints::new();
+        let mut total = AssetValues::default();
 
-        for (addr, balance) in address_list.iter_mut() {
-            if let Some(ops) = self.get_pk_cache_vec(addr) {
+        for address in addresses {
+            if let Some(ops) = self.get_pk_cache_vec(address) {
                 for op in ops {
                     let t_out = self.base.get(op).unwrap();
-
-                    if let Asset::Token(t) = t_out.value {
-                        *balance += t.0;
-                    }
+                    address_list
+                        .entry(address.clone())
+                        .or_insert_with(Vec::new)
+                        .push((op.clone(), t_out.value.clone()));
+                    total.update_add(&t_out.value);
                 }
             }
         }
-
-        let total = address_list
-            .values()
-            .cloned()
-            .collect::<Vec<u64>>()
-            .iter()
-            .sum();
 
         TrackedUtxoBalance {
             total,

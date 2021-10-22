@@ -2,7 +2,10 @@ use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
-use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
+use crate::interfaces::{
+    api_debug_routes, node_type_as_str, BlockchainItem, BlockchainItemMeta, DebugData, ProofOfWork,
+    StoredSerializingBlock,
+};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
@@ -701,7 +704,7 @@ pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Public key decoding errror: {}", key)))
+    Err(StringError(format!("Public key decoding error: {}", key)))
 }
 
 /// Decodes a secret key
@@ -715,21 +718,21 @@ pub fn decode_secret_key(key: &str) -> Result<SecretKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Secret key decoding errror: {}", key)))
+    Err(StringError(format!("Secret key decoding error: {}", key)))
 }
 
 /// Decodes a signature
 ///
 /// ### Arguments
 ///
-/// * `sig`    - signatre to decode
+/// * `sig`    - Signature to decode
 pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
     if let Ok(sig_slice) = hex::decode(sig) {
         if let Some(sig) = Signature::from_slice(&sig_slice) {
             return Ok(sig);
         }
     }
-    Err(StringError(format!("Signature decoding errror: {}", sig)))
+    Err(StringError(format!("Signature decoding error: {}", sig)))
 }
 
 /// Stop listening for connection and disconnect existing ones
@@ -985,4 +988,20 @@ pub fn create_receipt_asset_tx_from_sig(
     };
 
     Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
+}
+
+/// Get debug data for a node
+///
+/// ### Arguments
+///
+/// * `node` - `Node` to retrieve debug data for
+pub async fn get_node_debug_data(node: &Node) -> DebugData {
+    let node_type = node_type_as_str(node.get_node_type());
+    let node_api = api_debug_routes(node_type);
+    let node_peers = node.get_peer_list().await;
+    DebugData {
+        node_type: node_type.to_owned(),
+        node_api,
+        node_peers,
+    }
 }

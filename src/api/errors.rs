@@ -26,15 +26,10 @@ impl warp::reject::Reject for ErrorInvalidPassphrase {}
 pub struct ErrorInvalidJSONStructure;
 impl warp::reject::Reject for ErrorInvalidJSONStructure {}
 
-/// API error struct for invalid passphrase entered
+/// API error struct for inability to parse an IP address from a string
 #[derive(Debug)]
 pub struct ErrorCannotParseAddress;
 impl warp::reject::Reject for ErrorCannotParseAddress {}
-
-/// API error struct for inability to decrypt data encapsulated by client
-#[derive(Debug)]
-pub struct ErrorCannotDecryptEncapsulatedData;
-impl warp::reject::Reject for ErrorCannotDecryptEncapsulatedData {}
 
 /// API error struct for inability to access wallet
 #[derive(Debug)]
@@ -76,7 +71,9 @@ impl warp::reject::Reject for ErrorCouldNotDeserializeData {}
 pub struct ErrorDataNetworkVersionMismatch;
 impl warp::reject::Reject for ErrorDataNetworkVersionMismatch {}
 
-/// API error struct for bad serialisation of balance data
+/// API error for struct ambiguous code 500 internal errors.
+///
+/// TODO: Decide how much information on the internal error should be displayed to the client
 #[derive(Debug)]
-pub struct ErrorCannotSerializeBalanceForJson;
-impl warp::reject::Reject for ErrorCannotSerializeBalanceForJson {}
+pub struct InternalError;
+impl warp::reject::Reject for InternalError {}

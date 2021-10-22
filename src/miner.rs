@@ -1,10 +1,10 @@
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
-use crate::configurations::{ExtraNodeParams, MinerNodeConfig};
+use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::PEER_LIMIT;
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, DebugData, MineRequest, MinerInterface, NodeType, ProofOfWork,
-    Response, StorageRequest,
+    BlockchainItem, ComputeRequest, MineRequest, MinerInterface, NodeType, ProofOfWork, Response,
+    StorageRequest,
 };
 use crate::utils::{
     self, concat_merkle_coinbase, format_parition_pow_address, generate_pow_nonce,
@@ -21,7 +21,9 @@ use naom::primitives::asset::TokenAmount;
 use naom::primitives::block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::{construct_coinbase_tx, construct_tx_hash};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+use std::sync::{Arc, Mutex};
 use std::{
     error::Error,
     fmt,
@@ -44,6 +46,11 @@ pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
 
+/// Wrapper for current block
+///
+/// TODO: Circumvent using a Mutex just for API purposes.
+pub type CurrentBlockWithMutex = Arc<Mutex<Option<BlockPoWReceived>>>;
+
 /// Block Pow task input/output
 #[derive(Debug, Clone)]
 pub struct BlockPoWInfo {
@@ -57,7 +64,7 @@ pub struct BlockPoWInfo {
 }
 
 /// Received block
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlockPoWReceived {
     hash_block: HashBlock,
     reward: TokenAmount,
@@ -121,7 +128,7 @@ pub struct MinerNode {
     storage_addr: SocketAddr,
     partition_key: Option<Key>,
     rand_num: Vec<u8>,
-    current_block: Option<BlockPoWReceived>,
+    current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
     partition_list: Vec<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
@@ -129,6 +136,7 @@ pub struct MinerNode {
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
+    api_info: (SocketAddr, Option<TlsPrivateInfo>),
 }
 
 impl MinerNode {
@@ -154,31 +162,59 @@ impl MinerNode {
             .get(config.miner_storage_node_idx)
             .ok_or(MinerError::ConfigError("Invalid storage index"))?
             .address;
+        let wallet_db = WalletDb::new(
+            config.miner_db_mode,
+            extra.wallet_db.take(),
+            config.passphrase,
+        );
+
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(addr.ip(), config.miner_api_port);
+        let api_tls_info = config
+            .miner_api_use_tls
+            .then(|| tcp_tls_config.clone_private_info());
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?;
 
         Ok(MinerNode {
-            node: Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Miner).await?,
+            node,
             local_events: Default::default(),
-            wallet_db: WalletDb::new(
-                config.miner_db_mode,
-                extra.wallet_db.take(),
-                config.passphrase,
-            ),
+            wallet_db,
             compute_addr,
             storage_addr,
             partition_list: Default::default(),
             rand_num: Default::default(),
             partition_key: None,
-            current_block: None,
+            current_block: Arc::new(Mutex::new(None)),
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
+            api_info: (api_addr, api_tls_info),
         }
         .load_local_db()
         .await?)
+    }
+
+    /// Info needed to run the API point.
+    pub fn api_inputs(
+        &self,
+    ) -> (
+        WalletDb,
+        Node,
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        CurrentBlockWithMutex,
+    ) {
+        let (api_addr, api_tls_info) = self.api_info.clone();
+        (
+            self.wallet_db.clone(),
+            self.node.clone(),
+            api_addr,
+            api_tls_info,
+            self.current_block.clone(),
+        )
     }
 
     /// Returns the node's public endpoint.
@@ -574,7 +610,12 @@ impl MinerNode {
         };
 
         let new_b_num = Some(new_block.hash_block.b_num);
-        let current_b_num = self.current_block.as_ref().map(|c| c.hash_block.b_num);
+        let current_b_num = self
+            .current_block
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.hash_block.b_num);
         if new_b_num <= current_b_num {
             if new_b_num == current_b_num {
                 self.process_found_block_pow().await;
@@ -599,7 +640,7 @@ impl MinerNode {
         &self,
         tx_merkle_verification: Vec<String>,
     ) -> Option<Response> {
-        let current_block_info = self.current_block.clone().unwrap();
+        let current_block_info = self.current_block.lock().unwrap().clone().unwrap();
         let merkle_root = current_block_info.hash_block.merkle_hash.clone();
         let mut valid = true;
 
@@ -804,7 +845,8 @@ impl MinerNode {
                 nonce,
             }))
         };
-        self.current_block = Some(new_block);
+        let mut current_block = self.current_block.lock().unwrap();
+        *current_block = Some(new_block);
     }
 
     /// Generates and returns the nonce of a block.active_raft
@@ -892,8 +934,9 @@ impl MinerNode {
         Ok(self)
     }
 
-    pub async fn node_debug_data(&self) -> DebugData {
-        self.node.clone().get_debug_data().await
+    /// Get `Node` member
+    pub fn get_node(&self) -> &Node {
+        &self.node
     }
 }
 

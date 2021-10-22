@@ -11,9 +11,13 @@ use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::fmt;
+use std::error::Error;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::{error, fmt};
+
+/// Simple BTreeMap structure used to hold `(OutPoint, Asset)` pairs with respect to a public key address
+pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
 
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
@@ -151,6 +155,59 @@ pub fn node_type_as_str(node_type: NodeType) -> &'static str {
         NodeType::User => "User",
         NodeType::PreLaunch => "Prelaunch",
         _ => "The requested node is an unknown node type",
+    }
+}
+
+// Returns a vector of possible API routes for the specified node type
+// TODO: Isn't there way we don't have to hard code this?
+pub fn api_debug_routes(node_type: &str) -> Vec<String> {
+    match node_type {
+        "Miner" => vec![
+            "current_mining_block".to_owned(),
+            "change_passphrase".to_owned(),
+            "export_keypairs".to_owned(),
+            "wallet_info".to_owned(),
+            "import_keypairs".to_owned(),
+            "new_payment_address".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        "Storage" => vec![
+            "latest_block".to_owned(),
+            "blockchain_entry_by_key".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        "Compute" => vec![
+            "fetch_balance".to_owned(),
+            "create_receipt_asset".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        "User" => vec![
+            "make_payment".to_owned(),
+            "make_ip_payment".to_owned(),
+            "request_donation".to_owned(),
+            "export_keypairs".to_owned(),
+            "import_keypairs".to_owned(),
+            "update_running_total".to_owned(),
+            "new_payment_address".to_owned(),
+            "create_receipt_asset".to_owned(),
+            "change_passphrase".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        /* Miner node with User node capabilities */
+        "Miner/User" => vec![
+            "make_payment".to_owned(),
+            "make_ip_payment".to_owned(),
+            "request_donation".to_owned(),
+            "export_keypairs".to_owned(),
+            "import_keypairs".to_owned(),
+            "update_running_total".to_owned(),
+            "new_payment_address".to_owned(),
+            "create_receipt_asset".to_owned(),
+            "change_passphrase".to_owned(),
+            "current_mining_block".to_owned(),
+            "debug_data".to_owned(),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -372,15 +429,6 @@ pub trait StorageInterface {
     ///
     /// * `contract`    - Contract to store
     fn receive_contracts(&self, contract: Contract) -> Response;
-}
-
-/// Returns a list of storage api routes
-pub fn storage_list() -> Vec<String> {
-    let storage_list1: String = String::from("latest_block");
-    let storage_list2: String = String::from("blockchain_entry_by_key");
-    let storage_list3: String = String::from("debug_data");
-    let storage_list: Vec<String> = vec![storage_list1, storage_list2, storage_list3];
-    storage_list
 }
 
 ///============ MINER NODE ============///
@@ -640,27 +688,9 @@ impl fmt::Debug for UserRequest {
         }
     }
 }
-
-/// Returns a vector of user API routes
-pub fn user_list() -> Vec<String> {
-    let user_list1: String = String::from("make_payment");
-    let user_list2: String = String::from("make_ip_payment");
-    let user_list3: String = String::from("request_donation");
-    let user_list4: String = String::from("wallet_keypairs");
-    let user_list5: String = String::from("import_keypairs");
-    let user_list6: String = String::from("update_running_total");
-    let user_list7: String = String::from("payment_address");
-    let user_list8: String = String::from("debug_data");
-    let user_list: Vec<String> = vec![
-        user_list1, user_list2, user_list3, user_list4, user_list5, user_list6, user_list7,
-        user_list8,
-    ];
-    user_list
-}
-
 ///============ PRE-LAUNCH NODE ============///
 ///
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DebugData {
     pub node_type: String,
     pub node_api: Vec<String>,

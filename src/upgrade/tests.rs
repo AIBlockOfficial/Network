@@ -191,7 +191,10 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
         NodeType::User => {
             let user = network.user(name).unwrap().lock().await;
             let wallet = user.get_wallet_db();
-            let payment = wallet.fetch_inputs_for_payment(Asset::token_u64(123)).await;
+            let payment = wallet
+                .fetch_inputs_for_payment(Asset::token_u64(123))
+                .await
+                .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
                 (1, Asset::token_u64(123), 1)
@@ -202,7 +205,8 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let wallet = miner.get_wallet_db();
             let payment = wallet
                 .fetch_inputs_for_payment(Asset::token_u64(15020370))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
                 (2, Asset::token_u64(15020370), 2)
