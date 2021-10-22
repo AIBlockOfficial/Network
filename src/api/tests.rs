@@ -149,32 +149,10 @@ async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
     evt.map(|Event::NewFrame { peer: _, frame }| frame.to_vec())
 }
 
-async fn new_self_user_node() -> (Node, SocketAddr) {
+async fn new_self_node(node_type: NodeType) -> (Node, SocketAddr) {
     let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, NodeType::User)
-        .await
-        .unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
-}
-
-async fn new_self_storage_node() -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Storage)
-        .await
-        .unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
-}
-
-async fn new_self_compute_node() -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
-    let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, NodeType::Compute)
-        .await
-        .unwrap();
+    let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
     let self_socket = self_node.address();
     (self_node, self_socket)
 }
@@ -244,13 +222,13 @@ async fn test_get_export_keypairs() {
     assert_eq!(res.body(), expected_addresses.as_bytes());
 }
 
-/// Test user get debug data
+/// Test get user debug data
 #[tokio::test(flavor = "current_thread")]
-async fn test_get_debug_data() {
+async fn test_get_user_debug_data() {
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_user_node().await;
+    let (self_node, _self_socket) = new_self_node(NodeType::User).await;
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
@@ -261,18 +239,18 @@ async fn test_get_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"new_payment_address\",\"create_receipt_asset\",\"change_passphrase\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"new_payment_address\",\"create_receipt_asset\",\"change_passphrase\",\"debug_data\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
 
-/// Test get debug data
+/// Test get storage debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_storage_debug_data() {
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_storage_node().await;
+    let (self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
@@ -283,7 +261,51 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"block_by_num\",\"debug_data\"],\"node_peers\":[]}";
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_string);
+}
+
+/// Test get compute debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_compute_debug_data() {
+    //
+    // Arrange
+    //
+    let (self_node, _self_socket) = new_self_node(NodeType::Compute).await;
+    let request = warp::test::request().method("GET").path("/debug_data");
+    //
+    // Act
+    //
+    let filter = routes::debug_data(self_node.clone(), None);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"debug_data\"],\"node_peers\":[]}";
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_string);
+}
+
+/// Test get miner debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_miner_debug_data() {
+    //
+    // Arrange
+    //
+    let (self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let request = warp::test::request().method("GET").path("/debug_data");
+    //
+    // Act
+    //
+    let filter = routes::debug_data(self_node.clone(), None);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"current_mining_block\",\"change_passphrase\",\"export_keypairs\",\"wallet_info\",\"import_keypairs\",\"new_payment_address\",\"debug_data\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -464,7 +486,7 @@ async fn test_post_make_payment() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_user_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let encapsulated_data = EncapsulatedPayment {
         address: COMMON_ADDR_STORE.0.to_string(),
@@ -510,7 +532,7 @@ async fn test_post_make_ip_payment() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_user_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let encapsulated_data = EncapsulatedPayment {
         address: "127.0.0.1:12345".to_owned(),
@@ -562,7 +584,7 @@ async fn test_post_request_donation() {
     //
     // Arange
     //
-    let (mut self_node, self_socket) = new_self_user_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let address = "127.0.0.1:12345".to_owned();
     let paying_peer = address.parse::<SocketAddr>().unwrap();
@@ -673,7 +695,7 @@ async fn test_post_update_running_total() {
     //
     // Arrange
     //
-    let (mut self_node, _self_socket) = new_self_user_node().await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
 
     let addresses = PublicKeyAddresses {
         address_list: vec![COMMON_ADDR_STORE.0.to_string()],
@@ -748,7 +770,7 @@ async fn test_post_create_transactions() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_compute_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
 
     let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
     let signed_data = construct_tx_in_signable_hash(&previous_out);
@@ -816,7 +838,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_compute_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::Compute).await;
 
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(1));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
@@ -867,7 +889,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     // Arrange
     //
-    let (mut self_node, self_socket) = new_self_user_node().await;
+    let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
@@ -910,7 +932,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Arrange
     //
-    let (self_node, self_socket) = new_self_compute_node().await;
+    let (self_node, self_socket) = new_self_node(NodeType::Compute).await;
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
@@ -954,7 +976,7 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     //
     // Arrange
     //
-    let (self_node, self_socket) = new_self_user_node().await;
+    let (self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let json_body = CreateReceiptAssetData {
         receipt_amount: 1,
