@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
-use tracing::{error, trace};
+use tracing::error;
 
 /// Data entry from the blockchain
 #[derive(Debug, Serialize, Deserialize)]
@@ -306,8 +306,6 @@ pub async fn post_make_ip_payment(
     peer: Node,
     encapsulated_data: EncapsulatedPayment,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    trace!("in the payment");
-
     let EncapsulatedPayment {
         address,
         amount,
@@ -339,8 +337,6 @@ pub async fn post_request_donation(
     peer: Node,
     address: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    trace!("in request donation");
-
     let paying_peer: SocketAddr = address
         .parse::<SocketAddr>()
         .map_err(|_| warp::reject::custom(errors::ErrorCannotParseAddress))?;

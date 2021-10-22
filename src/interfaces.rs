@@ -174,6 +174,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
         "Storage" => vec![
             "latest_block".to_owned(),
             "blockchain_entry_by_key".to_owned(),
+            "block_by_num".to_owned(),
             "debug_data".to_owned(),
         ],
         "Compute" => vec![
@@ -182,6 +183,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
             "debug_data".to_owned(),
         ],
         "User" => vec![
+            "wallet_info".to_owned(),
             "make_payment".to_owned(),
             "make_ip_payment".to_owned(),
             "request_donation".to_owned(),
@@ -195,6 +197,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
         ],
         /* Miner node with User node capabilities */
         "Miner/User" => vec![
+            "wallet_info".to_owned(),
             "make_payment".to_owned(),
             "make_ip_payment".to_owned(),
             "request_donation".to_owned(),
