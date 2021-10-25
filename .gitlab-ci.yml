@@ -21,6 +21,30 @@ image: "rust:latest"
       - cargo_cache
       - target/
 
+# Build ZNP artifacts for a release
+build:
+  extends: '.cache'
+  only:
+    - main
+    - develop
+    - feature/artifacts
+  stage: build
+  cache:
+    key:
+      prefix: build
+  script:
+      # Print version info for debugging
+    - rustc --version && cargo --version  
+    - cargo build --bins --release
+    - ls ./target/release/ -l
+  artifacts:
+    paths:
+      - target/release/node
+      - target/release/upgrade
+      - src/bin/*.toml 
+      - src/bin/*.json 
+      - src/bin/*.sh 
+      
 # Test and lint the project: do not build binaries
 # that require rocksdb and other dependencies
 test:cargo:
@@ -31,7 +55,8 @@ test:cargo:
     key:
       prefix: test2
   script:
-    - rustc --version && cargo --version  # Print version info for debugging
+    - rustc --version && cargo --version  
+      # Print version info for debugging
     - cargo test --workspace --verbose
 
 lint:rustfmt:
@@ -39,7 +64,8 @@ lint:rustfmt:
     - merge_requests
   script:
     - rustup component add rustfmt
-    - rustc --version && cargo --version  # Print version info for debugging
+    - rustc --version && cargo --version  
+      # Print version info for debugging
     - cargo fmt -- --check
 
 lint:clippy:
@@ -51,5 +77,6 @@ lint:clippy:
       prefix: clippy
   script:
     - rustup component add clippy
-    - rustc --version && cargo --version  # Print version info for debugging
+    - rustc --version && cargo --version  
+      # Print version info for debugging
     - cargo clippy --all-targets -- -D warnings
