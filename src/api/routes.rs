@@ -297,6 +297,7 @@ pub fn compute_node_routes(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     fetch_utxo_balance(tracked_utxo)
         .or(create_receipt_asset(node.clone()))
+        .or(create_transactions(node.clone()))
         .or(debug_data(node, None))
 }
 
