@@ -179,6 +179,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
         ],
         "Compute" => vec![
             "fetch_balance".to_owned(),
+            "create_transactions".to_owned(),
             "create_receipt_asset".to_owned(),
             "debug_data".to_owned(),
         ],
