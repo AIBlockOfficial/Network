@@ -258,6 +258,18 @@ pub fn create_transactions(
         .with(post_cors())
 }
 
+// POST check for address presence
+pub fn blocks_by_tx_hashes(
+    db: Arc<Mutex<SimpleDb>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("block_by_tx_hashes")
+        .and(warp::post())
+        .and(with_node_component(db))
+        .and(warp::body::json())
+        .and_then(handlers::post_blocks_by_tx_hashes)
+        .with(post_cors())
+}
+
 //======= NODE ROUTES =======//
 //TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 
@@ -286,7 +298,8 @@ pub fn storage_node_routes(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     block_info_by_nums(db.clone())
         .or(latest_block(db.clone()))
-        .or(blockchain_entry_by_key(db))
+        .or(blockchain_entry_by_key(db.clone()))
+        .or(blocks_by_tx_hashes(db))
         .or(debug_data(node, None))
 }
 

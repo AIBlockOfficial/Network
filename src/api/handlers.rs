@@ -6,7 +6,9 @@ use crate::interfaces::{
     NodeType, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
-use crate::storage::{get_blocks_by_num, get_last_block_stored, get_stored_value_from_db};
+use crate::storage::{
+    get_block_nums_by_tx_hashes, get_blocks_by_num, get_last_block_stored, get_stored_value_from_db,
+};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     decode_pub_key, decode_signature, get_node_debug_data, DeserializedBlockchainItem,
@@ -492,6 +494,15 @@ pub async fn post_change_wallet_passphrase(
     Ok(warp::reply::json(
         &"Passphrase changed successfully".to_owned(),
     ))
+}
+
+// POST to check for address presence
+pub async fn post_blocks_by_tx_hashes(
+    db: Arc<Mutex<SimpleDb>>,
+    tx_hashes: Vec<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let bock_nums = get_block_nums_by_tx_hashes(db, tx_hashes);
+    Ok(warp::reply::json(&bock_nums))
 }
 
 //======= Helpers =======//

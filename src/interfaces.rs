@@ -175,6 +175,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
             "latest_block".to_owned(),
             "blockchain_entry_by_key".to_owned(),
             "block_by_num".to_owned(),
+            "block_by_tx_hashes".to_owned(),
             "debug_data".to_owned(),
         ],
         "Compute" => vec![
