@@ -1182,22 +1182,62 @@ pub fn get_blocks_by_num(
     nums: Vec<u64>,
 ) -> Vec<(String, StoredSerializingBlock)> {
     nums.iter()
-        .map(|num| {
-            let key = indexed_block_hash_key(*num);
-            let item = get_stored_value_from_db(db.clone(), key).unwrap_or_default();
-
-            let block = match deserialize(&item.data) {
-                Ok(b) => b,
-                Err(_) => StoredSerializingBlock::default(),
-            };
-
-            let hash_digest = Sha3_256::digest(&item.data);
-            let mut hash_hex = hex::encode(hash_digest);
-            hash_hex.insert(0, BLOCK_PREPEND as char);
-
-            (hash_hex, block)
-        })
+        .map(|num| get_block_by_num(db.clone(), *num).unwrap_or_default())
         .collect::<Vec<(String, StoredSerializingBlock)>>()
+}
+
+/// Fetches a single block using the block's number.
+///
+/// If the block is unretreivable, a `None` value will be returned
+///
+/// ### Arguments
+///
+/// * `num`    - Number of the block to fetch
+pub fn get_block_by_num(
+    db: Arc<Mutex<SimpleDb>>,
+    num: u64,
+) -> Option<(String, StoredSerializingBlock)> {
+    let key = indexed_block_hash_key(num);
+    let item = get_stored_value_from_db(db, key).unwrap_or_default();
+    let block = match deserialize(&item.data) {
+        Ok(b) => b,
+        Err(_) => return None,
+    };
+    let hash_digest = Sha3_256::digest(&item.data);
+    let mut hash_hex = hex::encode(hash_digest);
+    hash_hex.insert(0, BLOCK_PREPEND as char);
+    Some((hash_hex, block))
+}
+
+/// Fetches stored block numbers that contain provided `tx_hash` values
+///
+/// ### Arguments
+///
+/// * `tx_hashes`    - Transaction hashes contained within blocks to fetch
+pub fn get_block_nums_by_tx_hashes(db: Arc<Mutex<SimpleDb>>, tx_hashes: Vec<String>) -> Vec<u64> {
+    tx_hashes
+        .iter()
+        .filter_map(|tx_hash| get_block_num_by_tx_hash(db.clone(), tx_hash.clone()))
+        .collect()
+}
+
+/// Fetches a single stored block that contains provided `tx_hash` value
+///
+/// ### Arguments
+///
+/// * `tx_hash`    - Transaction hashes contained within block to fetch
+pub fn get_block_num_by_tx_hash(db: Arc<Mutex<SimpleDb>>, tx_hash: String) -> Option<u64> {
+    let item = match get_stored_value_from_db(db, tx_hash) {
+        Some(it) => it,
+        _ => return None,
+    };
+    match item.item_meta {
+        BlockchainItemMeta::Tx {
+            block_num,
+            tx_num: _,
+        } => Some(block_num),
+        _ => None,
+    }
 }
 
 /// Fetches the most recent block stored

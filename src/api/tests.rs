@@ -261,7 +261,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"block_by_num\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"block_by_num\",\"block_by_tx_hashes\",\"debug_data\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -1108,4 +1108,33 @@ async fn test_post_change_passphrase_failure() {
     assert_eq!(res.status(), 500);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "Unhandled rejection: ErrorInvalidPassphrase");
+}
+
+/// Test POST fetch block hashes for blocks that contain given `tx_hashes`
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_block_nums_by_tx_hashes() {
+    //
+    // Arrange
+    //
+    let db = get_db_with_block();
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/block_by_tx_hashes")
+        .header("Content-Type", "application/json")
+        .json(&vec![
+            "1842d4e51e99e14671077e4cac648339c3ca57e7219257fed707afd0f4d96232",
+        ]);
+
+    //
+    // Act
+    //
+    let filter = routes::blocks_by_tx_hashes(db);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "[0]");
 }

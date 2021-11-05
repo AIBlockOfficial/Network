@@ -717,6 +717,9 @@ impl ComputeNode {
                 self.node_raft.generate_first_block();
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
+                // Update the currently known local UTXO set
+                let mut utxo_set = self.current_utxo_set.lock().unwrap();
+                *utxo_set = self.node_raft.get_committed_utxo_tracked_set().clone();
                 Some(Ok(Response {
                     success: true,
                     reason: "First Block committed",
@@ -731,6 +734,9 @@ impl ComputeNode {
                 };
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
+                // Update the currently known local UTXO set
+                let mut utxo_set = self.current_utxo_set.lock().unwrap();
+                *utxo_set = self.node_raft.get_committed_utxo_tracked_set().clone();
                 Some(Ok(Response {
                     success: true,
                     reason,
@@ -1307,11 +1313,6 @@ impl ComputeNode {
             }
             return None;
         }
-
-        // Update the currently known UTXO set
-        self.current_utxo_set = Arc::new(Mutex::new(
-            self.node_raft.get_committed_utxo_tracked_set().clone(),
-        ));
 
         Some(Response {
             success: true,
