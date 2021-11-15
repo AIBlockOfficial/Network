@@ -16,11 +16,12 @@ use crate::utils::{
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
+use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::construct_tx_in_signable_hash;
+use naom::utils::transaction_utils::{construct_address, construct_tx_in_signable_hash};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -117,6 +118,12 @@ pub struct CreateTransaction {
 pub struct ChangePassphraseData {
     pub old_passphrase: String,
     pub new_passphrase: String,
+}
+
+/// Struct received from client to construct address
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressConstructData {
+    pub pub_key: Vec<u8>,
 }
 
 //======= GET HANDLERS =======//
@@ -505,6 +512,17 @@ pub async fn post_blocks_by_tx_hashes(
     Ok(warp::reply::json(&bock_nums))
 }
 
+//POST create a new payment address from a computet node
+pub async fn post_payment_address_construction(
+    address_construct_struct: AddressConstructData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let pub_key = address_construct_struct.pub_key;
+    if !pub_key.is_empty() {
+        let data: String = construct_address(&PublicKey::from_slice(&pub_key).unwrap());
+        return Ok(warp::reply::json(&data));
+    }
+    Ok(warp::reply::json(&String::from("")))
+}
 //======= Helpers =======//
 
 /// Filters through wallet errors which are internal vs errors caused by user input

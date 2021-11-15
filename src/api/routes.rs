@@ -270,6 +270,16 @@ pub fn blocks_by_tx_hashes(
         .with(post_cors())
 }
 
+// POST construct payment address
+pub fn payment_address_construction() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+{
+    warp::path("address_construction")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and_then(handlers::post_payment_address_construction)
+        .with(post_cors())
+}
+
 //======= NODE ROUTES =======//
 //TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 
@@ -289,6 +299,7 @@ pub fn user_node_routes(
         .or(payment_address(db.clone()))
         .or(change_passphrase(db))
         .or(debug_data(node, None))
+        .or(payment_address_construction())
 }
 
 // API routes for Storage nodes
@@ -301,6 +312,7 @@ pub fn storage_node_routes(
         .or(blockchain_entry_by_key(db.clone()))
         .or(blocks_by_tx_hashes(db))
         .or(debug_data(node, None))
+        .or(payment_address_construction())
 }
 
 // API routes for Compute nodes
@@ -312,6 +324,7 @@ pub fn compute_node_routes(
         .or(create_receipt_asset(node.clone()))
         .or(create_transactions(node.clone()))
         .or(debug_data(node, None))
+        .or(payment_address_construction())
 }
 
 // API routes for Miner nodes
@@ -327,6 +340,7 @@ pub fn miner_node_routes(
         .or(import_keypairs(db.clone()))
         .or(wallet_info(db.clone()))
         .or(payment_address(db))
+        .or(payment_address_construction())
 }
 
 // API routes for Miner nodes with User node capabilities
