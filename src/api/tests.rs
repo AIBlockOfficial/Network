@@ -1,6 +1,6 @@
 use crate::api::handlers::{
-    Addresses, ChangePassphraseData, CreateReceiptAssetData, CreateTransaction, CreateTxIn,
-    CreateTxInScript, EncapsulatedPayment, PublicKeyAddresses,
+    AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
+    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -17,6 +17,7 @@ use crate::utils::{decode_pub_key, decode_secret_key};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
+use bytes::Bytes;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -576,6 +577,39 @@ async fn test_post_make_ip_payment() {
     });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
+}
+
+/// Test POST construct address from public key
+#[tokio::test(flavor = "current_thread")]
+async fn test_address_construction() {
+    //
+    // Arrange
+    //
+
+    let address_construct_data = AddressConstructData {
+        pub_key: vec![
+            109, 133, 37, 100, 46, 243, 13, 156, 189, 123, 142, 12, 24, 169, 49, 186, 187, 0, 63,
+            27, 129, 207, 183, 13, 156, 208, 171, 164, 179, 118, 131, 183,
+        ],
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/address_construction")
+        .header("Content-Type", "application/json")
+        .json(&address_construct_data);
+
+    //
+    // Act
+    //
+    let filter = routes::payment_address_construction();
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected = Bytes::from_static(b"\"56d5b6da467e6c588966967ef5405dd2\"");
+    assert_eq!(res.body(), &expected);
 }
 
 /// Test POST make ip payment with correct address

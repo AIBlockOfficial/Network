@@ -29,8 +29,8 @@ use naom::primitives::block::Block;
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_coinbase_tx, construct_tx_hash, construct_tx_in_signable_asset_hash,
-    get_tx_out_with_out_point_cloned,
+    construct_address, construct_coinbase_tx, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
 use sha3::Digest;
@@ -1406,6 +1406,16 @@ async fn receive_payment_tx_user() {
     );
 
     test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn payment_address_from_public_key() {
+    let (public_key, _) = sign::gen_keypair();
+    let public_key_vec: Vec<u8> = public_key.as_ref().to_vec();
+    let pub_key = PublicKey::from_slice(&public_key_vec).unwrap();
+    assert_eq!(pub_key, public_key);
+
+    construct_address(&pub_key);
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -2,6 +2,7 @@
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use bytes::Bytes;
+use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
@@ -656,15 +657,22 @@ pub enum UserRequest {
     /// Request payment address with optional proof of work
     SendAddressRequest,
     /// Provide payment address with optional proof of work
-    SendPaymentAddress { address: String },
+    SendPaymentAddress {
+        address: String,
+    },
     /// Complete payment
-    SendPaymentTransaction { transaction: Transaction },
+    SendPaymentTransaction {
+        transaction: Transaction,
+    },
 
     /// Process received utxo set
-    SendUtxoSet { utxo_set: UtxoSet },
+    SendUtxoSet {
+        utxo_set: UtxoSet,
+    },
     /// Process received block being mined
-    BlockMining { block: Block },
-    /// Process closing event
+    BlockMining {
+        block: Block,
+    },
     Closing,
 }
 
