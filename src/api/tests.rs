@@ -289,7 +289,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
