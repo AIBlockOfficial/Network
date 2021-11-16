@@ -115,11 +115,16 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
 // Util function to create a transaction.
 // Returns the hash of the tx and the tx itself
 fn get_transaction() -> (String, Transaction) {
+    generate_transaction("tx_hash", COMMON_ADDR_STORE.0)
+}
+
+// Generates a transaction using the given `tx_hash` and `script_public_key`
+fn generate_transaction(tx_hash: &str, script_public_key: &str) -> (String, Transaction) {
     let asset = TokenAmount(25_200);
     let mut tx = Transaction::new();
 
-    let tx_in = TxIn::new_from_input(OutPoint::new("tx_hash".to_string(), 0), Script::new());
-    let tx_out = TxOut::new_token_amount(COMMON_ADDR_STORE.0.to_string(), asset);
+    let tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
+    let tx_out = TxOut::new_token_amount(script_public_key.to_string(), asset);
     tx.inputs = vec![tx_in];
     tx.outputs = vec![tx_out];
 
@@ -379,6 +384,47 @@ async fn test_get_payment_address() {
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_store_address.as_bytes());
+}
+
+/// Test GET all addresses on the UTXO set
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_utxo_set_addresses() {
+    //
+    // Arrange
+    //
+    let mut bmap = BTreeMap::new();
+
+    let tx_vals = vec![
+        generate_transaction("tx_hash_1", "public_address_1"),
+        generate_transaction("tx_hash_2", "public_address_2"),
+        generate_transaction("tx_hash_3", "public_address_3"),
+    ];
+
+    for (_, tx) in tx_vals {
+        bmap.insert(
+            tx.inputs[0].clone().previous_out.unwrap(),
+            tx.outputs[0].clone(),
+        );
+    }
+
+    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
+
+    let request = warp::test::request().method("GET").path("/utxo_addresses");
+
+    //
+    // Act
+    //
+    let filter = routes::utxo_addresses(tracked_utxo);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(
+        res.body(),
+        "[\"public_address_1\",\"public_address_2\",\"public_address_3\"]"
+    );
 }
 
 /*------- POST TESTS--------*/

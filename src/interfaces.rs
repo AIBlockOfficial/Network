@@ -184,6 +184,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
             "create_transactions".to_owned(),
             "create_receipt_asset".to_owned(),
             "debug_data".to_owned(),
+            "utxo_addresses".to_owned(),
         ],
         "User" => vec![
             "wallet_info".to_owned(),

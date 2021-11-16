@@ -92,6 +92,17 @@ pub fn current_mining_block(
         .with(get_cors())
 }
 
+// GET UTXO set addresses
+pub fn utxo_addresses(
+    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path("utxo_addresses")
+        .and(warp::get())
+        .and(with_node_component(tracked_utxo))
+        .and_then(handlers::get_utxo_addresses)
+        .with(get_cors())
+}
+
 //======= POST ROUTES =======//
 
 // POST CORS
@@ -320,11 +331,12 @@ pub fn compute_node_routes(
     tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    fetch_utxo_balance(tracked_utxo)
+    fetch_utxo_balance(tracked_utxo.clone())
         .or(create_receipt_asset(node.clone()))
         .or(create_transactions(node.clone()))
         .or(debug_data(node, None))
         .or(payment_address_construction())
+        .or(utxo_addresses(tracked_utxo))
 }
 
 // API routes for Miner nodes

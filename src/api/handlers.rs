@@ -222,6 +222,14 @@ pub async fn get_current_mining_block(
     Ok(warp::reply::json(&data))
 }
 
+/// Get all addresses for unspent tokens on the UTXO set
+pub async fn get_utxo_addresses(
+    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let addresses = tracked_utxo.lock().unwrap().get_all_addresses();
+    Ok(warp::reply::json(&addresses))
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve an item from the blockchain db by hash key
