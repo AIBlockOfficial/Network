@@ -80,6 +80,14 @@ impl TrackedUtxoSet {
             address_list,
         }
     }
+
+    /// Get all `script_public_key` values from the current UTXO set
+    pub fn get_all_addresses(&self) -> Vec<String> {
+        self.base
+            .iter()
+            .filter_map(|(_, tx_out)| tx_out.script_public_key.clone())
+            .collect::<Vec<String>>()
+    }
 }
 
 /// Create `pk_cache` entries from base `UtxoSet`
