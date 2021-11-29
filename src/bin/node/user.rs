@@ -225,8 +225,13 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
-    settings.set_default("user_setup_tx_max_count", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
+    settings
+        .set_default(
+            "user_test_auto_gen_setup",
+            default_user_test_auto_gen_setup(),
+        )
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -307,6 +312,15 @@ fn configuration(settings: config::Config) -> UserNodeConfig {
     settings.try_into().unwrap()
 }
 
+fn default_user_test_auto_gen_setup() -> HashMap<String, config::Value> {
+    let mut value = HashMap::new();
+    let zero = config::Value::new(None, 0);
+    value.insert("user_setup_tx_chunk_size".to_owned(), zero.clone());
+    value.insert("user_setup_tx_in_per_tx".to_owned(), zero.clone());
+    value.insert("user_setup_tx_max_count".to_owned(), zero);
+    value
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -327,6 +341,14 @@ mod test {
         // Use argument instead of std::env as env apply to all tests
         let args = vec!["bin_name", "--tls_private_key_override=42"];
         let expected = (DbMode::Test(1000), Some("42".to_owned()));
+
+        validate_startup_common(args, expected);
+    }
+
+    #[test]
+    fn validate_startup_aws() {
+        let args = vec!["bin_name", "--config=src/bin/node_settings_aws.toml"];
+        let expected = (DbMode::Live, None);
 
         validate_startup_common(args, expected);
     }

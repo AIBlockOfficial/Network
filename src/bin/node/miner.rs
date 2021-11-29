@@ -342,8 +342,13 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings.set_default("user_node_idx", 0).unwrap();
     settings.set_default("user_compute_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
-    settings.set_default("user_setup_tx_max_count", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
+    settings
+        .set_default(
+            "user_test_auto_gen_setup",
+            default_user_test_auto_gen_setup(),
+        )
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -446,6 +451,16 @@ fn configuration(
         settings.1.map(|v| v.try_into::<UserNodeConfig>().unwrap()),
     )
 }
+
+fn default_user_test_auto_gen_setup() -> HashMap<String, config::Value> {
+    let mut value = HashMap::new();
+    let zero = config::Value::new(None, 0);
+    value.insert("user_setup_tx_chunk_size".to_owned(), zero.clone());
+    value.insert("user_setup_tx_in_per_tx".to_owned(), zero.clone());
+    value.insert("user_setup_tx_max_count".to_owned(), zero);
+    value
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -491,6 +506,19 @@ mod test {
         ];
         let expected: Expected = (DbMode::Test(3), Some("42".to_owned()));
         let user_expected: UserExpected = Some((DbMode::Test(3), Some("42".to_owned())));
+        validate_startup_common(args, expected, user_expected);
+    }
+
+    #[test]
+    fn validate_startup_aws() {
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_aws.toml",
+            "--with_user_index=1",
+        ];
+        let expected = (DbMode::Live, None);
+        let user_expected: UserExpected = Some((DbMode::Live, None));
+
         validate_startup_common(args, expected, user_expected);
     }
 
