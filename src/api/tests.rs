@@ -69,6 +69,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
 
     let tx = Transaction::new();
     let tx_value = serialize(&tx).unwrap();
+    let tx_json = serde_json::to_vec(&tx).unwrap();
     let tx_hash = hex::encode(Sha3_256::digest(&serialize(&tx_value).unwrap()));
 
     let mut mining_tx_hash_and_nonces = BTreeMap::new();
@@ -84,6 +85,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
 
     // Handle block insert
     let block_input = serialize(&block_to_input).unwrap();
+    let block_json = serde_json::to_vec(&block_to_input).unwrap();
     let block_hash = {
         let hash_digest = Sha3_256::digest(&block_input);
         let mut hash_digest = hex::encode(hash_digest);
@@ -95,7 +97,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
         let block_num = 0;
         let tx_len = 0;
         let t = BlockchainItemMeta::Block { block_num, tx_len };
-        let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input);
+        let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input, &block_json);
         put_named_last_block_to_block_chain(&mut batch, &pointer);
     }
     // Handle tx insert
@@ -104,7 +106,7 @@ fn get_db_with_block_no_mutex() -> SimpleDb {
             block_num: 0,
             tx_num: 1,
         };
-        put_to_block_chain(&mut batch, &t, &tx_hash, &tx_value);
+        put_to_block_chain(&mut batch, &t, &tx_hash, &tx_value, &tx_json);
     }
 
     let batch = batch.done();
@@ -514,7 +516,7 @@ async fn test_post_block_info_by_nums() {
         .method("POST")
         .path("/block_by_num")
         .header("Content-Type", "application/json")
-        .json(&vec![0_u64])
+        .json(&vec![0_u64, 10, 0])
         .reply(&filter)
         .await;
 
@@ -524,7 +526,7 @@ async fn test_post_block_info_by_nums() {
 
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
-    assert_eq!(res.body(), "[[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
+    assert_eq!(res.body(), "[[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}],[\"\",\"\"],[\"b6d369ad3595c1348772ad89e7ce314032687579f1bbe288b1a4d065a005a9997\",{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}]]");
 }
 
 /// Test POST make payment

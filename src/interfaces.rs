@@ -225,6 +225,7 @@ pub struct BlockchainItem {
     pub item_meta: BlockchainItemMeta,
     pub key: Vec<u8>,
     pub data: Vec<u8>,
+    pub data_json: Vec<u8>,
 }
 
 impl BlockchainItem {

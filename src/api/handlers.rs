@@ -1,18 +1,16 @@
 use crate::api::errors;
 use crate::comms_handler::Node;
+use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    api_debug_routes, node_type_as_str, AddressesWithOutPoints, ComputeApiRequest, DebugData,
-    NodeType, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    api_debug_routes, node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
+    BlockchainItemType, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
+    UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
-use crate::storage::{
-    get_block_nums_by_tx_hashes, get_blocks_by_num, get_last_block_stored, get_stored_value_from_db,
-};
+use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::tracked_utxo::TrackedUtxoSet;
-use crate::utils::{
-    decode_pub_key, decode_signature, get_node_debug_data, DeserializedBlockchainItem,
-};
+use crate::utils::{decode_pub_key, decode_signature, get_node_debug_data};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
@@ -126,6 +124,20 @@ pub struct AddressConstructData {
     pub pub_key: Vec<u8>,
 }
 
+/// A JSON formatted reply.
+pub struct JsonReply(Vec<u8>);
+
+impl warp::reply::Reply for JsonReply {
+    #[inline]
+    fn into_response(self) -> warp::reply::Response {
+        use warp::http::header::{HeaderValue, CONTENT_TYPE};
+        let mut res = warp::reply::Response::new(self.0.into());
+        res.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        res
+    }
+}
+
 //======= GET HANDLERS =======//
 
 /// Gets the state of the connected wallet and returns it.
@@ -183,8 +195,7 @@ pub async fn get_new_payment_address(
 pub async fn get_latest_block(
     db: Arc<Mutex<SimpleDb>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let last_block = get_last_block_stored(db);
-    Ok(warp::reply::json(&last_block))
+    get_json_reply_stored_value_from_db(db, LAST_BLOCK_HASH_KEY, false)
 }
 
 /// Gets the debug info for a speficied node type
@@ -237,27 +248,7 @@ pub async fn post_blockchain_entry_by_key(
     db: Arc<Mutex<SimpleDb>>,
     key: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let item = match get_stored_value_from_db(db, key.as_bytes()) {
-        Some(i) => i,
-        None => return Err(warp::reject::custom(errors::ErrorNoDataFoundForKey)),
-    };
-
-    let des = match DeserializedBlockchainItem::from_item(&item) {
-        DeserializedBlockchainItem::CurrentBlock(b, ..) => BlockchainData::Block(b),
-        DeserializedBlockchainItem::CurrentTx(t, ..) => BlockchainData::Transaction(t),
-        DeserializedBlockchainItem::VersionErr(err) => {
-            error!("Version error: {:?}", err);
-            return Err(warp::reject::custom(
-                errors::ErrorDataNetworkVersionMismatch,
-            ));
-        }
-        DeserializedBlockchainItem::SerializationErr(err) => {
-            error!("Deserializing error: {:?}", err);
-            return Err(warp::reject::custom(errors::ErrorCouldNotDeserializeData));
-        }
-    };
-
-    Ok(warp::reply::json(&des))
+    get_json_reply_stored_value_from_db(db, &key, true)
 }
 
 /// Post to retrieve block information by number
@@ -265,9 +256,11 @@ pub async fn post_block_by_num(
     db: Arc<Mutex<SimpleDb>>,
     block_nums: Vec<u64>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let blocks = get_blocks_by_num(db, block_nums);
-
-    Ok(warp::reply::json(&blocks))
+    let keys: Vec<_> = block_nums
+        .iter()
+        .map(|num| indexed_block_hash_key(*num))
+        .collect();
+    get_json_reply_blocks_from_db(db, keys)
 }
 
 /// Post to import new keypairs to the connected wallet
@@ -516,8 +509,7 @@ pub async fn post_blocks_by_tx_hashes(
     db: Arc<Mutex<SimpleDb>>,
     tx_hashes: Vec<String>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let bock_nums = get_block_nums_by_tx_hashes(db, tx_hashes);
-    Ok(warp::reply::json(&bock_nums))
+    get_json_reply_block_nums_by_tx_hashes_from_db(db, tx_hashes)
 }
 
 //POST create a new payment address from a computet node
@@ -593,4 +585,85 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
         version,
         druid_info,
     })
+}
+
+/// Fetches JSON blocks.
+fn get_json_reply_stored_value_from_db(
+    db: Arc<Mutex<SimpleDb>>,
+    key: &str,
+    wrap: bool,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let item = get_stored_value_from_db(db, key.as_bytes())
+        .ok_or_else(|| warp::reject::custom(errors::ErrorNoDataFoundForKey))?;
+
+    match (wrap, item.item_meta.as_type()) {
+        (true, BlockchainItemType::Block) => Ok(json_embed_block(item.data_json)),
+        (true, BlockchainItemType::Tx) => Ok(json_embed_transaction(item.data_json)),
+        (false, _) => Ok(json_embed(&[&item.data_json])),
+    }
+}
+
+/// Fetches JSON blocks. Blocks which for whatever reason are
+/// unretrievable will be replaced with a default (best handling?)
+pub fn get_json_reply_blocks_from_db(
+    db: Arc<Mutex<SimpleDb>>,
+    keys: Vec<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let key_values: Vec<_> = keys
+        .into_iter()
+        .map(|key| {
+            get_stored_value_from_db(db.clone(), key)
+                .map(|item| (item.key, item.data_json))
+                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec()))
+        })
+        .collect();
+
+    // Make JSON tupple with key and Block
+    let key_values: Vec<_> = key_values
+        .iter()
+        .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
+        .collect();
+
+    // Make JSON array:
+    let mut key_values: Vec<_> = key_values.join(&&b","[..]);
+    key_values.insert(0, &b"["[..]);
+    key_values.push(&b"]"[..]);
+
+    Ok(json_embed(&key_values))
+}
+
+/// Fetches stored block numbers that contain provided `tx_hash` values.
+/// Unretrievable transactions will be ignored.
+pub fn get_json_reply_block_nums_by_tx_hashes_from_db(
+    db: Arc<Mutex<SimpleDb>>,
+    tx_hashes: Vec<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let block_nums: Vec<u64> = tx_hashes
+        .into_iter()
+        .filter_map(
+            |tx_hash| match get_stored_value_from_db(db.clone(), tx_hash) {
+                Some(BlockchainItem {
+                    item_meta: BlockchainItemMeta::Tx { block_num, .. },
+                    ..
+                }) => Some(block_num),
+                _ => None,
+            },
+        )
+        .collect();
+    Ok(warp::reply::json(&block_nums))
+}
+
+/// Embed block into Block enum
+pub fn json_embed_block(value: Vec<u8>) -> JsonReply {
+    json_embed(&[b"{\"Block\":", &value, b"}"])
+}
+
+/// Embed transaction into Transaction enum
+pub fn json_embed_transaction(value: Vec<u8>) -> JsonReply {
+    json_embed(&[b"{\"Transaction\":", &value, b"}"])
+}
+
+/// Embed JSON into wrapping JSON
+pub fn json_embed(value: &[&[u8]]) -> JsonReply {
+    JsonReply(value.iter().copied().flatten().copied().collect())
 }

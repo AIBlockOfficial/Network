@@ -289,6 +289,7 @@ pub fn get_upgrade_storage_db(
     db.upgrade_create_missing_cf(storage::DB_COL_BC_ALL)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NAMED)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_META)?;
+    db.upgrade_create_missing_cf(storage::DB_COL_BC_JSON)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
     db.upgrade_create_missing_cf(storage::DB_COL_BC_V0_2_0)?;
     Ok(ExtraNodeParams {
@@ -353,8 +354,13 @@ pub fn upgrade_storage_db_batch<'a>(
             for (tx_num, tx_hash) in all_txs {
                 tx_len = tx_num + 1;
                 if let Some(tx_value) = db.get_cf(DB_COL_DEFAULT, tx_hash)? {
+                    let tx: old::naom::Transaction =
+                        tracked_deserialize("Tx deserialize", tx_hash.as_bytes(), &tx_value)?;
+                    let tx_json = serde_json::to_vec(&tx).unwrap();
                     let t = BlockchainItemMeta::Tx { block_num, tx_num };
-                    storage::put_to_block_chain_at(&mut batch, column, &t, tx_hash, tx_value);
+                    storage::put_to_block_chain_at(
+                        &mut batch, column, &t, tx_hash, tx_value, tx_json,
+                    );
                 } else {
                     error!(
                         "Missing block {} transaction {}: \"{}\"",
@@ -364,8 +370,9 @@ pub fn upgrade_storage_db_batch<'a>(
             }
 
             let pointer = {
+                let value_json = serde_json::to_vec(&stored_block).unwrap();
                 let t = BlockchainItemMeta::Block { block_num, tx_len };
-                storage::put_to_block_chain_at(&mut batch, column, &t, &key, &value)
+                storage::put_to_block_chain_at(&mut batch, column, &t, &key, &value, &value_json)
             };
 
             max_block = std::cmp::max(max_block, Some((block_num, key, pointer)));
