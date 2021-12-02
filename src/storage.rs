@@ -41,6 +41,7 @@ pub const DB_COL_INTERNAL: &str = "internal";
 pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_META: &str = "block_chain_meta";
+pub const DB_COL_BC_JSON: &str = "block_chain_json";
 pub const DB_COL_BC_NOW: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
@@ -57,6 +58,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         DB_COL_BC_ALL,
         DB_COL_BC_NAMED,
         DB_COL_BC_META,
+        DB_COL_BC_JSON,
         DB_COL_BC_NOW,
         DB_COL_BC_V0_2_0,
     ],
@@ -618,6 +620,7 @@ impl StorageNode {
         };
 
         let block_input = serialize(&stored_block).unwrap();
+        let block_json = serde_json::to_vec(&stored_block).unwrap();
         let block_hash = {
             let hash_digest = Sha3_256::digest(&block_input);
             let mut hash_digest = hex::encode(hash_digest);
@@ -661,8 +664,9 @@ impl StorageNode {
             tx_len = tx_num + 1;
             if let Some(tx_value) = all_block_txs.get(tx_hash) {
                 let tx_input = serialize(tx_value).unwrap();
+                let tx_json = serde_json::to_vec(tx_value).unwrap();
                 let t = BlockchainItemMeta::Tx { block_num, tx_num };
-                put_to_block_chain(&mut batch, &t, tx_hash, &tx_input);
+                put_to_block_chain(&mut batch, &t, tx_hash, &tx_input, &tx_json);
             } else {
                 error!(
                     "Missing block {} transaction {}: \"{}\"",
@@ -673,7 +677,8 @@ impl StorageNode {
 
         {
             let t = BlockchainItemMeta::Block { block_num, tx_len };
-            let pointer = put_to_block_chain(&mut batch, &t, &block_hash, &block_input);
+            let pointer =
+                put_to_block_chain(&mut batch, &t, &block_hash, &block_input, &block_json);
             put_named_last_block_to_block_chain(&mut batch, &pointer);
 
             if FetchStatus::Contiguous(block_num) == status {
@@ -736,7 +741,13 @@ impl StorageNode {
         for item in &items {
             let key = str::from_utf8(&item.key)
                 .map_err(|_| StorageError::ConfigError("Non UTF-8 blockchain key"))?;
-            let pointer = put_to_block_chain(&mut batch, &item.item_meta, key, &item.data);
+            let pointer = put_to_block_chain(
+                &mut batch,
+                &item.item_meta,
+                key,
+                &item.data,
+                &item.data_json,
+            );
 
             if let BlockchainItemMeta::Block { block_num, .. } = &item.item_meta {
                 if block_num == &b_num {
@@ -1060,37 +1071,42 @@ impl StorageInterface for StorageNode {
 ///
 /// ### Arguments
 ///
-/// * `batch`     - Database writer
-/// * `item_meta` - The metadata for the data
-/// * `key`       - The key for the data
-/// * `value`     - The value to store
+/// * `batch`      - Database writer
+/// * `item_meta`  - The metadata for the data
+/// * `key`        - The key for the data
+/// * `value`      - The value to store
+/// * `value_json` - The value to store in JSON
 pub fn put_to_block_chain(
     batch: &mut SimpleDbWriteBatch,
     item_meta: &BlockchainItemMeta,
     key: &str,
     value: &[u8],
+    value_json: &[u8],
 ) -> Vec<u8> {
-    put_to_block_chain_at(batch, DB_COL_BC_NOW, item_meta, key, value)
+    put_to_block_chain_at(batch, DB_COL_BC_NOW, item_meta, key, value, value_json)
 }
 
 /// Add to the block chain columns for specified version
 ///
 /// ### Arguments
 ///
-/// * `batch`     - Database writer
-/// * `cf`        - Column family to store the key/value
-/// * `item_meta` - The metadata for the data
-/// * `key`       - The key for the data
-/// * `value`     - The value to store
+/// * `batch`      - Database writer
+/// * `cf`         - Column family to store the key/value
+/// * `item_meta`  - The metadata for the data
+/// * `key`        - The key for the data
+/// * `value`      - The value to store
+/// * `value_json` - The value to store in JSON
 pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     batch: &mut SimpleDbWriteBatch,
     cf: &'static str,
     item_meta: &BlockchainItemMeta,
     key: K,
     value: V,
+    value_json: V,
 ) -> Vec<u8> {
     let key = key.as_ref();
     let value = value.as_ref();
+    let value_json = value_json.as_ref();
     let pointer = version_pointer(cf, key);
     let meta_key = match *item_meta {
         BlockchainItemMeta::Block { block_num, .. } => indexed_block_hash_key(block_num),
@@ -1099,6 +1115,7 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     let meta_ser = serialize(item_meta).unwrap();
 
     batch.put_cf(cf, key, value);
+    batch.put_cf(DB_COL_BC_JSON, key, value_json);
     batch.put_cf(DB_COL_BC_ALL, key, &pointer);
     batch.put_cf(DB_COL_BC_META, key, &meta_ser);
     batch.put_cf(DB_COL_BC_NAMED, &meta_key, &pointer);
@@ -1157,6 +1174,10 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
 
     let (version, cf, key) = decode_version_pointer(&pointer);
     let data = ok_or_warn(u_db.get_cf(cf, key), "get_stored_value data")?;
+    let data_json = ok_or_warn(
+        u_db.get_cf(DB_COL_BC_JSON, key),
+        "get_stored_value data_json",
+    )?;
     let meta = {
         let meta = u_db.get_cf(DB_COL_BC_META, key);
         let meta = ok_or_warn(meta, "get_stored_value meta")?;
@@ -1168,86 +1189,8 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
         item_meta: meta,
         key: key.to_owned(),
         data,
+        data_json,
     })
-}
-
-/// Fetches blocks by their block numbers. Blocks which for whatever reason are
-/// unretrievable will be replaced with a default (best handling?)
-///
-/// ### Arguments
-///
-/// * `nums`    - Numbers of the blocks to fetch
-pub fn get_blocks_by_num(
-    db: Arc<Mutex<SimpleDb>>,
-    nums: Vec<u64>,
-) -> Vec<(String, StoredSerializingBlock)> {
-    nums.iter()
-        .map(|num| get_block_by_num(db.clone(), *num).unwrap_or_default())
-        .collect::<Vec<(String, StoredSerializingBlock)>>()
-}
-
-/// Fetches a single block using the block's number.
-///
-/// If the block is unretreivable, a `None` value will be returned
-///
-/// ### Arguments
-///
-/// * `num`    - Number of the block to fetch
-pub fn get_block_by_num(
-    db: Arc<Mutex<SimpleDb>>,
-    num: u64,
-) -> Option<(String, StoredSerializingBlock)> {
-    let key = indexed_block_hash_key(num);
-    let item = get_stored_value_from_db(db, key).unwrap_or_default();
-    let block = match deserialize(&item.data) {
-        Ok(b) => b,
-        Err(_) => return None,
-    };
-    let hash_digest = Sha3_256::digest(&item.data);
-    let mut hash_hex = hex::encode(hash_digest);
-    hash_hex.insert(0, BLOCK_PREPEND as char);
-    Some((hash_hex, block))
-}
-
-/// Fetches stored block numbers that contain provided `tx_hash` values
-///
-/// ### Arguments
-///
-/// * `tx_hashes`    - Transaction hashes contained within blocks to fetch
-pub fn get_block_nums_by_tx_hashes(db: Arc<Mutex<SimpleDb>>, tx_hashes: Vec<String>) -> Vec<u64> {
-    tx_hashes
-        .iter()
-        .filter_map(|tx_hash| get_block_num_by_tx_hash(db.clone(), tx_hash.clone()))
-        .collect()
-}
-
-/// Fetches a single stored block that contains provided `tx_hash` value
-///
-/// ### Arguments
-///
-/// * `tx_hash`    - Transaction hashes contained within block to fetch
-pub fn get_block_num_by_tx_hash(db: Arc<Mutex<SimpleDb>>, tx_hash: String) -> Option<u64> {
-    let item = match get_stored_value_from_db(db, tx_hash) {
-        Some(it) => it,
-        _ => return None,
-    };
-    match item.item_meta {
-        BlockchainItemMeta::Tx {
-            block_num,
-            tx_num: _,
-        } => Some(block_num),
-        _ => None,
-    }
-}
-
-/// Fetches the most recent block stored
-pub fn get_last_block_stored(db: Arc<Mutex<SimpleDb>>) -> StoredSerializingBlock {
-    let item = get_stored_value_from_db(db, LAST_BLOCK_HASH_KEY).unwrap_or_default();
-
-    match deserialize(&item.data) {
-        Ok(b) => b,
-        Err(_) => StoredSerializingBlock::default(),
-    }
 }
 
 /// Version pointer for the column:key

@@ -61,16 +61,6 @@ impl warp::reject::Reject for ErrorCannotSaveAddressesToWallet {}
 pub struct ErrorNoDataFoundForKey;
 impl warp::reject::Reject for ErrorNoDataFoundForKey {}
 
-/// API error struct for a deserialization error
-#[derive(Debug)]
-pub struct ErrorCouldNotDeserializeData;
-impl warp::reject::Reject for ErrorCouldNotDeserializeData {}
-
-/// API error struct for a version-network mismatch error
-#[derive(Debug)]
-pub struct ErrorDataNetworkVersionMismatch;
-impl warp::reject::Reject for ErrorDataNetworkVersionMismatch {}
-
 /// API error for struct ambiguous code 500 internal errors.
 ///
 /// TODO: Decide how much information on the internal error should be displayed to the client
