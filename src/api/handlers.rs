@@ -195,7 +195,7 @@ pub async fn get_new_payment_address(
 pub async fn get_latest_block(
     db: Arc<Mutex<SimpleDb>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    get_json_reply_stored_value_from_db(db, LAST_BLOCK_HASH_KEY)
+    get_json_reply_stored_value_from_db(db, LAST_BLOCK_HASH_KEY, false)
 }
 
 /// Gets the debug info for a speficied node type
@@ -248,7 +248,7 @@ pub async fn post_blockchain_entry_by_key(
     db: Arc<Mutex<SimpleDb>>,
     key: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    get_json_reply_stored_value_from_db(db, &key)
+    get_json_reply_stored_value_from_db(db, &key, true)
 }
 
 /// Post to retrieve block information by number
@@ -591,13 +591,15 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
 fn get_json_reply_stored_value_from_db(
     db: Arc<Mutex<SimpleDb>>,
     key: &str,
+    wrap: bool,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let item = get_stored_value_from_db(db, key.as_bytes())
         .ok_or_else(|| warp::reject::custom(errors::ErrorNoDataFoundForKey))?;
 
-    match item.item_meta.as_type() {
-        BlockchainItemType::Block => Ok(json_embed_block(item.data_json)),
-        BlockchainItemType::Tx => Ok(json_embed_transaction(item.data_json)),
+    match (wrap, item.item_meta.as_type()) {
+        (true, BlockchainItemType::Block) => Ok(json_embed_block(item.data_json)),
+        (true, BlockchainItemType::Tx) => Ok(json_embed_transaction(item.data_json)),
+        (false, _) => Ok(json_embed(&[&item.data_json])),
     }
 }
 
@@ -619,7 +621,7 @@ pub fn get_json_reply_blocks_from_db(
     // Make JSON tupple with key and Block
     let key_values: Vec<_> = key_values
         .iter()
-        .map(|(k, v)| [&b"[\""[..], k, &b"\",{\"Block\":"[..], v, &b"}]"[..]])
+        .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
         .collect();
 
     // Make JSON array:
