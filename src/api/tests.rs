@@ -18,6 +18,7 @@ use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use bytes::Bytes;
+use naom::constants::NETWORK_VERSION_V0;
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -656,7 +657,8 @@ async fn test_address_construction() {
     //
     // Assert
     //
-    let expected = Bytes::from_static(b"\"56d5b6da467e6c588966967ef5405dd2\"");
+    let expected =
+        Bytes::from_static(b"\"ca0abdcd2826a77218af0914601ee34c7ff44127aab9d0671267b25a7d36946a\"");
     assert_eq!(res.body(), &expected);
 }
 
@@ -842,13 +844,23 @@ async fn test_post_signable_transactions() {
     //
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\"}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
+        (success_json(), "[{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"Pay2PkH\":{\"signed_data\":\"2000000000000000313362643333353162373862656232643064616466323035386463633932366300000000\",\"signature\":\"\",\"public_key\":\"\",\"address_version\":null}}}],\"outputs\":[],\"version\":1,\"druid_info\":null}]")
     );
 }
 
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions() {
+    test_post_create_transactions_common(None).await;
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_transactions_v0() {
+    test_post_create_transactions_common(Some(NETWORK_VERSION_V0)).await;
+}
+
+async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Arrange
     //
@@ -868,6 +880,7 @@ async fn test_post_create_transactions() {
                 signed_data,
                 signature,
                 public_key,
+                address_version,
             }),
         }],
         outputs: vec![],
@@ -903,6 +916,7 @@ async fn test_post_create_transactions() {
                 previous_out,
                 signatures: vec![raw_signature],
                 pub_keys: vec![decode_pub_key(COMMON_PUB_KEY).unwrap()],
+                address_version,
             }]),
             outputs: vec![],
             version: 1,

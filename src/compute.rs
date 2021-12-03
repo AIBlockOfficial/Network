@@ -384,7 +384,7 @@ impl ComputeNode {
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
         let txs_valid = {
             let tx_validator = self.transactions_validator();
-            droplet.tx.values().all(|tx| tx_validator(tx))
+            droplet.tx.values().all(tx_validator)
         };
 
         if txs_valid && druid_expectations_are_met(druid, droplet.tx.values()) {

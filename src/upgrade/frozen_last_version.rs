@@ -420,6 +420,7 @@ pub mod convert {
         wallet::AddressStore {
             public_key: convert_public_key(old.public_key),
             secret_key: convert_secret_key(old.secret_key),
+            address_version: Some(old::constants::NETWORK_VERSION as u64),
         }
     }
 

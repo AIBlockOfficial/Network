@@ -15,6 +15,7 @@ use crate::test_utils::{
     get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig,
     NetworkNodeInfo, NodeType,
 };
+use crate::tests::compute_committed_tx_pool;
 use crate::utils::tracing_log_try_init;
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -483,6 +484,50 @@ async fn upgrade_restart_network_common(
     test_step_complete(network).await;
 }
 
+// Spend transactions with old address structure
+#[tokio::test(flavor = "current_thread")]
+async fn upgrade_spend_old_tx() {
+    //
+    // Arrange
+    //
+    let config = complete_network_config(20260);
+    let mut network = Network::create_stopped_from_config(&config);
+
+    for name in ["user1", "compute1"] {
+        let node_info = network.get_node_info(name).unwrap().clone();
+        let db = create_old_node_db(&node_info, DbCfg::ComputeBlockToMine);
+        let db = get_upgrade_node_db(&node_info, in_memory(db)).unwrap();
+        let (db, _) = upgrade_node_db(&node_info, db, &cfg_upgrade()).unwrap();
+        let db = open_as_new_node_db(&node_info, in_memory(db)).unwrap();
+        network.add_extra_params(name, in_memory(db));
+    }
+
+    //
+    // Act
+    //
+    network.re_spawn_dead_nodes().await;
+    raft_node_handle_event(&mut network, "user1", "Snapshot applied").await;
+    raft_node_handle_event(&mut network, "compute1", "Snapshot applied").await;
+
+    user_make_payment_transaction(
+        &mut network,
+        "user1",
+        "compute1",
+        TokenAmount(123),
+        "payment_address".to_owned(),
+    )
+    .await;
+
+    raft_node_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    raft_node_handle_event(&mut network, "compute1", "Transactions committed").await;
+    let actual_tx_pool = compute_committed_tx_pool(&mut network, "compute1").await;
+
+    //
+    // Assert
+    //
+    assert_eq!(actual_tx_pool.len(), 1);
+}
+
 //
 // Test helpers
 //
@@ -788,6 +833,22 @@ fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
         tokio::time::sleep(TIMEOUT_TEST_WAIT_DURATION).await;
         "Test timeout elapsed"
     })
+}
+
+// Make a payment transaction from inputs containing old address structure
+async fn user_make_payment_transaction(
+    network: &mut Network,
+    user: &str,
+    compute: &str,
+    amount: TokenAmount,
+    to_addr: String,
+) {
+    let mut user = network.user(user).unwrap().lock().await;
+    let compute_addr = network.get_address(compute).await.unwrap();
+    user.make_payment_transactions(None, to_addr, amount).await;
+    user.send_next_payment_to_destinations(compute_addr)
+        .await
+        .unwrap();
 }
 
 async fn raft_node_handle_event(network: &mut Network, node: &str, reason_val: &str) {

@@ -1251,6 +1251,7 @@ impl UserNode {
         let AddressStore {
             public_key,
             secret_key,
+            address_version: _,
         } = self.wallet_db.generate_payment_address().await.1;
 
         let block_num = self.last_block_notified.header.b_num;

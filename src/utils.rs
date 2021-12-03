@@ -565,6 +565,7 @@ pub fn create_valid_transaction_with_ins_outs(
                 previous_out: signable,
                 signatures: vec![signature],
                 pub_keys: vec![*pub_key],
+                address_version: None,
             });
         }
 
