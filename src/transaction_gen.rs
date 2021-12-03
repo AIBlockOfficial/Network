@@ -29,7 +29,7 @@ impl TransactionGen {
     pub fn new(tx_specs: Vec<WalletTxSpec>) -> Self {
         let infos: Vec<_> = tx_specs
             .iter()
-            .map(|s| make_wallet_tx_info(s))
+            .map(make_wallet_tx_info)
             .map(|(out_p, pk, sk, amount)| ((out_p, amount), (pk, sk, construct_address(&pk))))
             .collect();
 

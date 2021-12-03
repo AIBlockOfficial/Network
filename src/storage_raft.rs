@@ -24,6 +24,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum StorageRaftItem {
     PartBlock(ReceivedBlock),
     CompleteBlock(u64),

@@ -107,6 +107,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
 pub struct AddressStore {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
+    pub address_version: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +260,7 @@ impl WalletDb {
         let address_keys = AddressStore {
             public_key,
             secret_key,
+            address_version: None,
         };
 
         let save_result = self
@@ -807,6 +809,7 @@ pub fn tx_constructor_from_prev_out(
         previous_out: out_p.clone(),
         signatures: vec![signature],
         pub_keys: vec![needed_store.public_key],
+        address_version: needed_store.address_version,
     };
 
     (tx_const, (out_p, key_address))
@@ -826,7 +829,10 @@ mod tests {
         .unwrap();
         let addr = construct_address(&pk);
 
-        assert_eq!(addr, "197e990a0e00fd6ae13daecc18180df6".to_string(),);
+        assert_eq!(
+            addr,
+            "fc0aa2394edb0d2df918325d4682c21eacecf173265db7c04623d2a921f3876c".to_string(),
+        );
     }
 
     #[test]
@@ -839,7 +845,7 @@ mod tests {
         .unwrap();
         let addr = construct_address(&pk);
 
-        assert_eq!(addr.len(), 32);
+        assert_eq!(addr.len(), 64);
     }
 
     #[tokio::test(flavor = "current_thread")]

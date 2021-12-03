@@ -86,6 +86,8 @@ pub enum CreateTxInScript {
         signature: String,
         /// Hex encoded complete public key
         public_key: String,
+        /// Optional address version field
+        address_version: Option<u64>,
     },
 }
 
@@ -453,6 +455,7 @@ pub async fn post_signable_transactions(
                     signed_data: construct_tx_in_signable_hash(previous_out),
                     signature: Default::default(),
                     public_key: Default::default(),
+                    address_version: None,
                 })
             }
         }
@@ -561,6 +564,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
                     signed_data,
                     signature,
                     public_key,
+                    address_version,
                 } = script_signature;
 
                 let signature =
@@ -570,7 +574,12 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, warp::Reje
 
                 TxIn {
                     previous_out: Some(previous_out),
-                    script_signature: Script::pay2pkh(signed_data, signature, public_key),
+                    script_signature: Script::pay2pkh(
+                        signed_data,
+                        signature,
+                        public_key,
+                        address_version,
+                    ),
                 }
             };
 

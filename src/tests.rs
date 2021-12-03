@@ -76,13 +76,13 @@ const SOME_SEC_KEYS: [&str; 3] = [
 
 const SOME_PUB_KEY_ADDRS: [&str; 3] = [
     COMMON_PUB_ADDR,
-    "abc7c0448465c4507faf2ee588728824",
-    "6ae52e3870884ab66ec49d3bb359c0bf",
+    "77516e2d91606250e625546f86702510d2e893e4a27edfc932fdba03c955cc1b",
+    "4cfd64a6692021fc417368a866d33d94e1c806747f61ac85e0b3935e7d5ed925",
 ];
 
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
-const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
+const COMMON_PUB_ADDR: &str = "5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b";
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Cfg {
@@ -3141,7 +3141,7 @@ async fn compute_all_committed_tx_pool(
     result
 }
 
-async fn compute_committed_tx_pool(
+pub async fn compute_committed_tx_pool(
     network: &mut Network,
     compute: &str,
 ) -> BTreeMap<String, Transaction> {
