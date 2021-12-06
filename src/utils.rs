@@ -158,6 +158,7 @@ impl fmt::Debug for LocalEventChannel {
 }
 
 /// A trivial error to output
+#[derive(PartialEq, Eq)]
 pub struct StringError(pub String);
 
 impl Error for StringError {
