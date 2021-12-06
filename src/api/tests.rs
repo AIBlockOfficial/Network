@@ -8,10 +8,11 @@ use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, ComputeApiRequest, NodeType, StoredSerializingBlock, UserApiRequest,
-    UserRequest, UtxoFetchType,
+    BlockchainItemMeta, ComputeApi, ComputeApiRequest, NodeType, StoredSerializingBlock,
+    UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
+use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{decode_pub_key, decode_secret_key};
 use crate::wallet::{WalletDb, WalletDbError};
@@ -54,6 +55,48 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
 );
 
 /*------- UTILS--------*/
+
+#[derive(Default)]
+struct ComputeTest {
+    pub utxo_set: TrackedUtxoSet,
+    pub threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
+}
+
+impl ComputeTest {
+    fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
+        Self {
+            utxo_set: TrackedUtxoSet::new(
+                tx_vals
+                    .into_iter()
+                    .map(|(_, tx)| {
+                        (
+                            tx.inputs[0].clone().previous_out.unwrap(),
+                            tx.outputs[0].clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn spawn(self) -> tokio::task::JoinHandle<Self> {
+        tokio::spawn({
+            let mut c = self;
+            async move {
+                let f = c.threaded_calls.rx.recv().await.unwrap();
+                f(&mut c);
+                c
+            }
+        })
+    }
+}
+
+impl ComputeApi for ComputeTest {
+    fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
+        &self.utxo_set
+    }
+}
 
 fn from_utf8(data: &[u8]) -> &str {
     std::str::from_utf8(data).unwrap()
@@ -395,7 +438,6 @@ async fn test_get_utxo_set_addresses() {
     //
     // Arrange
     //
-    let mut bmap = BTreeMap::new();
 
     let tx_vals = vec![
         generate_transaction("tx_hash_1", "public_address_1"),
@@ -403,22 +445,16 @@ async fn test_get_utxo_set_addresses() {
         generate_transaction("tx_hash_3", "public_address_3"),
     ];
 
-    for (_, tx) in tx_vals {
-        bmap.insert(
-            tx.inputs[0].clone().previous_out.unwrap(),
-            tx.outputs[0].clone(),
-        );
-    }
-
-    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
-
+    let compute = ComputeTest::new(tx_vals);
     let request = warp::test::request().method("GET").path("/utxo_addresses");
 
     //
     // Act
     //
-    let filter = routes::utxo_addresses(tracked_utxo);
+    let filter = routes::utxo_addresses(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert
@@ -738,15 +774,8 @@ async fn test_post_fetch_balance() {
     //
     // Arrange
     //
-    let (_, tx) = get_transaction();
-    let mut bmap = BTreeMap::new();
-
-    bmap.insert(
-        tx.inputs[0].clone().previous_out.unwrap(),
-        tx.outputs[0].clone(),
-    );
-
-    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
+    let tx_vals = vec![get_transaction()];
+    let compute = ComputeTest::new(tx_vals);
     let addresses = PublicKeyAddresses {
         address_list: vec![COMMON_ADDR_STORE.0.to_string()],
     };
@@ -760,8 +789,10 @@ async fn test_post_fetch_balance() {
     //
     // Act
     //
-    let filter = routes::fetch_utxo_balance(tracked_utxo);
+    let filter = routes::fetch_utxo_balance(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert

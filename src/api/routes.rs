@@ -1,8 +1,9 @@
 use crate::api::handlers;
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
+use crate::interfaces::ComputeApi;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
-use crate::tracked_utxo::TrackedUtxoSet;
+use crate::threaded_call::ThreadedCallSender;
 use crate::wallet::WalletDb;
 
 use std::convert::Infallible;
@@ -94,11 +95,11 @@ pub fn current_mining_block(
 
 // GET UTXO set addresses
 pub fn utxo_addresses(
-    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path("utxo_addresses")
         .and(warp::get())
-        .and(with_node_component(tracked_utxo))
+        .and(with_node_component(threaded_calls))
         .and_then(handlers::get_utxo_addresses)
         .with(get_cors())
 }
@@ -213,11 +214,11 @@ pub fn update_running_total(
 
 // POST fetch balance for addresses
 pub fn fetch_utxo_balance(
-    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::path("fetch_balance")
         .and(warp::post())
-        .and(with_node_component(tracked_utxo))
+        .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and_then(handlers::post_fetch_utxo_balance)
         .with(post_cors())
@@ -328,15 +329,15 @@ pub fn storage_node_routes(
 
 // API routes for Compute nodes
 pub fn compute_node_routes(
-    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    fetch_utxo_balance(tracked_utxo.clone())
+    fetch_utxo_balance(threaded_calls.clone())
         .or(create_receipt_asset(node.clone()))
         .or(create_transactions(node.clone()))
         .or(debug_data(node, None))
         .or(payment_address_construction())
-        .or(utxo_addresses(tracked_utxo))
+        .or(utxo_addresses(threaded_calls))
 }
 
 // API routes for Miner nodes

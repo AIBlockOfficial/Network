@@ -8,25 +8,25 @@ pub type ThreadedCallSender<T> = MpscTracingSender<ThreadedCall<T>>;
 pub type ThreadedCallReceiver<T> = mpsc::Receiver<ThreadedCall<T>>;
 
 /// Channel for remote calls
-pub struct ThreadedCallChannel<T> {
+pub struct ThreadedCallChannel<T: ?Sized> {
     pub tx: ThreadedCallSender<T>,
     pub rx: ThreadedCallReceiver<T>,
 }
 
-impl<T> Default for ThreadedCallChannel<T> {
+impl<T: ?Sized> Default for ThreadedCallChannel<T> {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel(100);
         Self { tx: tx.into(), rx }
     }
 }
 
-impl<T> fmt::Debug for ThreadedCallChannel<T> {
+impl<T: ?Sized> fmt::Debug for ThreadedCallChannel<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "")
     }
 }
 
-pub async fn make_threaded_call<'a, T, R: Send + Sized + 'static>(
+pub async fn make_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
     tx: &mut ThreadedCallSender<T>,
     f: impl FnOnce(&mut T) -> R + Send + Sized + 'static,
     tag: &str,

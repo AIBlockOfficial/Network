@@ -1,6 +1,7 @@
 #![allow(unused)]
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
+use crate::tracked_utxo::TrackedUtxoSet;
 use bytes::Bytes;
 use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
@@ -610,6 +611,11 @@ pub trait ComputeInterface {
 
     /// Returns the next block reward value
     fn get_next_block_reward(&self) -> f64;
+}
+
+pub trait ComputeApi {
+    /// Get the UTXO tracked set
+    fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
 }
 
 ///============ USER NODE ============///

@@ -4,12 +4,12 @@ use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     api_debug_routes, node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
+    BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
     UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
-use crate::tracked_utxo::TrackedUtxoSet;
+use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, get_node_debug_data};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -237,9 +237,14 @@ pub async fn get_current_mining_block(
 
 /// Get all addresses for unspent tokens on the UTXO set
 pub async fn get_utxo_addresses(
-    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let addresses = tracked_utxo.lock().unwrap().get_all_addresses();
+    let addresses = make_api_threaded_call(
+        &mut threaded_calls,
+        |c| c.get_committed_utxo_tracked_set().get_all_addresses(),
+        "get_utxo_addresses",
+    )
+    .await?;
     Ok(warp::reply::json(&addresses))
 }
 
@@ -386,11 +391,18 @@ pub async fn post_update_running_total(
 
 /// Post to fetch the balance for given addresses in UTXO
 pub async fn post_fetch_utxo_balance(
-    tracked_utxo: Arc<Mutex<TrackedUtxoSet>>,
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     addresses: PublicKeyAddresses,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let tutxo = tracked_utxo.lock().unwrap();
-    let balances = tutxo.get_balance_for_addresses(&addresses.address_list);
+    let balances = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| {
+            c.get_committed_utxo_tracked_set()
+                .get_balance_for_addresses(&addresses.address_list)
+        },
+        "post_fetch_utxo_balance",
+    )
+    .await?;
     Ok(warp::reply::json(&json!(balances)))
 }
 
@@ -675,4 +687,18 @@ pub fn json_embed_transaction(value: Vec<u8>) -> JsonReply {
 /// Embed JSON into wrapping JSON
 pub fn json_embed(value: &[&[u8]]) -> JsonReply {
     JsonReply(value.iter().copied().flatten().copied().collect())
+}
+
+/// Threaded call for API
+pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
+    tx: &mut ThreadedCallSender<T>,
+    f: impl FnOnce(&mut T) -> R + Send + Sized + 'static,
+    tag: &str,
+) -> Result<R, warp::Rejection> {
+    threaded_call::make_threaded_call(tx, f, tag)
+        .await
+        .map_err(|e| {
+            trace!("make_api_threaded_call error: {} ({})", e, tag);
+            warp::reject::custom(errors::InternalError)
+        })
 }
