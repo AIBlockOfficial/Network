@@ -1213,6 +1213,7 @@ name = "naom"
 version = "0.1.0"
 dependencies = [
  "actix-rt",
+ "base64",
  "bincode",
  "bytes",
  "hex",

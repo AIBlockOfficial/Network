@@ -18,7 +18,7 @@ use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use bytes::Bytes;
-use naom::constants::NETWORK_VERSION_V0;
+use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::Block;
@@ -858,6 +858,12 @@ async fn test_post_create_transactions() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions_v0() {
     test_post_create_transactions_common(Some(NETWORK_VERSION_V0)).await;
+}
+
+/// Test POST create receipt asset on compute node successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_create_transactions_temp() {
+    test_post_create_transactions_common(Some(NETWORK_VERSION_TEMP)).await;
 }
 
 async fn test_post_create_transactions_common(address_version: Option<u64>) {
