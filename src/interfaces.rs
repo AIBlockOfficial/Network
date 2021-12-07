@@ -138,7 +138,7 @@ impl ProofOfWorkBlock {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DruidDroplet {
     pub participants: usize,
-    pub tx: BTreeMap<String, Transaction>,
+    pub txs: BTreeMap<String, Transaction>,
 }
 
 /// A placeholder Contract struct
@@ -192,6 +192,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
         ],
         "Compute" => vec![
             "fetch_balance".to_owned(),
+            "fetch_pending".to_owned(),
             "create_transactions".to_owned(),
             "create_receipt_asset".to_owned(),
             "debug_data".to_owned(),

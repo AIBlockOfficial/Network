@@ -70,7 +70,7 @@ impl ComputeTest {
             "Druid1".to_owned(),
             DruidDroplet {
                 participants: 2,
-                tx: tx_vals.clone().into_iter().collect(),
+                txs: tx_vals.clone().into_iter().collect(),
             },
         )];
 
@@ -349,7 +349,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -849,7 +849,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"pending_transactions\":{\"Druid1\":{\"participants\":2,\"tx\":{\"g2d7b536e57ccdc6e565c62b2872c600\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":1,\"druid_info\":null}}}}}"
+        "{\"pending_transactions\":{\"Druid1\":{\"participants\":2,\"txs\":{\"g2d7b536e57ccdc6e565c62b2872c600\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":1,\"druid_info\":null}}}}}"
     );
 }
 

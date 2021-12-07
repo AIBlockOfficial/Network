@@ -320,11 +320,11 @@ impl ComputeNode {
             } else {
                 let mut droplet = DruidDroplet {
                     participants: druid_info.participants,
-                    tx: BTreeMap::new(),
+                    txs: BTreeMap::new(),
                 };
 
                 let tx_hash = construct_tx_hash(&transaction);
-                droplet.tx.insert(tx_hash, transaction);
+                droplet.txs.insert(tx_hash, transaction);
 
                 self.druid_pool.insert(druid, droplet);
                 return Response {
@@ -347,10 +347,10 @@ impl ComputeNode {
     pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
         let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
         let tx_hash = construct_tx_hash(&transaction);
-        current_droplet.tx.insert(tx_hash, transaction);
+        current_droplet.txs.insert(tx_hash, transaction);
 
         // Execute the tx if it's ready
-        if current_droplet.tx.len() == current_droplet.participants {
+        if current_droplet.txs.len() == current_droplet.participants {
             self.execute_dde_tx(current_droplet, &druid);
             let _removal = self.druid_pool.remove(&druid);
         }
@@ -363,11 +363,11 @@ impl ComputeNode {
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
         let txs_valid = {
             let tx_validator = self.transactions_validator();
-            droplet.tx.values().all(tx_validator)
+            droplet.txs.values().all(tx_validator)
         };
 
-        if txs_valid && druid_expectations_are_met(druid, droplet.tx.values()) {
-            self.node_raft.append_to_tx_druid_pool(droplet.tx);
+        if txs_valid && druid_expectations_are_met(druid, droplet.txs.values()) {
+            self.node_raft.append_to_tx_druid_pool(droplet.txs);
 
             trace!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
