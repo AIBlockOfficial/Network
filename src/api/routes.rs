@@ -224,6 +224,18 @@ pub fn fetch_utxo_balance(
         .with(post_cors())
 }
 
+// POST fetch balance for addresses
+pub fn fetch_druid_pending(
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path("fetch_pending")
+        .and(warp::post())
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and_then(handlers::post_fetch_druid_pending)
+        .with(post_cors())
+}
+
 // POST create receipt-based asset transaction
 pub fn create_receipt_asset(
     node: Node,
@@ -333,6 +345,7 @@ pub fn compute_node_routes(
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     fetch_utxo_balance(threaded_calls.clone())
+        .or(fetch_druid_pending(threaded_calls.clone()))
         .or(create_receipt_asset(node.clone()))
         .or(create_transactions(node.clone()))
         .or(debug_data(node, None))

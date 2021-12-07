@@ -4,8 +4,8 @@ use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     api_debug_routes, node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, NodeType, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, DruidPool, NodeType,
+    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
@@ -21,7 +21,6 @@ use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::{construct_address, construct_tx_in_signable_hash};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
@@ -124,6 +123,18 @@ pub struct ChangePassphraseData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressConstructData {
     pub pub_key: Vec<u8>,
+}
+
+/// Struct received from client to fetch pending
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchPendingtData {
+    pub druid_list: Vec<String>,
+}
+
+/// Struct received from client to fetch pending
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchPendingtResult {
+    pub pending_transactions: DruidPool,
 }
 
 /// A JSON formatted reply.
@@ -403,7 +414,29 @@ pub async fn post_fetch_utxo_balance(
         "post_fetch_utxo_balance",
     )
     .await?;
-    Ok(warp::reply::json(&json!(balances)))
+    Ok(warp::reply::json(&balances))
+}
+
+//POST fetch pending transaction from a computet node
+pub async fn post_fetch_druid_pending(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    fetch_input: FetchPendingtData,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let pending_transactions = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| {
+            let pending = c.get_pending_druid_pool();
+            (fetch_input.druid_list.iter())
+                .filter_map(|k| pending.get_key_value(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<DruidPool>()
+        },
+        "post_fetch_pending",
+    )
+    .await?;
+    Ok(warp::reply::json(&FetchPendingtResult {
+        pending_transactions,
+    }))
 }
 
 /// Post to create a receipt asset transaction on EITHER Compute or User node type
@@ -538,6 +571,7 @@ pub async fn post_payment_address_construction(
     }
     Ok(warp::reply::json(&String::from("")))
 }
+
 //======= Helpers =======//
 
 /// Filters through wallet errors which are internal vs errors caused by user input

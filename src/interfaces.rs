@@ -25,6 +25,9 @@ pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 pub type UtxoSetRef<'a> = BTreeMap<&'a OutPoint, &'a TxOut>;
 
+/// DRUID Pool
+pub type DruidPool = BTreeMap<String, DruidDroplet>;
+
 /// Token to uniquely identify messages.
 pub type Token = u64;
 
@@ -129,6 +132,13 @@ impl ProofOfWorkBlock {
             block: Block::new(),
         }
     }
+}
+
+/// Druid pool structure for checking and holding participants
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DruidDroplet {
+    pub participants: usize,
+    pub tx: BTreeMap<String, Transaction>,
 }
 
 /// A placeholder Contract struct
@@ -616,6 +626,8 @@ pub trait ComputeInterface {
 pub trait ComputeApi {
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
+    /// Get pending DRUID pool
+    fn get_pending_druid_pool(&self) -> &DruidPool;
 }
 
 ///============ USER NODE ============///

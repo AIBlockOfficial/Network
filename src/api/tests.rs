@@ -1,6 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
-    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, PublicKeyAddresses,
+    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, FetchPendingtData,
+    PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -8,8 +9,8 @@ use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, ComputeApi, ComputeApiRequest, NodeType, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType,
+    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::threaded_call::ThreadedCallChannel;
@@ -59,15 +60,24 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
 #[derive(Default)]
 struct ComputeTest {
     pub utxo_set: TrackedUtxoSet,
+    pub druid_pool: DruidPool,
     pub threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
 }
 
 impl ComputeTest {
     fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
+        let droplets = vec![(
+            "Druid1".to_owned(),
+            DruidDroplet {
+                participants: 2,
+                tx: tx_vals.clone().into_iter().collect(),
+            },
+        )];
+
         Self {
             utxo_set: TrackedUtxoSet::new(
                 tx_vals
-                    .into_iter()
+                    .iter()
                     .map(|(_, tx)| {
                         (
                             tx.inputs[0].clone().previous_out.unwrap(),
@@ -76,6 +86,7 @@ impl ComputeTest {
                     })
                     .collect(),
             ),
+            druid_pool: droplets.into_iter().collect(),
             ..Default::default()
         }
     }
@@ -95,6 +106,9 @@ impl ComputeTest {
 impl ComputeApi for ComputeTest {
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         &self.utxo_set
+    }
+    fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
     }
 }
 
@@ -800,7 +814,42 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"n\":0,\"t_hash\":\"tx_hash\"},{\"Token\":25200}]]},\"total\":{\"receipts\":0,\"tokens\":25200}}"
+        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":25200}]]}}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_fetch_pending() {
+    //
+    // Arrange
+    //
+    let tx_vals = vec![get_transaction()];
+    let compute = ComputeTest::new(tx_vals);
+    let druids = FetchPendingtData {
+        druid_list: vec!["Druid1".to_owned(), "Druid2".to_owned()],
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/fetch_pending")
+        .header("Content-Type", "application/json")
+        .json(&druids);
+
+    //
+    // Act
+    //
+    let filter = routes::fetch_druid_pending(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(
+        res.body(),
+        "{\"pending_transactions\":{\"Druid1\":{\"participants\":2,\"tx\":{\"g2d7b536e57ccdc6e565c62b2872c600\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":1,\"druid_info\":null}}}}}"
     );
 }
 

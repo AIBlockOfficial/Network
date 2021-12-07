@@ -6,8 +6,8 @@ use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response,
-    StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlockExtraInfo, NodeType,
+    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -115,13 +115,6 @@ pub struct MinedBlock {
     pub shutdown: bool,
 }
 
-/// Druid pool structure for checking and holding participants
-#[derive(Debug, Clone)]
-pub struct DruidDroplet {
-    participants: usize,
-    tx: BTreeMap<String, Transaction>,
-}
-
 #[derive(Debug)]
 pub struct ComputeNode {
     node: Node,
@@ -131,7 +124,7 @@ pub struct ComputeNode {
     threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
-    druid_pool: BTreeMap<String, DruidDroplet>,
+    druid_pool: DruidPool,
     current_random_num: Vec<u8>,
     partition_key: Option<Key>,
     partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
@@ -1461,6 +1454,10 @@ impl ComputeInterface for ComputeNode {
 impl ComputeApi for ComputeNode {
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         self.node_raft.get_committed_utxo_tracked_set()
+    }
+
+    fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
     }
 }
 
