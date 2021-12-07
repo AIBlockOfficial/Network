@@ -26,6 +26,7 @@ mod storage_raft;
 mod test_utils;
 #[cfg(test)]
 mod tests;
+mod threaded_call;
 mod tracked_utxo;
 mod transaction_gen;
 mod unicorn;

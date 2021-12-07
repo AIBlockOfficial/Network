@@ -1,6 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
-    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, PublicKeyAddresses,
+    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, FetchPendingtData,
+    PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -8,11 +9,16 @@ use crate::configurations::DbMode;
 use crate::constants::{BLOCK_PREPEND, FUND_KEY};
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, ComputeApiRequest, NodeType, StoredSerializingBlock, UserApiRequest,
-    UserRequest, UtxoFetchType,
+    BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType,
+    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
+use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
+use crate::user::{
+    make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
+    make_rb_payment_send_tx_and_request,
+};
 use crate::utils::{decode_pub_key, decode_secret_key};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -53,7 +59,74 @@ const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
     ],
 );
 
+const COMMON_ADDRS: &[&str] = &[
+    "0008536e3d5a13e347262b5023963000",
+    "1118536e3d5a13e347262b5023963111",
+    "2228536e3d5a13e347262b5023963222",
+];
+
 /*------- UTILS--------*/
+
+#[derive(Default)]
+struct ComputeTest {
+    pub utxo_set: TrackedUtxoSet,
+    pub druid_pool: DruidPool,
+    pub threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
+}
+
+impl ComputeTest {
+    fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
+        let druid =
+            if let Some(druid_info) = tx_vals.get(0).and_then(|(_, tx)| tx.druid_info.as_ref()) {
+                druid_info.druid.clone()
+            } else {
+                "Druid1".to_owned()
+            };
+        let droplets = vec![(
+            druid,
+            DruidDroplet {
+                participants: 2,
+                txs: tx_vals.clone().into_iter().collect(),
+            },
+        )];
+
+        Self {
+            utxo_set: TrackedUtxoSet::new(
+                tx_vals
+                    .iter()
+                    .map(|(_, tx)| {
+                        (
+                            tx.inputs[0].clone().previous_out.unwrap(),
+                            tx.outputs[0].clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+            druid_pool: droplets.into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn spawn(self) -> tokio::task::JoinHandle<Self> {
+        tokio::spawn({
+            let mut c = self;
+            async move {
+                let f = c.threaded_calls.rx.recv().await.unwrap();
+                f(&mut c);
+                c
+            }
+        })
+    }
+}
+
+impl ComputeApi for ComputeTest {
+    fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
+        &self.utxo_set
+    }
+    fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
+    }
+}
 
 fn from_utf8(data: &[u8]) -> &str {
     std::str::from_utf8(data).unwrap()
@@ -134,6 +207,45 @@ fn generate_transaction(tx_hash: &str, script_public_key: &str) -> (String, Tran
     let t_hash = construct_tx_hash(&tx);
 
     (t_hash, tx)
+}
+
+// Util function to create receipt base transactions.
+// Returns the hash of the tx and the tx itself
+fn get_rb_transactions() -> Vec<(String, Transaction)> {
+    generate_rb_transactions("tx_hash", COMMON_ADDR_STORE.0)
+}
+
+// Generates a receipt base transaction using the given `tx_hash` and `script_public_key`
+fn generate_rb_transactions(tx_hash: &str, script_public_key: &str) -> Vec<(String, Transaction)> {
+    let asset = TokenAmount(25_200);
+    let tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
+    let tx_out = TxOut::new_token_amount(script_public_key.to_string(), asset);
+    let sender_half_druid = COMMON_ADDRS[0].to_owned();
+    let sender_receipt_address = COMMON_ADDRS[1].to_owned();
+
+    let r_asset = 10;
+    let r_tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
+    let r_tx_out = TxOut::new_receipt_amount(script_public_key.to_string(), r_asset);
+    let receiver_half_druid = COMMON_ADDRS[2].to_owned();
+
+    let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
+        tx_out.value.clone(),
+        (vec![tx_in], vec![tx_out]),
+        sender_half_druid,
+        sender_receipt_address,
+    );
+    let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
+        rb_payment_request_data,
+        (vec![r_tx_in], vec![r_tx_out]),
+        receiver_half_druid,
+        script_public_key.to_owned(),
+    );
+    let rb_send_tx = make_rb_payment_send_transaction(rb_payment_response, rb_payment_data);
+
+    let t_r_hash = construct_tx_hash(&rb_receive_tx);
+    let t_s_hash = construct_tx_hash(&rb_send_tx);
+
+    vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
 }
 
 fn success_json() -> (StatusCode, HeaderMap) {
@@ -292,7 +404,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -395,7 +507,6 @@ async fn test_get_utxo_set_addresses() {
     //
     // Arrange
     //
-    let mut bmap = BTreeMap::new();
 
     let tx_vals = vec![
         generate_transaction("tx_hash_1", "public_address_1"),
@@ -403,22 +514,16 @@ async fn test_get_utxo_set_addresses() {
         generate_transaction("tx_hash_3", "public_address_3"),
     ];
 
-    for (_, tx) in tx_vals {
-        bmap.insert(
-            tx.inputs[0].clone().previous_out.unwrap(),
-            tx.outputs[0].clone(),
-        );
-    }
-
-    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
-
+    let compute = ComputeTest::new(tx_vals);
     let request = warp::test::request().method("GET").path("/utxo_addresses");
 
     //
     // Act
     //
-    let filter = routes::utxo_addresses(tracked_utxo);
+    let filter = routes::utxo_addresses(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert
@@ -738,15 +843,8 @@ async fn test_post_fetch_balance() {
     //
     // Arrange
     //
-    let (_, tx) = get_transaction();
-    let mut bmap = BTreeMap::new();
-
-    bmap.insert(
-        tx.inputs[0].clone().previous_out.unwrap(),
-        tx.outputs[0].clone(),
-    );
-
-    let tracked_utxo = Arc::new(Mutex::new(TrackedUtxoSet::new(bmap)));
+    let tx_vals = vec![get_transaction()];
+    let compute = ComputeTest::new(tx_vals);
     let addresses = PublicKeyAddresses {
         address_list: vec![COMMON_ADDR_STORE.0.to_string()],
     };
@@ -760,8 +858,10 @@ async fn test_post_fetch_balance() {
     //
     // Act
     //
-    let filter = routes::fetch_utxo_balance(tracked_utxo);
+    let filter = routes::fetch_utxo_balance(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
     let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
 
     //
     // Assert
@@ -769,7 +869,43 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"n\":0,\"t_hash\":\"tx_hash\"},{\"Token\":25200}]]},\"total\":{\"receipts\":0,\"tokens\":25200}}"
+        "{\"total\":{\"tokens\":25200,\"receipts\":0},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[[{\"t_hash\":\"tx_hash\",\"n\":0},{\"Token\":25200}]]}}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_fetch_pending() {
+    //
+    // Arrange
+    //
+    let tx_vals = get_rb_transactions();
+    let druid = COMMON_ADDRS[0].to_owned() + COMMON_ADDRS[2];
+    let compute = ComputeTest::new(tx_vals);
+    let druids = FetchPendingtData {
+        druid_list: vec![druid, "Druid2".to_owned()],
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/fetch_pending")
+        .header("Content-Type", "application/json")
+        .json(&druids);
+
+    //
+    // Act
+    //
+    let filter = routes::fetch_druid_pending(compute.threaded_calls.tx.clone());
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _compute = handle.await.unwrap();
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(
+        res.body(),
+        "{\"pending_transactions\":{\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\":{\"participants\":2,\"txs\":{\"g1f213309772c9d61f995a71c66d3e7a\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Receipt\":10},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Receipt\":1},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"1118536e3d5a13e347262b5023963111\"}],\"version\":1,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"4348536e3d5a13e347262b5023963edf\",\"asset\":{\"Token\":25200}}]}},\"gce73d452e2a15663c47f762eb68b72c\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"tx_hash\",\"n\":0},\"script_signature\":{\"stack\":[]}}],\"outputs\":[{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"drs_tx_hash\":null,\"script_public_key\":\"4348536e3d5a13e347262b5023963edf\"}],\"version\":1,\"druid_info\":{\"druid\":\"0008536e3d5a13e347262b50239630002228536e3d5a13e347262b5023963222\",\"participants\":2,\"expectations\":[{\"from\":\"153ec7022f10ca535c83f6ab3572edd757772af4cc3b1caa1800f87514703f6e\",\"to\":\"1118536e3d5a13e347262b5023963111\",\"asset\":{\"Receipt\":1}}]}}}}}}"
     );
 }
 

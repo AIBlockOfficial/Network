@@ -1,6 +1,7 @@
 #![allow(unused)]
 use crate::hash_block;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
+use crate::tracked_utxo::TrackedUtxoSet;
 use bytes::Bytes;
 use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
@@ -23,6 +24,9 @@ pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
 pub type UtxoSetRef<'a> = BTreeMap<&'a OutPoint, &'a TxOut>;
+
+/// DRUID Pool
+pub type DruidPool = BTreeMap<String, DruidDroplet>;
 
 /// Token to uniquely identify messages.
 pub type Token = u64;
@@ -130,6 +134,13 @@ impl ProofOfWorkBlock {
     }
 }
 
+/// Druid pool structure for checking and holding participants
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DruidDroplet {
+    pub participants: usize,
+    pub txs: BTreeMap<String, Transaction>,
+}
+
 /// A placeholder Contract struct
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract;
@@ -181,6 +192,7 @@ pub fn api_debug_routes(node_type: &str) -> Vec<String> {
         ],
         "Compute" => vec![
             "fetch_balance".to_owned(),
+            "fetch_pending".to_owned(),
             "create_transactions".to_owned(),
             "create_receipt_asset".to_owned(),
             "debug_data".to_owned(),
@@ -610,6 +622,13 @@ pub trait ComputeInterface {
 
     /// Returns the next block reward value
     fn get_next_block_reward(&self) -> f64;
+}
+
+pub trait ComputeApi {
+    /// Get the UTXO tracked set
+    fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
+    /// Get pending DRUID pool
+    fn get_pending_druid_pool(&self) -> &DruidPool;
 }
 
 ///============ USER NODE ============///

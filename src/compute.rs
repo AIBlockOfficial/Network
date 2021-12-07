@@ -5,11 +5,13 @@ use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::hash_block::HashBlock;
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeApiRequest, ComputeInterface, ComputeRequest,
-    Contract, MineRequest, MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest,
-    UserRequest, UtxoFetchType, UtxoSet,
+    BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlockExtraInfo, NodeType,
+    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::raft::RaftCommit;
+use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
+use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
     generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow,
@@ -19,15 +21,12 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-
+use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::Transaction;
 use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
-
-use crate::tracked_utxo::TrackedUtxoSet;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::{
@@ -35,7 +34,6 @@ use std::{
     fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
 };
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
@@ -117,22 +115,16 @@ pub struct MinedBlock {
     pub shutdown: bool,
 }
 
-/// Druid pool structure for checking and holding participants
-#[derive(Debug, Clone)]
-pub struct DruidDroplet {
-    participants: usize,
-    tx: BTreeMap<String, Transaction>,
-}
-
 #[derive(Debug)]
 pub struct ComputeNode {
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
     local_events: LocalEventChannel,
+    threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
-    druid_pool: BTreeMap<String, DruidDroplet>,
+    druid_pool: DruidPool,
     current_random_num: Vec<u8>,
     partition_key: Option<Key>,
     partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
@@ -144,14 +136,8 @@ pub struct ComputeNode {
     user_notification_list: BTreeSet<SocketAddr>,
     coordiated_shudown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
-    current_utxo_set: Arc<Mutex<TrackedUtxoSet>>,
     fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
-    api_info: (
-        SocketAddr,
-        Option<TlsPrivateInfo>,
-        Arc<Mutex<TrackedUtxoSet>>,
-        Node,
-    ),
+    api_info: (SocketAddr, Option<TlsPrivateInfo>, Node),
 }
 
 impl ComputeNode {
@@ -186,14 +172,14 @@ impl ComputeNode {
             raft_peers.chain(storage).collect()
         };
 
-        let utxo_set_empty = Arc::new(Mutex::new(TrackedUtxoSet::new(BTreeMap::new())));
-        let api_info = (api_addr, api_tls_info, utxo_set_empty.clone(), node.clone());
+        let api_info = (api_addr, api_tls_info, node.clone());
 
         Ok(ComputeNode {
             node,
             node_raft,
             db,
             local_events: Default::default(),
+            threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
             current_random_num: generate_pow_random_num(),
@@ -209,7 +195,6 @@ impl ComputeNode {
             coordiated_shudown: u64::MAX,
             shutdown_group,
             api_info,
-            current_utxo_set: utxo_set_empty,
             fetched_utxo_set: None,
         }
         .load_local_db()?)
@@ -257,6 +242,11 @@ impl ComputeNode {
         &self.local_events.tx
     }
 
+    /// Threaded call channel.
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<dyn ComputeApi> {
+        &self.threaded_calls.tx
+    }
+
     /// The current utxo_set including block being mined and previous block mining txs.
     pub fn get_committed_utxo_set(&self) -> &UtxoSet {
         self.node_raft.get_committed_utxo_set()
@@ -264,10 +254,6 @@ impl ComputeNode {
 
     pub fn get_committed_utxo_set_to_send(&self) -> UtxoSet {
         self.node_raft.get_committed_utxo_set().clone()
-    }
-
-    pub fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
-        self.node_raft.get_committed_utxo_tracked_set()
     }
 
     pub fn get_committed_utxo_tracked_set_to_send(&self) -> TrackedUtxoSet {
@@ -309,14 +295,7 @@ impl ComputeNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(
-        &self,
-    ) -> (
-        SocketAddr,
-        Option<TlsPrivateInfo>,
-        Arc<Mutex<TrackedUtxoSet>>,
-        Node,
-    ) {
+    pub fn api_inputs(&self) -> (SocketAddr, Option<TlsPrivateInfo>, Node) {
         self.api_info.clone()
     }
 
@@ -341,11 +320,11 @@ impl ComputeNode {
             } else {
                 let mut droplet = DruidDroplet {
                     participants: druid_info.participants,
-                    tx: BTreeMap::new(),
+                    txs: BTreeMap::new(),
                 };
 
                 let tx_hash = construct_tx_hash(&transaction);
-                droplet.tx.insert(tx_hash, transaction);
+                droplet.txs.insert(tx_hash, transaction);
 
                 self.druid_pool.insert(druid, droplet);
                 return Response {
@@ -368,10 +347,10 @@ impl ComputeNode {
     pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
         let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
         let tx_hash = construct_tx_hash(&transaction);
-        current_droplet.tx.insert(tx_hash, transaction);
+        current_droplet.txs.insert(tx_hash, transaction);
 
         // Execute the tx if it's ready
-        if current_droplet.tx.len() == current_droplet.participants {
+        if current_droplet.txs.len() == current_droplet.participants {
             self.execute_dde_tx(current_droplet, &druid);
             let _removal = self.druid_pool.remove(&druid);
         }
@@ -384,11 +363,11 @@ impl ComputeNode {
     pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
         let txs_valid = {
             let tx_validator = self.transactions_validator();
-            droplet.tx.values().all(tx_validator)
+            droplet.txs.values().all(tx_validator)
         };
 
-        if txs_valid && druid_expectations_are_met(druid, droplet.tx.values()) {
-            self.node_raft.append_to_tx_druid_pool(droplet.tx);
+        if txs_valid && druid_expectations_are_met(druid, droplet.txs.values()) {
+            self.node_raft.append_to_tx_druid_pool(droplet.txs);
 
             trace!(
                 "Transactions for dual double entry execution are valid. Adding to pending block"
@@ -698,6 +677,9 @@ impl ComputeNode {
                         return Some(Ok(res));
                     }
                 }
+                Some(f) = self.threaded_calls.rx.recv(), if ready => {
+                    f(self);
+                }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
                     reason,
@@ -717,9 +699,6 @@ impl ComputeNode {
                 self.node_raft.generate_first_block();
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
-                // Update the currently known local UTXO set
-                let mut utxo_set = self.current_utxo_set.lock().unwrap();
-                *utxo_set = self.node_raft.get_committed_utxo_tracked_set().clone();
                 Some(Ok(Response {
                     success: true,
                     reason: "First Block committed",
@@ -734,9 +713,6 @@ impl ComputeNode {
                 };
                 self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
-                // Update the currently known local UTXO set
-                let mut utxo_set = self.current_utxo_set.lock().unwrap();
-                *utxo_set = self.node_raft.get_committed_utxo_tracked_set().clone();
                 Some(Ok(Response {
                     success: true,
                     reason,
@@ -1472,6 +1448,16 @@ impl ComputeInterface for ComputeNode {
 
     fn get_next_block_reward(&self) -> f64 {
         0.0
+    }
+}
+
+impl ComputeApi for ComputeNode {
+    fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
+        self.node_raft.get_committed_utxo_tracked_set()
+    }
+
+    fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
     }
 }
 
