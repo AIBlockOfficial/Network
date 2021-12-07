@@ -1068,24 +1068,14 @@ impl UserNode {
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
             .await?;
 
-        let sender_from_addr = construct_tx_ins_address(&tx_ins);
-
-        let rb_payment_request_data = RbPaymentRequestData {
-            sender_address,
-            sender_half_druid: sender_half_druid.clone(),
-            sender_from_addr,
-            sender_asset: sender_asset.clone(),
-        };
-
-        let rb_payment_data = RbPaymentData {
+        let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
             sender_asset,
+            (tx_ins, tx_outs),
             sender_half_druid,
-            tx_ins,
-            tx_outs,
-        };
+            sender_address,
+        );
 
         self.next_rb_payment_data = Some(rb_payment_data);
-
         self.node
             .send(
                 peer,
@@ -1127,19 +1117,9 @@ impl UserNode {
         peer: SocketAddr,
         rb_payment_request_data: RbPaymentRequestData,
     ) -> Response {
-        //TODO: Decide if the send/receive assets are acceptable
-        let RbPaymentRequestData {
-            sender_address,
-            sender_half_druid,
-            sender_from_addr,
-            sender_asset,
-        } = rb_payment_request_data;
-
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
-        let druid = sender_half_druid + &receiver_half_druid.clone();
         let asset_required = Asset::Receipt(1);
-
         let tx_ins_and_outs = self
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
@@ -1153,39 +1133,15 @@ impl UserNode {
             };
         };
 
-        let receiver_from_addr = construct_tx_ins_address(&tx_ins);
-
-        // DruidExpectation for sender(Alice)
-        let sender_druid_expectation = DruidExpectation {
-            from: receiver_from_addr,
-            to: sender_address.clone(),
-            asset: Asset::Receipt(1),
-        };
-
-        // DruidExpectation for receiver(Bob)
-        let receiver_druid_expectation = DruidExpectation {
-            from: sender_from_addr,
-            to: receiver_address.clone(),
-            asset: sender_asset,
-        };
-
-        let rb_receive_tx = construct_rb_receive_payment_tx(
-            tx_ins,
-            tx_outs,
-            sender_address,
-            0,
-            druid,
-            vec![receiver_druid_expectation],
+        let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
+            rb_payment_request_data,
+            (tx_ins, tx_outs),
+            receiver_half_druid,
+            receiver_address,
         );
 
-        let rb_payment_response = Some(RbPaymentResponseData {
-            receiver_address,
-            receiver_half_druid,
-            sender_druid_expectation,
-        });
-
         self.next_rb_payment = Some((Some(peer), rb_receive_tx));
-        self.next_rb_payment_response = Some((peer, rb_payment_response));
+        self.next_rb_payment_response = Some((peer, Some(rb_payment_response)));
 
         Response {
             success: true,
@@ -1213,31 +1169,7 @@ impl UserNode {
         let rb_payment_data = self.next_rb_payment_data.take().unwrap();
         //TODO: Handle `None` value upon receipt-based payment rejection
         if let Some(rb_payment_response) = rb_payment_response {
-            let RbPaymentData {
-                sender_asset,
-                sender_half_druid,
-                tx_ins,
-                tx_outs,
-            } = rb_payment_data;
-
-            let RbPaymentResponseData {
-                receiver_address,
-                receiver_half_druid,
-                sender_druid_expectation,
-            } = rb_payment_response;
-
-            let druid = sender_half_druid + &receiver_half_druid;
-
-            let rb_send_tx = construct_rb_payments_send_tx(
-                tx_ins,
-                tx_outs,
-                receiver_address,
-                sender_asset.token_amount(),
-                0,
-                druid,
-                vec![sender_druid_expectation],
-            );
-
+            let rb_send_tx = make_rb_payment_send_transaction(rb_payment_response, rb_payment_data);
             self.next_rb_payment = Some((Some(peer), rb_send_tx));
         }
         Response {
@@ -1270,6 +1202,126 @@ impl UserNode {
     pub fn get_node(&self) -> &Node {
         &self.node
     }
+}
+
+/// Make the send initial request for receipt based transaction
+///
+/// * `send_asset`        - The asset to be sent
+/// * `(tx_ins, tx_outs)` - The send transaction infos
+/// * `sender_half_druid` - The sender half druid part
+/// * `sender_address`    - The sender address
+pub fn make_rb_payment_send_tx_and_request(
+    sender_asset: Asset,
+    (tx_ins, tx_outs): (Vec<TxIn>, Vec<TxOut>),
+    sender_half_druid: String,
+    sender_address: String,
+) -> (RbPaymentData, RbPaymentRequestData) {
+    let sender_from_addr = construct_tx_ins_address(&tx_ins);
+
+    let rb_payment_request_data = RbPaymentRequestData {
+        sender_address,
+        sender_half_druid: sender_half_druid.clone(),
+        sender_from_addr,
+        sender_asset: sender_asset.clone(),
+    };
+
+    let rb_payment_data = RbPaymentData {
+        sender_asset,
+        sender_half_druid,
+        tx_ins,
+        tx_outs,
+    };
+
+    (rb_payment_data, rb_payment_request_data)
+}
+
+/// Make The receipt transaction and response
+///
+/// * `rb_payment_request_data` - Receipt-based payment request data struct
+/// * `(tx_ins, tx_outs)`       - The receipt transaction infos
+/// * `receiver_half_druid`     - The receiver half druid part
+/// * `receiver_address`        - The receiver address
+pub fn make_rb_payment_receipt_tx_and_response(
+    rb_payment_request_data: RbPaymentRequestData,
+    (tx_ins, tx_outs): (Vec<TxIn>, Vec<TxOut>),
+    receiver_half_druid: String,
+    receiver_address: String,
+) -> (Transaction, RbPaymentResponseData) {
+    //TODO: Decide if the send/receive assets are acceptable
+    let RbPaymentRequestData {
+        sender_address,
+        sender_half_druid,
+        sender_from_addr,
+        sender_asset,
+    } = rb_payment_request_data;
+
+    let druid = sender_half_druid + &receiver_half_druid;
+    let receiver_from_addr = construct_tx_ins_address(&tx_ins);
+
+    // DruidExpectation for sender(Alice)
+    let sender_druid_expectation = DruidExpectation {
+        from: receiver_from_addr,
+        to: sender_address.clone(),
+        asset: Asset::Receipt(1),
+    };
+
+    // DruidExpectation for receiver(Bob)
+    let receiver_druid_expectation = DruidExpectation {
+        from: sender_from_addr,
+        to: receiver_address.clone(),
+        asset: sender_asset,
+    };
+
+    let rb_receive_tx = construct_rb_receive_payment_tx(
+        tx_ins,
+        tx_outs,
+        sender_address,
+        0,
+        druid,
+        vec![receiver_druid_expectation],
+    );
+
+    let rb_payment_response = RbPaymentResponseData {
+        receiver_address,
+        receiver_half_druid,
+        sender_druid_expectation,
+    };
+
+    (rb_receive_tx, rb_payment_response)
+}
+
+/// Make The payment send transaction
+///
+/// * `rb_payment_response`- (receiver address, half druid value, hash value of Vec<TxIn>)
+/// * `rb_payment_data`    - The data related to initial requrest for the payment
+pub fn make_rb_payment_send_transaction(
+    rb_payment_response: RbPaymentResponseData,
+    rb_payment_data: RbPaymentData,
+) -> Transaction {
+    let RbPaymentData {
+        sender_asset,
+        sender_half_druid,
+        tx_ins,
+        tx_outs,
+    } = rb_payment_data;
+
+    let RbPaymentResponseData {
+        receiver_address,
+        receiver_half_druid,
+        sender_druid_expectation,
+    } = rb_payment_response;
+
+    let druid = sender_half_druid + &receiver_half_druid;
+
+    construct_rb_payments_send_tx(
+        tx_ins,
+        tx_outs,
+        receiver_address,
+        sender_asset.token_amount(),
+        0,
+        druid,
+        vec![sender_druid_expectation],
+    )
 }
 
 fn make_transaction_gen(setup: UserAutoGenTxSetup, user_node_idx: usize) -> Option<AutoGenTx> {
