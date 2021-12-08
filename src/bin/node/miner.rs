@@ -141,8 +141,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
                 async move {
                     let serve = warp::serve(routes::miner_node_with_user_routes(
-                        db,
                         current_block,
+                        db,
                         miner_node,
                         user_node,
                     ));

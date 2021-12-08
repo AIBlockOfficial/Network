@@ -4,8 +4,8 @@ use crate::compute::ComputeNode;
 use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
-    api_debug_routes, BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType,
-    CommonBlockInfo, ComputeRequest, DebugData, MinedBlockExtraInfo, Response, StorageRequest,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
+    ComputeRequest, DebugData, MinedBlockExtraInfo, Response, StorageRequest,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
@@ -2606,7 +2606,7 @@ pub async fn node_debug_api() {
     let (user_expected, compute_expected, storage_expected, miner_expected) = (
         DebugData {
             node_type: String::from("User"),
-            node_api: api_debug_routes("User"),
+            node_api: vec!["user_route".to_owned()],
             node_peers: vec![(
                 String::from("127.0.0.1:11492"),
                 "127.0.0.1:11492".parse::<SocketAddr>().unwrap(),
@@ -2615,7 +2615,7 @@ pub async fn node_debug_api() {
         },
         DebugData {
             node_type: String::from("Compute"),
-            node_api: api_debug_routes("Compute"),
+            node_api: vec!["compute_route".to_owned()],
             node_peers: vec![(
                 String::from("127.0.0.1:11493"),
                 "127.0.0.1:11493".parse::<SocketAddr>().unwrap(),
@@ -2624,7 +2624,7 @@ pub async fn node_debug_api() {
         },
         DebugData {
             node_type: String::from("Storage"),
-            node_api: api_debug_routes("Storage"),
+            node_api: vec!["storage_route".to_owned()],
             node_peers: vec![(
                 String::from("127.0.0.1:11492"),
                 "127.0.0.1:11492".parse::<SocketAddr>().unwrap(),
@@ -2633,7 +2633,7 @@ pub async fn node_debug_api() {
         },
         DebugData {
             node_type: String::from("Miner"),
-            node_api: api_debug_routes("Miner"),
+            node_api: vec!["miner_route".to_owned()],
             node_peers: vec![
                 (
                     String::from("127.0.0.1:11492"),
@@ -2961,7 +2961,7 @@ async fn node_send_startup_requests(network: &mut Network, node: &str) {
 
 async fn compute_get_debug_data(network: &mut Network, compute: &str) -> DebugData {
     let c = network.compute(compute).unwrap().lock().await;
-    get_node_debug_data(c.get_node()).await
+    get_node_debug_data(c.get_node(), vec!["compute_route"]).await
 }
 
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
@@ -3258,7 +3258,7 @@ async fn compute_send_utxo_set(network: &mut Network, compute: &str) {
 
 async fn storage_get_debug_data(network: &mut Network, storage: &str) -> DebugData {
     let s = network.storage(storage).unwrap().lock().await;
-    get_node_debug_data(s.get_node()).await
+    get_node_debug_data(s.get_node(), vec!["storage_route"]).await
 }
 
 async fn storage_inject_next_event(
@@ -3501,7 +3501,7 @@ async fn storage_one_handle_event(
 
 async fn user_get_debug_data(network: &mut Network, user: &str) -> DebugData {
     let u = network.user(user).unwrap().lock().await;
-    get_node_debug_data(u.get_node()).await
+    get_node_debug_data(u.get_node(), vec!["user_route"]).await
 }
 
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
@@ -3693,7 +3693,7 @@ async fn user_send_receipt_asset(
 
 async fn miner_get_debug_data(network: &mut Network, miner: &str) -> DebugData {
     let m = network.miner(miner).unwrap().lock().await;
-    get_node_debug_data(m.get_node()).await
+    get_node_debug_data(m.get_node(), vec!["miner_route"]).await
 }
 
 async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {

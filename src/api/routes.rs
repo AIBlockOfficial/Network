@@ -1,11 +1,10 @@
-use crate::api::handlers;
+use crate::api::handlers::{self, DbgPaths};
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::ComputeApi;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::threaded_call::ThreadedCallSender;
 use crate::wallet::WalletDb;
-
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use warp::{self, Filter, Rejection, Reply};
@@ -14,6 +13,14 @@ fn with_node_component<T: Clone + Send>(
     comp: T,
 ) -> impl Filter<Extract = (T,), Error = Infallible> + Clone {
     warp::any().map(move || comp.clone())
+}
+
+fn warp_path(
+    dp: &mut DbgPaths,
+    p: &'static str,
+) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    dp.push(p);
+    warp::path(p)
 }
 
 //======= GET ROUTES =======//
@@ -27,8 +34,11 @@ fn get_cors() -> warp::cors::Builder {
 }
 
 // GET wallet info
-pub fn wallet_info(db: WalletDb) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("wallet_info")
+pub fn wallet_info(
+    dp: &mut DbgPaths,
+    db: WalletDb,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp_path(dp, "wallet_info")
         .and(warp::get())
         .and(with_node_component(db))
         .and_then(handlers::get_wallet_info)
@@ -38,9 +48,10 @@ pub fn wallet_info(db: WalletDb) -> impl Filter<Extract = impl Reply, Error = Re
 // GET all keypairs
 // TODO: Requires password (will move to POST)
 pub fn export_keypairs(
+    dp: &mut DbgPaths,
     db: WalletDb,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("export_keypairs")
+    warp_path(dp, "export_keypairs")
         .and(warp::get())
         .and(with_node_component(db))
         .and_then(handlers::get_export_keypairs)
@@ -48,10 +59,11 @@ pub fn export_keypairs(
 }
 
 // GET new payment address
-pub fn payment_address(
+pub fn new_payment_address(
+    dp: &mut DbgPaths,
     db: WalletDb,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("new_payment_address")
+    warp_path(dp, "new_payment_address")
         .and(warp::get())
         .and(with_node_component(db))
         .and_then(handlers::get_new_payment_address)
@@ -60,9 +72,10 @@ pub fn payment_address(
 
 // GET latest block
 pub fn latest_block(
+    dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("latest_block")
+    warp_path(dp, "latest_block")
         .and(warp::get())
         .and(with_node_component(db))
         .and_then(handlers::get_latest_block)
@@ -71,11 +84,13 @@ pub fn latest_block(
 
 // GET debug data
 pub fn debug_data(
+    mut dp: DbgPaths,
     node: Node,
     aux_node: Option<Node>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("debug_data")
+    warp_path(&mut dp, "debug_data")
         .and(warp::get())
+        .and(with_node_component(dp))
         .and(with_node_component(node))
         .and(with_node_component(aux_node))
         .and_then(handlers::get_debug_data)
@@ -84,9 +99,10 @@ pub fn debug_data(
 
 // GET current block being mined
 pub fn current_mining_block(
+    dp: &mut DbgPaths,
     current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("current_mining_block")
+    warp_path(dp, "current_mining_block")
         .and(warp::get())
         .and(with_node_component(current_block))
         .and_then(handlers::get_current_mining_block)
@@ -95,9 +111,10 @@ pub fn current_mining_block(
 
 // GET UTXO set addresses
 pub fn utxo_addresses(
+    dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("utxo_addresses")
+    warp_path(dp, "utxo_addresses")
         .and(warp::get())
         .and(with_node_component(threaded_calls))
         .and_then(handlers::get_utxo_addresses)
@@ -125,9 +142,10 @@ fn post_cors() -> warp::cors::Builder {
 
 // POST get db item by key
 pub fn blockchain_entry_by_key(
+    dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("blockchain_entry_by_key")
+    warp_path(dp, "blockchain_entry_by_key")
         .and(warp::post())
         .and(with_node_component(db))
         .and(warp::body::json())
@@ -136,10 +154,11 @@ pub fn blockchain_entry_by_key(
 }
 
 // POST get block information by number
-pub fn block_info_by_nums(
+pub fn block_by_num(
+    dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("block_by_num")
+    warp_path(dp, "block_by_num")
         .and(warp::post())
         .and(with_node_component(db))
         .and(warp::body::json())
@@ -150,9 +169,10 @@ pub fn block_info_by_nums(
 // POST save keypair
 // TODO: Requires password
 pub fn import_keypairs(
+    dp: &mut DbgPaths,
     db: WalletDb,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("import_keypairs")
+    warp_path(dp, "import_keypairs")
         .and(warp::post())
         .and(with_node_component(db))
         .and(warp::body::json())
@@ -162,10 +182,11 @@ pub fn import_keypairs(
 
 // POST make payment
 pub fn make_payment(
+    dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("make_payment")
+    warp_path(dp, "make_payment")
         .and(warp::post())
         .and(with_node_component(db))
         .and(with_node_component(node))
@@ -176,10 +197,11 @@ pub fn make_payment(
 
 // POST make payment
 pub fn make_ip_payment(
+    dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("make_ip_payment")
+    warp_path(dp, "make_ip_payment")
         .and(warp::post())
         .and(with_node_component(db))
         .and(with_node_component(node))
@@ -190,9 +212,10 @@ pub fn make_ip_payment(
 
 // POST request donation payment
 pub fn request_donation(
+    dp: &mut DbgPaths,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("request_donation")
+    warp_path(dp, "request_donation")
         .and(warp::post())
         .and(with_node_component(node))
         .and(warp::body::json())
@@ -202,9 +225,10 @@ pub fn request_donation(
 
 // POST update running total
 pub fn update_running_total(
+    dp: &mut DbgPaths,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("update_running_total")
+    warp_path(dp, "update_running_total")
         .and(warp::post())
         .and(with_node_component(node))
         .and(warp::body::json())
@@ -213,10 +237,11 @@ pub fn update_running_total(
 }
 
 // POST fetch balance for addresses
-pub fn fetch_utxo_balance(
+pub fn fetch_balance(
+    dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("fetch_balance")
+    warp_path(dp, "fetch_balance")
         .and(warp::post())
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
@@ -225,10 +250,11 @@ pub fn fetch_utxo_balance(
 }
 
 // POST fetch balance for addresses
-pub fn fetch_druid_pending(
+pub fn fetch_pending(
+    dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("fetch_pending")
+    warp_path(dp, "fetch_pending")
         .and(warp::post())
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
@@ -238,9 +264,10 @@ pub fn fetch_druid_pending(
 
 // POST create receipt-based asset transaction
 pub fn create_receipt_asset(
+    dp: &mut DbgPaths,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("create_receipt_asset")
+    warp_path(dp, "create_receipt_asset")
         .and(warp::post())
         .and(with_node_component(node))
         .and(warp::body::json())
@@ -250,9 +277,10 @@ pub fn create_receipt_asset(
 
 // POST change passphrase
 pub fn change_passphrase(
+    dp: &mut DbgPaths,
     db: WalletDb,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path("change_passphrase")
+    warp_path(dp, "change_passphrase")
         .and(warp::post())
         .and(with_node_component(db))
         .and(warp::body::json())
@@ -262,8 +290,9 @@ pub fn change_passphrase(
 
 // POST signable transaction
 pub fn signable_transactions(
+    dp: &mut DbgPaths,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::path("signable_transactions")
+    warp_path(dp, "signable_transactions")
         .and(warp::post())
         .and(warp::body::json())
         .and_then(handlers::post_signable_transactions)
@@ -272,9 +301,10 @@ pub fn signable_transactions(
 
 // POST create transactions
 pub fn create_transactions(
+    dp: &mut DbgPaths,
     peer: Node,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::path("create_transactions")
+    warp_path(dp, "create_transactions")
         .and(warp::post())
         .and(with_node_component(peer))
         .and(warp::body::json())
@@ -284,9 +314,10 @@ pub fn create_transactions(
 
 // POST check for address presence
 pub fn blocks_by_tx_hashes(
+    dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::path("block_by_tx_hashes")
+    warp_path(dp, "block_by_tx_hashes")
         .and(warp::post())
         .and(with_node_component(db))
         .and(warp::body::json())
@@ -295,9 +326,10 @@ pub fn blocks_by_tx_hashes(
 }
 
 // POST construct payment address
-pub fn payment_address_construction() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
-{
-    warp::path("address_construction")
+pub fn address_construction(
+    dp: &mut DbgPaths,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp_path(dp, "address_construction")
         .and(warp::post())
         .and(warp::body::json())
         .and_then(handlers::post_payment_address_construction)
@@ -312,18 +344,21 @@ pub fn user_node_routes(
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    wallet_info(db.clone())
-        .or(make_payment(db.clone(), node.clone()))
-        .or(make_ip_payment(db.clone(), node.clone()))
-        .or(request_donation(node.clone()))
-        .or(export_keypairs(db.clone()))
-        .or(import_keypairs(db.clone()))
-        .or(update_running_total(node.clone()))
-        .or(create_receipt_asset(node.clone()))
-        .or(payment_address(db.clone()))
-        .or(change_passphrase(db))
-        .or(debug_data(node, None))
-        .or(payment_address_construction())
+    let mut dp_vec = DbgPaths::new();
+    let dp = &mut dp_vec;
+
+    wallet_info(dp, db.clone())
+        .or(make_payment(dp, db.clone(), node.clone()))
+        .or(make_ip_payment(dp, db.clone(), node.clone()))
+        .or(request_donation(dp, node.clone()))
+        .or(export_keypairs(dp, db.clone()))
+        .or(import_keypairs(dp, db.clone()))
+        .or(update_running_total(dp, node.clone()))
+        .or(create_receipt_asset(dp, node.clone()))
+        .or(new_payment_address(dp, db.clone()))
+        .or(change_passphrase(dp, db))
+        .or(address_construction(dp))
+        .or(debug_data(dp_vec, node, None))
 }
 
 // API routes for Storage nodes
@@ -331,12 +366,15 @@ pub fn storage_node_routes(
     db: Arc<Mutex<SimpleDb>>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    block_info_by_nums(db.clone())
-        .or(latest_block(db.clone()))
-        .or(blockchain_entry_by_key(db.clone()))
-        .or(blocks_by_tx_hashes(db))
-        .or(debug_data(node, None))
-        .or(payment_address_construction())
+    let mut dp_vec = DbgPaths::new();
+    let dp = &mut dp_vec;
+
+    block_by_num(dp, db.clone())
+        .or(latest_block(dp, db.clone()))
+        .or(blockchain_entry_by_key(dp, db.clone()))
+        .or(blocks_by_tx_hashes(dp, db))
+        .or(address_construction(dp))
+        .or(debug_data(dp_vec, node, None))
 }
 
 // API routes for Compute nodes
@@ -344,13 +382,16 @@ pub fn compute_node_routes(
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    fetch_utxo_balance(threaded_calls.clone())
-        .or(fetch_druid_pending(threaded_calls.clone()))
-        .or(create_receipt_asset(node.clone()))
-        .or(create_transactions(node.clone()))
-        .or(debug_data(node, None))
-        .or(payment_address_construction())
-        .or(utxo_addresses(threaded_calls))
+    let mut dp_vec = DbgPaths::new();
+    let dp = &mut dp_vec;
+
+    fetch_balance(dp, threaded_calls.clone())
+        .or(fetch_pending(dp, threaded_calls.clone()))
+        .or(create_receipt_asset(dp, node.clone()))
+        .or(create_transactions(dp, node.clone()))
+        .or(utxo_addresses(dp, threaded_calls))
+        .or(address_construction(dp))
+        .or(debug_data(dp_vec, node, None))
 }
 
 // API routes for Miner nodes
@@ -359,33 +400,40 @@ pub fn miner_node_routes(
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    current_mining_block(current_block)
-        .or(debug_data(node, None))
-        .or(change_passphrase(db.clone()))
-        .or(export_keypairs(db.clone()))
-        .or(import_keypairs(db.clone()))
-        .or(wallet_info(db.clone()))
-        .or(payment_address(db))
-        .or(payment_address_construction())
+    let mut dp_vec = DbgPaths::new();
+    let dp = &mut dp_vec;
+
+    wallet_info(dp, db.clone())
+        .or(export_keypairs(dp, db.clone()))
+        .or(import_keypairs(dp, db.clone()))
+        .or(new_payment_address(dp, db.clone()))
+        .or(change_passphrase(dp, db))
+        .or(current_mining_block(dp, current_block))
+        .or(address_construction(dp))
+        .or(debug_data(dp_vec, node, None))
 }
 
 // API routes for Miner nodes with User node capabilities
 pub fn miner_node_with_user_routes(
-    db: WalletDb, /* Shared WalletDb */
     current_block: CurrentBlockWithMutex,
+    db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
     user_node: Node, /* Additional User `Node` */
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    current_mining_block(current_block)
-        .or(debug_data(miner_node, Some(user_node.clone())))
-        .or(change_passphrase(db.clone()))
-        .or(export_keypairs(db.clone()))
-        .or(import_keypairs(db.clone()))
-        .or(wallet_info(db.clone()))
-        .or(payment_address(db.clone()))
-        .or(make_payment(db.clone(), user_node.clone()))
-        .or(make_ip_payment(db, user_node.clone()))
-        .or(request_donation(user_node.clone()))
-        .or(update_running_total(user_node.clone()))
-        .or(create_receipt_asset(user_node))
+    let mut dp_vec = DbgPaths::new();
+    let dp = &mut dp_vec;
+
+    wallet_info(dp, db.clone())
+        .or(make_payment(dp, db.clone(), user_node.clone()))
+        .or(make_ip_payment(dp, db.clone(), user_node.clone()))
+        .or(request_donation(dp, user_node.clone()))
+        .or(export_keypairs(dp, db.clone()))
+        .or(import_keypairs(dp, db.clone()))
+        .or(update_running_total(dp, user_node.clone()))
+        .or(create_receipt_asset(dp, user_node.clone()))
+        .or(new_payment_address(dp, db.clone()))
+        .or(change_passphrase(dp, db))
+        .or(current_mining_block(dp, current_block))
+        .or(address_construction(dp))
+        .or(debug_data(dp_vec, miner_node, Some(user_node)))
 }
