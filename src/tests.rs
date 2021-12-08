@@ -5,8 +5,8 @@ use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTx
 use crate::constants::{BLOCK_PREPEND, NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeRequest, DebugData, MinedBlockExtraInfo, Response, StorageRequest,
-    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, MinedBlockExtraInfo, Response, StorageRequest, StoredSerializingBlock,
+    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::miner::MinerNode;
 use crate::storage::StorageNode;
@@ -17,8 +17,8 @@ use crate::test_utils::{
 use crate::user::UserNode;
 use crate::utils::{
     calculate_reward, concat_merkle_coinbase, create_valid_create_transaction_with_ins_outs,
-    create_valid_transaction_with_ins_outs, decode_secret_key, get_node_debug_data,
-    get_sanction_addresses, tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
+    create_valid_transaction_with_ins_outs, decode_secret_key, get_sanction_addresses,
+    tracing_log_try_init, validate_pow_block, LocalEvent, StringError,
 };
 use crate::wallet::AssetValues;
 use bincode::{deserialize, serialize};
@@ -37,7 +37,6 @@ use sha3::Digest;
 use sha3::Sha3_256;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
@@ -2579,92 +2578,6 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
     test_step_complete(network).await;
 }
 
-#[tokio::test(flavor = "current_thread")]
-pub async fn node_debug_api() {
-    test_step_start();
-
-    //
-    // Arrange
-    //
-    let mut network_config = complete_network_config_with_n_compute_raft(11490, 1);
-    network_config
-        .nodes_mut(NodeType::User)
-        .push("user2".to_string());
-    network_config
-        .nodes_mut(NodeType::Miner)
-        .push("miner1".to_string());
-    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
-    network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
-    let mut network = Network::create_from_config(&network_config).await;
-
-    node_connect_to(&mut network, "user1", "user2").await;
-    node_connect_to(&mut network, "miner1", "storage1").await;
-
-    //
-    // Act
-    //
-    let (user_expected, compute_expected, storage_expected, miner_expected) = (
-        DebugData {
-            node_type: String::from("User"),
-            node_api: vec!["user_route".to_owned()],
-            node_peers: vec![(
-                String::from("127.0.0.1:11492"),
-                "127.0.0.1:11492".parse::<SocketAddr>().unwrap(),
-                String::from("Compute"),
-            )],
-        },
-        DebugData {
-            node_type: String::from("Compute"),
-            node_api: vec!["compute_route".to_owned()],
-            node_peers: vec![(
-                String::from("127.0.0.1:11493"),
-                "127.0.0.1:11493".parse::<SocketAddr>().unwrap(),
-                String::from("Storage"),
-            )],
-        },
-        DebugData {
-            node_type: String::from("Storage"),
-            node_api: vec!["storage_route".to_owned()],
-            node_peers: vec![(
-                String::from("127.0.0.1:11492"),
-                "127.0.0.1:11492".parse::<SocketAddr>().unwrap(),
-                String::from("Compute"),
-            )],
-        },
-        DebugData {
-            node_type: String::from("Miner"),
-            node_api: vec!["miner_route".to_owned()],
-            node_peers: vec![
-                (
-                    String::from("127.0.0.1:11492"),
-                    "127.0.0.1:11492".parse::<SocketAddr>().unwrap(),
-                    String::from("Compute"),
-                ),
-                (
-                    String::from("127.0.0.1:11493"),
-                    "127.0.0.1:11493".parse::<SocketAddr>().unwrap(),
-                    String::from("Storage"),
-                ),
-            ],
-        },
-    );
-
-    let user_actual = user_get_debug_data(&mut network, "user1").await;
-    let compute_actual = compute_get_debug_data(&mut network, "compute1").await;
-    let storage_actual = storage_get_debug_data(&mut network, "storage1").await;
-    let miner_actual = miner_get_debug_data(&mut network, "miner1").await;
-
-    //
-    // Assert
-    //
-    assert_eq!(user_expected, user_actual);
-    assert_eq!(compute_expected, compute_actual);
-    assert_eq!(storage_expected, storage_actual);
-    assert_eq!(miner_expected, miner_actual);
-
-    test_step_complete(network).await;
-}
-
 async fn create_receipt_asset_act(
     network: &mut Network,
     user: &str,
@@ -2959,11 +2872,6 @@ async fn node_send_startup_requests(network: &mut Network, node: &str) {
 // ComputeNode helpers
 //
 
-async fn compute_get_debug_data(network: &mut Network, compute: &str) -> DebugData {
-    let c = network.compute(compute).unwrap().lock().await;
-    get_node_debug_data(c.get_node(), vec!["compute_route"]).await
-}
-
 async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
     compute_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
@@ -3256,11 +3164,6 @@ async fn compute_send_utxo_set(network: &mut Network, compute: &str) {
 // StorageNode helpers
 //
 
-async fn storage_get_debug_data(network: &mut Network, storage: &str) -> DebugData {
-    let s = network.storage(storage).unwrap().lock().await;
-    get_node_debug_data(s.get_node(), vec!["storage_route"]).await
-}
-
 async fn storage_inject_next_event(
     network: &mut Network,
     from: &str,
@@ -3499,11 +3402,6 @@ async fn storage_one_handle_event(
 // UserNode helpers
 //
 
-async fn user_get_debug_data(network: &mut Network, user: &str) -> DebugData {
-    let u = network.user(user).unwrap().lock().await;
-    get_node_debug_data(u.get_node(), vec!["user_route"]).await
-}
-
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
@@ -3690,11 +3588,6 @@ async fn user_send_receipt_asset(
 //
 // MinerNode helpers
 //
-
-async fn miner_get_debug_data(network: &mut Network, miner: &str) -> DebugData {
-    let m = network.miner(miner).unwrap().lock().await;
-    get_node_debug_data(m.get_node(), vec!["miner_route"]).await
-}
 
 async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
     let mut m = network.miner(miner_from).unwrap().lock().await;

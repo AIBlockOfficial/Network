@@ -19,7 +19,7 @@ use crate::user::{
     make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
     make_rb_payment_send_tx_and_request,
 };
-use crate::utils::{decode_pub_key, decode_secret_key};
+use crate::utils::{decode_pub_key, decode_secret_key, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
@@ -277,11 +277,18 @@ async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
 }
 
 async fn new_self_node(node_type: NodeType) -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    new_self_node_with_port(node_type, 0).await
+}
+
+async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, SocketAddr) {
+    let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let mut socket_address = "127.0.0.1:0".parse::<SocketAddr>().unwrap();
+    bind_address.set_port(port);
+
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
     let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
+    socket_address.set_port(self_node.address().port());
+    (self_node, socket_address)
 }
 
 fn dp() -> DbgPaths {
@@ -293,6 +300,8 @@ fn dp() -> DbgPaths {
 /// Test GET latest block info
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_latest_block() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
     let request = warp::test::request().method("GET").path("/latest_block");
 
@@ -306,6 +315,8 @@ async fn test_get_latest_block() {
 /// Test GET wallet keypairs
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_export_keypairs() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -343,11 +354,16 @@ async fn test_get_export_keypairs() {
 /// Test get user debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_user_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
     let db = get_wallet_db("");
-    let (self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
 
     //
@@ -359,20 +375,26 @@ async fn test_get_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!(res.body(), &expected_string);
 }
 
 /// Test get storage debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_storage_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
     let db = get_db_with_block();
-    let (self_node, _self_socket) = new_self_node(NodeType::Storage).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
+
     //
     // Act
     //
@@ -382,7 +404,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -390,11 +412,16 @@ async fn test_get_storage_debug_data() {
 /// Test get compute debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_compute_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
     let compute = ComputeTest::new(vec![]);
-    let (self_node, _self_socket) = new_self_node(NodeType::Compute).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
@@ -405,7 +432,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -413,12 +440,17 @@ async fn test_get_compute_debug_data() {
 /// Test get miner debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_miner_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
-    let (self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
@@ -429,7 +461,7 @@ async fn test_get_miner_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -437,13 +469,20 @@ async fn test_get_miner_debug_data() {
 /// Test get miner with user debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_miner_with_user_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
     let db = get_wallet_db("");
     let current_block = Default::default();
-    let (self_node, _self_socket) = new_self_node(NodeType::Miner).await;
-    let (self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
+    let (_s_node, s_socket) = new_self_node_with_port(NodeType::Storage, 13041).await;
+    self_node.connect_to(c_socket).await.unwrap();
+    self_node_u.connect_to(s_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
@@ -454,7 +493,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -462,6 +501,8 @@ async fn test_get_miner_with_user_debug_data() {
 /// Test GET wallet info
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_wallet_info() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -496,6 +537,8 @@ async fn test_get_wallet_info() {
 /// Test GET new payment address
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_payment_address() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -522,6 +565,8 @@ async fn test_get_payment_address() {
 /// Test GET all addresses on the UTXO set
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_utxo_set_addresses() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -558,6 +603,8 @@ async fn test_get_utxo_set_addresses() {
 /// Test POST for get blockchain block by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
@@ -581,6 +628,8 @@ async fn test_post_blockchain_entry_by_key_block() {
 /// Test POST for get blockchain tx by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_tx() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
@@ -607,6 +656,8 @@ async fn test_post_blockchain_entry_by_key_tx() {
 /// Test POST for get blockchain with wrong key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_failure() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
     let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
@@ -633,6 +684,8 @@ async fn test_post_blockchain_entry_by_key_failure() {
 /// Test POST for get block info by nums
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_block_info_by_nums() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
     let filter = routes::block_by_num(&mut dp(), db);
 
@@ -656,6 +709,8 @@ async fn test_post_block_info_by_nums() {
 /// Test POST make payment
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_make_payment() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -697,6 +752,8 @@ async fn test_post_make_payment() {
 /// Test POST make ip payment with correct address
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_make_ip_payment() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -743,6 +800,8 @@ async fn test_post_make_ip_payment() {
 /// Test POST construct address from public key
 #[tokio::test(flavor = "current_thread")]
 async fn test_address_construction() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -777,6 +836,8 @@ async fn test_address_construction() {
 /// Test POST make ip payment with correct address
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_request_donation() {
+    let _ = tracing_log_try_init();
+
     //
     // Arange
     //
@@ -813,6 +874,8 @@ async fn test_post_request_donation() {
 /// Test POST import key-pairs
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_import_keypairs_success() {
+    let _ = tracing_log_try_init();
+
     let db = get_wallet_db("");
     let mut addresses: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     addresses.insert(
@@ -844,6 +907,8 @@ async fn test_post_import_keypairs_success() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_fetch_balance() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -879,6 +944,8 @@ async fn test_post_fetch_balance() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_fetch_pending() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -916,6 +983,8 @@ async fn test_post_fetch_pending() {
 /// Test POST update running total successful
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_update_running_total() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -954,6 +1023,8 @@ async fn test_post_update_running_total() {
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_signable_transactions() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1007,6 +1078,8 @@ async fn test_post_create_transactions_temp() {
 }
 
 async fn test_post_create_transactions_common(address_version: Option<u64>) {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1077,6 +1150,8 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1128,6 +1203,8 @@ async fn test_post_create_receipt_asset_tx_compute() {
 /// Test POST create receipt asset on user node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_user() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1171,6 +1248,8 @@ async fn test_post_create_receipt_asset_tx_user() {
 /// Test POST create receipt asset on compute node failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1215,6 +1294,8 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
 /// Test POST create receipt asset on user node failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_user_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1259,6 +1340,8 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
 /// Test POST change passphrase successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_change_passphrase() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1300,6 +1383,8 @@ async fn test_post_change_passphrase() {
 /// Test POST change passphrase failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_change_passphrase_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1345,6 +1430,8 @@ async fn test_post_change_passphrase_failure() {
 /// Test POST fetch block hashes for blocks that contain given `tx_hashes`
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_block_nums_by_tx_hashes() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //

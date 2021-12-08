@@ -2,10 +2,7 @@ use crate::comms_handler::Node;
 use crate::configurations::{UtxoSetSpec, WalletTxSpec};
 use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
 use crate::hash_block::*;
-use crate::interfaces::{
-    node_type_as_str, BlockchainItem, BlockchainItemMeta, DebugData, ProofOfWork,
-    StoredSerializingBlock,
-};
+use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
@@ -990,19 +987,4 @@ pub fn create_receipt_asset_tx_from_sig(
     };
 
     Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
-}
-
-/// Get debug data for a node
-///
-/// ### Arguments
-///
-/// * `node` - `Node` to retrieve debug data for
-pub async fn get_node_debug_data(node: &Node, node_api: Vec<&'static str>) -> DebugData {
-    let node_type = node_type_as_str(node.get_node_type());
-    let node_peers = node.get_peer_list().await;
-    DebugData {
-        node_type: node_type.to_owned(),
-        node_api: node_api.into_iter().map(|p| p.to_string()).collect(),
-        node_peers,
-    }
 }
