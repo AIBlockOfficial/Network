@@ -3,14 +3,14 @@ use crate::comms_handler::Node;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
-    api_debug_routes, node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
+    node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
     BlockchainItemType, ComputeApi, ComputeApiRequest, DebugData, DruidPool, NodeType,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::threaded_call::{self, ThreadedCallSender};
-use crate::utils::{decode_pub_key, decode_signature, get_node_debug_data};
+use crate::utils::{decode_pub_key, decode_signature};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use naom::constants::D_DISPLAY_PLACES;
@@ -26,6 +26,8 @@ use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
 use tracing::{error, trace};
+
+pub type DbgPaths = Vec<&'static str>;
 
 /// Data entry from the blockchain
 #[derive(Debug, Serialize, Deserialize)]
@@ -217,23 +219,29 @@ pub async fn get_latest_block(
 /// , i.e a Miner node may or may not have additional User
 /// node capabilities- providing additional debug data.
 pub async fn get_debug_data(
+    debug_paths: DbgPaths,
     node: Node,
     aux_node: Option<Node>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    let node_type = node_type_as_str(node.get_node_type());
+    let node_peers = node.get_peer_list().await;
+    let node_api = debug_paths.into_iter().map(|p| p.to_string()).collect();
+
     let data = match aux_node {
-        Some(aux_node) => {
-            let node_type = format!(
-                "{}/{}",
-                node_type_as_str(node.get_node_type()),
-                node_type_as_str(aux_node.get_node_type())
-            );
+        Some(aux) => {
+            let aux_type = node_type_as_str(aux.get_node_type());
+            let aux_peers = aux.get_peer_list().await;
             DebugData {
-                node_type: node_type.clone(),
-                node_api: api_debug_routes(&node_type),
-                node_peers: [node.get_peer_list().await, aux_node.get_peer_list().await].concat(),
+                node_type: format!("{}/{}", node_type, aux_type),
+                node_api,
+                node_peers: [node_peers, aux_peers].concat(),
             }
         }
-        None => get_node_debug_data(&node).await,
+        None => DebugData {
+            node_type: node_type.to_owned(),
+            node_api,
+            node_peers,
+        },
     };
     Ok(warp::reply::json(&data))
 }

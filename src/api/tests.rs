@@ -1,7 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetData,
-    CreateTransaction, CreateTxIn, CreateTxInScript, EncapsulatedPayment, FetchPendingtData,
-    PublicKeyAddresses,
+    CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths, EncapsulatedPayment,
+    FetchPendingtData, PublicKeyAddresses,
 };
 use crate::api::routes;
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
@@ -19,7 +19,7 @@ use crate::user::{
     make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
     make_rb_payment_send_tx_and_request,
 };
-use crate::utils::{decode_pub_key, decode_secret_key};
+use crate::utils::{decode_pub_key, decode_secret_key, tracing_log_try_init};
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
@@ -136,6 +136,12 @@ fn from_utf8(data: &[u8]) -> &str {
 fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
     let db = get_db_with_block_no_mutex();
     Arc::new(Mutex::new(db))
+}
+
+fn get_wallet_db(passphrase: &str) -> WalletDb {
+    let simple_db = Some(get_db_with_block_no_mutex());
+    let passphrase = Some(passphrase.to_owned());
+    WalletDb::new(DbMode::InMemory, simple_db, passphrase)
 }
 
 fn get_db_with_block_no_mutex() -> SimpleDb {
@@ -271,11 +277,22 @@ async fn next_event_frame(node: &mut Node) -> Option<Vec<u8>> {
 }
 
 async fn new_self_node(node_type: NodeType) -> (Node, SocketAddr) {
-    let bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    new_self_node_with_port(node_type, 0).await
+}
+
+async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, SocketAddr) {
+    let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+    let mut socket_address = "127.0.0.1:0".parse::<SocketAddr>().unwrap();
+    bind_address.set_port(port);
+
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
     let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
-    let self_socket = self_node.address();
-    (self_node, self_socket)
+    socket_address.set_port(self_node.address().port());
+    (self_node, socket_address)
+}
+
+fn dp() -> DbgPaths {
+    Default::default()
 }
 
 /*------- GET TESTS--------*/
@@ -283,36 +300,27 @@ async fn new_self_node(node_type: NodeType) -> (Node, SocketAddr) {
 /// Test GET latest block info
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_latest_block() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
-    let filter = routes::latest_block(db);
+    let request = warp::test::request().method("GET").path("/latest_block");
 
-    let res = warp::test::request()
-        .method("GET")
-        .path("/latest_block")
-        .reply(&filter)
-        .await;
+    let filter = routes::latest_block(&mut dp(), db);
+    let res = request.reply(&filter).await;
 
-    // Header to match
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.headers(), &headers);
+    assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"block\":{\"header\":{\"version\":1,\"bits\":0,\"nonce\":[],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"merkle_root_hash\":\"\"},\"transactions\":[]},\"mining_tx_hash_and_nonces\":{\"0\":[\"test\",[0,1,23]]}}");
 }
 
 /// Test GET wallet keypairs
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_export_keypairs() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db("");
     let (address, keys) = (
         COMMON_ADDR_STORE.0.to_string(),
         COMMON_ADDR_STORE.1.to_vec(),
@@ -327,7 +335,7 @@ async fn test_get_export_keypairs() {
     //
     // Act
     //
-    let filter = routes::export_keypairs(db);
+    let filter = routes::export_keypairs(&mut dp(), db);
     let res = request.reply(&filter).await;
     let expected_addresses = serde_json::to_string(&json!({
         "addresses":{
@@ -346,43 +354,57 @@ async fn test_get_export_keypairs() {
 /// Test get user debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_user_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let db = get_wallet_db("");
+    let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
+
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone(), None);
+    let filter = routes::user_node_routes(db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"new_payment_address\",\"create_receipt_asset\",\"change_passphrase\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), expected_string);
+    assert_eq!(res.body(), &expected_string);
 }
 
 /// Test get storage debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_storage_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_node(NodeType::Storage).await;
+    let db = get_db_with_block();
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
+
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone(), None);
+    let filter = routes::storage_node_routes(db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"latest_block\",\"blockchain_entry_by_key\",\"block_by_num\",\"block_by_tx_hashes\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry_by_key\",\"block_by_tx_hashes\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -390,21 +412,27 @@ async fn test_get_storage_debug_data() {
 /// Test get compute debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_compute_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_node(NodeType::Compute).await;
+    let compute = ComputeTest::new(vec![]);
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone(), None);
+    let filter = routes::compute_node_routes(compute.threaded_calls.tx.clone(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_transactions\",\"create_receipt_asset\",\"debug_data\",\"utxo_addresses\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"fetch_pending\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -412,21 +440,60 @@ async fn test_get_compute_debug_data() {
 /// Test get miner debug data
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_miner_debug_data() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let (self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let db = get_wallet_db("");
+    let current_block = Default::default();
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
+    self_node.connect_to(c_socket).await.unwrap();
+
     let request = warp::test::request().method("GET").path("/debug_data");
     //
     // Act
     //
-    let filter = routes::debug_data(self_node.clone(), None);
+    let filter = routes::miner_node_routes(current_block, db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
-    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"current_mining_block\",\"change_passphrase\",\"export_keypairs\",\"wallet_info\",\"import_keypairs\",\"new_payment_address\",\"debug_data\"],\"node_peers\":[]}";
+    let expected_string = "{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]]}";
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), expected_string);
+}
+
+/// Test get miner with user debug data
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_miner_with_user_debug_data() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("");
+    let current_block = Default::default();
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
+    let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
+    let (_s_node, s_socket) = new_self_node_with_port(NodeType::Storage, 13041).await;
+    self_node.connect_to(c_socket).await.unwrap();
+    self_node_u.connect_to(s_socket).await.unwrap();
+
+    let request = warp::test::request().method("GET").path("/debug_data");
+    //
+    // Act
+    //
+    let filter = routes::miner_node_with_user_routes(current_block, db, self_node, self_node_u);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected_string = "{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"new_payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]]}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_string);
 }
@@ -434,15 +501,12 @@ async fn test_get_miner_debug_data() {
 /// Test GET wallet info
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_wallet_info() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db("");
     let mut fund_store = db.get_fund_store();
     let out_point = OutPoint::new("tx_hash".to_string(), 0);
     let asset = Asset::token_u64(11);
@@ -460,7 +524,7 @@ async fn test_get_wallet_info() {
     //
     // Act
     //
-    let filter = routes::wallet_info(db);
+    let filter = routes::wallet_info(&mut dp(), db);
     let res = request.reply(&filter).await;
 
     //
@@ -473,15 +537,12 @@ async fn test_get_wallet_info() {
 /// Test GET new payment address
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_payment_address() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::new());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db("");
     let request = warp::test::request()
         .method("GET")
         .path("/new_payment_address");
@@ -489,7 +550,7 @@ async fn test_get_payment_address() {
     //
     // Act
     //
-    let filter = routes::payment_address(db.clone());
+    let filter = routes::new_payment_address(&mut dp(), db.clone());
     let res = request.reply(&filter).await;
     let store_address = db.get_known_addresses().pop().unwrap();
     let expected_store_address = serde_json::to_string(&json!(store_address)).unwrap();
@@ -504,6 +565,8 @@ async fn test_get_payment_address() {
 /// Test GET all addresses on the UTXO set
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_utxo_set_addresses() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -520,7 +583,7 @@ async fn test_get_utxo_set_addresses() {
     //
     // Act
     //
-    let filter = routes::utxo_addresses(compute.threaded_calls.tx.clone());
+    let filter = routes::utxo_addresses(&mut dp(), compute.threaded_calls.tx.clone());
     let handle = compute.spawn();
     let res = request.reply(&filter).await;
     let _compute = handle.await.unwrap();
@@ -540,8 +603,10 @@ async fn test_get_utxo_set_addresses() {
 /// Test POST for get blockchain block by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_block() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
-    let filter = routes::blockchain_entry_by_key(db);
+    let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
     let res = warp::test::request()
         .method("POST")
@@ -563,8 +628,10 @@ async fn test_post_blockchain_entry_by_key_block() {
 /// Test POST for get blockchain tx by key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_tx() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
-    let filter = routes::blockchain_entry_by_key(db);
+    let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
     let res = warp::test::request()
         .method("POST")
@@ -589,8 +656,10 @@ async fn test_post_blockchain_entry_by_key_tx() {
 /// Test POST for get blockchain with wrong key
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_blockchain_entry_by_key_failure() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
-    let filter = routes::blockchain_entry_by_key(db);
+    let filter = routes::blockchain_entry_by_key(&mut dp(), db);
 
     let res = warp::test::request()
         .method("POST")
@@ -615,8 +684,10 @@ async fn test_post_blockchain_entry_by_key_failure() {
 /// Test POST for get block info by nums
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_block_info_by_nums() {
+    let _ = tracing_log_try_init();
+
     let db = get_db_with_block();
-    let filter = routes::block_info_by_nums(db);
+    let filter = routes::block_by_num(&mut dp(), db);
 
     let res = warp::test::request()
         .method("POST")
@@ -638,6 +709,8 @@ async fn test_post_block_info_by_nums() {
 /// Test POST make payment
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_make_payment() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -649,12 +722,7 @@ async fn test_post_make_payment() {
         passphrase: String::new(),
     };
 
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(encapsulated_data.passphrase.clone());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db(&encapsulated_data.passphrase);
     let request = warp::test::request()
         .method("POST")
         .path("/make_payment")
@@ -665,7 +733,7 @@ async fn test_post_make_payment() {
     //
     // Act
     //
-    let filter = routes::make_payment(db, self_node.clone());
+    let filter = routes::make_payment(&mut dp(), db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -684,6 +752,8 @@ async fn test_post_make_payment() {
 /// Test POST make ip payment with correct address
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_make_ip_payment() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -694,13 +764,7 @@ async fn test_post_make_ip_payment() {
         amount: TokenAmount(25),
         passphrase: String::new(),
     };
-
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(encapsulated_data.passphrase.clone());
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db(&encapsulated_data.passphrase);
     let request = warp::test::request()
         .method("POST")
         .path("/make_ip_payment")
@@ -711,7 +775,7 @@ async fn test_post_make_ip_payment() {
     //
     // Act
     //
-    let filter = routes::make_ip_payment(db, self_node.clone());
+    let filter = routes::make_ip_payment(&mut dp(), db, self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -736,6 +800,8 @@ async fn test_post_make_ip_payment() {
 /// Test POST construct address from public key
 #[tokio::test(flavor = "current_thread")]
 async fn test_address_construction() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -756,7 +822,7 @@ async fn test_address_construction() {
     //
     // Act
     //
-    let filter = routes::payment_address_construction();
+    let filter = routes::address_construction(&mut dp());
     let res = request.reply(&filter).await;
 
     //
@@ -770,6 +836,8 @@ async fn test_address_construction() {
 /// Test POST make ip payment with correct address
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_request_donation() {
+    let _ = tracing_log_try_init();
+
     //
     // Arange
     //
@@ -788,7 +856,7 @@ async fn test_post_request_donation() {
     //
     // Act
     //
-    let filter = routes::request_donation(self_node.clone());
+    let filter = routes::request_donation(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -806,17 +874,16 @@ async fn test_post_request_donation() {
 /// Test POST import key-pairs
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_import_keypairs_success() {
-    let passphrase: Option<String> = Some(String::from(""));
-    let simple_db: Option<SimpleDb> = Some(get_db_with_block_no_mutex());
-    let db = WalletDb::new(DbMode::InMemory, simple_db, passphrase);
+    let _ = tracing_log_try_init();
 
+    let db = get_wallet_db("");
     let mut addresses: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     addresses.insert(
         COMMON_ADDR_STORE.0.to_string(),
         COMMON_ADDR_STORE.1.to_vec(),
     );
     let imported_addresses = Addresses { addresses };
-    let filter = routes::import_keypairs(db.clone());
+    let filter = routes::import_keypairs(&mut dp(), db.clone());
     let wallet_addresses_before = db.get_known_addresses();
 
     let res = warp::test::request()
@@ -840,6 +907,8 @@ async fn test_post_import_keypairs_success() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_fetch_balance() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -858,7 +927,7 @@ async fn test_post_fetch_balance() {
     //
     // Act
     //
-    let filter = routes::fetch_utxo_balance(compute.threaded_calls.tx.clone());
+    let filter = routes::fetch_balance(&mut dp(), compute.threaded_calls.tx.clone());
     let handle = compute.spawn();
     let res = request.reply(&filter).await;
     let _compute = handle.await.unwrap();
@@ -875,6 +944,8 @@ async fn test_post_fetch_balance() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_fetch_pending() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -894,7 +965,7 @@ async fn test_post_fetch_pending() {
     //
     // Act
     //
-    let filter = routes::fetch_druid_pending(compute.threaded_calls.tx.clone());
+    let filter = routes::fetch_pending(&mut dp(), compute.threaded_calls.tx.clone());
     let handle = compute.spawn();
     let res = request.reply(&filter).await;
     let _compute = handle.await.unwrap();
@@ -912,6 +983,8 @@ async fn test_post_fetch_pending() {
 /// Test POST update running total successful
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_update_running_total() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -931,7 +1004,7 @@ async fn test_post_update_running_total() {
     //
     // Act
     //
-    let filter = routes::update_running_total(self_node.clone());
+    let filter = routes::update_running_total(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -950,6 +1023,8 @@ async fn test_post_update_running_total() {
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_signable_transactions() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -972,7 +1047,7 @@ async fn test_post_signable_transactions() {
     //
     // Act
     //
-    let filter = routes::signable_transactions();
+    let filter = routes::signable_transactions(&mut dp());
     let res = request.reply(&filter).await;
 
     //
@@ -1003,6 +1078,8 @@ async fn test_post_create_transactions_temp() {
 }
 
 async fn test_post_create_transactions_common(address_version: Option<u64>) {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1040,7 +1117,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Act
     //
-    let filter = routes::create_transactions(self_node.clone());
+    let filter = routes::create_transactions(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -1073,6 +1150,8 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
 /// Test POST create receipt asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1099,7 +1178,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -1124,6 +1203,8 @@ async fn test_post_create_receipt_asset_tx_compute() {
 /// Test POST create receipt asset on user node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_user() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1146,7 +1227,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -1167,6 +1248,8 @@ async fn test_post_create_receipt_asset_tx_user() {
 /// Test POST create receipt asset on compute node failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_compute_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1190,7 +1273,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -1211,6 +1294,8 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
 /// Test POST create receipt asset on user node failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_receipt_asset_tx_user_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1234,7 +1319,7 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
     //
     // Act
     //
-    let filter = routes::create_receipt_asset(self_node.clone());
+    let filter = routes::create_receipt_asset(&mut dp(), self_node.clone());
     let res = request.reply(&filter).await;
 
     //
@@ -1255,15 +1340,12 @@ async fn test_post_create_receipt_asset_tx_user_failure() {
 /// Test POST change passphrase successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_change_passphrase() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::from("old_passphrase"));
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db("old_passphrase");
     let (payment_address, expected_address_store) = db.generate_payment_address().await;
 
     let json_body = ChangePassphraseData {
@@ -1280,7 +1362,7 @@ async fn test_post_change_passphrase() {
     //
     // Act
     //
-    let filter = routes::change_passphrase(db.clone());
+    let filter = routes::change_passphrase(&mut dp(), db.clone());
     let res = request.reply(&filter).await;
     let actual = db.test_passphrase(String::from("new_passphrase")).await;
     let actual_address_store = db.get_address_store(&payment_address);
@@ -1301,15 +1383,12 @@ async fn test_post_change_passphrase() {
 /// Test POST change passphrase failure
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_change_passphrase_failure() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
-    let db = {
-        let simple_db = Some(get_db_with_block_no_mutex());
-        let passphrase = Some(String::from("old"));
-        WalletDb::new(DbMode::InMemory, simple_db, passphrase)
-    };
-
+    let db = get_wallet_db("old");
     let json_body = ChangePassphraseData {
         old_passphrase: String::from("invalid_passphrase"),
         new_passphrase: String::from("new_passphrase"),
@@ -1324,7 +1403,7 @@ async fn test_post_change_passphrase_failure() {
     //
     // Act
     //
-    let filter = routes::change_passphrase(db.clone());
+    let filter = routes::change_passphrase(&mut dp(), db.clone());
     let actual = db.test_passphrase(String::from("new_passphrase")).await;
     let res = request.reply(&filter).await;
 
@@ -1351,6 +1430,8 @@ async fn test_post_change_passphrase_failure() {
 /// Test POST fetch block hashes for blocks that contain given `tx_hashes`
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_block_nums_by_tx_hashes() {
+    let _ = tracing_log_try_init();
+
     //
     // Arrange
     //
@@ -1367,7 +1448,7 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     // Act
     //
-    let filter = routes::blocks_by_tx_hashes(db);
+    let filter = routes::blocks_by_tx_hashes(&mut dp(), db);
     let res = request.reply(&filter).await;
 
     //

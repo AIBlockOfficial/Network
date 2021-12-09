@@ -170,66 +170,6 @@ pub fn node_type_as_str(node_type: NodeType) -> &'static str {
     }
 }
 
-// Returns a vector of possible API routes for the specified node type
-// TODO: Isn't there way we don't have to hard code this?
-pub fn api_debug_routes(node_type: &str) -> Vec<String> {
-    match node_type {
-        "Miner" => vec![
-            "current_mining_block".to_owned(),
-            "change_passphrase".to_owned(),
-            "export_keypairs".to_owned(),
-            "wallet_info".to_owned(),
-            "import_keypairs".to_owned(),
-            "new_payment_address".to_owned(),
-            "debug_data".to_owned(),
-        ],
-        "Storage" => vec![
-            "latest_block".to_owned(),
-            "blockchain_entry_by_key".to_owned(),
-            "block_by_num".to_owned(),
-            "block_by_tx_hashes".to_owned(),
-            "debug_data".to_owned(),
-        ],
-        "Compute" => vec![
-            "fetch_balance".to_owned(),
-            "fetch_pending".to_owned(),
-            "create_transactions".to_owned(),
-            "create_receipt_asset".to_owned(),
-            "debug_data".to_owned(),
-            "utxo_addresses".to_owned(),
-        ],
-        "User" => vec![
-            "wallet_info".to_owned(),
-            "make_payment".to_owned(),
-            "make_ip_payment".to_owned(),
-            "request_donation".to_owned(),
-            "export_keypairs".to_owned(),
-            "import_keypairs".to_owned(),
-            "update_running_total".to_owned(),
-            "new_payment_address".to_owned(),
-            "create_receipt_asset".to_owned(),
-            "change_passphrase".to_owned(),
-            "debug_data".to_owned(),
-        ],
-        /* Miner node with User node capabilities */
-        "Miner/User" => vec![
-            "wallet_info".to_owned(),
-            "make_payment".to_owned(),
-            "make_ip_payment".to_owned(),
-            "request_donation".to_owned(),
-            "export_keypairs".to_owned(),
-            "import_keypairs".to_owned(),
-            "update_running_total".to_owned(),
-            "new_payment_address".to_owned(),
-            "create_receipt_asset".to_owned(),
-            "change_passphrase".to_owned(),
-            "current_mining_block".to_owned(),
-            "debug_data".to_owned(),
-        ],
-        _ => Vec::new(),
-    }
-}
-
 /// Mined block or transaction as stored in DB.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockchainItem {
