@@ -229,6 +229,17 @@ impl WalletDb {
             return self;
         };
 
+        {
+            let fund_store = self.get_fund_store();
+            let addresses = self.get_known_addresses();
+            if !fund_store.transactions().is_empty()
+                || !fund_store.spent_transactions().is_empty()
+                || !addresses.is_empty()
+            {
+                return self;
+            }
+        }
+
         for seed in seeds {
             let (tx_out_p, pk, sk, amount) = make_wallet_tx_info(seed);
             let (address, _) = self.store_payment_address(pk, sk).await;

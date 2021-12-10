@@ -470,6 +470,11 @@ impl Network {
         &self.config
     }
 
+    ///Config that launched the network
+    pub fn mut_config(&mut self) -> &mut NetworkConfig {
+        &mut self.config
+    }
+
     ///Dead nodes not currently active
     pub fn dead_nodes(&self) -> &BTreeSet<String> {
         &self.dead_nodes
