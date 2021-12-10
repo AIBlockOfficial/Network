@@ -315,6 +315,8 @@ fn configuration(settings: config::Config) -> UserNodeConfig {
 fn default_user_test_auto_gen_setup() -> HashMap<String, config::Value> {
     let mut value = HashMap::new();
     let zero = config::Value::new(None, 0);
+    let empty = config::Value::new(None, Vec::<String>::new());
+    value.insert("user_initial_transactions".to_owned(), empty);
     value.insert("user_setup_tx_chunk_size".to_owned(), zero.clone());
     value.insert("user_setup_tx_in_per_tx".to_owned(), zero.clone());
     value.insert("user_setup_tx_max_count".to_owned(), zero);
@@ -347,7 +349,11 @@ mod test {
 
     #[test]
     fn validate_startup_aws() {
-        let args = vec!["bin_name", "--config=src/bin/node_settings_aws.toml"];
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_aws.toml",
+            "--initial_block_config=src/bin/initial_block_aws.json",
+        ];
         let expected = (DbMode::Live, None);
 
         validate_startup_common(args, expected);

@@ -258,7 +258,11 @@ mod test {
 
     #[test]
     fn validate_startup_aws() {
-        let args = vec!["bin_name", "--config=src/bin/node_settings_aws.toml"];
+        let args = vec![
+            "bin_name",
+            "--config=src/bin/node_settings_aws.toml",
+            "--initial_block_config=src/bin/initial_block_aws.json",
+        ];
         let expected = (DbMode::Live, None);
 
         validate_startup_common(args, expected);
