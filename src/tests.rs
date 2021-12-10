@@ -2631,6 +2631,38 @@ async fn make_receipt_based_payment_act(
     compute_handle_event(network, compute, "Transactions committed").await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn restart_user_with_seed() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config(11490);
+    let modify_cfg = vec![
+        ("stop", CfgModif::Drop("user1")),
+        ("start", CfgModif::Respawn("user1")),
+    ];
+    let seed_0 = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
+    let seed_1 = vec![vec![wallet_seed(VALID_TXS_IN[1], &TokenAmount(12))]];
+    network_config.user_wallet_seeds = seed_0;
+    let mut network = Network::create_from_config(&network_config).await;
+
+    //
+    // Act
+    //
+    let db_0 = node_get_wallet_info(&mut network, "user1").await;
+    modify_network(&mut network, "stop", &modify_cfg).await;
+    network.mut_config().user_wallet_seeds = seed_1;
+    modify_network(&mut network, "start", &modify_cfg).await;
+    let db_1 = node_get_wallet_info(&mut network, "user1").await;
+
+    //
+    // Assert
+    //
+    assert_eq!(db_0, db_1);
+}
+
 //
 // Node helpers
 //

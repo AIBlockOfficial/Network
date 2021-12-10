@@ -89,6 +89,10 @@ impl FundStore {
         &self.transactions
     }
 
+    pub fn spent_transactions(&self) -> &BTreeMap<OutPoint, Asset> {
+        &self.spent_transactions
+    }
+
     pub fn into_transactions(self) -> BTreeMap<OutPoint, Asset> {
         self.transactions
     }
