@@ -2422,45 +2422,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "system"
-version = "0.1.0"
-dependencies = [
- "async-std",
- "async-stream",
- "bincode",
- "bytes",
- "chrono",
- "clap",
- "config",
- "futures",
- "futures-util",
- "hex",
- "keccak_prime",
- "merkle-log",
- "merkletree",
- "moka",
- "naom",
- "protobuf",
- "raft",
- "rand 0.7.3",
- "ring",
- "rocksdb",
- "rug",
- "rust-crypto",
- "serde 1.0.125",
- "serde_json",
- "sha3",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "warp",
-]
-
-[[package]]
 name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3196,3 +3157,42 @@ name = "zeroize"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf68b08513768deaa790264a7fac27a58cbf2705cfcdc9448362229217d7e970"
+
+[[package]]
+name = "znp"
+version = "0.2.0"
+dependencies = [
+ "async-std",
+ "async-stream",
+ "bincode",
+ "bytes",
+ "chrono",
+ "clap",
+ "config",
+ "futures",
+ "futures-util",
+ "hex",
+ "keccak_prime",
+ "merkle-log",
+ "merkletree",
+ "moka",
+ "naom",
+ "protobuf",
+ "raft",
+ "rand 0.7.3",
+ "ring",
+ "rocksdb",
+ "rug",
+ "rust-crypto",
+ "serde 1.0.125",
+ "serde_json",
+ "sha3",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "warp",
+]
