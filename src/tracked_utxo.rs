@@ -1,6 +1,6 @@
-use crate::interfaces::{AddressesWithOutPoints, UtxoSet};
+use crate::interfaces::{AddressesWithOutPoints, OutPointData, UtxoSet};
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
-use crate::wallet::AssetValues;
+use naom::primitives::asset::AssetValues;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -13,6 +13,11 @@ pub struct TrackedUtxoBalance {
     address_list: AddressesWithOutPoints,
 }
 
+impl TrackedUtxoBalance {
+    pub fn get_asset_values(&self) -> &AssetValues {
+        &self.total
+    }
+}
 /// Invariant: `pk_cache` contains exactly all relevant mapping for `base`
 #[derive(Default, Clone, Debug)]
 pub struct TrackedUtxoSet {
@@ -50,11 +55,15 @@ impl TrackedUtxoSet {
     }
 
     /// Remove base 'UtxoSet' and pk_cache entry concurrently
-    pub fn remove_tracked_utxo_entry(&mut self, key: &OutPoint) -> Option<Vec<OutPoint>> {
-        self.base
-            .remove(key)
-            .and_then(|txout| txout.script_public_key)
-            .and_then(|spk| self.pk_cache.remove(&spk))
+    pub fn remove_tracked_utxo_entry<'a>(&mut self, key: &'a OutPoint) -> Option<&'a OutPoint> {
+        self.base.remove(key)?.script_public_key.and_then(|spk| {
+            let pk_cache_entry = self.pk_cache.get_mut(&spk)?;
+            pk_cache_entry.retain(|op| op.t_hash != key.t_hash);
+            if pk_cache_entry.is_empty() {
+                self.pk_cache.remove(&spk);
+            }
+            Some(key)
+        })
     }
 
     /// Calculates the balance of `OutPoint`s based on provided addresses
@@ -66,11 +75,12 @@ impl TrackedUtxoSet {
             if let Some(ops) = self.get_pk_cache_vec(address) {
                 for op in ops {
                     let t_out = self.base.get(op).unwrap();
+                    let asset = t_out.value.clone().with_fixed_hash(op);
                     address_list
                         .entry(address.clone())
                         .or_insert_with(Vec::new)
-                        .push((op.clone(), t_out.value.clone()));
-                    total.update_add(&t_out.value);
+                        .push(OutPointData::new(op.clone(), asset.clone()));
+                    total.update_add(&asset);
                 }
             }
         }

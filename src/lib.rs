@@ -5,13 +5,13 @@
 
 mod active_raft;
 mod api;
+mod block_pipeline;
 mod comms_handler;
 mod compute;
 mod compute_raft;
 pub mod configurations;
 mod constants;
 mod db_utils;
-mod hash_block;
 mod interfaces;
 pub mod key_creation;
 mod miner;
@@ -46,8 +46,8 @@ pub use transaction_gen::TransactionGen;
 pub use user::UserNode;
 pub use utils::{
     create_and_save_fake_to_wallet, create_valid_transaction, get_sanction_addresses,
-    loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect,
-    shutdown_connections, ResponseResult,
+    get_test_common_unicorn, loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async,
+    loops_re_connect_disconnect, shutdown_connections, ResponseResult,
 };
 
 #[cfg(not(features = "mock"))]

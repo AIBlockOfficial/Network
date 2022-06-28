@@ -1,35 +1,39 @@
 use crate::api::handlers::{self, DbgPaths};
+use crate::api::utils::{
+    auth_request, create_new_cache, handle_rejection, map_api_res_and_cache, warp_path,
+    with_node_component, ReplyCache, CACHE_LIVE_TIME,
+};
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::ComputeApi;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::threaded_call::ThreadedCallSender;
+use crate::utils::{ApiKeys, RoutesPoWInfo};
 use crate::wallet::WalletDb;
-use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
-use warp::{self, Filter, Rejection, Reply};
-
-fn with_node_component<T: Clone + Send>(
-    comp: T,
-) -> impl Filter<Extract = (T,), Error = Infallible> + Clone {
-    warp::any().map(move || comp.clone())
-}
-
-fn warp_path(
-    dp: &mut DbgPaths,
-    p: &'static str,
-) -> impl Filter<Extract = (), Error = Rejection> + Clone {
-    dp.push(p);
-    warp::path(p)
-}
+use warp::{Filter, Rejection, Reply};
 
 //======= GET ROUTES =======//
 
 // GET CORS
-fn get_cors() -> warp::cors::Builder {
+pub fn get_cors() -> warp::cors::Builder {
     warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["*"])
+        .allow_headers(vec![
+            "Accept",
+            "User-Agent",
+            "Sec-Fetch-Mode",
+            "Referer",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Headers",
+            "Content-Type",
+            "x-request-id",
+            "x-nonce",
+            "x-api-key",
+        ])
         .allow_methods(vec!["GET"])
 }
 
@@ -37,11 +41,28 @@ fn get_cors() -> warp::cors::Builder {
 pub fn wallet_info(
     dp: &mut DbgPaths,
     db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "wallet_info")
+    let route = "wallet_info";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
-        .and_then(handlers::get_wallet_info)
+        .and(
+            warp::path::param::<String>()
+                .map(Some)
+                .or_else(|_| async { Ok::<(Option<String>,), std::convert::Infallible>((None,)) }),
+        )
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, ei, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_wallet_info(db, ei, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
@@ -50,23 +71,47 @@ pub fn wallet_info(
 pub fn export_keypairs(
     dp: &mut DbgPaths,
     db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "export_keypairs")
+    let route = "export_keypairs";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
-        .and_then(handlers::get_export_keypairs)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_export_keypairs(db, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
 // GET new payment address
-pub fn new_payment_address(
+pub fn payment_address(
     dp: &mut DbgPaths,
     db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "new_payment_address")
+    let route = "payment_address";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
-        .and_then(handlers::get_new_payment_address)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_payment_address(db, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
@@ -74,11 +119,23 @@ pub fn new_payment_address(
 pub fn latest_block(
     dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "latest_block")
+    let route = "latest_block";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
-        .and_then(handlers::get_latest_block)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_latest_block(db, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
@@ -87,13 +144,29 @@ pub fn debug_data(
     mut dp: DbgPaths,
     node: Node,
     aux_node: Option<Node>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(&mut dp, "debug_data")
+    let route = "debug_data";
+    warp_path(&mut dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow.clone(), api_keys))
         .and(with_node_component(dp))
         .and(with_node_component(node))
         .and(with_node_component(aux_node))
-        .and_then(handlers::get_debug_data)
+        .and(with_node_component(routes_pow))
+        .and(with_node_component(cache))
+        .and_then(
+            move |call_id: String, dp, node, aux, routes_pow: RoutesPoWInfo, cache| {
+                let routes = routes_pow.lock().unwrap().clone();
+                map_api_res_and_cache(
+                    call_id.clone(),
+                    cache,
+                    handlers::get_debug_data(dp, node, aux, route, call_id, routes),
+                )
+            },
+        )
         .with(get_cors())
 }
 
@@ -101,11 +174,23 @@ pub fn debug_data(
 pub fn current_mining_block(
     dp: &mut DbgPaths,
     current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "current_mining_block")
+    let route = "current_mining_block";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(current_block))
-        .and_then(handlers::get_current_mining_block)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, cb, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_current_mining_block(cb, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
@@ -113,21 +198,34 @@ pub fn current_mining_block(
 pub fn utxo_addresses(
     dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "utxo_addresses")
+    let route = "utxo_addresses";
+    warp_path(dp, route)
         .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
-        .and_then(handlers::get_utxo_addresses)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, a, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_utxo_addresses(a, route, call_id),
+            )
+        })
         .with(get_cors())
 }
 
 //======= POST ROUTES =======//
 
 // POST CORS
-fn post_cors() -> warp::cors::Builder {
+pub fn post_cors() -> warp::cors::Builder {
     warp::cors()
         .allow_any_origin()
         .allow_headers(vec![
+            "Accept",
             "User-Agent",
             "Sec-Fetch-Mode",
             "Referer",
@@ -135,7 +233,11 @@ fn post_cors() -> warp::cors::Builder {
             "Access-Control-Request-Method",
             "Access-Control-Request-Headers",
             "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Headers",
             "Content-Type",
+            "x-request-id",
+            "x-nonce",
+            "x-api-key",
         ])
         .allow_methods(vec!["POST"])
 }
@@ -144,12 +246,24 @@ fn post_cors() -> warp::cors::Builder {
 pub fn blockchain_entry_by_key(
     dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "blockchain_entry_by_key")
+    let route = "blockchain_entry";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(warp::body::json())
-        .and_then(handlers::post_blockchain_entry_by_key)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_blockchain_entry_by_key(db, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -157,12 +271,24 @@ pub fn blockchain_entry_by_key(
 pub fn block_by_num(
     dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "block_by_num")
+    let route = "block_by_num";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(warp::body::json())
-        .and_then(handlers::post_block_by_num)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_block_by_num(db, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -171,12 +297,24 @@ pub fn block_by_num(
 pub fn import_keypairs(
     dp: &mut DbgPaths,
     db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "import_keypairs")
+    let route = "import_keypairs";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(warp::body::json())
-        .and_then(handlers::post_import_keypairs)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, kp, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_import_keypairs(db, kp, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -185,13 +323,25 @@ pub fn make_payment(
     dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "make_payment")
+    let route = "make_payment";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(with_node_component(node))
         .and(warp::body::json())
-        .and_then(handlers::post_make_payment)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, node, pi, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_make_payment(db, node, pi, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -200,13 +350,25 @@ pub fn make_ip_payment(
     dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "make_ip_payment")
+    let route = "make_ip_payment";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(with_node_component(node))
         .and(warp::body::json())
-        .and_then(handlers::post_make_ip_payment)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, node, pi, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_make_ip_payment(db, node, pi, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -214,12 +376,24 @@ pub fn make_ip_payment(
 pub fn request_donation(
     dp: &mut DbgPaths,
     node: Node,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "request_donation")
+    let route = "request_donation";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(node))
         .and(warp::body::json())
-        .and_then(handlers::post_request_donation)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, node, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_request_donation(node, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -227,12 +401,24 @@ pub fn request_donation(
 pub fn update_running_total(
     dp: &mut DbgPaths,
     node: Node,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "update_running_total")
+    let route = "update_running_total";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(node))
         .and(warp::body::json())
-        .and_then(handlers::post_update_running_total)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, node, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_update_running_total(node, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -240,12 +426,24 @@ pub fn update_running_total(
 pub fn fetch_balance(
     dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "fetch_balance")
+    let route = "fetch_balance";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
-        .and_then(handlers::post_fetch_utxo_balance)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_fetch_utxo_balance(tc, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -253,25 +451,74 @@ pub fn fetch_balance(
 pub fn fetch_pending(
     dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "fetch_pending")
+    let route = "fetch_pending";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
-        .and_then(handlers::post_fetch_druid_pending)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_fetch_druid_pending(tc, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
 // POST create receipt-based asset transaction
 pub fn create_receipt_asset(
     dp: &mut DbgPaths,
-    node: Node,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "create_receipt_asset")
+    let route = "create_receipt_asset";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_create_receipt_asset(tc, info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+/// POST create a receipt-based asset transaction on user
+pub fn create_receipt_asset_user(
+    dp: &mut DbgPaths,
+    node: Node,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    let route = "create_receipt_asset";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(node))
         .and(warp::body::json())
-        .and_then(handlers::post_create_receipt_asset)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, node, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_create_receipt_asset_user(node, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -279,36 +526,49 @@ pub fn create_receipt_asset(
 pub fn change_passphrase(
     dp: &mut DbgPaths,
     db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "change_passphrase")
+    let route = "change_passphrase";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(warp::body::json())
-        .and_then(handlers::post_change_wallet_passphrase)
-        .with(post_cors())
-}
-
-// POST signable transaction
-pub fn signable_transactions(
-    dp: &mut DbgPaths,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp_path(dp, "signable_transactions")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and_then(handlers::post_signable_transactions)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_change_wallet_passphrase(db, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
 // POST create transactions
 pub fn create_transactions(
     dp: &mut DbgPaths,
-    peer: Node,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp_path(dp, "create_transactions")
+    let route = "create_transactions";
+    warp_path(dp, route)
         .and(warp::post())
-        .and(with_node_component(peer))
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(threaded_calls))
         .and(warp::body::json())
-        .and_then(handlers::post_create_transactions)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_create_transactions(tc, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -316,23 +576,47 @@ pub fn create_transactions(
 pub fn blocks_by_tx_hashes(
     dp: &mut DbgPaths,
     db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp_path(dp, "block_by_tx_hashes")
+    let route = "check_transaction_presence";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(warp::body::json())
-        .and_then(handlers::post_blocks_by_tx_hashes)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_blocks_by_tx_hashes(db, info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
 // POST construct payment address
 pub fn address_construction(
     dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp_path(dp, "address_construction")
+    let route = "address_construction";
+    warp_path(dp, route)
         .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
         .and(warp::body::json())
-        .and_then(handlers::post_payment_address_construction)
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_payment_address_construction(info, route, call_id),
+            )
+        })
         .with(post_cors())
 }
 
@@ -341,80 +625,297 @@ pub fn address_construction(
 
 // API routes for User nodes
 pub fn user_node_routes(
+    api_keys: ApiKeys,
+    routes_pow_info: RoutesPoWInfo,
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    wallet_info(dp, db.clone())
-        .or(make_payment(dp, db.clone(), node.clone()))
-        .or(make_ip_payment(dp, db.clone(), node.clone()))
-        .or(request_donation(dp, node.clone()))
-        .or(export_keypairs(dp, db.clone()))
-        .or(import_keypairs(dp, db.clone()))
-        .or(update_running_total(dp, node.clone()))
-        .or(create_receipt_asset(dp, node.clone()))
-        .or(new_payment_address(dp, db.clone()))
-        .or(change_passphrase(dp, db))
-        .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+    let routes = wallet_info(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    )
+    .or(make_payment(
+        dp,
+        db.clone(),
+        node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(make_ip_payment(
+        dp,
+        db.clone(),
+        node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(request_donation(
+        dp,
+        node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(export_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(import_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(update_running_total(
+        dp,
+        node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(create_receipt_asset_user(
+        dp,
+        node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(payment_address(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(change_passphrase(
+        dp,
+        db,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(address_construction(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(debug_data(
+        dp_vec,
+        node,
+        None,
+        routes_pow_info,
+        api_keys,
+        cache,
+    ));
+
+    routes.recover(handle_rejection)
 }
 
 // API routes for Storage nodes
 pub fn storage_node_routes(
+    api_keys: ApiKeys,
+    routes_pow_info: RoutesPoWInfo,
     db: Arc<Mutex<SimpleDb>>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    block_by_num(dp, db.clone())
-        .or(latest_block(dp, db.clone()))
-        .or(blockchain_entry_by_key(dp, db.clone()))
-        .or(blocks_by_tx_hashes(dp, db))
-        .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+    let routes = block_by_num(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    )
+    .or(latest_block(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(blockchain_entry_by_key(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(blocks_by_tx_hashes(
+        dp,
+        db,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(address_construction(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(debug_data(
+        dp_vec,
+        node,
+        None,
+        routes_pow_info,
+        api_keys,
+        cache,
+    ));
+
+    routes.recover(handle_rejection)
 }
 
 // API routes for Compute nodes
+// TODO: 1. `fetch_pending` should not return `Transaction` as it contains sensitive information (`Script`)
+// TODO: 2. `fetch_pending` should return sensible data once a proper use-case has been found
 pub fn compute_node_routes(
+    api_keys: ApiKeys,
+    routes_pow_info: RoutesPoWInfo,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    fetch_balance(dp, threaded_calls.clone())
-        .or(fetch_pending(dp, threaded_calls.clone()))
-        .or(create_receipt_asset(dp, node.clone()))
-        .or(create_transactions(dp, node.clone()))
-        .or(utxo_addresses(dp, threaded_calls))
-        .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+    let routes = fetch_balance(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    )
+    .or(create_receipt_asset(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(create_transactions(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(utxo_addresses(
+        dp,
+        threaded_calls,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(address_construction(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(debug_data(
+        dp_vec,
+        node,
+        None,
+        routes_pow_info,
+        api_keys,
+        cache,
+    ));
+
+    routes.recover(handle_rejection)
 }
 
 // API routes for Miner nodes
 pub fn miner_node_routes(
+    api_keys: ApiKeys,
+    routes_pow_info: RoutesPoWInfo,
     current_block: CurrentBlockWithMutex,
     db: WalletDb,
     node: Node,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    wallet_info(dp, db.clone())
-        .or(export_keypairs(dp, db.clone()))
-        .or(import_keypairs(dp, db.clone()))
-        .or(new_payment_address(dp, db.clone()))
-        .or(change_passphrase(dp, db))
-        .or(current_mining_block(dp, current_block))
-        .or(address_construction(dp))
-        .or(debug_data(dp_vec, node, None))
+    let routes = wallet_info(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    )
+    .or(export_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(import_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(payment_address(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(change_passphrase(
+        dp,
+        db,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(current_mining_block(
+        dp,
+        current_block,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(address_construction(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(debug_data(
+        dp_vec,
+        node,
+        None,
+        routes_pow_info,
+        api_keys,
+        cache,
+    ));
+
+    routes.recover(handle_rejection)
 }
 
 // API routes for Miner nodes with User node capabilities
 pub fn miner_node_with_user_routes(
+    api_keys: ApiKeys,
+    routes_pow_info: RoutesPoWInfo,
     current_block: CurrentBlockWithMutex,
     db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
@@ -422,18 +923,101 @@ pub fn miner_node_with_user_routes(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
+    let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    wallet_info(dp, db.clone())
-        .or(make_payment(dp, db.clone(), user_node.clone()))
-        .or(make_ip_payment(dp, db.clone(), user_node.clone()))
-        .or(request_donation(dp, user_node.clone()))
-        .or(export_keypairs(dp, db.clone()))
-        .or(import_keypairs(dp, db.clone()))
-        .or(update_running_total(dp, user_node.clone()))
-        .or(create_receipt_asset(dp, user_node.clone()))
-        .or(new_payment_address(dp, db.clone()))
-        .or(change_passphrase(dp, db))
-        .or(current_mining_block(dp, current_block))
-        .or(address_construction(dp))
-        .or(debug_data(dp_vec, miner_node, Some(user_node)))
+    let routes = wallet_info(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    )
+    .or(make_payment(
+        dp,
+        db.clone(),
+        user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(make_ip_payment(
+        dp,
+        db.clone(),
+        user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(request_donation(
+        dp,
+        user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(export_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(import_keypairs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(update_running_total(
+        dp,
+        user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(create_receipt_asset_user(
+        dp,
+        user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(payment_address(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(change_passphrase(
+        dp,
+        db,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(current_mining_block(
+        dp,
+        current_block,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(address_construction(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(debug_data(
+        dp_vec,
+        miner_node,
+        Some(user_node),
+        routes_pow_info,
+        api_keys,
+        cache,
+    ));
+
+    routes.recover(handle_rejection)
 }

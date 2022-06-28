@@ -1,8 +1,8 @@
 use crate::active_raft::ActiveRaft;
 use crate::raft::RaftData;
 use bincode::{deserialize, serialize};
+use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use tracing::{debug, warn};
@@ -44,7 +44,7 @@ impl RaftInFlightProposals {
     ///
     /// * `raft_data` - Data for the commit
     /// * `raft_ctx`  - Context for the commit
-    pub async fn received_commit_poposal<'a, Item: Deserialize<'a>>(
+    pub async fn received_commit_proposal<'a, Item: Deserialize<'a> + std::fmt::Debug>(
         &mut self,
         raft_data: &'a [u8],
         raft_ctx: &'a [u8],
@@ -206,7 +206,7 @@ fn check_deduplication(
             return None;
         }
 
-        let data_hash = Sha3_256::digest(item_data).to_vec();
+        let data_hash = sha3_256::digest(item_data).to_vec();
         if let Some((key, num)) = already_proposed_hashes.get(&data_hash) {
             debug!("check_deduplication found: key({:?}), b_num({})", key, num);
             None

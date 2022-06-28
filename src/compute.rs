@@ -1,29 +1,29 @@
+use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft};
 use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
 use crate::constants::{DB_PATH, PEER_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
-use crate::hash_block::HashBlock;
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlockExtraInfo, NodeType,
-    ProofOfWork, Response, StorageRequest, UserRequest, UtxoFetchType, UtxoSet,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
+    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    concat_merkle_coinbase, create_receipt_asset_tx_from_sig, format_parition_pow_address,
-    generate_pow_random_num, get_partition_entry_key, serialize_hashblock_for_pow,
-    validate_pow_block, validate_pow_for_address, LocalEvent, LocalEventChannel, LocalEventSender,
-    ResponseResult,
+    apply_mining_tx, check_druid_participants, create_receipt_asset_tx_from_sig,
+    format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
+    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
+    LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
+use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
@@ -42,6 +42,7 @@ use tracing_futures::Instrument;
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
+pub const POW_RANDOM_NUM_KEY: &str = "PowRandomNumKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
@@ -63,6 +64,7 @@ pub enum ComputeError {
     Network(CommsError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
+    GenericError(StringError),
 }
 
 impl fmt::Display for ComputeError {
@@ -72,6 +74,7 @@ impl fmt::Display for ComputeError {
             Self::Network(err) => write!(f, "Network error: {}", err),
             Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
             Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::GenericError(err) => write!(f, "Generic error: {}", err),
         }
     }
 }
@@ -83,6 +86,7 @@ impl Error for ComputeError {
             Self::Network(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
+            Self::GenericError(ref e) => Some(e),
         }
     }
 }
@@ -105,14 +109,10 @@ impl From<task::JoinError> for ComputeError {
     }
 }
 
-/// Druid pool structure for checking and holding participants
-#[derive(Debug, Clone)]
-pub struct MinedBlock {
-    pub nonce: Vec<u8>,
-    pub block: Block,
-    pub block_tx: BTreeMap<String, Transaction>,
-    pub mining_transaction: (String, Transaction),
-    pub shutdown: bool,
+impl From<StringError> for ComputeError {
+    fn from(other: StringError) -> Self {
+        Self::GenericError(other)
+    }
 }
 
 #[derive(Debug)]
@@ -126,18 +126,22 @@ pub struct ComputeNode {
     current_mined_block: Option<MinedBlock>,
     druid_pool: DruidPool,
     current_random_num: Vec<u8>,
-    partition_key: Option<Key>,
-    partition_list: (Vec<ProofOfWork>, BTreeSet<SocketAddr>),
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
-    coordiated_shudown: u64,
+    coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
-    api_info: (SocketAddr, Option<TlsPrivateInfo>, Node),
+    api_info: (
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        ApiKeys,
+        RoutesPoWInfo,
+        Node,
+    ),
 }
 
 impl ComputeNode {
@@ -172,9 +176,11 @@ impl ComputeNode {
             raft_peers.chain(storage).collect()
         };
 
-        let api_info = (api_addr, api_tls_info, node.clone());
+        let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
+        let api_keys = to_api_keys(config.api_keys.clone());
+        let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
-        Ok(ComputeNode {
+        ComputeNode {
             node,
             node_raft,
             db,
@@ -182,22 +188,20 @@ impl ComputeNode {
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
-            current_random_num: generate_pow_random_num(),
+            current_random_num: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
             request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
             partition_full_size: config.compute_partition_full_size,
-            partition_list: Default::default(),
-            partition_key: None,
             storage_addr,
             user_notification_list: Default::default(),
-            coordiated_shudown: u64::MAX,
+            coordinated_shutdown: u64::MAX,
             shutdown_group,
             api_info,
             fetched_utxo_set: None,
         }
-        .load_local_db()?)
+        .load_local_db()
     }
 
     /// Returns the compute node's public endpoint.
@@ -270,6 +274,16 @@ impl ComputeNode {
         self.node_raft.get_committed_tx_druid_pool()
     }
 
+    /// The current local DRUID transactions present in the `local_tx_druid_pool`
+    pub fn get_local_druid_pool(&self) -> &Vec<BTreeMap<String, Transaction>> {
+        self.node_raft.get_local_tx_druid_pool()
+    }
+
+    // The current druid pool of pending DDE transactions
+    pub fn get_pending_druid_pool(&self) -> &DruidPool {
+        &self.druid_pool
+    }
+
     pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
         &self.request_list
     }
@@ -295,91 +309,61 @@ impl ComputeNode {
     }
 
     /// Info needed to run the API point.
-    pub fn api_inputs(&self) -> (SocketAddr, Option<TlsPrivateInfo>, Node) {
+    pub fn api_inputs(
+        &self,
+    ) -> (
+        SocketAddr,
+        Option<TlsPrivateInfo>,
+        ApiKeys,
+        RoutesPoWInfo,
+        Node,
+    ) {
         self.api_info.clone()
     }
 
-    /// Processes a dual double entry transaction
+    /// Validate and get DDE transactions that are ready to be added to the RAFT
+    ///
     /// ### Arguments
-    /// * `transaction` - Transaction to process
-    pub async fn process_dde_tx(&mut self, transaction: Transaction) -> Response {
-        if let Some(druid_info) = transaction.clone().druid_info {
-            let druid = druid_info.druid;
+    ///
+    /// * `transactions` - DDE transactions to process
+    pub fn validate_dde_txs(
+        &mut self,
+        transactions: BTreeMap<String, Transaction>,
+    ) -> Vec<(bool, BTreeMap<String, Transaction>)> {
+        let mut ready_txs = Vec::new();
+        for (tx_hash, tx) in transactions {
+            if let Some(druid_info) = tx.druid_info.clone() {
+                let druid = druid_info.druid;
+                let participants = druid_info.participants;
 
-            // If this transaction is meant to join others
-            #[allow(clippy::map_entry)]
-            if self.druid_pool.contains_key(&druid) {
-                self.process_tx_druid(druid, transaction);
+                let droplet = self
+                    .druid_pool
+                    .entry(druid.clone())
+                    .or_insert_with(|| DruidDroplet::new(participants));
 
-                return Response {
-                    success: true,
-                    reason: "Transaction added to corresponding DRUID droplets",
-                };
+                droplet.txs.insert(tx_hash.clone(), tx);
 
-            // If we haven't seen this DRUID yet
-            } else {
-                let mut droplet = DruidDroplet {
-                    participants: druid_info.participants,
-                    txs: BTreeMap::new(),
-                };
-
-                let tx_hash = construct_tx_hash(&transaction);
-                droplet.txs.insert(tx_hash, transaction);
-
-                self.druid_pool.insert(druid, droplet);
-                return Response {
-                    success: true,
-                    reason: "Transaction added to DRUID pool. Awaiting other parties",
-                };
+                // Execute the DDE tx if it's ready
+                if droplet.txs.len() == droplet.participants {
+                    let valid = druid_expectations_are_met(&druid, droplet.txs.values())
+                        && check_druid_participants(droplet);
+                    ready_txs.push((valid, droplet.txs.clone()));
+                    // TODO: Implement time-based removal?
+                    self.druid_pool.remove(&druid);
+                }
             }
         }
-
-        Response {
-            success: false,
-            reason: "Dual double entry transaction doesn't contain a DRUID",
-        }
+        ready_txs
     }
 
-    /// Processes a dual double entry transaction's DRUID with the current pool
-    /// ### Arguments
-    /// * `druid`       - DRUID to match on
-    /// * `transaction` - Transaction to process
-    pub fn process_tx_druid(&mut self, druid: String, transaction: Transaction) {
-        let mut current_droplet = self.druid_pool.get(&druid).unwrap().clone();
-        let tx_hash = construct_tx_hash(&transaction);
-        current_droplet.txs.insert(tx_hash, transaction);
-
-        // Execute the tx if it's ready
-        if current_droplet.txs.len() == current_droplet.participants {
-            self.execute_dde_tx(current_droplet, &druid);
-            let _removal = self.druid_pool.remove(&druid);
-        }
-    }
-
-    /// Executes a waiting dual double entry transaction that is ready to execute
-    /// ### Arguments
-    /// * `droplet`  - DRUID droplet of transactions to execute
-    /// * `druid`    -
-    pub fn execute_dde_tx(&mut self, droplet: DruidDroplet, druid: &str) {
-        let txs_valid = {
-            let tx_validator = self.transactions_validator();
-            droplet.txs.values().all(tx_validator)
-        };
-
-        if txs_valid && druid_expectations_are_met(druid, droplet.txs.values()) {
-            self.node_raft.append_to_tx_druid_pool(droplet.txs);
-
-            trace!(
-                "Transactions for dual double entry execution are valid. Adding to pending block"
-            );
-        } else {
-            debug!("Transactions for dual double entry execution are invalid");
-        }
-    }
-
-    ///Returns the mining block from the node_raft
+    /// Returns the mining block from the node_raft
     pub fn get_mining_block(&self) -> &Option<Block> {
         self.node_raft.get_mining_block()
+    }
+
+    /// Get mining participants selected
+    pub fn get_mining_participants(&self) -> &Participants {
+        self.node_raft.get_mining_participants()
     }
 
     ///Returns last generated block number from the node_raft
@@ -387,16 +371,20 @@ impl ComputeNode {
         self.node_raft.get_committed_current_block_num()
     }
 
-    /// Sets the commited mining block to the given block and transaction BTreeMap
+    /// Process block generation in single step (Test only)
     /// ### Arguments
-    /// * `block`  - Block to be set to commited mining block
+    /// * `block`    - Block to be set to commited mining block
     /// * `block_tx` - BTreeMap of the block transactions
-    pub fn set_committed_mining_block(
-        &mut self,
-        block: Block,
-        block_tx: BTreeMap<String, Transaction>,
-    ) {
-        self.node_raft.set_committed_mining_block(block, block_tx)
+    pub fn test_skip_block_gen(&mut self, block: Block, block_tx: BTreeMap<String, Transaction>) {
+        self.node_raft.test_skip_block_gen(block, block_tx)
+    }
+
+    /// Process all the mining phase in a single step (Test only)
+    /// ### Arguments
+    /// * `winning_pow`    - Address nad PoW for the winner to use
+    pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo), seed: Vec<u8>) {
+        self.node_raft.test_skip_mining(winning_pow, seed);
+        self.mining_block_mined();
     }
 
     /// Gets a decremented socket address of peer for storage
@@ -439,23 +427,10 @@ impl ComputeNode {
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
-        let mined_block = self.current_mined_block.clone().unwrap();
-        let block = mined_block.block;
-        let block_txs = mined_block.block_tx;
-        let nonce = mined_block.nonce;
-        let mining_tx = mined_block.mining_transaction;
-        let shutdown = mined_block.shutdown;
-
-        let request = StorageRequest::SendBlock {
-            common: CommonBlockInfo { block, block_txs },
-            mined_info: MinedBlockExtraInfo {
-                nonce,
-                mining_tx,
-                shutdown,
-            },
-        };
-        self.node.send(self.storage_addr, request).await?;
-
+        let mined_block = self.current_mined_block.clone();
+        self.node
+            .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
+            .await?;
         Ok(())
     }
 
@@ -519,7 +494,7 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Start Coordianted shutdown",
+                reason: "Start coordinated shutdown",
             }) => {}
             Ok(Response {
                 success: true,
@@ -531,15 +506,20 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Partition list is full",
+                reason: "Received PoW successfully",
             }) => {
-                self.flood_list_to_partition().await.unwrap();
+                debug!("Proposing winning PoW entry");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Winning PoW intake open",
+            }) => {
                 self.flood_block_to_partition().await.unwrap();
                 self.flood_block_to_users().await.unwrap();
             }
             Ok(Response {
                 success: true,
-                reason: "Received PoW successfully",
+                reason: "Pipeline halted",
             }) => {
                 info!("Send Block to storage");
                 debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
@@ -559,6 +539,7 @@ impl ComputeNode {
             }) => {
                 debug!("First Block ready to mine: {:?}", self.get_mining_block());
                 self.flood_rand_num_to_requesters().await.unwrap();
+                self.flood_block_to_users().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -566,6 +547,7 @@ impl ComputeNode {
             }) => {
                 debug!("Block ready to mine: {:?}", self.get_mining_block());
                 self.flood_rand_num_to_requesters().await.unwrap();
+                self.flood_block_to_users().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -602,7 +584,7 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Partition list is already full",
+                reason: "Partition list complete",
             }) => {}
             Ok(Response {
                 success: false,
@@ -672,6 +654,13 @@ impl ComputeNode {
                     self.node_raft.propose_local_transactions_at_timeout().await;
                     self.node_raft.propose_local_druid_transactions().await;
                 }
+                _ = self.node_raft.timeout_propose_mining_event(), if ready && !shutdown => {
+                    trace!("handle_next_event timeout mining pipeline");
+                    if !self.node_raft.propose_mining_event_at_timeout().await {
+                        self.node_raft.re_propose_uncommitted_current_b_num().await;
+                        self.resend_trigger_message().await;
+                    }
+                }
                 Some(event) = self.local_events.rx.recv(), if ready => {
                     if let Some(res) = self.handle_local_event(event) {
                         return Some(Ok(res));
@@ -688,7 +677,7 @@ impl ComputeNode {
         }
     }
 
-    ///Handle commit data
+    /// Handle commit data
     ///
     /// ### Arguments
     ///
@@ -696,8 +685,6 @@ impl ComputeNode {
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
-                self.node_raft.generate_first_block();
-                self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
                 Some(Ok(Response {
                     success: true,
@@ -705,23 +692,30 @@ impl ComputeNode {
                 }))
             }
             Some(CommittedItem::Block) => {
-                let reason = if self.node_raft.is_shutdown_on_commit() {
-                    "Block shutdown"
-                } else {
-                    self.node_raft.generate_block().await;
-                    "Block committed"
-                };
-                self.node_raft.event_processed_generate_snapshot();
                 self.reset_mining_block_process();
                 Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: "Block committed",
                 }))
             }
-            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+            Some(CommittedItem::BlockShutdown) => {
+                self.reset_mining_block_process();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Block shutdown",
+                }))
+            }
+            Some(CommittedItem::StartPhasePowIntake) => Some(Ok(Response {
                 success: true,
-                reason: "Snapshot applied",
+                reason: "Winning PoW intake open",
             })),
+            Some(CommittedItem::StartPhaseHalted) => {
+                self.mining_block_mined();
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Pipeline halted",
+                }))
+            }
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,
@@ -732,6 +726,10 @@ impl ComputeNode {
                     reason: "Transactions committed",
                 }))
             }
+            Some(CommittedItem::Snapshot) => Some(Ok(Response {
+                success: true,
+                reason: "Snapshot applied",
+            })),
             None => None,
         }
     }
@@ -748,10 +746,10 @@ impl ComputeNode {
                 reason,
             }),
             LocalEvent::CoordinatedShutdown(shutdown) => {
-                self.coordiated_shudown = shutdown;
+                self.coordinated_shutdown = shutdown;
                 Some(Response {
                     success: true,
-                    reason: "Start Coordianted shutdown",
+                    reason: "Start coordinated shutdown",
                 })
             }
             LocalEvent::Ignore => None,
@@ -815,7 +813,7 @@ impl ComputeNode {
                 coinbase,
             } => Some(self.receive_pow(peer, block_num, nonce, coinbase).await),
             SendPartitionEntry { partition_entry } => {
-                Some(self.receive_partition_entry(peer, partition_entry))
+                Some(self.receive_partition_entry(peer, partition_entry).await)
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendUserBlockNotificationRequest => {
@@ -827,7 +825,6 @@ impl ComputeNode {
                 self.node_raft.received_message(msg).await;
                 None
             }
-            SendRbTransaction { transaction } => Some(self.process_dde_tx(transaction).await),
         }
     }
 
@@ -855,15 +852,20 @@ impl ComputeNode {
                 script_public_key,
                 public_key,
                 signature,
-            } => {
-                self.create_receipt_asset_tx(
-                    receipt_amount,
-                    script_public_key,
-                    public_key,
-                    signature,
-                )
-                .await
-            }
+                drs_tx_hash_spec,
+            } => match self.create_receipt_asset_tx(
+                receipt_amount,
+                script_public_key,
+                public_key,
+                signature,
+                drs_tx_hash_spec,
+            ) {
+                Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
+                Err(e) => {
+                    error!("Error creating receipt asset transaction: {:?}", e);
+                    None
+                }
+            },
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
         }
     }
@@ -945,41 +947,35 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     /// * 'partition_entry' - ProofOfWork object for the partition entry being recieved.
-    fn receive_partition_entry(
+    async fn receive_partition_entry(
         &mut self,
         peer: SocketAddr,
         partition_entry: ProofOfWork,
     ) -> Response {
-        if self.partition_list.0.len() >= self.partition_full_size {
+        if self.node_raft.get_mining_pipeline_status() != &MiningPipelineStatus::ParticipantIntake {
             return Response {
                 success: false,
-                reason: "Partition list is already full",
+                reason: "Partition list complete",
             };
         }
 
         let valid_pow = format_parition_pow_address(peer) == partition_entry.address
             && validate_pow_for_address(&partition_entry, &Some(&self.current_random_num));
 
-        if valid_pow && self.partition_list.1.insert(peer) {
-            self.partition_list.0.push(partition_entry);
-        } else {
+        if !valid_pow {
             return Response {
                 success: false,
                 reason: "PoW received is invalid",
             };
         }
 
-        if self.partition_list.0.len() < self.partition_full_size {
-            return Response {
-                success: true,
-                reason: "Partition PoW received successfully",
-            };
-        }
+        self.node_raft
+            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer))
+            .await;
 
-        self.partition_key = Some(get_partition_entry_key(&self.partition_list.0));
         Response {
             success: true,
-            reason: "Partition list is full",
+            reason: "Partition PoW received successfully",
         }
     }
 
@@ -1043,17 +1039,13 @@ impl ComputeNode {
         debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
         let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
         let header = block.header.clone();
-        let unicorn = header.previous_hash.unwrap_or_default();
-        let hashblock =
-            HashBlock::new_for_mining(unicorn, block.header.merkle_root_hash.clone(), header.b_num);
-        let block = serialize_hashblock_for_pow(&hashblock);
         let reward = self.node_raft.get_current_reward();
 
         self.node
             .send_to_all(
-                self.partition_list.1.iter().copied(),
+                self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendBlock {
-                    block,
+                    block: header,
                     reward: *reward,
                 },
             )
@@ -1070,7 +1062,7 @@ impl ComputeNode {
 
         self.node
             .send_to_all(
-                self.partition_list.1.iter().copied(),
+                self.node_raft.get_mining_participants_iter(),
                 MineRequest::SendTransactions {
                     tx_merkle_verification,
                 },
@@ -1096,47 +1088,41 @@ impl ComputeNode {
         Ok(())
     }
 
-    /// Floods all peers with the full partition list
-    pub async fn flood_list_to_partition(&mut self) -> Result<()> {
-        self.node
-            .send_to_all(
-                self.partition_list.1.iter().copied(),
-                MineRequest::SendPartitionList {
-                    p_list: self.partition_list.0.clone(),
-                },
-            )
-            .await
-            .unwrap();
-        Ok(())
-    }
-
     /// Logs the winner of the block and changes the current block to a new block to be mined
-    /// ### Arguments
-    ///
-    /// * `nonce` - Sequence number in a Vec<u8>
-    /// * `mining_transaction` - String and transaction to be put into a BTreeMap
-    pub fn mining_block_mined(
-        &mut self,
-        nonce: Vec<u8>,
-        mining_transaction: (String, Transaction),
-    ) {
-        // Take mining block info: no more mining for it.
-        let (block, block_tx) = self.node_raft.take_mining_block();
-        let shutdown = self.coordiated_shudown <= block.header.b_num;
-        self.current_mined_block = Some(MinedBlock {
-            nonce,
+    pub fn mining_block_mined(&mut self) {
+        let (mut block, mut block_txs) = self.node_raft.take_mining_block().unwrap();
+        let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
+        let unicorn = self.node_raft.get_current_unicorn().clone();
+
+        let mining_tx = winning_pow.mining_tx;
+        let nonce = winning_pow.nonce;
+        block.header = apply_mining_tx(block.header, nonce, mining_tx.0.clone());
+        block_txs.insert(mining_tx.0, mining_tx.1);
+
+        let extra_info = MinedBlockExtraInfo {
+            shutdown: self.coordinated_shutdown <= block.header.b_num,
+        };
+        let common = CommonBlockInfo {
             block,
-            block_tx,
-            mining_transaction,
-            shutdown,
-        });
+            block_txs,
+            pow_p_value: winning_pow.p_value,
+            pow_d_value: winning_pow.d_value,
+            unicorn: unicorn.unicorn,
+            unicorn_witness: unicorn.witness,
+        };
+        self.current_mined_block = Some(MinedBlock { common, extra_info });
     }
 
     /// Reset the mining block processing to allow a new block.
     fn reset_mining_block_process(&mut self) {
         self.current_random_num = generate_pow_random_num();
-        self.partition_list = Default::default();
-        self.partition_key = None;
+        self.db
+            .put_cf(
+                DB_COL_INTERNAL,
+                POW_RANDOM_NUM_KEY,
+                &self.current_random_num,
+            )
+            .unwrap();
         self.current_mined_block = None;
     }
 
@@ -1166,6 +1152,22 @@ impl ComputeNode {
             }
             Ok(None) => self.user_notification_list,
             Err(e) => panic!("Error accessing db: {:?}", e),
+        };
+
+        self.current_random_num = {
+            let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY) {
+                Ok(Some(num)) => num,
+                Ok(None) => generate_pow_random_num(),
+                Err(e) => panic!("Error accessing db: {:?}", e),
+            };
+            debug!("load_local_db: current_random_num {:?}", current_random_num);
+            if let Err(e) = self
+                .db
+                .put_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY, &current_random_num)
+            {
+                panic!("Error accessing db: {:?}", e);
+            }
+            current_random_num
         };
 
         self.node_raft.set_key_run({
@@ -1205,23 +1207,14 @@ impl ComputeNode {
         nonce: Vec<u8>,
         coinbase: Transaction,
     ) -> Response {
-        let pow_mining_block = self
-            .node_raft
-            .get_mining_block()
-            .as_ref()
+        let pow_mining_block = (self.node_raft.get_mining_block().as_ref())
             .filter(|b| block_num == b.header.b_num)
-            .filter(|_| self.partition_list.1.contains(&address));
+            .filter(|_| self.node_raft.get_mining_participants().contains(&address));
 
         // Check if expected block
         let block_to_check = if let Some(mining_block) = pow_mining_block {
             info!(?address, "Received expected PoW");
-            let header = &mining_block.header;
-            HashBlock {
-                merkle_hash: header.merkle_root_hash.clone(),
-                unicorn: header.previous_hash.clone().unwrap_or_default(),
-                nonce: nonce.clone(),
-                b_num: header.b_num,
-            }
+            mining_block.header.clone()
         } else {
             trace!(?address, "Received outdated PoW");
             return Response {
@@ -1241,16 +1234,27 @@ impl ComputeNode {
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
-        let merkle_for_pow =
-            concat_merkle_coinbase(&block_to_check.merkle_hash, &coinbase_hash).await;
-        if !validate_pow_block(&block_to_check.unicorn, &merkle_for_pow, &nonce) {
+        let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
+        if !validate_pow_block(&block_to_check) {
             return Response {
                 success: false,
                 reason: "Invalid PoW for block",
             };
         }
 
-        self.mining_block_mined(nonce, (coinbase_hash, coinbase));
+        // TODO: D and P will need to change with keccak prime intro
+        let (nonce, coinbase_hash) = block_to_check.nonce_and_mining_tx_hash;
+        let pow_info = WinningPoWInfo {
+            nonce,
+            mining_tx: (coinbase_hash, coinbase),
+            d_value: 0,
+            p_value: 0,
+        };
+
+        // Propose the received PoW to the block pipeline
+        self.node_raft
+            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, pow_info))
+            .await;
 
         Response {
             success: true,
@@ -1276,17 +1280,12 @@ impl ComputeNode {
             });
         }
 
-        let b_num = previous_block_info.block_num;
         if !self
             .node_raft
             .propose_block_with_last_info(previous_block_info)
             .await
         {
-            if self.node_raft.get_committed_current_block_num() == Some(b_num + 1) {
-                self.resend_trigger_message().await;
-            } else {
-                self.node_raft.re_propose_uncommitted_current_b_num().await;
-            }
+            self.node_raft.re_propose_uncommitted_current_b_num().await;
             return None;
         }
 
@@ -1296,25 +1295,26 @@ impl ComputeNode {
         })
     }
 
-    /// Re-Sends Message triggering the next step in flow
+    /// Re-sends messages triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
-        if self.current_mined_block.is_some() {
-            info!("Resend block to storage");
-            if let Err(e) = self.send_block_to_storage().await {
-                error!("Resend block to storage failed {:?}", e);
+        match self.node_raft.get_mining_pipeline_status().clone() {
+            MiningPipelineStatus::Halted => {
+                info!("Resend block to storage");
+                if let Err(e) = self.send_block_to_storage().await {
+                    error!("Resend block to storage failed {:?}", e);
+                }
             }
-        } else if self.partition_key.is_some() {
-            info!("Resend partition list and block to partition miners");
-            if let Err(e) = self.flood_list_to_partition().await {
-                error!("Resend partition list to partition miners failed {:?}", e);
+            MiningPipelineStatus::ParticipantIntake => {
+                info!("Resend partition random number to miners");
+                if let Err(e) = self.flood_rand_num_to_requesters().await {
+                    error!("Resend partition random number to miners failed {:?}", e);
+                }
             }
-            if let Err(e) = self.flood_block_to_partition().await {
-                error!("Resend block to partition miners failed {:?}", e);
-            }
-        } else if self.node_raft.get_mining_block().is_some() {
-            info!("Resend partition random number to miners");
-            if let Err(e) = self.flood_rand_num_to_requesters().await {
-                error!("Resend partition random number to miners failed {:?}", e);
+            MiningPipelineStatus::WinningPoWIntake => {
+                info!("Resend block to partition miners");
+                if let Err(e) = self.flood_block_to_partition().await {
+                    error!("Resend block to partition miners failed {:?}", e);
+                }
             }
         }
     }
@@ -1327,32 +1327,92 @@ impl ComputeNode {
     /// * `script_public_key`   - Public address key
     /// * `public_key`          - Public key
     /// * `signature`           - Signature
-    pub async fn create_receipt_asset_tx(
+    pub fn create_receipt_asset_tx(
         &mut self,
         receipt_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
-    ) -> Option<Response> {
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
-        match create_receipt_asset_tx_from_sig(
+        Ok(create_receipt_asset_tx_from_sig(
             b_num,
             receipt_amount,
             script_public_key,
             public_key,
             signature,
-        ) {
-            Ok(tx) => Some(self.receive_transactions(vec![tx])),
-            Err(e) => {
-                error!("Error creating receipt asset transaction: {:?}", e);
-                None
-            }
-        }
+            drs_tx_hash_spec,
+        )?)
     }
 
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+
+    /// Receive incoming transactions
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions` - Transactions to be processed
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+        let transactions_len = transactions.len();
+        if !self.node_raft.tx_pool_can_accept(transactions_len) {
+            return Response {
+                success: false,
+                reason: "Transaction pool for this compute node is full",
+            };
+        }
+
+        let (valid_dde_txs, valid_txs): (BTreeMap<_, _>, BTreeMap<_, _>) = {
+            let tx_validator = self.transactions_validator();
+            transactions
+                .into_iter()
+                .filter(|tx| tx_validator(tx))
+                .map(|tx| (construct_tx_hash(&tx), tx))
+                .partition(|tx| tx.1.druid_info.is_some())
+        };
+
+        let total_valid_txs_len = valid_txs.len() + valid_dde_txs.len();
+
+        // No valid transactions (normal or DDE) provided
+        if total_valid_txs_len == 0 {
+            return Response {
+                success: false,
+                reason: "No valid transactions provided",
+            };
+        }
+
+        // `Normal` transactions
+        store_local_transactions(&mut self.db, &valid_txs);
+        self.node_raft.append_to_tx_pool(valid_txs);
+
+        // `DDE` transactions
+        // TODO: Save DDE transactions to local DB storage
+        let ready_dde_txs = self.validate_dde_txs(valid_dde_txs);
+        let mut invalid_dde_txs_len = 0;
+        for (valid, ready) in ready_dde_txs {
+            if !valid {
+                invalid_dde_txs_len += 1;
+                continue;
+            }
+            self.node_raft.append_to_tx_druid_pool(ready);
+        }
+
+        // Some txs are invalid or some DDE txs are ready to execute but fail to validate
+        // TODO: Should provide better feedback on DDE transactions that fail
+        if (total_valid_txs_len < transactions_len) || invalid_dde_txs_len != 0 {
+            return Response {
+                success: true,
+                reason: "Some transactions invalid. Adding valid transactions only",
+            };
+        }
+
+        Response {
+            success: true,
+            reason: "Transactions added to tx pool",
+        }
     }
 }
 
@@ -1396,49 +1456,6 @@ impl ComputeInterface for ComputeNode {
         }
     }
 
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
-        let transactions_len = transactions.len();
-        if !self.node_raft.tx_pool_can_accept(transactions_len) {
-            return Response {
-                success: false,
-                reason: "Transaction pool for this compute node is full",
-            };
-        }
-
-        let valid_tx: BTreeMap<_, _> = {
-            let tx_validator = self.transactions_validator();
-            transactions
-                .into_iter()
-                .filter(|tx| tx_validator(tx))
-                .map(|tx| (construct_tx_hash(&tx), tx))
-                .collect()
-        };
-
-        // At this point the tx's are considered valid
-        let valid_tx_len = valid_tx.len();
-        store_local_transactions(&mut self.db, &valid_tx);
-        self.node_raft.append_to_tx_pool(valid_tx);
-
-        if valid_tx_len == 0 {
-            return Response {
-                success: false,
-                reason: "No valid transactions provided",
-            };
-        }
-
-        if valid_tx_len < transactions_len {
-            return Response {
-                success: true,
-                reason: "Some transactions invalid. Adding valid transactions only",
-            };
-        }
-
-        Response {
-            success: true,
-            reason: "Transactions added to tx pool",
-        }
-    }
-
     fn execute_contract(&self, _contract: Contract) -> Response {
         Response {
             success: false,
@@ -1457,7 +1474,28 @@ impl ComputeApi for ComputeNode {
     }
 
     fn get_pending_druid_pool(&self) -> &DruidPool {
-        &self.druid_pool
+        self.get_pending_druid_pool()
+    }
+
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+        self.receive_transactions(transactions)
+    }
+
+    fn create_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String)> {
+        self.create_receipt_asset_tx(
+            receipt_amount,
+            script_public_key,
+            public_key,
+            signature,
+            drs_tx_hash_spec,
+        )
     }
 }
 
