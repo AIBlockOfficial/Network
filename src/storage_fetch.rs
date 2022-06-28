@@ -1,4 +1,4 @@
-use crate::configurations::NodeSpec;
+use crate::configurations::StorageNodeConfig;
 use crate::interfaces::{BlockchainItem, BlockchainItemMeta};
 use crate::storage::{indexed_block_hash_key, indexed_tx_hash_key};
 use std::fmt;
@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::ops::Range;
 use std::time::Duration;
 use tokio::time::{self, Instant};
-use tracing::error;
+use tracing::{debug, error};
 
 pub type FetchedBlockChain = (u64, Vec<BlockchainItem>);
 
@@ -140,8 +140,9 @@ pub struct StorageFetch {
 
 impl StorageFetch {
     /// Initialize with database info
-    pub fn new(addr: SocketAddr, storage_nodes: &[NodeSpec], timeout_duration: Duration) -> Self {
-        let storage_nodes = storage_nodes.iter().map(|s| s.address);
+    pub fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
+        let timeout_duration = Duration::from_millis(config.storage_catchup_duration as u64);
+        let storage_nodes = config.storage_nodes.iter().map(|s| s.address);
         let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
         Self {
             timeout_duration,
@@ -157,6 +158,10 @@ impl StorageFetch {
         &mut self,
         last_contiguous_block_num: Option<u64>,
     ) {
+        debug!(
+            "set_initial_last_contiguous_block_key = {:?}",
+            last_contiguous_block_num
+        );
         self.last_contiguous_block_num = last_contiguous_block_num;
     }
 

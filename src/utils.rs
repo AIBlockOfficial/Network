@@ -1,17 +1,19 @@
 use crate::comms_handler::Node;
-use crate::configurations::{UtxoSetSpec, WalletTxSpec};
-use crate::constants::{MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
-use crate::hash_block::*;
-use crate::interfaces::{BlockchainItem, BlockchainItemMeta, ProofOfWork, StoredSerializingBlock};
+use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
+use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
+use crate::interfaces::{
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
+};
 use crate::wallet::WalletDb;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
-use naom::crypto::secretbox_chacha20_poly1305::Key;
+use naom::crypto::sha3_256;
 use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use naom::primitives::transaction::DrsTxHashSpec;
 use naom::primitives::{
     asset::{Asset, TokenAmount},
-    block::{build_merkle_tree, Block},
+    block::{build_hex_txs_hash, Block, BlockHeader},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
 use naom::script::{lang::Script, StackEntry};
@@ -21,20 +23,22 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use sha3::{Digest, Sha3_256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 
+pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
+pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 
@@ -317,7 +321,7 @@ pub async fn create_and_save_fake_to_wallet(
     let (receiver_addr, _) = wallet_db.generate_payment_address().await;
 
     let (t_hash, _payment_tx) = create_valid_transaction(
-        &"00000".to_owned(),
+        "00000",
         0,
         &receiver_addr,
         &address_keys.public_key,
@@ -334,21 +338,6 @@ pub async fn create_and_save_fake_to_wallet(
     Ok(())
 }
 
-/// Computes a key that will be shared from a vector of PoWs
-///
-/// ### Arguments
-///
-/// * `p_list` - Vectoor of PoWs
-pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
-    let key_sha_seed: Vec<u8> = p_list
-        .iter()
-        .flat_map(|e| e.address.as_bytes().iter().chain(&e.nonce))
-        .copied()
-        .collect();
-
-    Key::from_slice(&Sha3_256::digest(&key_sha_seed)).unwrap()
-}
-
 /// Address to be used in Proof of Work
 ///
 /// ### Arguments
@@ -356,24 +345,6 @@ pub fn get_partition_entry_key(p_list: &[ProofOfWork]) -> Key {
 /// * `addr`    - Socket address of used in the proof of work
 pub fn format_parition_pow_address(addr: SocketAddr) -> String {
     format!("{}", addr)
-}
-
-/// Block to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &Block reference to be used in proof of work
-pub fn serialize_block_for_pow(block: &Block) -> Vec<u8> {
-    serialize(block).unwrap()
-}
-
-/// HashBlock to be used in Proof of Work
-///
-/// ### Arguments
-///
-/// * `block`    - &HashBlock reference to be used in proof of work
-pub fn serialize_hashblock_for_pow(block: &HashBlock) -> Vec<u8> {
-    serialize(block).unwrap()
 }
 
 /// Calculates the reward for the next block, to be placed within the coinbase tx
@@ -403,16 +374,12 @@ pub fn get_total_coinbase_tokens(coinbase_tx: &BTreeMap<String, Transaction>) ->
 ///
 /// ### Arguments
 ///
-/// * `merkle_hash` - Merkle hash to concatenate onto
-/// * `cb_tx_hash`  - Coinbase transaction hash
-pub async fn concat_merkle_coinbase(merkle_hash: &str, cb_tx_hash: &str) -> String {
-    let merkle_result = build_merkle_tree(&[merkle_hash.to_string(), cb_tx_hash.to_string()]).await;
-
-    if let Some((merkle_tree, _)) = merkle_result {
-        hex::encode(merkle_tree.root())
-    } else {
-        "".to_string()
-    }
+/// * `header     ` - Header to update
+/// * `merkle_hash` - Nonce to use
+/// * `cb_tx_hash`  - Mining transaction hash
+pub fn apply_mining_tx(mut header: BlockHeader, nonce: Vec<u8>, tx_hash: String) -> BlockHeader {
+    header.nonce_and_mining_tx_hash = (nonce, tx_hash);
+    header
 }
 
 /// Generates a random sequence of values for a nonce
@@ -463,20 +430,65 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
-    validate_pow(&pow_body)
+    validate_pow(&pow_body).is_some()
+}
+
+/// Generate Proof of Work for a block with a mining transaction
+///
+/// ### Arguments
+///
+/// * `header`   - The header for PoW
+pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
+    header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+    while !validate_pow_block(&header) {
+        header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+    }
+    header
+}
+
+/// Verify block is valid & consistent: Can be fully verified from PoW hash.
+/// Verify that PoW hash is valid: sufficient leading 0.
+/// Return the hex encoded hash with prefix
+///
+/// ### Arguments
+///
+/// * `block`   - The block to extract hash from
+pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringError> {
+    if build_hex_txs_hash(&block.transactions) != block.header.txs_merkle_root_and_hash.1 {
+        trace!(
+            "Transactions inconsistent with header: {:?}",
+            &block.transactions
+        );
+        return Err(StringError(
+            "Transactions inconsistent with header".to_owned(),
+        ));
+    }
+
+    let hash_digest = validate_pow_block_hash(&block.header).ok_or_else(|| {
+        StringError("Only block passing validate_pow_block are accepted".to_owned())
+    })?;
+
+    let mut hash_digest = hex::encode(hash_digest);
+    hash_digest.insert(0, BLOCK_PREPEND as char);
+    Ok(hash_digest)
 }
 
 /// Validate Proof of Work for a block with a mining transaction
 ///
 /// ### Arguments
 ///
-/// * `prev_hash`   - The hash of the previous block
-/// * `merkle_hash` - The merkle hash (+ coinbase)
-/// * `nonce`       - Nonce
-pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> bool {
-    let mut pow = nonce.to_owned().to_vec();
-    pow.extend_from_slice(merkle_hash.as_bytes());
-    pow.extend_from_slice(prev_hash.as_bytes());
+/// * `header`   - The header for PoW
+pub fn validate_pow_block(header: &BlockHeader) -> bool {
+    validate_pow_block_hash(header).is_some()
+}
+
+/// Validate Proof of Work for a block with a mining transaction returning the PoW hash
+///
+/// ### Arguments
+///
+/// * `header`   - The header for PoW
+fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
+    let pow = serialize(header).unwrap();
     validate_pow(&pow)
 }
 
@@ -484,10 +496,24 @@ pub fn validate_pow_block(prev_hash: &str, merkle_hash: &str, nonce: &[u8]) -> b
 ///
 /// ### Arguments
 ///
+/// * `mining_difficulty`    - usize mining difficulty
+/// * `pow`                  - &u8 proof of work
+pub fn validate_pow_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
+    let pow_hash = sha3_256::digest(pow).to_vec();
+    if pow_hash[0..mining_difficulty].iter().all(|v| *v == 0) {
+        Some(pow_hash)
+    } else {
+        None
+    }
+}
+
+/// Check the hash of given data reach MINING_DIFFICULTY
+///
+/// ### Arguments
+///
 /// * `pow`    - &u8 proof of work
-fn validate_pow(pow: &[u8]) -> bool {
-    let pow_hash = Sha3_256::digest(pow).to_vec();
-    pow_hash[0..MINING_DIFFICULTY].iter().all(|v| *v == 0)
+fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
+    validate_pow_for_diff(MINING_DIFFICULTY, pow)
 }
 
 /// Get the paiment info from the given transactions
@@ -529,6 +555,7 @@ pub fn create_valid_transaction(
         pub_key,
         secret_key,
         TokenAmount(1),
+        None,
     )
 }
 
@@ -551,6 +578,7 @@ pub fn create_valid_transaction_with_ins_outs(
     pub_key: &PublicKey,
     secret_key: &SecretKey,
     amount: TokenAmount,
+    address_version: Option<u64>,
 ) -> (String, Transaction) {
     let tx_ins = {
         let mut tx_in_cons = Vec::new();
@@ -563,7 +591,7 @@ pub fn create_valid_transaction_with_ins_outs(
                 previous_out: signable,
                 signatures: vec![signature],
                 pub_keys: vec![*pub_key],
-                address_version: None,
+                address_version,
             });
         }
 
@@ -579,7 +607,6 @@ pub fn create_valid_transaction_with_ins_outs(
                 locktime: 0,
                 script_public_key: Some(addr.to_string()),
                 drs_block_hash: None,
-                drs_tx_hash: None,
             });
         }
         tx_outs
@@ -662,13 +689,16 @@ pub fn make_utxo_set_from_seed(
 /// ### Arguments
 ///
 /// * `seed`    - &WalletTxSpec object containing parameters to generate wallet transactions
-pub fn make_wallet_tx_info(seed: &WalletTxSpec) -> (OutPoint, PublicKey, SecretKey, TokenAmount) {
+pub fn make_wallet_tx_info(
+    seed: &WalletTxSpec,
+) -> (OutPoint, PublicKey, SecretKey, TokenAmount, Option<u64>) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
     let amount = TokenAmount(seed.amount as u64);
     let sk = decode_secret_key(&seed.secret_key).unwrap();
     let pk = decode_pub_key(&seed.public_key).unwrap();
+    let version = seed.address_version;
 
-    (tx_out_p, pk, sk, amount)
+    (tx_out_p, pk, sk, amount, version)
 }
 
 /// Decodes a wallet's OutPoint
@@ -973,11 +1003,12 @@ pub fn create_receipt_asset_tx_from_sig(
     script_public_key: String,
     public_key: String,
     signature: String,
-) -> Result<Transaction, StringError> {
-    let tx_out = TxOut::new_receipt_amount(script_public_key, receipt_amount);
-
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::Receipt(receipt_amount));
-
+    drs_tx_hash_spec: DrsTxHashSpec,
+) -> Result<(Transaction, String), StringError> {
+    let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
+    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone());
+    let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
+    let tx_out = TxOut::new_asset(script_public_key, receipt);
     let public_key = decode_pub_key(&public_key)?;
     let signature = decode_signature(&signature)?;
 
@@ -986,5 +1017,58 @@ pub fn create_receipt_asset_tx_from_sig(
         script_signature: Script::new_create_asset(b_num, asset_hash, signature, public_key),
     };
 
-    Ok(construct_tx_core(vec![tx_in], vec![tx_out]))
+    let tx = construct_tx_core(vec![tx_in], vec![tx_out]);
+    let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
+
+    Ok((tx, tx_hash))
+}
+
+/// Confert to ApiKeys data structure
+pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
+    Arc::new(Mutex::new(api_keys.into_iter().collect()))
+}
+
+/// Confert to ApiKeys data structure
+pub fn to_route_pow_infos(route_pow_infos: BTreeMap<String, usize>) -> RoutesPoWInfo {
+    Arc::new(Mutex::new(route_pow_infos.into_iter().collect()))
+}
+
+/// Check to see if DDE transaction participants match
+pub fn check_druid_participants(droplet: &DruidDroplet) -> bool {
+    droplet
+        .txs
+        .iter()
+        .all(|(_, tx)| tx.druid_info.as_ref().map(|i| i.participants) == Some(droplet.participants))
+}
+
+/// Test UnicornFixedInfo with fast compuation
+pub fn get_test_common_unicorn() -> UnicornFixedInfo {
+    UnicornFixedInfo{
+        modulus: "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151".to_owned(),
+        iterations: 2,
+        security: 1
+    }
+}
+
+pub mod rug_integer {
+    use rug::Integer;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// Serialisation function for big ints
+    pub fn serialize<S>(x: &Integer, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value: String = x.to_string_radix(16);
+        value.serialize(s)
+    }
+
+    /// Deserialisation function for big ints
+    pub fn deserialize<'de, D>(d: D) -> Result<Integer, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: String = Deserialize::deserialize(d)?;
+        Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
+    }
 }

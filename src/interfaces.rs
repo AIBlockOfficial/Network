@@ -1,25 +1,37 @@
-#![allow(unused)]
-use crate::hash_block;
+use crate::compute::ComputeError;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
+use crate::unicorn::Unicorn;
+use crate::utils::rug_integer;
 use bytes::Bytes;
-use naom::crypto::sign_ed25519::PublicKey;
 use naom::primitives::asset::Asset;
 use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
+use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::TxIn;
+use naom::primitives::transaction::{DrsTxHashSpec, TxIn};
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
+use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::error::Error;
-use std::future::Future;
+use std::fmt;
 use std::net::SocketAddr;
-use std::{error, fmt};
 
-/// Simple BTreeMap structure used to hold `(OutPoint, Asset)` pairs with respect to a public key address
-pub type AddressesWithOutPoints = BTreeMap<String, Vec<(OutPoint, Asset)>>;
+/// Struct used for simplifying JSON deserialization on the client
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OutPointData {
+    out_point: OutPoint,
+    value: Asset,
+}
+
+impl OutPointData {
+    pub fn new(out_point: OutPoint, value: Asset) -> Self {
+        OutPointData { out_point, value }
+    }
+}
+
+/// Simple BTreeMap structure used to hold `(OutPoint, Asset, String/Data to Sign)` pairs
+/// with respect to a public key address
+pub type AddressesWithOutPoints = BTreeMap<String, Vec<OutPointData>>;
 
 /// UTXO set type
 pub type UtxoSet = BTreeMap<OutPoint, TxOut>;
@@ -54,6 +66,7 @@ pub struct RbPaymentRequestData {
     pub sender_half_druid: String,
     pub sender_from_addr: String,
     pub sender_asset: Asset,
+    pub sender_drs_tx_expectation: Option<String>,
 }
 
 /// Struct used to make a response to a new receipt-based payment
@@ -72,10 +85,10 @@ pub struct Response {
 }
 
 /// Mined block as stored in DB.
+/// TODO: Are we not storing the other info from CommonBlockInfo? (Unicorn etc..._
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSerializingBlock {
     pub block: Block,
-    pub mining_tx_hash_and_nonces: BTreeMap<u64, (String, Vec<u8>)>,
 }
 
 /// Common info in all mined block that form a complete block.
@@ -83,13 +96,23 @@ pub struct StoredSerializingBlock {
 pub struct CommonBlockInfo {
     pub block: Block,
     pub block_txs: BTreeMap<String, Transaction>,
+    pub pow_p_value: u8,
+    pub pow_d_value: u8,
+    pub unicorn: Unicorn,
+    #[serde(with = "rug_integer")]
+    pub unicorn_witness: Integer,
+}
+
+/// Mined block structure
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MinedBlock {
+    pub common: CommonBlockInfo,
+    pub extra_info: MinedBlockExtraInfo,
 }
 
 /// Additional info specific to one of the mined block that form a complete block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct MinedBlockExtraInfo {
-    pub nonce: Vec<u8>,
-    pub mining_tx: (String, Transaction),
     pub shutdown: bool,
 }
 
@@ -99,7 +122,6 @@ pub struct BlockStoredInfo {
     pub block_hash: String,
     pub block_num: u64,
     pub nonce: Vec<u8>,
-    pub merkle_hash: String,
     pub mining_transactions: BTreeMap<String, Transaction>,
     pub shutdown: bool,
 }
@@ -134,11 +156,27 @@ impl ProofOfWorkBlock {
     }
 }
 
+/// Winning PoW structure
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WinningPoWInfo {
+    pub nonce: Vec<u8>,
+    pub mining_tx: (String, Transaction),
+    pub p_value: u8,
+    pub d_value: u8,
+}
+
 /// Druid pool structure for checking and holding participants
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DruidDroplet {
     pub participants: usize,
     pub txs: BTreeMap<String, Transaction>,
+}
+
+impl DruidDroplet {
+    pub fn new(participants: usize) -> Self {
+        let txs = Default::default();
+        DruidDroplet { participants, txs }
+    }
 }
 
 /// A placeholder Contract struct
@@ -166,7 +204,6 @@ pub fn node_type_as_str(node_type: NodeType) -> &'static str {
         NodeType::Storage => "Storage",
         NodeType::User => "User",
         NodeType::PreLaunch => "Prelaunch",
-        _ => "The requested node is an unknown node type",
     }
 }
 
@@ -207,6 +244,13 @@ impl BlockchainItemMeta {
         match self {
             Self::Block { .. } => BlockchainItemType::Block,
             Self::Tx { .. } => BlockchainItemType::Tx,
+        }
+    }
+
+    pub fn block_num(&self) -> u64 {
+        match self {
+            Self::Block { block_num, .. } => *block_num,
+            Self::Tx { block_num, .. } => *block_num,
         }
     }
 }
@@ -280,30 +324,13 @@ pub enum CommMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum StorageRequest {
-    GetBlockchainItem {
-        key: String,
-    },
-    SendBlockchainItem {
-        key: String,
-        item: BlockchainItem,
-    },
-    GetHistory {
-        start_time: u64,
-        end_time: u64,
-    },
-    GetUnicornTable {
-        n_last_items: Option<u64>,
-    },
-    SendPow {
-        pow: ProofOfWork,
-    },
-    SendBlock {
-        common: CommonBlockInfo,
-        mined_info: MinedBlockExtraInfo,
-    },
-    Store {
-        incoming_contract: Contract,
-    },
+    GetBlockchainItem { key: String },
+    SendBlockchainItem { key: String, item: BlockchainItem },
+    GetHistory { start_time: u64, end_time: u64 },
+    GetUnicornTable { n_last_items: Option<u64> },
+    SendPow { pow: ProofOfWork },
+    SendBlock { mined_block: Option<MinedBlock> },
+    Store { incoming_contract: Contract },
     Closing,
     SendRaftCmd(RaftMessageWrapper),
 }
@@ -313,21 +340,13 @@ impl fmt::Debug for StorageRequest {
         use StorageRequest::*;
 
         match *self {
-            GetBlockchainItem { ref key } => write!(f, "GetBlockchainItem"),
-            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
-            GetHistory {
-                ref start_time,
-                ref end_time,
-            } => write!(f, "GetHistory"),
-            GetUnicornTable { ref n_last_items } => write!(f, "GetUnicornTable"),
-            SendPow { ref pow } => write!(f, "SendPoW"),
-            SendBlock {
-                ref common,
-                ref mined_info,
-            } => write!(f, "SendBlock"),
-            Store {
-                ref incoming_contract,
-            } => write!(f, "Store"),
+            GetBlockchainItem { .. } => write!(f, "GetBlockchainItem"),
+            SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
+            GetHistory { .. } => write!(f, "GetHistory"),
+            GetUnicornTable { .. } => write!(f, "GetUnicornTable"),
+            SendPow { .. } => write!(f, "SendPoW"),
+            SendBlock { .. } => write!(f, "SendBlock"),
+            Store { .. } => write!(f, "Store"),
             Closing => write!(f, "Closing"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
@@ -397,15 +416,12 @@ pub trait StorageInterface {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
     SendBlock {
-        block: Vec<u8>,
+        block: BlockHeader,
         reward: TokenAmount,
     },
     SendRandomNum {
         rnum: Vec<u8>,
         win_coinbases: Vec<String>,
-    },
-    SendPartitionList {
-        p_list: Vec<ProofOfWork>,
     },
     SendBlockchainItem {
         key: String,
@@ -422,19 +438,10 @@ impl fmt::Debug for MineRequest {
         use MineRequest::*;
 
         match *self {
-            SendBlockchainItem { ref key, ref item } => write!(f, "SendBlockchainItem"),
-            SendBlock {
-                ref block,
-                ref reward,
-            } => write!(f, "SendBlock"),
-            SendRandomNum {
-                ref rnum,
-                ref win_coinbases,
-            } => write!(f, "SendRandomNum"),
-            SendPartitionList { ref p_list } => write!(f, "SendPartitionList"),
-            SendTransactions {
-                ref tx_merkle_verification,
-            } => write!(f, "SendTransactions"),
+            SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
+            SendBlock { .. } => write!(f, "SendBlock"),
+            SendRandomNum { .. } => write!(f, "SendRandomNum"),
+            SendTransactions { .. } => write!(f, "SendTransactions"),
             Closing => write!(f, "Closing"),
         }
     }
@@ -459,6 +466,7 @@ pub trait MinerInterface {
 ///============ COMPUTE NODE ============///
 
 // Encapsulates compute requests injected by API
+#[allow(clippy::enum_variant_names)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum ComputeApiRequest {
     SendCreateReceiptRequest {
@@ -466,6 +474,7 @@ pub enum ComputeApiRequest {
         script_public_key: String,
         public_key: String,
         signature: String,
+        drs_tx_hash_spec: DrsTxHashSpec,
     },
     SendTransactions {
         transactions: Vec<Transaction>,
@@ -479,9 +488,6 @@ pub enum ComputeRequest {
     /// Process an API internal request
     ComputeApi(ComputeApiRequest),
 
-    SendRbTransaction {
-        transaction: Transaction,
-    },
     SendUtxoRequest {
         address_list: UtxoFetchType,
     },
@@ -515,18 +521,11 @@ impl fmt::Debug for ComputeRequest {
                 write!(f, "Api::SendTransactions")
             }
 
-            SendUtxoRequest { ref address_list } => write!(f, "SendUtxoRequest"),
-            SendBlockStored(ref _info) => write!(f, "SendBlockStored"),
-            SendPoW {
-                ref block_num,
-                ref nonce,
-                ref coinbase,
-            } => write!(f, "SendPoW({})", block_num),
-            SendPartitionEntry {
-                ref partition_entry,
-            } => write!(f, "SendPartitionEntry"),
-            SendTransactions { ref transactions } => write!(f, "SendTransactions"),
-            SendRbTransaction { ref transaction } => write!(f, "SendRbTransaction"),
+            SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
+            SendBlockStored(_) => write!(f, "SendBlockStored"),
+            SendPoW { ref block_num, .. } => write!(f, "SendPoW({})", block_num),
+            SendPartitionEntry { .. } => write!(f, "SendPartitionEntry"),
+            SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
             Closing => write!(f, "Closing"),
@@ -546,13 +545,6 @@ pub trait ComputeInterface {
     /// Returns the internal service level data
     fn get_service_levels(&self) -> Response;
 
-    /// Receives transactions to be bundled into blocks
-    ///
-    /// ### Arguments
-    ///
-    /// * `transactions` - Transactions to be added into blocks.
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
-
     /// Executes a received and approved contract
     ///
     /// ### Arguments
@@ -567,8 +559,26 @@ pub trait ComputeInterface {
 pub trait ComputeApi {
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
+
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;
+
+    /// Receives transactions to be bundled into blocks
+    ///
+    /// ### Arguments
+    ///
+    /// * `transactions` - Transactions to be added into blocks.
+    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
+
+    /// Creates a new set of receipt assets
+    fn create_receipt_asset_tx(
+        &mut self,
+        receipt_amount: u64,
+        script_public_key: String,
+        public_key: String,
+        signature: String,
+        drs_tx_hash_spec: DrsTxHashSpec,
+    ) -> Result<(Transaction, String), ComputeError>;
 }
 
 ///============ USER NODE ============///
@@ -577,7 +587,10 @@ pub trait ComputeApi {
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserApiRequest {
     /// Request to generate receipt-based asset
-    SendCreateReceiptRequest { receipt_amount: u64 },
+    SendCreateReceiptRequest {
+        receipt_amount: u64,
+        drs_tx_hash_spec: DrsTxHashSpec,
+    },
 
     /// Request to fetch UTXO set and update running total for specified addresses
     UpdateWalletFromUtxoSet {
@@ -663,12 +676,15 @@ impl fmt::Debug for UserRequest {
     }
 }
 ///============ PRE-LAUNCH NODE ============///
-///
+
+/// API Debug Data Struct
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DebugData {
     pub node_type: String,
-    pub node_api: Vec<String>,
+    #[serde(borrow)]
+    pub node_api: Vec<&'static str>,
     pub node_peers: Vec<(String, SocketAddr, String)>,
+    pub routes_pow: BTreeMap<String, usize>,
 }
 
 /// Encapsulates storage requests
