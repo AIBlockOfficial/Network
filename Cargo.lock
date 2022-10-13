@@ -1143,10 +1143,6 @@ dependencies = [
  "aes-gcm-siv",
  "crunchy",
  "hex",
- "lazy_static",
- "num-bigint",
- "num-traits 0.2.14",
- "rand 0.8.5",
  "vdf",
 ]
 
