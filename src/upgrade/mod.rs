@@ -194,9 +194,10 @@ pub fn upgrade_compute_db_batch<'a>(
         {
             batch.delete_cf(column, &key);
         } else if key == compute::RAFT_KEY_RUN.as_bytes()
+            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
             || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
         {
-            // Keep modified
+            // Keep unmodified
         } else {
             return Err(key_value_error("Unexpected key", &key, &value));
         }

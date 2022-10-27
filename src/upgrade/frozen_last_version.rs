@@ -606,8 +606,8 @@ pub mod convert {
 
     pub fn convert_receipt_asset(old: old::naom::ReceiptAsset) -> ReceiptAsset {
         ReceiptAsset {
-            amount: old,
-            drs_tx_hash: Some(RECEIPT_DEFAULT_DRS_TX_HASH.to_owned()),
+            amount: old.amount,
+            drs_tx_hash: old.drs_tx_hash,
             metadata: None,
         }
     }
