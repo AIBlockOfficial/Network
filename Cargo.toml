@@ -8,6 +8,7 @@ description = "The Zenotta Network Protocol (ZNP), the network that supports the
 
 [dependencies]
 async-std = "1.7.0"
+async-trait = "0.1.58"
 async-stream = "0.3.2"
 bincode = "1.2.1"
 bytes = { version = "1.0.1", features = ["serde"] }
