@@ -2,7 +2,7 @@
 
 A repo for the development of the Zenotta Network Protocol (ZNP).
 
-**We will regularly be updating links and easter eggs inside the code. Please join us on [this link](https://us02web.zoom.us/j/82794872826?pwd=WUxiMi9VdVBtSkFSMC9rcmg0K1NHdz09) on April 6th, 10h00 CET to discuss the design of a social compute. It has a sustainable mining client which also will provide distributed compute at the infrastructure layer. The protocol layer will introduce a very novel file system, all of which feeds an application layer that can be built using APIs. We believe you've never seen anything quite like this and look forward to engaging with you in our community!**
+**We will regularly be updating links and easter eggs inside the code. Please join us on [this link](https://us02web.zoom.us/j/83251305547?pwd=SkhtYlpuV0c3K0d1a1hyby9mT1o0dz09) on April 13th, 10h00 CET to discuss the design of a social compute. It has a sustainable mining client which also will provide distributed compute at the infrastructure layer. The protocol layer will introduce a very novel file system, all of which feeds an application layer that can be built using APIs. We believe you've never seen anything quite like this and look forward to engaging with you in our community!**
 
 ..
 
