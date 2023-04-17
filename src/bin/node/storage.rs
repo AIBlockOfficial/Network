@@ -2,9 +2,9 @@
 
 use clap::{App, Arg, ArgMatches};
 use std::net::SocketAddr;
-use system::configurations::StorageNodeConfig;
-use system::StorageNode;
-use system::{
+use znp::configurations::StorageNodeConfig;
+use znp::StorageNode;
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
@@ -238,7 +238,7 @@ fn configuration(settings: config::Config) -> StorageNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

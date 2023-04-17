@@ -4,12 +4,12 @@ use clap::{App, Arg, ArgMatches};
 use config::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use system::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
-use system::{
+use znp::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
-use system::{MinerNode, UserNode};
+use znp::{MinerNode, UserNode};
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
@@ -537,7 +537,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
     type UserExpected = Option<(DbMode, Option<String>)>;

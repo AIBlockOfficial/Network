@@ -1,9 +1,9 @@
 //! App to run a pre-launch node.
 
 use clap::{App, Arg, ArgMatches};
-use system::configurations::PreLaunchNodeConfig;
-use system::PreLaunchNode;
-use system::{
+use znp::configurations::PreLaunchNodeConfig;
+use znp::PreLaunchNode;
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
     ResponseResult,
 };
@@ -166,7 +166,7 @@ fn configuration(settings: config::Config) -> PreLaunchNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::{DbMode, PreLaunchNodeType};
+    use znp::configurations::{DbMode, PreLaunchNodeType};
 
     type Expected = (DbMode, Option<String>, PreLaunchNodeType);
 

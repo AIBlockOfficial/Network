@@ -4,8 +4,8 @@ use clap::{App, Arg, ArgMatches};
 use config::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use system::configurations::UserNodeConfig;
-use system::{
+use znp::configurations::UserNodeConfig;
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult, UserNode,
 };
@@ -339,7 +339,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 
