@@ -1518,8 +1518,9 @@ dependencies = [
 
 [[package]]
 name = "naom"
-version = "1.1.2"
-source = "git+https://github.com/zenotta/naom?branch=develop#623f09d30dbe434a75a42ae2ac5ad783511ed78e"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c4d0f2f022d58fa9ea6b786d129d7a130d0ba84d5726c6697ca4be4a67b1a0d"
 dependencies = [
  "actix-rt",
  "base64",
