@@ -1,17 +1,19 @@
 use crate::active_raft::ActiveRaft;
 use crate::block_pipeline::{
-    MiningPipelineInfo, MiningPipelineItem, MiningPipelinePhaseChange, MiningPipelineStatus,
-    Participants, PipelineEventInfo,
+    MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineItem, MiningPipelinePhaseChange,
+    MiningPipelineStatus, Participants, PipelineEventInfo,
 };
 use crate::configurations::{ComputeNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, UtxoSet, WinningPoWInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
-use crate::utils::{calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed};
+use crate::utils::{
+    calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
+};
 use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
@@ -33,26 +35,41 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     columns: &[],
 };
 
+// A coordinated command sent through the RAFT to all peers
+#[derive(Default, Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+pub enum CoordinatedCommand {
+    PauseNodes {
+        b_num: u64,
+    },
+    #[default]
+    ResumeNodes,
+    ApplySharedConfig,
+}
+
 /// Item serialized into RaftData and process by Raft.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ComputeRaftItem {
     FirstBlock(BTreeMap<String, Transaction>),
     Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
     PipelineItem(MiningPipelineItem, u64),
+    CoordinatedCmd(CoordinatedCommand),
 }
 
 /// Commited item to process.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommittedItem {
     FirstBlock,
     Block,
     BlockShutdown,
     StartPhasePowIntake,
     StartPhaseHalted,
+    ResetPipeline,
     Transactions,
     Snapshot,
+    CoordinatedCmd(CoordinatedCommand),
 }
 
 impl From<MiningPipelinePhaseChange> for CommittedItem {
@@ -61,6 +78,7 @@ impl From<MiningPipelinePhaseChange> for CommittedItem {
         match other {
             StartPhasePowIntake => CommittedItem::StartPhasePowIntake,
             StartPhaseHalted => CommittedItem::StartPhaseHalted,
+            Reset => CommittedItem::ResetPipeline,
         }
     }
 }
@@ -86,7 +104,7 @@ pub enum SpecialHandling {
 /// Initial proposal state: Need both miner ready and block info ready
 #[allow(clippy::large_enum_variant)]
 #[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InitialProposal {
     PendingAll,
     PendingAuthorized,
@@ -106,36 +124,29 @@ pub struct ComputeConsensused {
     sufficient_majority: usize,
     /// Number of miners
     partition_full_size: usize,
-    /// Fixed info for unicorn generation
-    unicorn_fixed_param: UnicornFixedParam,
     /// Committed transaction pool.
     tx_pool: BTreeMap<String, Transaction>,
     /// Committed DRUID transactions.
     tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
     /// Header to use for next block if ready to generate.
     tx_current_block_previous_hash: Option<String>,
-    /// Index of the last block,
-    tx_current_block_num: Option<u64>,
-    /// Current block ready to mine (consensused).
-    current_block: Option<Block>,
-    /// All transactions present in current_block (consensused).
-    current_block_tx: BTreeMap<String, Transaction>,
     /// The very first block to consensus.
     initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
-    /// UTXO set containain the valid transaction to use as previous input hashes.
+    /// UTXO set containing the valid transaction to use as previous input hashes.
     utxo_set: TrackedUtxoSet,
     /// Accumulating block:
-    /// Require majority of compute node votes for normal blocks.
-    /// Require unanimit for first block.
+    /// Requires majority of compute node votes for normal blocks.
+    /// Requires unanimous vote for first block.
     current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+    /// Coordinated commands sent through RAFT
+    /// Requires unanimous vote
+    current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
     /// The current circulation of tokens
     current_circulation: TokenAmount,
     /// The block pipeline
     block_pipeline: MiningPipelineInfo,
-    /// The current reward for a given compute node
-    current_reward: TokenAmount,
     /// The last mining rewards.
     last_mining_transaction_hashes: Vec<String>,
     /// Special handling for processing blocks.
@@ -176,7 +187,7 @@ pub struct ComputeRaft {
     local_tx_hash_last_commited: Vec<String>,
     /// Min duration between each transaction poposal.
     propose_transactions_timeout_duration: Duration,
-    /// Timeout expiration time for transactions poposal.
+    /// Timeout expiration time for transactimining_pipeline_statusons poposal.
     propose_transactions_timeout_at: Instant,
     /// Min duration between each event in the mining pipeline.
     propose_mining_event_timeout_duration: Duration,
@@ -192,6 +203,8 @@ pub struct ComputeRaft {
     proposed_and_consensused_tx_pool_len_max: usize,
     /// No longer process commits after shutdown reached
     shutdown_no_commit_process: bool,
+    /// Check for backup needed
+    backup_check: BackupCheck,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -209,12 +222,16 @@ impl ComputeRaft {
     /// * `raft_db` - Override raft db to use.
     pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.compute_raft != 0;
+
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
+        }
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
             &config.compute_nodes,
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db),
+            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
         );
 
         let propose_transactions_timeout_duration =
@@ -240,6 +257,7 @@ impl ComputeRaft {
             item: ComputeRaftItem::FirstBlock(utxo_set),
             dedup_b_num: None,
         });
+        let backup_check = BackupCheck::new(config.backup_block_modulo);
 
         Self {
             first_raft_peer,
@@ -259,7 +277,29 @@ impl ComputeRaft {
             proposed_tx_pool_len_max: BLOCK_SIZE_IN_TX / peers_len,
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             shutdown_no_commit_process: false,
+            backup_check,
         }
+    }
+
+    /// Get the full mining partition size
+    pub fn get_compute_partition_full_size(&self) -> usize {
+        self.consensused.partition_full_size
+    }
+
+    /// Get the compute mining event timeout in MS
+    pub fn get_compute_mining_event_timeout(&self) -> usize {
+        self.propose_mining_event_timeout_duration.as_millis() as usize
+    }
+
+    /// Update the mining event timeout duration
+    pub fn update_mining_event_timeout_duration(&mut self, ms: usize) {
+        self.propose_mining_event_timeout_duration = Duration::from_millis(ms as u64);
+    }
+
+    /// Update the partition full size
+    pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
+        self.consensused
+            .update_partition_full_size(partition_full_size);
     }
 
     /// Set the key run for all proposals (load from db before first proposal).
@@ -297,6 +337,11 @@ impl ComputeRaft {
         self.raft_active.take_closed_persistent_store().await
     }
 
+    /// Extract persistent storage
+    pub async fn backup_persistent_store(&self) -> Result<(), SimpleDbError> {
+        self.raft_active.backup_persistent_store().await
+    }
+
     /// Check if we are waiting for initial state
     pub fn need_initial_state(&self) -> bool {
         !self.consensused_snapshot_applied
@@ -308,7 +353,7 @@ impl ComputeRaft {
     }
 
     /// Process result from next_commit.
-    /// Return Some CommitedItem if block to mine is ready to generate. Returns 'not implemented' if not implemented
+    /// Return Some CommittedItem if block to mine is ready to generate. Returns 'not implemented' if not implemented
     /// ### Arguments
     /// * 'raft_commit' - a RaftCommit struct from the raft.rs class to be proposed to commit.
     pub async fn received_commit(&mut self, raft_commit: RaftCommit) -> Option<CommittedItem> {
@@ -348,7 +393,7 @@ impl ComputeRaft {
             }
             debug!(
                 "apply_snapshot called self.consensused updated: tx_current_block_num({:?})",
-                self.consensused.tx_current_block_num
+                self.consensused.block_pipeline.current_block_num()
             );
             Some(CommittedItem::Snapshot)
         }
@@ -393,7 +438,7 @@ impl ComputeRaft {
                     // First block complete:
                     self.consensused.apply_ready_block_stored_info();
                     self.consensused.generate_first_block().await;
-                    self.consensused.start_participant_intake();
+                    self.consensused.start_items_intake();
                     self.set_next_propose_mining_event_timeout_at();
                     self.event_processed_generate_snapshot();
                     return Some(CommittedItem::FirstBlock);
@@ -429,7 +474,7 @@ impl ComputeRaft {
                         return Some(CommittedItem::BlockShutdown);
                     } else {
                         self.consensused.generate_block().await;
-                        self.consensused.start_participant_intake();
+                        self.consensused.start_items_intake();
                         self.set_next_propose_mining_event_timeout_at();
                         self.event_processed_generate_snapshot();
                         return Some(CommittedItem::Block);
@@ -452,7 +497,30 @@ impl ComputeRaft {
                         self.set_next_propose_mining_event_timeout_at();
                         return Some(v.into());
                     }
+                    Some(v @ MiningPipelinePhaseChange::Reset) => {
+                        let proposed_block_pipeline_keys =
+                            self.consensused.block_pipeline.get_proposed_keys();
+                        self.proposed_in_flight
+                            .remove_all_keys(proposed_block_pipeline_keys);
+                        self.consensused.block_pipeline.clear_proposed_keys();
+                        return Some(v.into());
+                    }
                     None => return None,
+                }
+            }
+            ComputeRaftItem::CoordinatedCmd(cmd) => {
+                self.consensused
+                    .append_current_coordinated_raft_cmd_stored_info(key, cmd);
+                if self
+                    .consensused
+                    .has_different_coordinated_raft_cmd_stored_info()
+                {
+                    warn!("Proposed coordinated commands are different {:?}", key);
+                }
+
+                if self.consensused.has_coordinated_raft_cmd_info_ready() {
+                    let coordinated_command = self.consensused.take_ready_coordinated_raft_cmd();
+                    return Some(CommittedItem::CoordinatedCmd(coordinated_command));
                 }
             }
         }
@@ -472,17 +540,14 @@ impl ComputeRaft {
     /// Process block generation in single step (Test only)
     pub fn test_skip_block_gen(&mut self, block: Block, block_tx: BTreeMap<String, Transaction>) {
         self.consensused.set_committed_mining_block(block, block_tx);
-        self.consensused.start_participant_intake();
+        self.consensused.start_items_intake();
     }
 
     /// Process all the mining phase in a single step (Test only)
     pub fn test_skip_mining(&mut self, winning_pow: (SocketAddr, WinningPoWInfo), seed: Vec<u8>) {
-        let block = self.consensused.current_block.as_mut().unwrap();
-        block.header.seed_value = seed;
-
         self.consensused
             .block_pipeline
-            .test_skip_mining(winning_pow)
+            .test_skip_mining(winning_pow, seed)
     }
 
     /// Blocks & waits for a next message to dispatch from a peer.
@@ -571,10 +636,59 @@ impl ComputeRaft {
         if let Some(block) = self.get_mining_block() {
             let b_num = block.header.b_num;
             let item = ComputeRaftItem::PipelineItem(item, b_num);
-            self.propose_item_dedup(&item, b_num).await.is_some()
+            if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+                self.consensused.block_pipeline.add_proposed_key(key);
+                return true;
+            }
+            false
         } else {
             false
         }
+    }
+
+    /// Clear block pipeline proposed keys
+    pub fn clear_block_pipeline_proposed_keys(&mut self) {
+        self.consensused.block_pipeline.clear_proposed_keys();
+    }
+
+    /// Flush disconnected miners from compute node
+    pub fn flush_stale_miners(&mut self, unsent_miners: &[SocketAddr]) {
+        self.consensused
+            .block_pipeline
+            .cleanup_participant_intake(unsent_miners);
+        self.consensused
+            .block_pipeline
+            .cleanup_participants_mining(unsent_miners);
+    }
+
+    /// Propose to pause nodes
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_pause_nodes(&mut self, b_num: u64) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::PauseNodes { b_num },
+        ))
+        .await;
+    }
+
+    /// Propose to resume nodes
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_resume_nodes(&mut self) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::ResumeNodes,
+        ))
+        .await;
+    }
+
+    /// Propose to apply a shared config
+    ///
+    /// NOTE: Requires a unanimous majority vote
+    pub async fn propose_apply_shared_config(&mut self) {
+        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+            CoordinatedCommand::ApplySharedConfig,
+        ))
+        .await;
     }
 
     /// Process as a result of timeout_propose_transactions.
@@ -606,7 +720,7 @@ impl ComputeRaft {
 
     /// Re-propose uncommited items relevant for current block.
     pub async fn re_propose_uncommitted_current_b_num(&mut self) {
-        if let Some(tx_current_block_num) = self.consensused.tx_current_block_num {
+        if let Some(tx_current_block_num) = self.consensused.block_pipeline.current_block_num() {
             self.proposed_in_flight
                 .re_propose_uncommitted_current_b_num(&mut self.raft_active, tx_current_block_num)
                 .await;
@@ -682,7 +796,7 @@ impl ComputeRaft {
 
     /// Gets the current reward for a given block
     pub fn get_current_reward(&self) -> &TokenAmount {
-        &self.consensused.current_reward
+        self.consensused.block_pipeline.get_current_reward()
     }
 
     /// Whether adding these will grow our pool within the limit. Returns a bool.
@@ -761,8 +875,9 @@ impl ComputeRaft {
         let (snapshot_idx, term) = self.consensused.last_committed_raft_idx_and_term;
 
         debug!("generate_snapshot: (idx: {}, term: {})", snapshot_idx, term);
+        let backup = self.need_backup();
         self.raft_active
-            .create_snapshot(snapshot_idx, consensused_ser);
+            .create_snapshot(snapshot_idx, consensused_ser, backup);
 
         if self.is_shutdown_on_commit() {
             self.shutdown_no_commit_process = true;
@@ -771,8 +886,9 @@ impl ComputeRaft {
 
     /// Ignore processing raft item out of date.
     fn set_ignore_dedeup_b_num_less_than_current(&mut self) {
-        self.proposed_in_flight
-            .ignore_dedeup_b_num_less_than(self.consensused.tx_current_block_num.unwrap());
+        self.proposed_in_flight.ignore_dedeup_b_num_less_than(
+            self.consensused.block_pipeline.current_block_num().unwrap(),
+        );
     }
 
     /// Find transactions for the current block.
@@ -785,7 +901,7 @@ impl ComputeRaft {
 
     /// Get the current consensued block num.
     pub fn get_committed_current_block_num(&self) -> Option<u64> {
-        self.consensused.tx_current_block_num
+        self.consensused.block_pipeline.current_block_num()
     }
 
     /// The mining transactions accepted for previous block
@@ -802,9 +918,23 @@ impl ComputeRaft {
     pub fn is_shutdown_commit_processed(&self) -> bool {
         self.shutdown_no_commit_process
     }
+
+    /// Get Wether backup is needed
+    pub fn need_backup(&self) -> bool {
+        if let Some(b_num) = self.get_committed_current_block_num() {
+            self.backup_check.need_backup(b_num)
+        } else {
+            false
+        }
+    }
 }
 
 impl ComputeConsensused {
+    /// Update the mining partition size
+    pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
+        self.partition_full_size = partition_full_size;
+    }
+
     /// Specify the raft group size
     pub fn with_peers_len(mut self, peers_len: usize) -> Self {
         self.unanimous_majority = peers_len;
@@ -820,19 +950,21 @@ impl ComputeConsensused {
 
     /// Specify the unicorn fixed params
     pub fn with_unicorn_fixed_param(mut self, unicorn_fixed_info: UnicornFixedInfo) -> Self {
-        self.unicorn_fixed_param = UnicornFixedParam {
-            modulus: unicorn_fixed_info.modulus,
-            iterations: unicorn_fixed_info.iterations,
-            security: unicorn_fixed_info.security,
-        };
+        self.block_pipeline = self
+            .block_pipeline
+            .with_unicorn_fixed_param(unicorn_fixed_info);
         self
     }
 
     /// Initialize block pipeline
     pub fn init_block_pipeline_status(mut self) -> Self {
-        if self.current_block.is_some() {
-            self.start_participant_intake();
-        }
+        let extra = PipelineEventInfo {
+            proposer_id: 0,
+            unanimous_majority: self.unanimous_majority,
+            sufficient_majority: self.sufficient_majority,
+            partition_full_size: self.partition_full_size,
+        };
+        self.block_pipeline = self.block_pipeline.init_block_pipeline_status(extra);
         self
     }
 
@@ -851,24 +983,26 @@ impl ComputeConsensused {
             special_handling,
         } = consensused;
 
+        let block_pipeline = MiningPipelineInfoImport {
+            unicorn_fixed_param,
+            current_block_num: tx_current_block_num,
+            current_block,
+        };
+
         Self {
             unanimous_majority,
             sufficient_majority,
             partition_full_size,
-            unicorn_fixed_param,
             tx_pool: Default::default(),
             tx_druid_pool: Default::default(),
             tx_current_block_previous_hash: Default::default(),
-            tx_current_block_num,
-            current_block,
-            current_block_tx: Default::default(),
             initial_utxo_txs: Default::default(),
             utxo_set: TrackedUtxoSet::new(utxo_set),
             current_block_stored_info: Default::default(),
+            current_raft_coordinated_cmd_stored_info: Default::default(),
             last_committed_raft_idx_and_term,
             current_circulation,
-            block_pipeline: Default::default(),
-            current_reward: Default::default(),
+            block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
             special_handling,
         }
@@ -879,13 +1013,15 @@ impl ComputeConsensused {
         self,
         special_handling: Option<SpecialHandling>,
     ) -> ComputeConsensusedImport {
+        let block_pipeline = self.block_pipeline.into_import();
+
         ComputeConsensusedImport {
             unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
-            unicorn_fixed_param: self.unicorn_fixed_param,
-            tx_current_block_num: self.tx_current_block_num,
-            current_block: self.current_block,
+            unicorn_fixed_param: block_pipeline.unicorn_fixed_param,
+            tx_current_block_num: block_pipeline.current_block_num,
+            current_block: block_pipeline.current_block,
             utxo_set: self.utxo_set.into_utxoset(),
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
@@ -909,9 +1045,8 @@ impl ComputeConsensused {
         // TODO: Roll back append and removal if block rejected by miners.
 
         self.utxo_set.extend_tracked_utxo_set(&block_tx);
-
-        self.current_block = Some(block);
-        self.current_block_tx = block_tx;
+        self.block_pipeline
+            .set_committed_mining_block(block, block_tx);
     }
 
     /// Get the participating miners for the current mining round
@@ -931,7 +1066,7 @@ impl ComputeConsensused {
 
     /// Current block to mine or being mined.
     pub fn get_mining_block(&self) -> &Option<Block> {
-        &self.current_block
+        self.block_pipeline.get_mining_block()
     }
 
     /// Current number of tokens in circulation
@@ -951,9 +1086,7 @@ impl ComputeConsensused {
 
     /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> Option<(Block, BTreeMap<String, Transaction>)> {
-        let block = std::mem::take(&mut self.current_block);
-        let block_tx = std::mem::take(&mut self.current_block_tx);
-        block.map(|b| (b, block_tx))
+        self.block_pipeline.take_mining_block()
     }
 
     /// Processes the very first block with utxo_set
@@ -1032,7 +1165,7 @@ impl ComputeConsensused {
     /// * `block`   - Block to be set to be updated
     async fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_current_block_previous_hash).unwrap();
-        let b_num = self.tx_current_block_num.unwrap();
+        let b_num = self.block_pipeline.current_block_num().unwrap();
 
         block.header.previous_hash = Some(previous_hash);
         block.header.b_num = b_num;
@@ -1052,9 +1185,9 @@ impl ComputeConsensused {
         block: &mut Block,
         block_tx: &mut BTreeMap<String, Transaction>,
     ) {
-        for hash in get_inputs_previous_out_point(txs.values()) {
+        for outpoint in get_inputs_previous_out_point(txs.values()) {
             // All previous hash in valid txs set are present and must be removed.
-            self.utxo_set.remove_tracked_utxo_entry(hash);
+            self.utxo_set.remove_tracked_utxo_entry(outpoint);
         }
         block.transactions.extend(txs.keys().cloned());
         block_tx.append(&mut txs);
@@ -1091,7 +1224,7 @@ impl ComputeConsensused {
 
     /// Check if computing the first block.
     pub fn is_first_block(&self) -> bool {
-        self.tx_current_block_num.is_none()
+        self.block_pipeline.current_block_num().is_none()
     }
 
     /// Check if computing the given block.
@@ -1099,16 +1232,26 @@ impl ComputeConsensused {
     ///
     /// * `block_num`   - u64 sequence number for the block to be checked
     pub fn is_current_block(&self, block_num: u64) -> bool {
-        if let Some(tx_current_block_num) = self.tx_current_block_num {
+        if let Some(tx_current_block_num) = self.block_pipeline.current_block_num() {
             block_num == tx_current_block_num
         } else {
             false
         }
     }
 
+    /// Check if we have inconsistent votes for a coordinated RAFT command
+    pub fn has_different_coordinated_raft_cmd_stored_info(&self) -> bool {
+        self.current_raft_coordinated_cmd_stored_info.len() > 1
+    }
+
     /// Check if we have inconsistent votes for the current block stored info.
     pub fn has_different_block_stored_info(&self) -> bool {
         self.current_block_stored_info.len() > 1
+    }
+
+    /// Check if we have enough votes to apply a coordinated RAFT command
+    pub fn has_coordinated_raft_cmd_info_ready(&self) -> bool {
+        self.max_agreeing_coordinated_raft_cmd_stored_info() >= self.unanimous_majority
     }
 
     /// Check if we have enough votes to apply the block stored info.
@@ -1120,6 +1263,15 @@ impl ComputeConsensused {
         };
 
         self.max_agreeing_block_stored_info() >= threshold
+    }
+
+    // Current maximum vote count for coordinated RAFT command
+    fn max_agreeing_coordinated_raft_cmd_stored_info(&self) -> usize {
+        self.current_raft_coordinated_cmd_stored_info
+            .values()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Current maximum vote count for a block stored info.
@@ -1158,6 +1310,23 @@ impl ComputeConsensused {
         self.append_current_block_stored_info(key, AccumulatingBlockStoredInfo::Block(block))
     }
 
+    /// Append a vote for a coordinated RAFT command
+    ///
+    /// ### Arguments
+    ///
+    /// * `key` - RaftContextKey object
+    /// * `cmd` - The coordinated command
+    pub fn append_current_coordinated_raft_cmd_stored_info(
+        &mut self,
+        key: RaftContextKey,
+        cmd: CoordinatedCommand,
+    ) {
+        self.current_raft_coordinated_cmd_stored_info
+            .entry(cmd)
+            .or_default()
+            .insert(key.proposer_id);
+    }
+
     /// Append the given vote.
     ///
     /// ### Arguments
@@ -1181,15 +1350,11 @@ impl ComputeConsensused {
 
     /// Apply accumulated block info.
     pub fn apply_ready_block_stored_info(&mut self) {
-        // Reset block if not mined
-        self.current_block = Default::default();
-        self.current_block_tx = Default::default();
-
-        match self.take_ready_block_stored_info() {
+        let block_num = match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_circulation = get_total_coinbase_tokens(&utxo_set);
-                self.tx_current_block_num = Some(0);
                 self.initial_utxo_txs = Some(utxo_set);
+                0
             }
             AccumulatingBlockStoredInfo::Block(info) => {
                 if self.special_handling.is_none() && info.shutdown {
@@ -1202,39 +1367,53 @@ impl ComputeConsensused {
                 self.special_handling = None;
                 self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
-                self.tx_current_block_num = Some(info.block_num + 1);
                 self.utxo_set
                     .extend_tracked_utxo_set(&info.mining_transactions);
                 self.last_mining_transaction_hashes =
                     info.mining_transactions.keys().cloned().collect();
-            }
-        }
 
-        self.current_reward =
-            calculate_reward(self.current_circulation) / self.unanimous_majority as u64;
+                info.block_num + 1
+            }
+        };
+        let reward = calculate_reward(self.current_circulation) / self.unanimous_majority as u64;
+
+        self.block_pipeline
+            .apply_ready_block_stored_info(block_num, reward);
     }
 
     /// Take the block info with most vote and reset accumulator.
     fn take_ready_block_stored_info(&mut self) -> AccumulatingBlockStoredInfo {
         let infos = std::mem::take(&mut self.current_block_stored_info);
         infos
-            .into_iter()
-            .map(|(_digest, value)| value)
+            .into_values()
             .max_by_key(|(_, vote_ids)| vote_ids.len())
             .map(|(block_info, _)| block_info)
             .unwrap()
     }
 
+    /// Take the coordinated RAFT cmd info with most vote and reset accumulator.
+    fn take_ready_coordinated_raft_cmd(&mut self) -> CoordinatedCommand {
+        let infos = std::mem::take(&mut self.current_raft_coordinated_cmd_stored_info);
+        let mut coordinated_cmd = Default::default();
+        let current_max_vote: usize = Default::default();
+        for (val, votes) in infos.into_iter() {
+            if current_max_vote < votes.len() {
+                coordinated_cmd = val;
+            }
+        }
+        coordinated_cmd
+    }
+
     /// Start participants intake phase
-    pub fn start_participant_intake(&mut self) {
-        let block = self.current_block.as_mut().unwrap();
-        let tx_inputs = &block.transactions;
-        let fixed_paam = &self.unicorn_fixed_param;
-
-        self.block_pipeline.construct_unicorn(tx_inputs, fixed_paam);
-        block.header.seed_value = self.block_pipeline.get_unicorn_seed_value();
-
-        self.block_pipeline.start_participant_intake();
+    pub fn start_items_intake(&mut self) {
+        let extra = PipelineEventInfo {
+            proposer_id: 0,
+            unanimous_majority: self.unanimous_majority,
+            sufficient_majority: self.sufficient_majority,
+            partition_full_size: self.partition_full_size,
+        };
+        self.block_pipeline.construct_unicorn();
+        self.block_pipeline.start_items_intake(extra);
     }
 
     /// Handle a mining pipeline item
@@ -1245,6 +1424,7 @@ impl ComputeConsensused {
     ) -> Option<MiningPipelinePhaseChange> {
         let extra = PipelineEventInfo {
             proposer_id: key.proposer_id,
+            unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
         };
@@ -1387,7 +1567,7 @@ mod test {
             &["000311", "000312"],
             &mut BTreeMap::new(),
         ));
-        expected_unused_utxo_hashes.extend(&["000010", "000011"]);
+        expected_unused_utxo_hashes.extend(["000010", "000011"]);
         // 3. Add double spend between DRUID droplet
         // Keep first one added
         node.append_to_tx_druid_pool(valid_transaction(
@@ -1400,7 +1580,7 @@ mod test {
             &["000521", "000523"],
             &mut BTreeMap::new(),
         ));
-        expected_unused_utxo_hashes.extend(&["000021"]);
+        expected_unused_utxo_hashes.extend(["000021"]);
         // 4. Add double spend between DRUID droplet and transaction
         // Keep DRUID droplet
         node.append_to_tx_pool(valid_transaction(
@@ -1442,8 +1622,13 @@ mod test {
             .get_mining_block()
             .as_ref()
             .map(|b| b.transactions.iter().cloned().collect());
-        let actual_block_tx_t_hashes: BTreeSet<String> =
-            node.consensused.current_block_tx.keys().cloned().collect();
+        let actual_block_tx_t_hashes: BTreeSet<String> = node
+            .consensused
+            .block_pipeline
+            .get_mining_block_tx()
+            .keys()
+            .cloned()
+            .collect();
         let actual_utxo_t_hashes: BTreeSet<String> = node
             .get_committed_utxo_set()
             .keys()
@@ -1519,7 +1704,7 @@ mod test {
             collect_info(&node);
         }
 
-        node.consensused.start_participant_intake();
+        node.consensused.start_items_intake();
 
         //
         // Assert
@@ -1588,6 +1773,9 @@ mod test {
             compute_api_use_tls: true,
             compute_api_port: 3003,
             routes_pow: Default::default(),
+            backup_block_modulo: Default::default(),
+            backup_restore: Default::default(),
+            enable_trigger_messages_pipeline_reset: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

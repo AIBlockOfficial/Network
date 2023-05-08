@@ -92,15 +92,17 @@ pub enum UpgradeError {
     DbError(SimpleDbError),
     Serialization(bincode::Error),
     StringError(StringError),
+    WalletError(wallet::WalletDbError),
 }
 
 impl fmt::Display for UpgradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::DbError(err) => write!(f, "DB error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::StringError(err) => write!(f, "String error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::StringError(err) => write!(f, "String error: {err}"),
+            Self::WalletError(err) => write!(f, "Wallet error: {err}"),
         }
     }
 }
@@ -112,6 +114,7 @@ impl Error for UpgradeError {
             Self::DbError(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::StringError(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e),
         }
     }
 }
@@ -134,6 +137,12 @@ impl From<StringError> for UpgradeError {
     }
 }
 
+impl From<wallet::WalletDbError> for UpgradeError {
+    fn from(other: wallet::WalletDbError) -> Self {
+        Self::WalletError(other)
+    }
+}
+
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
 pub fn get_upgrade_compute_db(
     db_mode: DbMode,
@@ -142,8 +151,8 @@ pub fn get_upgrade_compute_db(
     let spec = &old::compute::DB_SPEC;
     let raft_spec = &old::compute_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
-    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.db, None)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db, None)?;
 
     Ok(ExtraNodeParams {
         db: Some(db),
@@ -193,8 +202,11 @@ pub fn upgrade_compute_db_batch<'a>(
             || key == old::compute::USER_NOTIFY_LIST_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
-        } else if key == compute::RAFT_KEY_RUN.as_bytes() {
-            // Keep modified
+        } else if key == compute::RAFT_KEY_RUN.as_bytes()
+            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
+            || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
+        {
+            // Keep unmodified
         } else {
             return Err(key_value_error("Unexpected key", &key, &value));
         }
@@ -240,6 +252,7 @@ pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<Extra
         if key == compute::REQUEST_LIST_KEY.as_bytes()
             || key == compute::USER_NOTIFY_LIST_KEY.as_bytes()
             || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
+            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
         } else if key == compute::RAFT_KEY_RUN.as_bytes() {
@@ -280,8 +293,8 @@ pub fn get_upgrade_storage_db(
     let spec = &old::storage::DB_SPEC;
     let raft_spec = &old::storage_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db)?;
-    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db)?;
+    let mut db = new_db_with_version(db_mode, spec, version, old_dbs.db, None)?;
+    let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db, None)?;
 
     db.upgrade_create_missing_cf(storage::DB_COL_BC_NOW)?;
     Ok(ExtraNodeParams {
@@ -331,13 +344,13 @@ pub fn upgrade_storage_db_batch<'a>(
         if key == storage::RAFT_KEY_RUN.as_bytes()
             || key == storage::LAST_CONTIGUOUS_BLOCK_KEY.as_bytes()
         {
-            // Keep modified
+            // Keep unmodified
         } else {
             return Err(key_value_error("Unexpected key", &key, &value));
         }
     }
 
-    let column = old::storage::DB_COL_BC_V0_3_0;
+    let column = old::storage::DB_COL_BC_V0_5_0;
     for (key, value) in db.iter_cf_clone(column) {
         if is_transaction_key(&key) {
             let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
@@ -456,7 +469,7 @@ fn clean_same_raft_db(
 pub fn get_upgrade_wallet_db(db_mode: DbMode, old_dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
     let spec = &old::wallet::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
-    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db)?;
+    let db = new_db_with_version(db_mode, spec, version, old_dbs.wallet_db, None)?;
     Ok(ExtraNodeParams {
         wallet_db: Some(db),
         ..Default::default()
@@ -484,7 +497,7 @@ pub fn upgrade_wallet_db_batch<'a>(
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
 
     let passphrase = upgrade_cfg.passphrase.as_bytes();
-    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase);
+    let masterkey = wallet::get_or_save_master_key_store(db, &mut batch, passphrase)?;
 
     for (key, value) in db.iter_cf_clone(DB_COL_DEFAULT) {
         if key == DB_VERSION_KEY.as_bytes() {
@@ -548,7 +561,7 @@ pub fn upgrade_same_version_wallet_db(mut dbs: ExtraNodeParams) -> Result<ExtraN
 /// whether it is a transaction key
 pub fn is_transaction_key(key: &[u8]) -> bool {
     // special genesis block transactions had 6 digits and missed prefix
-    key.get(0) == Some(&TX_PREPEND) || key.len() == 6
+    key.first() == Some(&TX_PREPEND) || key.len() == 6
 }
 
 /// Wallet AddressStore key
@@ -580,7 +593,7 @@ pub fn get_db_to_dump_no_checks(
         suffix: db_info.suffix,
         columns: &[],
     };
-    Ok(new_db_no_check_version(db_mode, &spec, old_db)?)
+    Ok(new_db_no_check_version(db_mode, &spec, old_db, None)?)
 }
 
 /// Dump the database as string
@@ -590,7 +603,7 @@ pub fn dump_db(db: &'_ SimpleDb) -> impl Iterator<Item = String> + '_ {
         .flat_map(|(c, it)| it.map(move |(k, v)| (c.clone(), k, v)))
         .map(|(c, k, v)| (c, to_u8_array_literal(&k), v))
         .map(|(c, k, v)| (c, k, to_u8_array_literal(&v)))
-        .map(|(c, k, v)| format!("\"{}\", b\"{}\", b\"{}\"", c, k, v))
+        .map(|(c, k, v)| format!("\"{c}\", b\"{k}\", b\"{v}\""))
 }
 
 /// Convert to a valid array literal displaying ASCII nicely
@@ -600,7 +613,7 @@ fn to_u8_array_literal(value: &[u8]) -> String {
         if v.is_ascii_alphanumeric() || v == &b'_' {
             result.push(*v as char);
         } else {
-            result.push_str(&format!("\\x{:02X}", v));
+            result.push_str(&format!("\\x{v:02X}"));
         }
     }
     result
@@ -610,7 +623,7 @@ fn key_value_error(info: &str, key: &[u8], value: &[u8]) -> UpgradeError {
     let log_key = to_u8_array_literal(key);
     let log_value = to_u8_array_literal(value);
 
-    let error = format!("{} \"{}\" -> \"{}\"", info, log_key, log_value);
+    let error = format!("{info} \"{log_key}\" -> \"{log_value}\"");
     error!("{}", &error);
 
     StringError(error).into()
@@ -623,7 +636,7 @@ fn tracked_deserialize<'a, T: serde::Deserialize<'a>>(
 ) -> Result<T> {
     match deserialize(value) {
         Ok(v) => Ok(v),
-        Err(e) => Err(key_value_error(&format!("{}: {:?}", tag, e), key, value)),
+        Err(e) => Err(key_value_error(&format!("{tag}: {e:?}"), key, value)),
     }
 }
 

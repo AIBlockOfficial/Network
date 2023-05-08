@@ -8,6 +8,7 @@ description = "The Zenotta Network Protocol (ZNP), the network that supports the
 
 [dependencies]
 async-std = "1.7.0"
+async-trait = "0.1.58"
 async-stream = "0.3.2"
 bincode = "1.2.1"
 bytes = { version = "1.0.1", features = ["serde"] }
@@ -20,8 +21,8 @@ hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
-naom = { version = "1.1.2" }
-keccak_prime = { path = "../keccak-prime" }
+naom = "1.2.0"
+keccak_prime = { git = "https://github.com/zenotta/keccak-prime" }
 protobuf = "~2.0"
 raft = "0.5.0"
 rand = "0.7.3"
@@ -43,6 +44,7 @@ warp = { version = "0.3.1", features = ["tls"] }
 
 [features]
 mock = []
+config_override = []
 
 [patch.crates-io]
-raft = {git =  "https://github.com/jeanphilippeD/raft-rs", branch = "0.5.1"}
+raft = { git = "https://github.com/Zenotta/raft-rs", branch = "0.5.1" }

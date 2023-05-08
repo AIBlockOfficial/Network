@@ -40,13 +40,17 @@ pub const DB_COL_BC_ALL: &str = "block_chain_all";
 pub const DB_COL_BC_NAMED: &str = "block_chain_named";
 pub const DB_COL_BC_META: &str = "block_chain_meta";
 pub const DB_COL_BC_JSON: &str = "block_chain_json";
-pub const DB_COL_BC_NOW: &str = "block_chain_v0.4.0";
+pub const DB_COL_BC_NOW: &str = "block_chain_v0.6.0";
+pub const DB_COL_BC_V0_5_0: &str = "block_chain_v0.5.0";
+pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
 pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
 pub const DB_COL_BC_V0_2_0: &str = "block_chain_v0.2.0";
 
 /// Version columns
 pub const DB_COLS_BC: &[(&str, u32)] = &[
-    (DB_COL_BC_NOW, 2),
+    (DB_COL_BC_NOW, 4),
+    (DB_COL_BC_V0_5_0, 3),
+    (DB_COL_BC_V0_4_0, 2),
     (DB_COL_BC_V0_3_0, 1),
     (DB_COL_BC_V0_2_0, 0),
 ];
@@ -63,6 +67,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         DB_COL_BC_META,
         DB_COL_BC_JSON,
         DB_COL_BC_NOW,
+        DB_COL_BC_V0_4_0,
         DB_COL_BC_V0_3_0,
         DB_COL_BC_V0_2_0,
     ],
@@ -82,10 +87,10 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::DbError(err) => write!(f, "DB error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
         }
     }
 }
@@ -160,13 +165,16 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage, false).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC, None).unwrap();
+        }
         let db = {
-            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take(), None);
             Arc::new(Mutex::new(raw_db))
         };
 
@@ -191,9 +199,14 @@ impl StorageNode {
         .load_local_db()
     }
 
+    /// Returns the storage node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the storage node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the storage node's API info
@@ -268,6 +281,16 @@ impl StorageNode {
         }
     }
 
+    /// Backup persistent dbs
+    pub async fn backup_persistent_dbs(&mut self) {
+        if self.node_raft.need_backup() {
+            let self_db = self.db.lock().unwrap();
+            if let Err(e) = self_db.file_backup() {
+                error!("Error bakup up main db: {:?}", e);
+            }
+        }
+    }
+
     /// Listens for new events from peers and handles them, processing any errors.
     pub async fn handle_next_event_response(
         &mut self,
@@ -276,6 +299,14 @@ impl StorageNode {
         debug!("Response: {:?}", response);
 
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
             Ok(Response {
                 success: true,
                 reason: "Blockchain item fetched from storage",
@@ -405,8 +436,8 @@ impl StorageNode {
                     match self.node.send(
                         addr,
                         StorageRequest::SendRaftCmd(msg)).await {
-                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
-                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
 
                 }
@@ -421,7 +452,7 @@ impl StorageNode {
                     }))
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
                 }
@@ -438,12 +469,25 @@ impl StorageNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
@@ -471,6 +515,7 @@ impl StorageNode {
                 };
                 self.node_raft
                     .event_processed_generate_snapshot(block_stored);
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block complete stored",
@@ -1115,7 +1160,7 @@ pub fn put_to_block_chain_at<K: AsRef<[u8]>, V: AsRef<[u8]>>(
 /// * `batch`   - Database writer
 /// * `pointer` - The block version pointer
 pub fn put_named_last_block_to_block_chain(batch: &mut SimpleDbWriteBatch, pointer: &[u8]) {
-    batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, &pointer);
+    batch.put_cf(DB_COL_BC_NAMED, LAST_BLOCK_HASH_KEY, pointer);
 }
 
 /// Update database with contiguous value
@@ -1149,7 +1194,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
     db: Arc<Mutex<SimpleDb>>,
     key: K,
 ) -> Option<BlockchainItem> {
-    let col_all = if key.as_ref().get(0) == Some(&NAMED_CONSTANT_PREPEND) {
+    let col_all = if key.as_ref().first() == Some(&NAMED_CONSTANT_PREPEND) {
         DB_COL_BC_NAMED
     } else {
         DB_COL_BC_ALL
@@ -1187,7 +1232,7 @@ pub fn get_stored_value_from_db<K: AsRef<[u8]>>(
 fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
     let mut r = Vec::new();
     r.extend(cf.as_bytes());
-    r.extend(&[DB_POINTER_SEPARATOR]);
+    r.extend([DB_POINTER_SEPARATOR]);
     r.extend(key.as_ref());
     r
 }
@@ -1198,7 +1243,7 @@ fn version_pointer<K: AsRef<[u8]>>(cf: &'static str, key: K) -> Vec<u8> {
 ///
 /// * `b_num`  - The block number
 pub fn indexed_block_hash_key(b_num: u64) -> String {
-    format!("{}{:016x}", INDEXED_BLOCK_HASH_PREFIX_KEY, b_num)
+    format!("{INDEXED_BLOCK_HASH_PREFIX_KEY}{b_num:016x}")
 }
 
 /// The key for indexed block
@@ -1208,10 +1253,7 @@ pub fn indexed_block_hash_key(b_num: u64) -> String {
 /// * `b_num`  - The block number
 /// * `tx_num` - The transaction index in the block
 pub fn indexed_tx_hash_key(b_num: u64, tx_num: u32) -> String {
-    format!(
-        "{}{:016x}_{:08x}",
-        INDEXED_TX_HASH_PREFIX_KEY, b_num, tx_num
-    )
+    format!("{INDEXED_TX_HASH_PREFIX_KEY}{b_num:016x}_{tx_num:08x}")
 }
 
 /// Decodes a version pointer

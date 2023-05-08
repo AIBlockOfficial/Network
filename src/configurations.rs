@@ -1,7 +1,7 @@
-use crate::db_utils::SimpleDb;
+use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::wallet::WalletDb;
 use naom::primitives::asset::TokenAmount;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
@@ -50,7 +50,7 @@ impl fmt::Debug for TlsSpec {
 }
 
 /// Configuration info for unicorn
-#[derive(Default, Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnicornFixedInfo {
     /// UNICORN modulus number
     pub modulus: String,
@@ -86,8 +86,9 @@ pub struct WalletTxSpec {
 }
 
 /// Configuration info for a database
-#[derive(Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
 pub enum DbMode {
+    #[default]
     Live,
     Test(usize),
     InMemory,
@@ -103,7 +104,7 @@ pub struct ComputeNodeConfig {
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// Initial API keys
-    pub api_keys: Vec<String>,
+    pub api_keys: BTreeMap<String, Vec<String>>,
     /// Configuation for unicorn
     pub compute_unicorn_fixed_param: UnicornFixedInfo,
     /// All compute nodes addresses
@@ -138,6 +139,21 @@ pub struct ComputeNodeConfig {
     pub sanction_list: Vec<String>,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
+    /// Restore backup if true
+    pub backup_restore: Option<bool>,
+    /// Enable trigger messages to reset the pipeline when it gets stuck
+    pub enable_trigger_messages_pipeline_reset: Option<bool>,
+}
+
+/// Configuration option for a compute node that can be shared across peers
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+pub struct ComputeNodeSharedConfig {
+    /// Timeout duration between mining event pipelines
+    pub compute_mining_event_timeout: usize,
+    /// Partition full size
+    pub compute_partition_full_size: usize,
 }
 
 /// Configuration option for a storage node
@@ -150,13 +166,11 @@ pub struct StorageNodeConfig {
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// Initial API keys
-    pub api_keys: Vec<String>,
+    pub api_keys: BTreeMap<String, Vec<String>>,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
-    /// All user nodes addresses
-    pub user_nodes: Vec<NodeSpec>,
     /// Whether storage node will use raft or act independently (0)
     pub storage_raft: usize,
     /// API port
@@ -169,31 +183,27 @@ pub struct StorageNodeConfig {
     pub storage_catchup_duration: usize,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
+    /// Restore backup if true
+    pub backup_restore: Option<bool>,
 }
 
 /// Configuration option for a storage node
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinerNodeConfig {
-    /// Index of the current node in miner_nodes
-    pub miner_node_idx: usize,
+    /// Socket Address of this miner node
+    pub miner_address: SocketAddr,
     /// Use specific database
     pub miner_db_mode: DbMode,
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// Initial API keys
-    pub api_keys: Vec<String>,
+    pub api_keys: BTreeMap<String, Vec<String>>,
     /// Index of the compute node to use in compute_nodes
     pub miner_compute_node_idx: usize,
-    /// Index of the storage node to use in storage_nodes
-    pub miner_storage_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
-    /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
-    /// All miner nodes addresses
-    pub miner_nodes: Vec<NodeSpec>,
-    /// All user nodes addresses
-    pub user_nodes: Vec<NodeSpec>,
     /// API port
     pub miner_api_port: u16,
     /// API use TLS
@@ -202,37 +212,31 @@ pub struct MinerNodeConfig {
     pub passphrase: Option<String>,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
 }
 
 /// Configuration option for a user node
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserNodeConfig {
-    /// Index of the current node in user_addrs
-    pub user_node_idx: usize,
+    /// Socket Address of this User node
+    pub user_address: SocketAddr,
     /// Use specific database
     pub user_db_mode: DbMode,
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// Initial API keys
-    pub api_keys: Vec<String>,
+    pub api_keys: BTreeMap<String, Vec<String>>,
     /// Index of the compute node to use in compute_nodes
     pub user_compute_node_idx: usize,
-    /// Peer node index in user_nodes
-    pub peer_user_node_idx: usize,
     /// All compute nodes addresses
     pub compute_nodes: Vec<NodeSpec>,
-    /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
-    /// All miner nodes addresses
-    pub miner_nodes: Vec<NodeSpec>,
-    /// All peer user nodes addresses
-    pub user_nodes: Vec<NodeSpec>,
     /// API port
     pub user_api_port: u16,
     /// API use TLS
     pub user_api_use_tls: bool,
     /// Wallet seeds
-    pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
+    pub user_wallet_seeds: Vec<WalletTxSpec>,
     /// Option of the passphrase used for encryption
     pub passphrase: Option<String>,
     /// Will donate amount to all unkown incomming payment request.
@@ -242,6 +246,8 @@ pub struct UserNodeConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
     // Routes that require PoW validation and their corresponding difficulties
     pub routes_pow: BTreeMap<String, usize>,
+    /// Backup block that given modulo result in 0
+    pub backup_block_modulo: Option<u64>,
 }
 
 /// Configuration option for a pre-launch node
@@ -276,7 +282,7 @@ pub enum PreLaunchNodeType {
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct UserAutoGenTxSetup {
     /// Transaction seeds, for each users
-    pub user_initial_transactions: Vec<Vec<WalletTxSpec>>,
+    pub user_initial_transactions: Vec<WalletTxSpec>,
     /// How many transaction to group in each requests
     pub user_setup_tx_chunk_size: Option<usize>,
     /// How many TxIn to have for each transactions
@@ -292,6 +298,8 @@ pub struct ExtraNodeParams {
     pub raft_db: Option<SimpleDb>,
     pub wallet_db: Option<SimpleDb>,
     pub shared_wallet_db: Option<WalletDb>,
+    pub custom_wallet_spec: Option<CustomDbSpec>,
+    pub disable_tcp_listener: bool,
 }
 
 ///Hacky deserializer to work around deserializatio error with u128
@@ -299,5 +307,5 @@ fn deserialize_token_amount<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<TokenAmount, D::Error> {
     let value: u64 = serde::Deserialize::deserialize(deserializer)?;
-    Ok(TokenAmount(value as u64))
+    Ok(TokenAmount(value))
 }

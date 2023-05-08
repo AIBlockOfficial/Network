@@ -11,6 +11,7 @@ pub struct ApiError {
 pub enum ApiErrorType {
     Generic(String),
     InvalidPassphrase,
+    BlankPassphrase,
     InvalidRequestBody,
     CannotParseAddress,
     CannotAccessWallet,
@@ -49,8 +50,9 @@ impl warp::reject::Reject for ApiError {}
 impl std::fmt::Display for ApiErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &self {
-            ApiErrorType::Generic(message) => write!(f, "Generic error: {}", message),
+            ApiErrorType::Generic(message) => write!(f, "Generic error: {message}"),
             ApiErrorType::InvalidPassphrase => write!(f, "Invalid passphrase"),
+            ApiErrorType::BlankPassphrase => write!(f, "New passphrase cannot be blank"),
             ApiErrorType::InvalidRequestBody => write!(f, "Invalid request body"),
             ApiErrorType::CannotParseAddress => write!(f, "Cannot parse address"),
             ApiErrorType::CannotAccessWallet => write!(f, "Cannot access wallet"),

@@ -26,47 +26,78 @@ use tracing::info;
 type ExtraNodeParamsFilterMap = BTreeMap<String, ExtraNodeParamsFilter>;
 
 const WALLET_PASSWORD: &str = "TestPassword";
-const LAST_BLOCK_STORED_NUM: u64 = 6;
+const LAST_BLOCK_STORED_NUM: u64 = 15;
 const LAST_BLOCK_BLOCK_HASH: &str =
-    "b57dc8fbe539699a43af4f16c2f9293f013976571422524a492e5d5a54193b868";
-const LAST_BLOCK_STORAGE_DB_V0_3_0_INDEX: usize = 8;
-const STORAGE_DB_V0_3_0_JSON_OFFSET: usize = 29;
-const STORAGE_DB_V0_3_0_CHAIN_VS_OFFSET: usize = 117;
-const STORAGE_DB_V0_3_0_INDEXES: &[(&str, usize)] = &[
-    ("nIndexedTxHashKey_0000000000000000_00000000", 0),
-    ("nIndexedTxHashKey_0000000000000000_00000001", 1),
-    ("nIndexedTxHashKey_0000000000000000_00000002", 2),
-    ("nIndexedTxHashKey_0000000000000000_00000003", 3),
-    ("nIndexedBlockHashKey_0000000000000001", 4),
-    ("nIndexedBlockHashKey_0000000000000002", 5),
-    ("nIndexedBlockHashKey_0000000000000000", 6),
-    ("nIndexedBlockHashKey_0000000000000004", 15),
-    ("nIndexedBlockHashKey_0000000000000006", 16),
-    ("nIndexedBlockHashKey_0000000000000005", 17),
-    ("nIndexedBlockHashKey_0000000000000003", 18),
-    ("nIndexedTxHashKey_0000000000000006_00000000", 19),
-    ("nIndexedTxHashKey_0000000000000005_00000000", 20),
-    ("nIndexedTxHashKey_0000000000000001_00000000", 7),
-    ("nIndexedTxHashKey_0000000000000002_00000003", 8),
-    ("nIndexedTxHashKey_0000000000000006_00000001", 21),
-    ("nIndexedTxHashKey_0000000000000002_00000000", 9),
-    ("nIndexedTxHashKey_0000000000000001_00000001", 10),
-    ("nIndexedTxHashKey_0000000000000000_00000004", 11),
-    ("nIndexedTxHashKey_0000000000000005_00000003", 22),
-    ("nIndexedTxHashKey_0000000000000003_00000000", 23),
-    ("nIndexedTxHashKey_0000000000000006_00000003", 24),
-    ("nIndexedTxHashKey_0000000000000001_00000002", 12),
-    ("nIndexedTxHashKey_0000000000000005_00000001", 25),
-    ("nIndexedTxHashKey_0000000000000004_00000000", 26),
-    ("nIndexedTxHashKey_0000000000000002_00000001", 13),
-    ("nIndexedTxHashKey_0000000000000005_00000002", 27),
-    ("nIndexedTxHashKey_0000000000000006_00000002", 28),
-    ("nIndexedTxHashKey_0000000000000002_00000002", 14),
+    "b0033c4bb16a07defbae11c484c61476efb95a73b612001566bc7914848c7876c";
+const LAST_BLOCK_STORAGE_DB_V0_5_0_INDEX: usize = 15;
+const STORAGE_DB_V0_5_0_INDEXES: &[(&str, usize, usize)] = &[
+    // (named key, json index, data index)
+    ("nIndexedBlockHashKey_0000000000000000", 68, 255),
+    ("nIndexedBlockHashKey_0000000000000001", 66, 253),
+    ("nIndexedBlockHashKey_0000000000000002", 67, 254),
+    ("nIndexedBlockHashKey_0000000000000003", 81, 267),
+    ("nIndexedBlockHashKey_0000000000000004", 78, 264),
+    ("nIndexedBlockHashKey_0000000000000005", 80, 266),
+    ("nIndexedBlockHashKey_0000000000000006", 79, 265),
+    ("nIndexedBlockHashKey_0000000000000007", 73, 280),
+    ("nIndexedBlockHashKey_0000000000000008", 75, 282),
+    ("nIndexedBlockHashKey_0000000000000009", 72, 279),
+    ("nIndexedBlockHashKey_000000000000000a", 71, 278),
+    ("nIndexedBlockHashKey_000000000000000b", 74, 281),
+    ("nIndexedBlockHashKey_000000000000000c", 77, 283),
+    ("nIndexedBlockHashKey_000000000000000d", 70, 306),
+    ("nIndexedBlockHashKey_000000000000000e", 76, 307),
+    ("nIndexedBlockHashKey_000000000000000f", 69, 305),
+    ("nIndexedTxHashKey_0000000000000000_00000000", 62, 249),
+    ("nIndexedTxHashKey_0000000000000000_00000001", 63, 250),
+    ("nIndexedTxHashKey_0000000000000000_00000002", 64, 251),
+    ("nIndexedTxHashKey_0000000000000000_00000003", 65, 252),
+    ("nIndexedTxHashKey_0000000000000000_00000004", 95, 260),
+    ("nIndexedTxHashKey_0000000000000001_00000000", 87, 256),
+    ("nIndexedTxHashKey_0000000000000001_00000001", 91, 259),
+    ("nIndexedTxHashKey_0000000000000001_00000002", 109, 261),
+    ("nIndexedTxHashKey_0000000000000002_00000000", 90, 258),
+    ("nIndexedTxHashKey_0000000000000002_00000001", 118, 262),
+    ("nIndexedTxHashKey_0000000000000002_00000002", 123, 263),
+    ("nIndexedTxHashKey_0000000000000002_00000003", 88, 257),
+    ("nIndexedTxHashKey_0000000000000003_00000000", 104, 272),
+    ("nIndexedTxHashKey_0000000000000004_00000000", 117, 275),
+    ("nIndexedTxHashKey_0000000000000005_00000000", 86, 269),
+    ("nIndexedTxHashKey_0000000000000005_00000001", 111, 274),
+    ("nIndexedTxHashKey_0000000000000005_00000002", 121, 276),
+    ("nIndexedTxHashKey_0000000000000005_00000003", 102, 271),
+    ("nIndexedTxHashKey_0000000000000006_00000000", 82, 268),
+    ("nIndexedTxHashKey_0000000000000006_00000001", 89, 270),
+    ("nIndexedTxHashKey_0000000000000006_00000002", 122, 277),
+    ("nIndexedTxHashKey_0000000000000006_00000003", 107, 273),
+    ("nIndexedTxHashKey_0000000000000007_00000000", 100, 292),
+    ("nIndexedTxHashKey_0000000000000008_00000000", 101, 293),
+    ("nIndexedTxHashKey_0000000000000008_00000001", 103, 294),
+    ("nIndexedTxHashKey_0000000000000008_00000002", 105, 295),
+    ("nIndexedTxHashKey_0000000000000008_00000003", 84, 284),
+    ("nIndexedTxHashKey_0000000000000009_00000000", 94, 288),
+    ("nIndexedTxHashKey_0000000000000009_00000001", 112, 299),
+    ("nIndexedTxHashKey_0000000000000009_00000002", 120, 304),
+    ("nIndexedTxHashKey_0000000000000009_00000003", 108, 297),
+    ("nIndexedTxHashKey_000000000000000a_00000000", 98, 290),
+    ("nIndexedTxHashKey_000000000000000a_00000001", 99, 291),
+    ("nIndexedTxHashKey_000000000000000a_00000002", 116, 303),
+    ("nIndexedTxHashKey_000000000000000a_00000003", 92, 286),
+    ("nIndexedTxHashKey_000000000000000b_00000000", 93, 287),
+    ("nIndexedTxHashKey_000000000000000b_00000001", 106, 296),
+    ("nIndexedTxHashKey_000000000000000b_00000002", 113, 300),
+    ("nIndexedTxHashKey_000000000000000b_00000003", 115, 302),
+    ("nIndexedTxHashKey_000000000000000c_00000000", 85, 285),
+    ("nIndexedTxHashKey_000000000000000c_00000001", 96, 289),
+    ("nIndexedTxHashKey_000000000000000c_00000002", 114, 301),
+    ("nIndexedTxHashKey_000000000000000c_00000003", 110, 298),
+    ("nIndexedTxHashKey_000000000000000d_00000000", 83, 308),
+    ("nIndexedTxHashKey_000000000000000e_00000000", 119, 310),
+    ("nIndexedTxHashKey_000000000000000f_00000000", 97, 309),
 ];
-const STORAGE_DB_V0_3_0_BLOCK_LEN: &[u32] = &[5, 3, 4, 1, 1, 4, 4];
-const STORAGE_DB_V0_3_0_BLOCK_VERSION: &[u32] = &[0, 0, 0, 1, 1, 1, 1];
+const STORAGE_DB_V0_5_0_BLOCK_LEN: &[u32] = &[5, 3, 4, 1, 1, 4, 4, 1, 4, 4, 4, 4, 4, 1, 1, 1];
+const STORAGE_DB_V0_5_0_BLOCK_VERSION: &[u32] = &[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3];
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
-
 const KEEP_ALL_FILTER: ExtraNodeParamsFilter = ExtraNodeParamsFilter {
     db: true,
     raft_db: true,
@@ -165,28 +196,26 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
                 let mut expected = Vec::new();
                 let mut actual = Vec::new();
                 let mut actual_indexed = Vec::new();
-                let db_v3 = tests_last_version_db::STORAGE_DB_V0_3_0;
-                for (i, (idx_k, data_i)) in STORAGE_DB_V0_3_0_INDEXES.iter().enumerate() {
-                    let (_, k, _) = db_v3[i];
-                    let json_idx = STORAGE_DB_V0_3_0_JSON_OFFSET + i;
-                    let data_v_idx = STORAGE_DB_V0_3_0_CHAIN_VS_OFFSET + data_i;
-                    let item_meta = index_meta(idx_k);
+                let db_v5 = tests_last_version_db::STORAGE_DB_V0_5_0;
+                for (idx_meta, json_idx, data_v_idx) in STORAGE_DB_V0_5_0_INDEXES.iter() {
+                    let key = db_v5[*data_v_idx].1;
+                    let item_meta = index_meta(idx_meta);
                     expected.push(Some(test_hash(BlockchainItem {
-                        version: STORAGE_DB_V0_3_0_BLOCK_VERSION[item_meta.block_num() as usize],
+                        version: STORAGE_DB_V0_5_0_BLOCK_VERSION[item_meta.block_num() as usize],
                         item_meta,
-                        key: k.to_vec(),
-                        data: db_v3[data_v_idx].2.to_vec(),
-                        data_json: db_v3[json_idx].2.to_vec(),
+                        key: key.to_vec(),
+                        data: db_v5[*data_v_idx].2.to_vec(),
+                        data_json: db_v5[*json_idx].2.to_vec(),
                     })));
-                    actual.push(storage.get_stored_value(k).map(test_hash));
-                    actual_indexed.push(storage.get_stored_value(idx_k).map(test_hash));
+                    actual.push(storage.get_stored_value(key).map(test_hash));
+                    actual_indexed.push(storage.get_stored_value(idx_meta).map(test_hash));
                 }
                 assert_eq!(actual, expected);
                 assert_eq!(actual_indexed, expected);
                 assert_eq!(storage.get_stored_values_count(), expected.len());
                 assert_eq!(
                     storage.get_stored_value(LAST_BLOCK_HASH_KEY).map(test_hash),
-                    expected[LAST_BLOCK_STORAGE_DB_V0_3_0_INDEX]
+                    expected[LAST_BLOCK_STORAGE_DB_V0_5_0_INDEX]
                 );
                 assert_eq!(
                     storage.get_last_block_stored(),
@@ -212,12 +241,12 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let miner = network.miner(name).unwrap().lock().await;
             let wallet = miner.get_wallet_db();
             let payment = wallet
-                .fetch_inputs_for_payment(Asset::token_u64(37550922))
+                .fetch_inputs_for_payment(Asset::token_u64(52571285))
                 .await
                 .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
-                (5, Asset::token_u64(37550922), 5)
+                (8, Asset::token_u64(60081467), 8)
             );
         }
     }
@@ -446,7 +475,8 @@ async fn upgrade_restart_network_common(
         }
 
         let raft_len = upgrade_cfg.raft_len;
-        let expected_count = STORAGE_DB_V0_3_0_INDEXES.len() + extra_blocks * (1 + 1);
+        let expected_count =
+            STORAGE_DB_V0_5_0_INDEXES.len() + extra_blocks * (1 + 1) /* aggregation tx */ + 1;
         assert_eq!(actual_count, vec![expected_count; raft_len]);
         assert_eq!(actual_last_bnum, vec![Some(expected_block_num); raft_len]);
     }
@@ -484,7 +514,7 @@ async fn upgrade_spend_old_tx() {
         "user1",
         "compute1",
         TokenAmount(123),
-        "payment_address".to_owned(),
+        "payment_address00000000000000000".to_owned(),
     )
     .await;
 
@@ -508,12 +538,12 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             db: Some(create_old_db(
                 &old::compute::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::COMPUTE_DB_V0_3_0,
+                tests_last_version_db::COMPUTE_DB_V0_5_0,
             )),
             raft_db: Some(create_old_db(
                 &old::compute_raft::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::COMPUTE_RAFT_DB_V0_3_0,
+                tests_last_version_db::COMPUTE_RAFT_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -521,12 +551,12 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             db: Some(create_old_db(
                 &old::storage::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_DB_V0_3_0,
+                tests_last_version_db::STORAGE_DB_V0_5_0,
             )),
             raft_db: Some(create_old_db(
                 &old::storage_raft::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::STORAGE_RAFT_DB_V0_3_0,
+                tests_last_version_db::STORAGE_RAFT_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -534,7 +564,7 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::USER_DB_V0_3_0,
+                tests_last_version_db::USER_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -542,7 +572,7 @@ fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
             wallet_db: Some(create_old_db(
                 &old::wallet::DB_SPEC,
                 info.db_mode,
-                tests_last_version_db::MINER_DB_V0_3_0,
+                tests_last_version_db::MINER_DB_V0_5_0,
             )),
             ..Default::default()
         },
@@ -560,7 +590,7 @@ async fn test_step_complete(network: Network) {
 }
 
 fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) -> SimpleDb {
-    let mut db = new_db(db_mode, spec, None);
+    let mut db = new_db(db_mode, spec, None, None);
     db.import_items(entries.iter().copied()).unwrap();
     db
 }
@@ -601,8 +631,9 @@ fn open_as_version_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     match specs {
         Specs::Db(spec, raft_spec) => {
-            let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db)?;
-            let raft_db = new_db_with_version(info.db_mode, raft_spec, version, old_dbs.raft_db)?;
+            let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db, None)?;
+            let raft_db =
+                new_db_with_version(info.db_mode, raft_spec, version, old_dbs.raft_db, None)?;
             Ok(ExtraNodeParams {
                 db: Some(db),
                 raft_db: Some(raft_db),
@@ -610,7 +641,8 @@ fn open_as_version_node_db(
             })
         }
         Specs::Wallet(spec) => {
-            let wallet_db = new_db_with_version(info.db_mode, spec, version, old_dbs.wallet_db)?;
+            let wallet_db =
+                new_db_with_version(info.db_mode, spec, version, old_dbs.wallet_db, None)?;
             Ok(ExtraNodeParams {
                 wallet_db: Some(wallet_db),
                 ..Default::default()
@@ -665,6 +697,9 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         user_test_auto_gen_setup: Default::default(),
         tls_config: get_test_tls_spec(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
+        backup_restore: Default::default(),
+        enable_pipeline_reset: Default::default(),
     }
     .with_groups(1, 1)
 }
@@ -698,9 +733,11 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
     BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
-        nonce: Vec::new(),
+        nonce: vec![
+            144, 99, 8, 30, 192, 102, 170, 185, 127, 30, 118, 20, 191, 97, 54, 170,
+        ],
         mining_transactions: std::iter::once((
-            "g801b501129674d9a0b389617665a95a".to_owned(),
+            "g5edb358984de4a7da28cf1e2ec89415".to_owned(),
             Transaction {
                 inputs: vec![TxIn {
                     previous_out: None,
@@ -709,11 +746,11 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                     },
                 }],
                 outputs: vec![TxOut {
-                    value: Asset::Token(TokenAmount(7510183)),
+                    value: Asset::Token(TokenAmount(7510181)),
                     locktime: 0,
                     drs_block_hash: None,
                     script_public_key: Some(
-                        "bdba6089d59492c9f89d9e3244fd6c38789884fde14e6192d87899a326a7415e"
+                        "3751e1e929efb493377dd7bebf68db13f38180e45ebe42cc94fe81c9cd463363"
                             .to_owned(),
                     ),
                 }],
@@ -745,7 +782,7 @@ fn get_test_auto_gen_setup(count_override: Option<usize>) -> UserAutoGenTxSetup 
     ];
 
     UserAutoGenTxSetup {
-        user_initial_transactions: vec![user1_tx],
+        user_initial_transactions: user1_tx,
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: count_override.unwrap_or(100000),
@@ -758,6 +795,8 @@ fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
         raft_db: dbs.raft_db.and_then(|v| v.in_memory()),
         wallet_db: dbs.wallet_db.and_then(|v| v.in_memory()),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 
@@ -767,6 +806,8 @@ fn filter_dbs(dbs: ExtraNodeParams, filter_dbs: &ExtraNodeParamsFilter) -> Extra
         raft_db: dbs.raft_db.filter(|_| filter_dbs.raft_db),
         wallet_db: dbs.wallet_db.filter(|_| filter_dbs.wallet_db),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 
@@ -776,6 +817,8 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
         raft_db: dbs.raft_db.as_ref().and_then(|v| v.cloned_in_memory()),
         wallet_db: dbs.wallet_db.as_ref().and_then(|v| v.cloned_in_memory()),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 
@@ -848,7 +891,7 @@ fn index_meta(v: &str) -> BlockchainItemMeta {
             let block_num = u64::from_str_radix(block_num, 16).unwrap();
             BlockchainItemMeta::Block {
                 block_num,
-                tx_len: STORAGE_DB_V0_3_0_BLOCK_LEN[block_num as usize],
+                tx_len: STORAGE_DB_V0_5_0_BLOCK_LEN[block_num as usize],
             }
         }
         (Some("nIndexedTxHashKey"), Some(block_num), Some(tx_num)) => BlockchainItemMeta::Tx {

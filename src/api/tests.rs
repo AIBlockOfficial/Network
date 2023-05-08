@@ -4,12 +4,10 @@ use crate::api::handlers::{
     EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
-use crate::api::utils::{
-    auth_request, create_new_cache, handle_rejection, ANY_API_KEY, CACHE_LIVE_TIME,
-};
+use crate::api::utils::{auth_request, create_new_cache, handle_rejection, CACHE_LIVE_TIME};
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
 use crate::compute::ComputeError;
-use crate::configurations::DbMode;
+use crate::configurations::{ComputeNodeSharedConfig, DbMode};
 use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
@@ -23,7 +21,7 @@ use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     apply_mining_tx, construct_valid_block_pow_hash, create_receipt_asset_tx_from_sig,
     decode_secret_key, generate_pow_for_block, to_api_keys, to_route_pow_infos,
-    tracing_log_try_init, validate_pow_block,
+    tracing_log_try_init, validate_pow_block, ApiKeys,
 };
 use crate::wallet::{WalletDb, WalletDbError};
 use crate::ComputeRequest;
@@ -31,7 +29,7 @@ use bincode::serialize;
 use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
 use naom::crypto::sign_ed25519::{self as sign};
 use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::block::Block;
+use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
 use naom::utils::transaction_utils::{
@@ -47,7 +45,9 @@ use warp::Filter;
 
 const COMMON_ROUTE_POW_DIFFICULTY: usize = 2;
 const COMMON_REQ_ID: &str = "2ae7bc9cba924e3cb73c0249893078d7";
-const COMMON_VALID_API_KEY: &str = "valid_api_key";
+const COMMON_VALID_API_KEY: &str = "some_key";
+const COMMON_VALID_API_KEYS: [&str; 2] = ["debug_data", COMMON_VALID_API_KEY];
+
 const COMMON_VALID_POW_NONCE: &str = "81234";
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
@@ -130,9 +130,41 @@ impl ComputeTest {
 }
 
 impl ComputeApi for ComputeTest {
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
+        Default::default()
+    }
+
+    fn pause_nodes(&mut self, _b_num: u64) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
+    fn resume_nodes(&mut self) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
+    fn send_shared_config(&mut self, _shared_config: ComputeNodeSharedConfig) -> Response {
+        let reason: &'static str = "";
+
+        Response {
+            success: true,
+            reason,
+        }
+    }
+
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         &self.utxo_set
     }
+
     fn get_pending_druid_pool(&self) -> &DruidPool {
         &self.druid_pool
     }
@@ -153,6 +185,7 @@ impl ComputeApi for ComputeTest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
         Ok(create_receipt_asset_tx_from_sig(
@@ -162,6 +195,7 @@ impl ComputeApi for ComputeTest {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata,
         )?)
     }
 }
@@ -179,17 +213,32 @@ async fn get_db_with_block() -> Arc<Mutex<SimpleDb>> {
 async fn get_wallet_db(passphrase: &str) -> WalletDb {
     let simple_db = Some(get_db_with_block_no_mutex().await);
     let passphrase = Some(passphrase.to_owned());
-    WalletDb::new(DbMode::InMemory, simple_db, passphrase)
+    WalletDb::new(DbMode::InMemory, simple_db, passphrase, None).unwrap()
 }
 
 async fn get_db_with_block_no_mutex() -> SimpleDb {
-    let tx = Transaction::new();
+    let tx = Transaction {
+        // We keep the network version here at 2 to avoid
+        // redundant changes to tests at each upgrade when
+        // rest of `Transaction` structure does not change
+        version: 2,
+        ..Default::default()
+    };
     let tx_value = serialize(&tx).unwrap();
     let tx_json = serde_json::to_vec(&tx).unwrap();
     let tx_hash = construct_tx_hash(&tx);
     let nonce = hex::decode(BLOCK_NONCE).unwrap();
 
-    let mut block = Block::new();
+    let mut block = Block {
+        header: BlockHeader {
+            // We keep the network version here at 2 to avoid
+            // redundant changes to tests at each upgrade when
+            // rest of `BlockHeader` structure does not change
+            version: 2,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     block.transactions.push(tx_hash.clone());
     block.set_txs_merkle_root_and_hash().await;
     block.header = apply_mining_tx(block.header, nonce, "test".to_string());
@@ -205,7 +254,7 @@ async fn get_db_with_block_no_mutex() -> SimpleDb {
 
     let block_to_input = StoredSerializingBlock { block };
 
-    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None);
+    let mut db = new_db(DbMode::InMemory, &DB_SPEC, None, None);
     let mut batch = db.batch_writer();
 
     // Handle block insert
@@ -321,8 +370,10 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     bind_address.set_port(port);
 
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, node_type).await.unwrap();
-    socket_address.set_port(self_node.address().port());
+    let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
+        .await
+        .unwrap();
+    socket_address.set_port(self_node.local_address().port());
     (self_node, socket_address)
 }
 
@@ -342,7 +393,7 @@ async fn test_get_latest_block() {
         .method("GET")
         .header("x-request-id", COMMON_REQ_ID)
         .path("/latest_block");
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::latest_block(&mut dp(), db, Default::default(), ks, cache)
@@ -378,7 +429,7 @@ async fn test_get_export_keypairs() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::export_keypairs(&mut dp(), db, Default::default(), ks, cache)
@@ -401,7 +452,11 @@ async fn test_get_user_debug_data() {
     // Arrange
     //
     let db = get_wallet_db("").await;
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -412,7 +467,7 @@ async fn test_get_user_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -445,7 +500,11 @@ async fn test_get_storage_debug_data() {
     // Arrange
     //
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -456,7 +515,7 @@ async fn test_get_storage_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -469,7 +528,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"transactions_by_key\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -489,7 +548,11 @@ async fn test_get_compute_debug_data() {
     // Arrange
     //
     let compute = ComputeTest::new(vec![]);
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -500,7 +563,7 @@ async fn test_get_compute_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -522,7 +585,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -543,7 +606,11 @@ async fn test_get_miner_debug_data() {
     //
     let db = get_wallet_db("").await;
     let current_block = Default::default();
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
     self_node.connect_to(c_socket).await.unwrap();
@@ -554,7 +621,7 @@ async fn test_get_miner_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -589,7 +656,11 @@ async fn test_get_miner_with_user_debug_data() {
     //
     let db = get_wallet_db("").await;
     let current_block = Default::default();
-    let ks = to_api_keys(vec!["key".to_owned()]);
+    let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
+    ks.lock().unwrap().insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
     let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
@@ -603,7 +674,7 @@ async fn test_get_miner_with_user_debug_data() {
             .header("x-request-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
-    let request_x_api = || request().header("x-api-key", "key");
+    let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
 
     //
     // Act
@@ -637,14 +708,14 @@ async fn test_get_miner_with_user_debug_data() {
 // Authorize a request where no proof-of-work or API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_no_pow_with_no_api_key() {
-    auth_request_common((ANY_API_KEY, ""), None, true).await;
+    auth_request_common((Default::default(), COMMON_VALID_API_KEY), None, true).await;
 }
 
 // Authorize a request where proof-of-work IS required BUT no API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_no_api_key() {
     auth_request_common(
-        (ANY_API_KEY, ""),
+        (Default::default(), COMMON_VALID_API_KEY),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         true,
     )
@@ -654,14 +725,24 @@ async fn auth_request_pow_with_no_api_key() {
 // Authorize a request where NO proof-of-work is required BUT a valid API key is required
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_no_pow_with_api_key() {
-    auth_request_common((COMMON_VALID_API_KEY, COMMON_VALID_API_KEY), None, true).await;
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
+    auth_request_common((api_keys, COMMON_VALID_API_KEY), None, true).await;
 }
 
 // Authorize a request where valid proof of work is required AND a valid API key
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_api_key() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
-        (COMMON_VALID_API_KEY, COMMON_VALID_API_KEY),
+        (api_keys, COMMON_VALID_API_KEY),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         true,
     )
@@ -672,8 +753,13 @@ async fn auth_request_pow_with_api_key() {
 // , but the provided nonce for PoW is invalid
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_invalid_pow_with_api_key_failure() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
-        (COMMON_VALID_API_KEY, COMMON_VALID_API_KEY),
+        (api_keys, COMMON_VALID_API_KEY),
         /* Invalid nonce value */
         Some((COMMON_ROUTE_POW_DIFFICULTY, "99999")),
         false,
@@ -685,9 +771,14 @@ async fn auth_request_invalid_pow_with_api_key_failure() {
 // , but the provided API key is invalid
 #[tokio::test(flavor = "current_thread")]
 async fn auth_request_pow_with_invalid_api_key_failure() {
+    let mut api_keys = BTreeMap::new();
+    api_keys.insert(
+        COMMON_VALID_API_KEYS[0].to_string(),
+        vec![COMMON_VALID_API_KEYS[1].to_string()],
+    );
     auth_request_common(
         /* Invalid API key */
-        (COMMON_VALID_API_KEY, "invalid_api_key"),
+        (api_keys, "invalid_api_key"),
         Some((COMMON_ROUTE_POW_DIFFICULTY, COMMON_VALID_POW_NONCE)),
         false,
     )
@@ -695,7 +786,7 @@ async fn auth_request_pow_with_invalid_api_key_failure() {
 }
 
 async fn auth_request_common(
-    api_keys_and_key: (&str, &str),
+    api_key_and_keys: (BTreeMap<String, Vec<String>>, &str),
     difficulty_and_nonce: Option<(usize, &str)>,
     authorization_success: bool,
 ) {
@@ -712,10 +803,7 @@ async fn auth_request_common(
             .collect(),
     );
     let nonce = difficulty_and_nonce.map(|(_, n)| n).unwrap_or_default();
-    let (api_keys, api_key) = (
-        to_api_keys(vec![api_keys_and_key.0.to_owned()]),
-        api_keys_and_key.1,
-    );
+    let (api_keys, api_key) = (to_api_keys(api_key_and_keys.0), api_key_and_keys.1);
 
     let request = || {
         warp::test::request()
@@ -792,7 +880,7 @@ async fn test_get_wallet_info() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
     let res = request.reply(&filter).await;
@@ -806,6 +894,141 @@ async fn test_get_wallet_info() {
 
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
     assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+}
+
+/// Test GET shared config for compute node
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_shared_config() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("GET")
+        .path("/get_shared_config")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID);
+
+    //
+    // Act
+    //
+    let filter = routes::get_shared_config(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"compute_mining_event_timeout\":0,\"compute_partition_full_size\":0}}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_pagination() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("").await;
+    let mut fund_store = db.get_fund_store();
+    fund_store.add_transaction_pages();
+
+    for i in 0..100 {
+        let out_point = OutPoint::new("tx_hash".to_string() + &i.to_string(), 0);
+        let asset = Asset::token_u64(11);
+        fund_store.store_tx(out_point.clone(), asset.clone());
+
+        db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
+            .await;
+
+        db.save_transaction_to_wallet(out_point, "public_address".to_string())
+            .await
+            .unwrap();
+    }
+
+    let request = warp::test::request()
+        .method("GET")
+        .header("x-request-id", COMMON_REQ_ID)
+        .path("/wallet_info/1");
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+
+    //
+    // Act
+    //
+    let ks = to_api_keys(Default::default());
+    let filter =
+        routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_pagination_zero_or_terminal() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("").await;
+    let mut fund_store = db.get_fund_store();
+
+    for i in 0..100 {
+        let out_point = OutPoint::new("tx_hash".to_string() + &i.to_string(), 0);
+        let asset = Asset::token_u64(11);
+        fund_store.store_tx(out_point.clone(), asset.clone());
+
+        db.set_db_value(FUND_KEY, serialize(&fund_store).unwrap())
+            .await;
+
+        db.save_transaction_to_wallet(out_point, "public_address".to_string())
+            .await
+            .unwrap();
+    }
+
+    let request = warp::test::request()
+        .method("GET")
+        .header("x-request-id", COMMON_REQ_ID)
+        .path("/wallet_info/-10");
+
+    let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
+    let request_terminal = warp::test::request()
+        .method("GET")
+        .header("x-request-id", com_req_id_plus_1)
+        .path("/wallet_info/999");
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+
+    //
+    // Act
+    //
+    let ks = to_api_keys(Default::default());
+    let filter =
+        routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
+    let res = request.reply(&filter).await;
+    let r_s = request_terminal.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash0\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash1\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash10\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash11\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash12\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash13\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash14\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash15\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash16\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash17\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash18\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash19\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash2\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash20\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash21\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash22\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash23\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash24\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash3\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash4\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash5\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash50\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash51\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash52\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash53\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash54\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash55\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash56\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash57\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash58\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash59\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash6\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash60\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash61\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash62\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash63\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash64\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash65\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash66\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash67\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash68\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash69\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash7\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash70\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash71\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash72\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash73\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash74\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash8\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash9\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+
+    assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 /// Test cache
@@ -854,7 +1077,7 @@ async fn test_cache() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
 
     let filter =
         routes::wallet_info(&mut dp(), db, Default::default(), ks, cache).recover(handle_rejection);
@@ -907,14 +1130,14 @@ async fn test_get_payment_address() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::payment_address(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
     let res = request.reply(&filter).await;
     let store_address = db.get_known_addresses().pop().unwrap();
-    let expected = format!("{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"New payment address generated\",\"route\":\"payment_address\",\"content\":\"{}\"}}", store_address);
+    let expected = format!("{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"New payment address generated\",\"route\":\"payment_address\",\"content\":\"{store_address}\"}}");
 
     //
     // Assert
@@ -947,7 +1170,7 @@ async fn test_get_utxo_set_addresses() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::utxo_addresses(
@@ -1050,7 +1273,7 @@ async fn test_post_blockchain_entry_by_key(
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::blockchain_entry_by_key(&mut dp(), db, Default::default(), ks, cache)
@@ -1074,7 +1297,7 @@ async fn test_post_block_info_by_nums() {
     let _ = tracing_log_try_init();
 
     let db = get_db_with_block().await;
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::block_by_num(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1095,6 +1318,35 @@ async fn test_post_block_info_by_nums() {
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers(), &headers);
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"block_by_num\",\"content\":[[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}],[\"\",\"\"],[\"b0004e829238707b7a600a95d3089e320448f706c2c7f6b0427201cc384c7fbfc\",{\"block\":{\"header\":{\"version\":2,\"bits\":0,\"nonce_and_mining_tx_hash\":[[120,12,5,128,106,59,112,177,92,150,115,57,97,113,103,79],\"test\"],\"b_num\":0,\"seed_value\":[],\"previous_hash\":null,\"txs_merkle_root_and_hash\":[\"42fbcc73bc0eeb41a991a32a6f6e145d1d45b2738657db5b4781d1fa707693cf\",\"35260a02627ae9d586dbb9f11de79afd46d1096f41ffb6b9ee88cca6b78bf374\"]},\"transactions\":[\"g98d0ab9304ca82f098a86ad6251803b\"]}}]]}");
+}
+
+/// Test POST for get transactions info by tx_hash
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_transactions_by_key() {
+    let _ = tracing_log_try_init();
+
+    let db = get_db_with_block().await;
+    let ks = to_api_keys(Default::default());
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::transactions_by_key(&mut dp(), db, Default::default(), ks, cache)
+        .recover(handle_rejection);
+
+    let res = warp::test::request()
+        .method("POST")
+        .path("/transactions_by_key")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&vec!["g98d0ab9304ca82f098a86ad6251803b".to_string()])
+        .reply(&filter)
+        .await;
+
+    // Header to match
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers(), &headers);
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"transactions_by_key\",\"content\":[[\"g98d0ab9304ca82f098a86ad6251803b\",{\"inputs\":[],\"outputs\":[],\"version\":2,\"druid_info\":null}]]}");
 }
 
 /// Test POST make payment
@@ -1125,7 +1377,7 @@ async fn test_post_make_payment() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::make_payment(
         &mut dp(),
@@ -1142,7 +1394,7 @@ async fn test_post_make_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":{\"Token\":25},\"metadata\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
     let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
@@ -1177,7 +1429,7 @@ async fn test_post_make_ip_payment() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::make_ip_payment(
@@ -1195,7 +1447,7 @@ async fn test_post_make_ip_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"metadata\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
     let (payment_peer, amount) = (
@@ -1269,7 +1521,7 @@ async fn test_address_construction() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::address_construction(&mut dp(), Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1316,7 +1568,7 @@ async fn test_post_request_donation() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter =
@@ -1348,7 +1600,7 @@ async fn test_post_import_keypairs_success() {
         COMMON_ADDR_STORE.1.to_vec(),
     );
     let imported_addresses = Addresses { addresses };
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks, cache)
@@ -1397,7 +1649,7 @@ async fn test_post_fetch_balance() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_balance(
@@ -1444,7 +1696,7 @@ async fn test_post_fetch_pending() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::fetch_pending(
@@ -1465,7 +1717,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g516cfd7114fd17c150165e3e6cedcd7\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\"}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"gb38bbea4d95f1419f794aaed49b0d82\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":2,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\"}}}]}}}}}}");
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g108cb8683f0f669686db8621a893f80\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}},\"g58c513f4120d172c5fa4faeb836435f\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":4,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1492,7 +1744,7 @@ async fn test_post_update_running_total() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter =
@@ -1575,7 +1827,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_transactions(
@@ -1593,9 +1845,15 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Assert
     //
+    let expected_response_body = match address_version {
+        Some(NETWORK_VERSION_V0) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g13b6549a078915299a6081f54f0baa8\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        Some(NETWORK_VERSION_TEMP) => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"gf171a06123a55797394de71faa8bb47\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        None => "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"g52f00edbab20a75dc235ca1d68cf1bf\":[\"0008536e3d5a13e347262b5023963000\",{\"asset\":{\"Token\":1},\"extra_info\":null}]}}",
+        _ => Default::default()
+    };
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
-        (success_json(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) processing\",\"route\":\"create_transactions\",\"content\":{\"0008536e3d5a13e347262b5023963000\":{\"asset\":{\"Token\":1},\"metadata\":null}}}")
+        (success_json(), expected_response_body)
     );
 }
 
@@ -1609,7 +1867,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     let compute = ComputeTest::new(Vec::new());
 
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, None));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -1619,6 +1877,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: None,
     };
 
     let request = warp::test::request()
@@ -1630,7 +1889,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::create_receipt_asset(
@@ -1649,7 +1908,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":{\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\"}},\"metadata\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":{\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
 }
 
 /// Test POST create receipt asset on user node successfully
@@ -1665,6 +1924,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
@@ -1677,7 +1937,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_receipt_asset_user(
         &mut dp(),
@@ -1699,6 +1959,7 @@ async fn test_post_create_receipt_asset_tx_user() {
     let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount: json_body.receipt_amount,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: json_body.metadata,
     });
 
     let actual_frame = next_event_frame(&mut self_node).await;
@@ -1718,6 +1979,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     let json_body = CreateReceiptAssetDataUser {
         receipt_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
+        metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
@@ -1729,7 +1991,7 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_receipt_asset(
         &mut dp(),
@@ -1759,7 +2021,7 @@ async fn test_post_change_passphrase() {
     //
     // Arrange
     //
-    let db = get_wallet_db("old_passphrase").await;
+    let mut db = get_wallet_db("old_passphrase").await;
     let (payment_address, expected_address_store) = db.generate_payment_address().await;
 
     let json_body = ChangePassphraseData {
@@ -1776,7 +2038,7 @@ async fn test_post_change_passphrase() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
@@ -1793,7 +2055,7 @@ async fn test_post_change_passphrase() {
         "Not able to decrypt addresses stored in WalletDb"
     );
 
-    assert!(matches!(actual, Ok(())), "{:?}", actual);
+    assert!(matches!(actual, Ok(())), "{}", "{actual:?}");
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Passphrase changed successfully\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
@@ -1821,7 +2083,7 @@ async fn test_post_change_passphrase_failure() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1833,14 +2095,59 @@ async fn test_post_change_passphrase_failure() {
     //
     assert!(
         matches!(actual, Err(WalletDbError::PassphraseError)),
-        "{:?}",
-        actual
+        "{}",
+        "{actual:?}"
     );
     assert_eq!(
         (res.status(), res.headers().clone()),
         fail_json(StatusCode::UNAUTHORIZED)
     ); // TODO: Convert to fail_json
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Error\",\"reason\":\"Invalid passphrase\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
+}
+
+/// Test POST change blank passphrase failure
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_change_blank_passphrase_failure() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let db = get_wallet_db("old_passphrase").await;
+    let json_body = ChangePassphraseData {
+        old_passphrase: String::from("old_passphrase"),
+        new_passphrase: String::from(""),
+    };
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/change_passphrase")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&json_body.clone());
+    //
+    // Act
+    //
+    let ks = to_api_keys(Default::default());
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+    let filter = routes::change_passphrase(&mut dp(), db.clone(), Default::default(), ks, cache)
+        .recover(handle_rejection);
+    let actual = db.test_passphrase(String::from("")).await;
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    assert!(
+        matches!(actual, Err(WalletDbError::PassphraseError)),
+        "{}",
+        "{actual:?}"
+    );
+    assert_eq!(
+        (res.status(), res.headers().clone()),
+        fail_json(StatusCode::UNAUTHORIZED)
+    );
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Error\",\"reason\":\"New passphrase cannot be blank\",\"route\":\"change_passphrase\",\"content\":\"null\"}");
 }
 
 /// Test POST fetch block hashes for blocks that contain given `tx_hashes`
@@ -1862,7 +2169,7 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     // Act
     //
-    let ks = to_api_keys(vec![ANY_API_KEY.to_owned()]);
+    let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::blocks_by_tx_hashes(&mut dp(), db, Default::default(), ks, cache)
         .recover(handle_rejection);
@@ -1873,4 +2180,121 @@ async fn test_post_block_nums_by_tx_hashes() {
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Database item(s) successfully retrieved\",\"route\":\"check_transaction_presence\",\"content\":[]}");
+}
+
+/// Test POST pause nodes
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_pause_nodes() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/pause_nodes")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&1_u64);
+
+    //
+    // Act
+    //
+    let filter = routes::pause_nodes(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"pause_nodes\",\"content\":\"null\"}");
+}
+
+/// Test POST resume nodes
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_resume_nodes() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/resume_nodes")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID);
+
+    //
+    // Act
+    //
+    let filter = routes::resume_nodes(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"resume_nodes\",\"content\":\"null\"}");
+}
+
+/// Test POST update shared config
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_update_shared_config() {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let shared_config_body = ComputeNodeSharedConfig {
+        compute_mining_event_timeout: 10000,
+        compute_partition_full_size: 5,
+    };
+    let compute = ComputeTest::new(Default::default());
+    let request = warp::test::request()
+        .method("POST")
+        .path("/update_shared_config")
+        .header("Content-Type", "application/json")
+        .header("x-request-id", COMMON_REQ_ID)
+        .json(&shared_config_body);
+
+    //
+    // Act
+    //
+    let filter = routes::update_shared_config(
+        &mut dp(),
+        compute.threaded_calls.tx.clone(),
+        Default::default(),
+        Default::default(),
+        create_new_cache(CACHE_LIVE_TIME),
+    )
+    .recover(handle_rejection);
+    let handle = compute.spawn();
+    let res = request.reply(&filter).await;
+    let _ = handle.await;
+
+    //
+    // Assert
+    //
+    assert_eq!((res.status(), res.headers().clone()), success_json());
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"\",\"route\":\"update_shared_config\",\"content\":\"null\"}");
 }

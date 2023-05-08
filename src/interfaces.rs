@@ -1,4 +1,5 @@
 use crate::compute::ComputeError;
+use crate::configurations::ComputeNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
@@ -12,7 +13,7 @@ use naom::primitives::transaction::{DrsTxHashSpec, TxIn};
 use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use rug::Integer;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 
@@ -78,7 +79,7 @@ pub struct RbPaymentResponseData {
 }
 
 /// A placeholder struct for sensible feedback
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub success: bool,
     pub reason: &'static str,
@@ -124,6 +125,13 @@ pub struct BlockStoredInfo {
     pub nonce: Vec<u8>,
     pub mining_transactions: BTreeMap<String, Transaction>,
     pub shutdown: bool,
+}
+
+/// PoW additional info
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PowInfo {
+    pub participant_only: bool,
+    pub b_num: u64,
 }
 
 /// PoW structure
@@ -299,6 +307,8 @@ pub enum CommMessage {
         node_type: NodeType,
         /// contacts of ring members.
         contacts: Vec<SocketAddr>,
+        /// Publicly resolved IP address of the node who made the handshake request
+        public_address: SocketAddr,
     },
     /// Gossip message, multicast to all peers within the same ring.
     Gossip {
@@ -412,16 +422,33 @@ pub trait StorageInterface {
 
 ///============ MINER NODE ============///
 
+#[allow(clippy::enum_variant_names)]
+#[derive(Deserialize, Serialize, Clone)]
+pub enum MineApiRequest {
+    /// Get the connection status of this node
+    GetConnectionStatus,
+    /// Get mining status
+    GetMiningStatus,
+    /// Initiate pause mining
+    InitiatePauseMining,
+    /// Initiate resume mining
+    InitiateResumeMining,
+    /// Connect to to compute Node
+    ConnectToCompute,
+    // Disconnect from compute Node
+    DisconnectFromCompute,
+}
+
 /// Encapsulates miner requests
 #[derive(Serialize, Deserialize, Clone)]
 pub enum MineRequest {
     SendBlock {
-        block: BlockHeader,
-        reward: TokenAmount,
-    },
-    SendRandomNum {
+        pow_info: PowInfo,
         rnum: Vec<u8>,
         win_coinbases: Vec<String>,
+        reward: TokenAmount,
+        block: Option<BlockHeader>,
+        b_num: u64,
     },
     SendBlockchainItem {
         key: String,
@@ -430,6 +457,12 @@ pub enum MineRequest {
     SendTransactions {
         tx_merkle_verification: Vec<String>,
     },
+    /// Process received utxo set
+    SendUtxoSet {
+        utxo_set: UtxoSet,
+    },
+    MinerRemovedAck,
+    MinerApi(MineApiRequest),
     Closing,
 }
 
@@ -440,9 +473,16 @@ impl fmt::Debug for MineRequest {
         match *self {
             SendBlockchainItem { .. } => write!(f, "SendBlockchainItem"),
             SendBlock { .. } => write!(f, "SendBlock"),
-            SendRandomNum { .. } => write!(f, "SendRandomNum"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
+            SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             Closing => write!(f, "Closing"),
+            MinerRemovedAck => write!(f, "MinerRemovedAck"),
+            MinerApi(MineApiRequest::GetConnectionStatus) => write!(f, "GetConnectionStatus"),
+            MinerApi(MineApiRequest::GetMiningStatus) => write!(f, "GetMiningStatus"),
+            MinerApi(MineApiRequest::InitiatePauseMining) => write!(f, "InitiatePauseMining"),
+            MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
+            MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
+            MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
         }
     }
 }
@@ -463,6 +503,25 @@ pub trait MinerInterface {
     ) -> Response;
 }
 
+/* ---------------- STRUCT TO ENCAPSULATE GENERAL UI FEEDBACK --------------- */
+// Note that this struct is primarly used with the desktop UI as well as
+// server-side events, and should not form part of the public API.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Rs2JsMsg {
+    // Success message
+    Success { success: String },
+    // Error message
+    Error { error: String },
+    // Info message
+    Info { info: String },
+    // Warning Message
+    Warning { warning: String },
+    // A JSON-serialized value
+    Value(serde_json::Value),
+    // Close the feedback loop
+    Exit,
+}
+
 ///============ COMPUTE NODE ============///
 
 // Encapsulates compute requests injected by API
@@ -475,9 +534,17 @@ pub enum ComputeApiRequest {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     },
     SendTransactions {
         transactions: Vec<Transaction>,
+    },
+    PauseNodes {
+        b_num: u64,
+    },
+    ResumeNodes,
+    SendSharedConfig {
+        shared_config: ComputeNodeSharedConfig,
     },
 }
 
@@ -488,8 +555,12 @@ pub enum ComputeRequest {
     /// Process an API internal request
     ComputeApi(ComputeApiRequest),
 
+    SendSharedConfig {
+        shared_config: ComputeNodeSharedConfig,
+    },
     SendUtxoRequest {
         address_list: UtxoFetchType,
+        requester_node_type: NodeType,
     },
     SendBlockStored(BlockStoredInfo),
     SendPoW {
@@ -498,6 +569,7 @@ pub enum ComputeRequest {
         coinbase: Transaction,
     },
     SendPartitionEntry {
+        pow_info: PowInfo,
         partition_entry: ProofOfWork,
     },
     SendTransactions {
@@ -505,7 +577,12 @@ pub enum ComputeRequest {
     },
     SendPartitionRequest,
     SendUserBlockNotificationRequest,
+    CoordinatedPause {
+        b_num: u64, // Pause the nodes on current b_num + b_num
+    },
+    CoordinatedResume,
     Closing,
+    RequestRemoveMiner,
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -520,15 +597,23 @@ impl fmt::Debug for ComputeRequest {
             ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
                 write!(f, "Api::SendTransactions")
             }
-
+            ComputeApi(ComputeApiRequest::PauseNodes { .. }) => write!(f, "Api::PauseNodes"),
+            ComputeApi(ComputeApiRequest::ResumeNodes) => write!(f, "Api::ResumeNodes"),
+            ComputeApi(ComputeApiRequest::SendSharedConfig { .. }) => {
+                write!(f, "Api::SendSharedConfig")
+            }
             SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
             SendBlockStored(_) => write!(f, "SendBlockStored"),
-            SendPoW { ref block_num, .. } => write!(f, "SendPoW({})", block_num),
+            SendPoW { ref block_num, .. } => write!(f, "SendPoW({block_num})"),
             SendPartitionEntry { .. } => write!(f, "SendPartitionEntry"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
             SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            SendSharedConfig { .. } => write!(f, "SendSharedConfig"),
             Closing => write!(f, "Closing"),
+            CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
+            CoordinatedResume => write!(f, "CoordinatedResume"),
+            RequestRemoveMiner => write!(f, "RequestRemoveMiner"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -536,7 +621,12 @@ impl fmt::Debug for ComputeRequest {
 
 pub trait ComputeInterface {
     /// Fetch UTXO set for given addresses
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response;
+    fn fetch_utxo_set(
+        &mut self,
+        peer: SocketAddr,
+        address_list: UtxoFetchType,
+        node_type: NodeType,
+    ) -> Response;
 
     /// Partitions a set of provided UUIDs for key creation/agreement
     /// TODO: Figure out the correct return type
@@ -556,7 +646,20 @@ pub trait ComputeInterface {
     fn get_next_block_reward(&self) -> f64;
 }
 
+/// Compute node API
 pub trait ComputeApi {
+    /// Get compute node configuration that is shareable between peers
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig;
+
+    /// Pause all compute nodes
+    fn pause_nodes(&mut self, b_num: u64) -> Response;
+
+    /// Resume all compute nodes
+    fn resume_nodes(&mut self) -> Response;
+
+    /// Share compute node config with other compute nodes
+    fn send_shared_config(&mut self, shared_config: ComputeNodeSharedConfig) -> Response;
+
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
 
@@ -578,6 +681,7 @@ pub trait ComputeApi {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError>;
 }
 
@@ -590,6 +694,7 @@ pub enum UserApiRequest {
     SendCreateReceiptRequest {
         receipt_amount: u64,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     },
 
     /// Request to fetch UTXO set and update running total for specified addresses
@@ -611,6 +716,34 @@ pub enum UserApiRequest {
     MakePayment {
         address: String,
         amount: TokenAmount,
+    },
+
+    /// Request to make a payment to a public key address with a given excess address
+    MakePaymentWithExcessAddress {
+        address: String,
+        amount: TokenAmount,
+        excess_address: String,
+    },
+
+    /// Request to generate a new address
+    GenerateNewAddress,
+
+    /// Get the connection status of this node
+    GetConnectionStatus,
+
+    /// Connect to compute node
+    ConnectToCompute,
+
+    /// Disconnect from compute
+    DisconnectFromCompute,
+
+    /// Delete addresses
+    DeleteAddresses { addresses: BTreeSet<String> },
+
+    /// Merge addresses to an excess address (if provided)
+    MergeAddresses {
+        addresses: BTreeSet<String>,
+        excess_address: Option<String>,
     },
 }
 
@@ -661,6 +794,15 @@ impl fmt::Debug for UserRequest {
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
             UserApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
+            UserApi(MakePaymentWithExcessAddress { .. }) => {
+                write!(f, "MakePaymentWithExcessAddress")
+            }
+            UserApi(GenerateNewAddress) => write!(f, "GenerateNewAddress"),
+            UserApi(GetConnectionStatus) => write!(f, "GetConnectionStatus"),
+            UserApi(ConnectToCompute) => write!(f, "ConnectToCompute"),
+            UserApi(DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            UserApi(DeleteAddresses { .. }) => write!(f, "DeleteAddresses"),
+            UserApi(MergeAddresses { .. }) => write!(f, "MergeAddresses"),
 
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
@@ -678,7 +820,7 @@ impl fmt::Debug for UserRequest {
 ///============ PRE-LAUNCH NODE ============///
 
 /// API Debug Data Struct
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DebugData {
     pub node_type: String,
     #[serde(borrow)]

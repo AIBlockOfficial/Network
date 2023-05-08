@@ -108,11 +108,12 @@ impl<'a> CallResponse<'a> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Default, Debug, Serialize)]
 pub enum APIResponseStatus {
     Success,
     Error,
     InProgress,
+    #[default]
     Unknown,
 }
 
@@ -127,21 +128,15 @@ impl std::fmt::Display for APIResponseStatus {
     }
 }
 
-impl Default for APIResponseStatus {
-    fn default() -> Self {
-        APIResponseStatus::Unknown
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct APIAsset {
     asset: Asset,
-    metadata: Option<Vec<u8>>,
+    extra_info: Option<Vec<u8>>,
 }
 
 impl APIAsset {
-    pub fn new(asset: Asset, metadata: Option<Vec<u8>>) -> Self {
-        APIAsset { asset, metadata }
+    pub fn new(asset: Asset, extra_info: Option<Vec<u8>>) -> Self {
+        APIAsset { asset, extra_info }
     }
 }
 
@@ -178,7 +173,7 @@ pub fn common_reply(
     route: &str,
     content: JsonReply,
 ) -> JsonReply {
-    let status = format!("{}", status);
+    let status = format!("{status}");
     json_embed(&[
         b"{\"id\":\"",
         id.as_bytes(),
@@ -229,7 +224,7 @@ pub fn common_error_reply(
     common_reply(
         call_id,
         APIResponseStatus::Error,
-        &format!("{}", error_type),
+        &format!("{error_type}"),
         route,
         data,
     )

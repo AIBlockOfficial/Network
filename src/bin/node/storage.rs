@@ -2,9 +2,9 @@
 
 use clap::{App, Arg, ArgMatches};
 use std::net::SocketAddr;
-use system::configurations::StorageNodeConfig;
-use system::StorageNode;
-use system::{
+use znp::configurations::StorageNodeConfig;
+use znp::StorageNode;
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
@@ -12,10 +12,10 @@ use system::{
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
 
-    println!("Start node with config {:?}", config);
+    println!("Start node with config {config:?}");
     let node = StorageNode::new(config, Default::default()).await.unwrap();
 
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let api_inputs = node.api_inputs();
@@ -238,7 +238,7 @@ fn configuration(settings: config::Config) -> StorageNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

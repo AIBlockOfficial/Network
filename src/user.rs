@@ -5,13 +5,17 @@ use crate::interfaces::{
     ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
+use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
+use crate::transactor::Transactor;
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo, to_api_keys,
-    to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
+    try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
     RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
+use crate::Rs2JsMsg;
+use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
 use naom::primitives::asset::{Asset, TokenAmount};
@@ -20,9 +24,13 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
 use naom::utils::transaction_utils::{
     construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
-    construct_tx_core, construct_tx_hash, construct_tx_ins_address,
+    construct_tx_core, construct_tx_ins_address,
 };
+use serde::Serialize;
+use std::collections::BTreeSet;
+
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
+use tokio::sync::mpsc;
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
@@ -45,11 +53,11 @@ pub enum UserError {
 impl fmt::Display for UserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::WalletError(err) => write!(f, "Wallet error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::AsyncTask(err) => write!(f, "Async task error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::WalletError(err) => write!(f, "Wallet error: {err}"),
         }
     }
 }
@@ -117,6 +125,8 @@ pub struct UserNode {
     node: Node,
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
+    threaded_calls: ThreadedCallChannel<UserNode>,
+    ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
     compute_addr: SocketAddr,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
     trading_peer: Option<SocketAddr>,
@@ -138,11 +148,7 @@ impl UserNode {
     /// * `config` - UserNodeConfig object containing UserNode parameters.
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
-        let addr = config
-            .user_nodes
-            .get(config.user_node_idx)
-            .ok_or(UserError::ConfigError("Invalid user index"))?
-            .address;
+        let addr = config.user_address;
         let compute_addr = config
             .compute_nodes
             .get(config.user_compute_node_idx)
@@ -155,8 +161,14 @@ impl UserNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
-
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::User).await?;
+        let disable_tcp_listener = extra.disable_tcp_listener;
+        let node = Node::new(
+            &tcp_tls_config,
+            PEER_LIMIT,
+            NodeType::User,
+            disable_tcp_listener,
+        )
+        .await?;
 
         let wallet_db = match extra.shared_wallet_db {
             Some(shared_db) => shared_db,
@@ -164,24 +176,24 @@ impl UserNode {
                 config.user_db_mode,
                 extra.wallet_db.take(),
                 config.passphrase,
-            ),
+                extra.custom_wallet_spec,
+            )?,
         };
-        let wallet_db = wallet_db
-            .with_seed(config.user_node_idx, &config.user_wallet_seeds)
-            .await;
+        let wallet_db = wallet_db.with_seed(config.user_wallet_seeds).await;
 
         let pending_payments = match config.user_auto_donate {
             0 => (Default::default(), AutoDonate::Disabled),
             amount => (Default::default(), AutoDonate::Enabled(TokenAmount(amount))),
         };
 
-        let test_auto_gen_tx =
-            make_transaction_gen(config.user_test_auto_gen_setup, config.user_node_idx);
+        let test_auto_gen_tx = make_transaction_gen(config.user_test_auto_gen_setup);
 
         Ok(UserNode {
             node,
             wallet_db,
             local_events: Default::default(),
+            threaded_calls: Default::default(),
+            ui_feedback_tx: Default::default(),
             compute_addr,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             trading_peer: None,
@@ -196,9 +208,23 @@ impl UserNode {
         })
     }
 
-    /// Returns the node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    /// Injects a new event into user node
+    pub fn inject_next_event(
+        &self,
+        from_peer_addr: SocketAddr,
+        data: impl Serialize,
+    ) -> Result<()> {
+        Ok(self.node.inject_next_event(from_peer_addr, data)?)
+    }
+
+    /// Returns the user node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
+    /// Returns the user node's public endpoint.
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the node's compute endpoint.
@@ -206,9 +232,23 @@ impl UserNode {
         self.compute_addr
     }
 
+    /// Returns whether the node is connected to its Compute peer
+    pub async fn is_disconnected(&self) -> bool {
+        !self
+            .node
+            .unconnected_peers(&[self.compute_address()])
+            .await
+            .is_empty()
+    }
+
     /// Check if auto generator is active
     pub fn is_test_auto_gen_tx_active(&self) -> bool {
         self.test_auto_gen_tx.is_some()
+    }
+
+    /// Returns the last generated address.
+    pub fn get_last_generated_address(&self) -> Option<String> {
+        self.wallet_db.get_last_generated_address()
     }
 
     /// Connect to a peer on the network.
@@ -264,15 +304,13 @@ impl UserNode {
         }
     }
 
-    /// Update the running total from a retrieved UTXO set/subset
-    pub async fn update_running_total(&mut self) {
-        let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
-
-        self.wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
+    /// Backup persistent storage
+    pub async fn backup_persistent_store(&mut self) {
+        if let Err(e) = self.wallet_db.backup_persistent_store().await {
+            let error = format!("Error backup up main db: {:?}", e);
+            error!("{:?}", &error);
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
+        }
     }
 
     /// Listens for new events from peers and handles them, processing any errors.
@@ -282,12 +320,33 @@ impl UserNode {
     ) -> ResponseResult {
         debug!("Response: {:?}", response);
 
+        if let Ok(resp) = &response {
+            let ui_message = match resp.success {
+                true => Rs2JsMsg::Info {
+                    info: resp.reason.to_owned(),
+                },
+                false => Rs2JsMsg::Error {
+                    error: resp.reason.to_owned(),
+                },
+            };
+            try_send_to_ui(self.ui_feedback_tx.as_ref(), ui_message).await;
+        }
+
         match response {
+            Ok(Response {
+                success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
             }) => {
                 warn!("Shutdown now");
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Exit).await;
                 return ResponseResult::Exit;
             }
             Ok(Response {
@@ -336,6 +395,18 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
+                reason: "New address generated",
+            }) => {
+                debug!("New address generated");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Addresses deleted",
+            }) => {
+                debug!("Addresses deleted");
+            }
+            Ok(Response {
+                success: true,
                 reason: "Next payment transaction ready",
             }) => {
                 self.send_next_payment_to_destinations(self.compute_address())
@@ -366,6 +437,38 @@ impl UserNode {
             }) => {
                 self.update_running_total().await;
             }
+            Ok(Response {
+                success: true,
+                reason: "Node is connected",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true, // Not always an error
+                reason: "Node is disconnected",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Connected to compute",
+            }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Disconnected from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Failed to disconnect from compute",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason,
@@ -404,9 +507,12 @@ impl UserNode {
                     }
                 }
                 Some(event) = self.local_events.rx.recv() => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
+                }
+                Some(f) = self.threaded_calls.rx.recv() => {
+                    f(self);
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
@@ -426,9 +532,25 @@ impl UserNode {
         Ok(())
     }
 
+    /// Threaded call channel.
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<UserNode> {
+        &self.threaded_calls.tx
+    }
+
     /// Local event channel.
     pub fn local_event_tx(&self) -> &LocalEventSender {
         &self.local_events.tx
+    }
+
+    /// UI feedback channel.
+    pub fn ui_feedback_tx(&self) -> Option<mpsc::Sender<Rs2JsMsg>> {
+        self.ui_feedback_tx.clone()
+    }
+
+    /// Set UI feedback channel.
+    pub fn set_ui_feedback_tx(&mut self, tx: mpsc::Sender<Rs2JsMsg>) {
+        self.ui_feedback_tx = Some(tx.clone());
+        self.wallet_db.set_ui_feedback_tx(tx);
     }
 
     ///Handle a local event
@@ -436,12 +558,25 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }
@@ -519,7 +654,7 @@ impl UserNode {
                 self.receive_rb_payment_response(peer, rb_payment_response)
                     .await,
             ),
-            BlockMining { block } => Some(self.notified_block_mining(peer, block)),
+            BlockMining { block } => Some(self.notified_block_mining(peer, block).await),
             Closing => self.receive_closing(peer),
         }
     }
@@ -537,7 +672,7 @@ impl UserNode {
     ) -> Option<Response> {
         use UserApiRequest::*;
 
-        if peer != self.address() {
+        if peer != self.local_address() {
             // Do not process if not internal request
             return None;
         }
@@ -560,10 +695,148 @@ impl UserNode {
             SendCreateReceiptRequest {
                 receipt_amount,
                 drs_tx_hash_spec,
+                metadata,
             } => Some(
-                self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec)
+                self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec, metadata)
                     .await,
             ),
+            MakePaymentWithExcessAddress {
+                address,
+                amount,
+                excess_address,
+            } => Some(
+                self.make_payment_transactions_provided_excess(
+                    None,
+                    address,
+                    amount,
+                    Some(excess_address),
+                )
+                .await,
+            ),
+            GenerateNewAddress => Some(self.generate_new_address().await),
+            GetConnectionStatus => Some(self.receive_connection_status_request().await),
+            ConnectToCompute => Some(self.handle_connect_to_compute().await),
+            DisconnectFromCompute => Some(self.handle_disconnect_from_compute().await),
+            DeleteAddresses { addresses } => {
+                Some(self.delete_addresses_from_wallet(peer, addresses).await)
+            }
+            MergeAddresses {
+                addresses,
+                excess_address,
+            } => Some(
+                self.make_merged_payment_transaction_from_input_addrs(
+                    peer,
+                    addresses,
+                    excess_address,
+                )
+                .await,
+            ),
+        }
+    }
+
+    /// Handle delete addresses from wallet
+    pub async fn delete_addresses_from_wallet(
+        &mut self,
+        _peer: SocketAddr,
+        addresses: BTreeSet<String>,
+    ) -> Response {
+        self.wallet_db
+            .destroy_spent_transactions_and_keys(Some(addresses))
+            .await;
+
+        Response {
+            success: true,
+            reason: "Addresses deleted",
+        }
+    }
+
+    /// Handle connect to compute node
+    pub async fn handle_disconnect_from_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        let join_handles = self.node.disconnect_all(Some(&[compute_addr])).await;
+        if join_handles.is_empty() {
+            return Response {
+                success: false,
+                reason: "Already disconnected from compute",
+            };
+        }
+        for join_handle in join_handles {
+            if let Err(err) = join_handle.await {
+                error!("Failed to disconnect from compute: {}", err);
+                return Response {
+                    success: false,
+                    reason: "Failed to disconnect from compute",
+                };
+            }
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": false,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Disconnected from compute",
+        }
+    }
+
+    /// Handle connect to compute node
+    pub async fn handle_connect_to_compute(&mut self) -> Response {
+        let compute_addr = self.compute_address();
+        if let Err(e) = self.node.connect_to(compute_addr).await {
+            error!("Failed to connect to compute: {e:?}");
+            return Response {
+                success: false,
+                reason: "Failed to connect to compute",
+            };
+        }
+        if let Err(e) = self.send_block_notification_request().await {
+            error!("Failed to send startup requests to compute: {e:?}");
+            return Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Connected to compute",
+        }
+    }
+
+    /// Handles the request to check connection status
+    pub async fn receive_connection_status_request(&self) -> Response {
+        if self.is_disconnected().await {
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "connected":false,
+                })),
+            )
+            .await;
+            return Response {
+                success: true,
+                reason: "Node is disconnected",
+            };
+        }
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "connected": true,
+            })),
+        )
+        .await;
+        Response {
+            success: true,
+            reason: "Node is connected",
         }
     }
 
@@ -582,17 +855,6 @@ impl UserNode {
             reason: "Shutdown",
         })
     }
-
-    pub async fn send_request_utxo_set(&mut self, address_list: UtxoFetchType) -> Result<()> {
-        self.node
-            .send(
-                self.compute_address(),
-                ComputeRequest::SendUtxoRequest { address_list },
-            )
-            .await?;
-        Ok(())
-    }
-
     pub fn get_next_payment_transaction(&self) -> Option<(Option<SocketAddr>, Transaction)> {
         self.next_payment.clone()
     }
@@ -617,7 +879,7 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        self.store_payment_transaction(tx.clone()).await;
+        self.wallet_db.store_payment_transaction(tx.clone()).await;
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -636,7 +898,9 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
-        self.store_payment_transaction(transaction.clone()).await;
+        self.wallet_db
+            .store_payment_transaction(transaction.clone())
+            .await;
         let _peer_span =
             info_span!("sending receipt-based transaction to compute node for processing");
         let transactions = vec![transaction.clone()];
@@ -654,29 +918,6 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends the next internal payment transaction to be processed by the connected Compute
-    /// node
-    ///
-    /// ### Arguments
-    ///
-    /// * `compute_peer` - Compute peer to send the payment tx to
-    /// * `transactions` - Transactions to send
-    pub async fn send_transactions_to_compute(
-        &mut self,
-        compute_peer: SocketAddr,
-        transactions: Vec<Transaction>,
-    ) -> Result<()> {
-        let _peer_span = info_span!("sending transactions to compute node for processing");
-        self.node
-            .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Request a UTXO set/subset from Compute for updating the running total
     ///
     /// ### Arguments
@@ -686,7 +927,11 @@ impl UserNode {
         &mut self,
         address_list: UtxoFetchType,
     ) -> Option<Response> {
-        self.send_request_utxo_set(address_list).await.ok()?;
+        let compute_addr = self.compute_address();
+        self.send_request_utxo_set(address_list, compute_addr, NodeType::User)
+            .await
+            .ok()?;
+
         Some(Response {
             success: true,
             reason: "Request UTXO set",
@@ -736,30 +981,12 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        self.store_payment_transaction(transaction).await;
+        self.wallet_db.store_payment_transaction(transaction).await;
 
         Response {
             success: true,
             reason: "Payment transaction received",
         }
-    }
-
-    /// Store payment transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `transaction` - Transaction to be received and saved to wallet
-    pub async fn store_payment_transaction(&mut self, transaction: Transaction) {
-        let hash = construct_tx_hash(&transaction);
-
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
-
-        let our_payments = self
-            .wallet_db
-            .save_usable_payments_to_wallet(payments)
-            .await
-            .unwrap();
-        debug!("store_payment_transactions: {:?}", our_payments);
     }
 
     /// Process pending paiment transaction with received address
@@ -793,7 +1020,83 @@ impl UserNode {
         )
     }
 
-    /// Process specified paiment, updating wallet and next_payment
+    /// Process specified payment with a provided excess address,
+    /// updating wallet and next_payment
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer`    - Peer recieving the payment.
+    /// * `address` - Address to assign the payment transaction to
+    /// * `amount`  - Price/amount payed
+    /// * `excess_address` - Address to assign the excess to
+    pub async fn make_payment_transactions_provided_excess(
+        &mut self,
+        peer: Option<SocketAddr>,
+        address: String,
+        amount: TokenAmount,
+        excess_address: Option<String>,
+    ) -> Response {
+        let tx_out = vec![TxOut::new_token_amount(address, amount)];
+        let asset_required = Asset::Token(amount);
+        let (tx_ins, tx_outs) = if let Ok(value) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, tx_out, excess_address)
+            .await
+        {
+            value
+        } else {
+            return Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            };
+        };
+        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        self.next_payment = Some((peer, payment_tx));
+
+        Response {
+            success: true,
+            reason: "Next payment transaction ready",
+        }
+    }
+
+    /// Process specified payment with a provided excess address,
+    /// as well as provided input addresses; updating wallet and next_payment
+    ///
+    /// NOTE: This payment is meant to merge existing addresses in the wallet
+    /// to a new address, and is not meant to be used for payments to peers
+    ///
+    /// ### Arguments
+    ///
+    /// * `input_addresses`  - Input addresses to use in this payment
+    /// * `excess_address` - Address to assign the excess to
+    pub async fn make_merged_payment_transaction_from_input_addrs(
+        &mut self,
+        _peer: SocketAddr,
+        input_addresses: BTreeSet<String>,
+        excess_address: Option<String>,
+    ) -> Response {
+        let (tx_ins, tx_outs) = if let Ok(value) = self
+            .wallet_db
+            .fetch_tx_ins_and_tx_outs_merge_input_addrs(input_addresses, excess_address)
+            .await
+        {
+            value
+        } else {
+            return Response {
+                success: false,
+                reason: "Insufficient funds for payment",
+            };
+        };
+        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        self.next_payment = Some((None, payment_tx));
+
+        Response {
+            success: true,
+            reason: "Next payment transaction ready",
+        }
+    }
+
+    /// Process specified payment, updating wallet and next_payment
     ///
     /// ### Arguments
     ///
@@ -806,53 +1109,8 @@ impl UserNode {
         address: String,
         amount: TokenAmount,
     ) -> Response {
-        let tx_out = vec![TxOut::new_token_amount(address, amount)];
-        let asset_required = Asset::Token(amount);
-        let (tx_ins, tx_outs) =
-            if let Ok(value) = self.fetch_tx_ins_and_tx_outs(asset_required, tx_out).await {
-                value
-            } else {
-                return Response {
-                    success: false,
-                    reason: "Insufficient funds for payment",
-                };
-            };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
-        self.next_payment = Some((peer, payment_tx));
-
-        Response {
-            success: true,
-            reason: "Next payment transaction ready",
-        }
-    }
-
-    /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction
-    ///
-    /// ### Arguments
-    ///
-    /// * `asset_required`              - The required `Asset`
-    /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    pub async fn fetch_tx_ins_and_tx_outs(
-        &mut self,
-        asset_required: Asset,
-        mut tx_outs: Vec<TxOut>,
-    ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amount, tx_used) = self
-            .wallet_db
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await?;
-
-        if let Some(excess) = total_amount.get_excess(&asset_required) {
-            let (excess_address, _) = self.wallet_db.generate_payment_address().await;
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
-        }
-
-        let tx_ins = self
-            .wallet_db
-            .consume_inputs_for_payment(tx_cons, tx_used)
-            .await;
-
-        Ok((tx_ins, tx_outs))
+        self.make_payment_transactions_provided_excess(peer, address, amount, None)
+            .await
     }
 
     /// Sends a payment transaction to the receiving party
@@ -942,10 +1200,20 @@ impl UserNode {
     ///
     /// * `peer` -  SocketAdress of the peer notifying.
     /// * `block` - Block that is being mined and will be stored.
-    pub fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
+    pub async fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
         if peer == self.compute_addr {
+            self.wallet_db
+                .filter_locked_coinbase(block.header.b_num)
+                .await;
             self.last_block_notified = block;
-
+            // Send the block to the UI for realtime feedback
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!( {
+                    "last_block_notified": self.last_block_notified.clone(),
+                })),
+            )
+            .await;
             Response {
                 success: true,
                 reason: "Block mining notified",
@@ -1005,7 +1273,9 @@ impl UserNode {
                 .send_transactions_to_compute(self.compute_address(), txs_chunk)
                 .await
             {
-                error!("Autogenerated tx not sent to {:?}", e);
+                let error = format!("Autogenerated tx not sent to {:?}", e);
+                error!("{:?}", &error);
+                try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
             }
         }
         if total_txs > 0 {
@@ -1035,17 +1305,12 @@ impl UserNode {
         &self.last_block_notified
     }
 
-    /// Receive the requested UTXO set/subset from Compute
-    ///
-    /// ### Arguments
-    ///
-    /// * `utxo_set` - The requested UTXO set
-    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
-        self.received_utxo_set = Some(utxo_set);
-
+    /// Generate a new payment address
+    pub async fn generate_new_address(&mut self) -> Response {
+        let _ = self.wallet_db.generate_payment_address().await;
         Response {
             success: true,
-            reason: "Received UTXO set",
+            reason: "New address generated",
         }
     }
 
@@ -1086,6 +1351,7 @@ impl UserNode {
         let sender_half_druid = generate_half_druid();
 
         let (tx_ins, tx_outs) = self
+            .wallet_db
             .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
             .await?;
 
@@ -1141,9 +1407,13 @@ impl UserNode {
     ) -> Response {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
-        let asset_required =
-            Asset::receipt(1, rb_payment_request_data.sender_drs_tx_expectation.clone());
+        let asset_required = Asset::receipt(
+            1,
+            rb_payment_request_data.sender_drs_tx_expectation.clone(),
+            None,
+        );
         let tx_ins_and_outs = self
+            .wallet_db
             .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
             .await;
 
@@ -1206,6 +1476,7 @@ impl UserNode {
         &mut self,
         receipt_amount: u64,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Response {
         let AddressStore {
             public_key,
@@ -1220,6 +1491,7 @@ impl UserNode {
             &secret_key,
             receipt_amount,
             drs_tx_hash_spec,
+            metadata,
         );
 
         self.next_payment = Some((None, receipt_asset_tx));
@@ -1233,6 +1505,70 @@ impl UserNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+
+    /// Get `Node` member as mutable (useful to reach comms)
+    pub fn get_node_mut(&mut self) -> &mut Node {
+        &mut self.node
+    }
+}
+
+#[async_trait]
+impl Transactor for UserNode {
+    type Error = UserError;
+
+    async fn send_transactions_to_compute(
+        &mut self,
+        compute_peer: SocketAddr,
+        transactions: Vec<Transaction>,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending transactions to compute node for processing");
+        self.node
+            .send(
+                compute_peer,
+                ComputeRequest::SendTransactions { transactions },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn send_request_utxo_set(
+        &mut self,
+        address_list: UtxoFetchType,
+        compute_addr: SocketAddr,
+        requester_node_type: NodeType,
+    ) -> Result<()> {
+        let _peer_span = info_span!("Sending UXTO request to compute node");
+        self.node
+            .send(
+                compute_addr,
+                ComputeRequest::SendUtxoRequest {
+                    address_list,
+                    requester_node_type,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    fn receive_utxo_set(&mut self, utxo_set: UtxoSet) -> Response {
+        self.received_utxo_set = Some(utxo_set);
+
+        Response {
+            success: true,
+            reason: "Received UTXO set",
+        }
+    }
+    async fn update_running_total(&mut self) {
+        let utxo_set = self.received_utxo_set.take();
+        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments)
+            .await
+            .unwrap();
     }
 }
 
@@ -1297,7 +1633,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
     let sender_druid_expectation = DruidExpectation {
         from: receiver_from_addr,
         to: sender_address.clone(),
-        asset: Asset::receipt(1, sender_drs_tx_expectation.clone()),
+        asset: Asset::receipt(1, sender_drs_tx_expectation.clone(), None),
     };
 
     // DruidExpectation for receiver(Bob)
@@ -1360,15 +1696,10 @@ pub fn make_rb_payment_send_transaction(
     )
 }
 
-fn make_transaction_gen(setup: UserAutoGenTxSetup, user_node_idx: usize) -> Option<AutoGenTx> {
-    let initial_transactions = setup
-        .user_initial_transactions
-        .get(user_node_idx)
-        .cloned()
-        .unwrap_or_default();
-    if !initial_transactions.is_empty() {
+fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {
+    if !setup.user_initial_transactions.is_empty() {
         Some(AutoGenTx {
-            tx_generator: TransactionGen::new(initial_transactions),
+            tx_generator: TransactionGen::new(setup.user_initial_transactions),
             tx_chunk_size: setup.user_setup_tx_chunk_size,
             tx_in_per_tx: setup.user_setup_tx_in_per_tx,
             tx_max_count: setup.user_setup_tx_max_count,

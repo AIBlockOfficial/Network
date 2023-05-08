@@ -1,7 +1,9 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
-use crate::configurations::{TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec};
+use crate::configurations::{
+    ComputeNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
+};
 use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
@@ -17,9 +19,10 @@ use crate::test_utils::{
     remove_all_node_dbs, Network, NetworkConfig, NodeType, RbReceiverData, RbSenderData,
 };
 use crate::tracked_utxo::TrackedUtxoBalance;
+use crate::transactor::Transactor;
 use crate::user::UserNode;
 use crate::utils::{
-    apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
+    apply_mining_tx, calculate_reward, construct_coinbase_tx, construct_valid_block_pow_hash,
     create_valid_create_transaction_with_ins_outs, create_valid_transaction_with_ins_outs,
     decode_pub_key, decode_secret_key, generate_pow_for_block, get_sanction_addresses,
     tracing_log_try_init, LocalEvent, StringError,
@@ -34,7 +37,7 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_address, construct_coinbase_tx, construct_receipt_create_tx, construct_tx_hash,
+    construct_address, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,14 +54,29 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
+#[cfg(test)]
+use crate::miner::NO_OF_ADDRESSES_FOR_AGGREGATION_TX;
+
 #[cfg(not(debug_assertions))] // Release
 const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
 const TEST_DURATION_DIVIDER: usize = 1;
 
-const SEED_UTXO: &[(i32, &str)] = &[(1, "000000"), (3, "000001"), (1, "000002")];
-const VALID_TXS_IN: &[(i32, &str)] = &[(0, "000000"), (0, "000001"), (1, "000001")];
-const VALID_TXS_OUT: &[&str] = &["000101", "000102", "000103"];
+const SEED_UTXO: &[(i32, &str)] = &[
+    (1, "00000000000000000000000000000000"),
+    (3, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000002"),
+];
+const VALID_TXS_IN: &[(i32, &str)] = &[
+    (0, "00000000000000000000000000000000"),
+    (0, "00000000000000000000000000000001"),
+    (1, "00000000000000000000000000000001"),
+];
+const VALID_TXS_OUT: &[&str] = &[
+    "00000000000000000000000000000101",
+    "00000000000000000000000000000102",
+    "00000000000000000000000000000103",
+];
 const DEFAULT_SEED_AMOUNT: TokenAmount = TokenAmount(3);
 
 const BLOCK_RECEIVED: &str = "Block received to be added";
@@ -99,6 +117,12 @@ enum Cfg {
 enum CfgNum {
     All,
     Majority,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CfgPow {
+    First,
+    Parallel,
 }
 
 #[derive(Clone, Debug)]
@@ -168,9 +192,16 @@ async fn full_flow_raft_majority_3_nodes() {
     .await;
 }
 
+// Only run locally - unstable on repository pipeline
 #[tokio::test(flavor = "current_thread")]
-async fn full_flow_raft_15_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10550, 15)).await;
+#[ignore]
+async fn full_flow_raft_majority_15_nodes() {
+    full_flow_tls(
+        complete_network_config_with_n_compute_raft(10550, 15),
+        CfgNum::Majority,
+        Vec::new(),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -179,6 +210,81 @@ async fn full_flow_multi_miners_no_raft() {
         11000, false, 1, 3,
     ))
     .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
+    test_step_start();
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_miner(11030, true, 1, 1);
+    let mut network = Network::create_from_config(&network_config).await;
+    let active_nodes = network.all_active_nodes().clone();
+    let miner_addr = &active_nodes[&NodeType::Miner][0];
+    let compute_addr = &active_nodes[&NodeType::Compute][0];
+    let mut prev_mining_reward = TokenAmount(0);
+
+    //
+    // Act
+    //
+
+    // Genesis block
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    let mut handle_aggregation_tx: bool;
+    // Create more blocks
+    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+
+        // Check if the miner is _about_ to send aggregation tx
+        {
+            let miner_node = network.miner(miner_addr).unwrap();
+
+            let addrs = miner_node
+                .lock()
+                .await
+                .get_wallet_db()
+                .get_known_addresses()
+                .len();
+            handle_aggregation_tx = addrs % (NO_OF_ADDRESSES_FOR_AGGREGATION_TX - 1) == 0;
+        }
+
+        if handle_aggregation_tx {
+            prev_mining_reward = compute_get_prev_mining_reward(&mut network, compute_addr).await;
+        }
+
+        proof_of_work_act(
+            &mut network,
+            CfgPow::Parallel,
+            CfgNum::All,
+            handle_aggregation_tx,
+            Some(prev_mining_reward),
+        )
+        .await;
+
+        send_block_to_storage_act(&mut network, CfgNum::All).await;
+    }
+
+    //
+    // Assert
+    //
+
+    // Assert that the miner has aggregated the winnings under a single address
+    let miner_node = network.miner(miner_addr).unwrap();
+    let txs = miner_node
+        .lock()
+        .await
+        .get_wallet_db()
+        .get_fund_store()
+        .transactions()
+        .len();
+
+    assert_eq!(txs, 1);
+
+    test_step_complete(network).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -358,14 +464,15 @@ async fn full_flow_common(
     //
     create_first_block_act(&mut network).await;
     modify_network(&mut network, "After create block 0", &modify_cfg).await;
-    proof_of_work_act(&mut network, cfg_num).await;
+    proof_of_work_act(&mut network, CfgPow::First, cfg_num, false, None).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
     add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, cfg_num).await;
     modify_network(&mut network, "After create block 1", &modify_cfg).await;
-    proof_of_work_act(&mut network, cfg_num).await;
+
+    proof_of_work_act(&mut network, CfgPow::Parallel, cfg_num, false, None).await;
     send_block_to_storage_act(&mut network, cfg_num).await;
     let stored1 = storage_get_last_block_stored(&mut network, "storage1").await;
 
@@ -441,7 +548,44 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 }
             }
             CfgModif::Disconnect(v) => network.disconnect_nodes_named(&[v.to_string()]).await,
-            CfgModif::Reconnect(v) => network.re_connect_nodes_named(&[v.to_string()]).await,
+            CfgModif::Reconnect(v) => {
+                network.re_connect_nodes_named(&[v.to_string()]).await;
+                let mut event_tx = network.get_local_event_tx(v).await.unwrap();
+                event_tx
+                    .send(
+                        LocalEvent::ReconnectionComplete,
+                        "reconnection complete test",
+                    )
+                    .await
+                    .unwrap();
+
+                let event = Some((
+                    v.to_string(),
+                    vec!["Sent startup requests on reconnection".to_string()],
+                ))
+                .into_iter()
+                .collect();
+                node_all_handle_different_event(network, &[v.to_string()], &event).await;
+
+                // Process miner's request at compute node
+                if let Some(miner) = network.miner(v) {
+                    let compute_addr = miner.lock().await.compute_address();
+
+                    let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
+                    for c in compute_nodes {
+                        if network.compute(&c).unwrap().lock().await.local_address() == compute_addr
+                        {
+                            compute_handle_event(
+                                network,
+                                &c,
+                                &["Received partition request successfully"],
+                            )
+                            .await;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -511,7 +655,7 @@ async fn create_first_block_act(network: &mut Network) {
             } else {
                 "Received partition request successfully"
             };
-            compute_handle_event(network, compute, evt).await;
+            compute_handle_event(network, compute, &[evt]).await;
         }
     }
 
@@ -686,12 +830,12 @@ async fn add_transactions_act_with(
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
 
-    info!("Test Step Add Transactions");
     for tx in txs.values() {
+        info!("Test Step Add Transactions");
         user_send_transaction_to_compute(network, "user1", "compute1", tx).await;
     }
     for _tx in txs.values() {
-        compute_handle_event(network, "compute1", "Transactions added to tx pool").await;
+        compute_handle_event(network, "compute1", &["Transactions added to tx pool"]).await;
     }
 
     if cfg != Cfg::IgnoreWaitTxComplete {
@@ -853,8 +997,8 @@ async fn create_block_with_seed() {
     //
     // Assert
     //
-    let expected_seed0 = Some("66834560691823092383280912636706120233344033721002615407440851751837150180545-3844507961937768323920383207668601435665951786473762741354875576809652837091661170062503618204890764181646182943319001719893641440471545700415549055369881370");
-    let expected_seed1 = Some("64881971566960642807502732089019822505957602038695891698026494006585682667610-6351671768184906669104848274468413710662978486397558205806593283397095895418610669943877633258302998254241950838477005161684726191818003264071457891039943678");
+    let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
+    let expected_seed1 = Some("79517952505538256861151843445639717368411728498040253818577148745236066939200-608851237869384074028927848965267137933543514368566184368468310593042514786217666803052921017960590742912236121984406032569439142243677586678666897386789165");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -934,7 +1078,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     let block_before = compute_all_mined_block_num(&mut network, compute_nodes).await;
 
-    proof_of_work_act(&mut network, cfg_num).await;
+    proof_of_work_act(&mut network, CfgPow::First, cfg_num, false, None).await;
     proof_of_work_send_more_act(&mut network, cfg_num).await;
 
     let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
@@ -948,41 +1092,135 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     test_step_complete(network).await;
 }
 
-async fn proof_of_work_act(network: &mut Network, cfg_num: CfgNum) {
+async fn proof_of_work_act(
+    network: &mut Network,
+    cfg_pow: CfgPow,
+    cfg_num: CfgNum,
+    handle_aggregation_tx: bool,
+    prev_mining_reward: Option<TokenAmount>,
+) {
+    proof_of_work_participation_act(network, cfg_num, cfg_pow).await;
+    proof_of_work_block_act(network, cfg_num, handle_aggregation_tx, prev_mining_reward).await;
+}
+
+async fn proof_of_work_participation_act(network: &mut Network, cfg_num: CfgNum, cfg_pow: CfgPow) {
+    let active_nodes = network.all_active_nodes().clone();
+    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let c_mined = &node_select(compute_nodes, cfg_num);
+    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
+    const POWS_COMPLETE: [&str; 2] = ["Partition PoW complete", "Block PoW complete"];
+
+    info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
+    if cfg_pow == CfgPow::First {
+        for compute in c_mined {
+            let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
+            compute_flood_rand_and_block_to_partition(network, compute).await;
+            miner_all_handle_event(network, c_miners, "Received random number successfully").await;
+            for miner in c_miners.iter() {
+                miner_handle_event(network, miner, "Partition PoW complete").await;
+                miner_process_found_partition_pow(network, miner).await;
+                compute_handle_event(network, compute, &["Partition PoW received successfully"])
+                    .await;
+            }
+        }
+
+        node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
+    }
+}
+
+async fn proof_of_work_block_act(
+    network: &mut Network,
+    cfg_num: CfgNum,
+    handle_aggregation_tx: bool,
+    prev_mining_reward: Option<TokenAmount>,
+) {
     let active_nodes = network.all_active_nodes().clone();
     let compute_nodes = &active_nodes[&NodeType::Compute];
     let c_mined = &node_select(compute_nodes, cfg_num);
     let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
 
-    info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
-    for compute in c_mined {
-        let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
-        compute_flood_rand_num_to_requesters(network, compute).await;
-        miner_all_handle_event(network, c_miners, "Received random number successfully").await;
-
-        for miner in c_miners.iter() {
-            miner_handle_event(network, miner, "Partition PoW complete").await;
-            miner_process_found_partition_pow(network, miner).await;
-            compute_handle_event(network, compute, "Partition PoW received successfully").await;
-        }
-    }
-
-    node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
-
     for compute in c_mined {
         let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
         let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
         let in_miners = &in_miners;
-        compute_flood_block_to_partition(network, compute).await;
+        compute_flood_rand_and_block_to_partition(network, compute).await;
         // TODO: Better to validate all miners => needs to have the miner with barrier as well.
-        miner_all_handle_event(network, in_miners, "Pre-block received successfully").await;
-        miner_all_handle_event(network, in_miners, "Block PoW complete").await;
+
+        let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
+        node_all_handle_different_event(network, c_miners, &all_evts).await;
         compute_flood_transactions_to_partition(network, compute).await;
         miner_all_handle_event(network, in_miners, "Block is valid").await;
 
+        for miner in c_miners.iter() {
+            miner_process_found_partition_pow(network, miner).await;
+            // `handle_aggregation_tx` indicates that an aggregation tx has been sent by the miner
+            // Compute node needs to handle this special case
+            if handle_aggregation_tx {
+                // Supplied as an array because these Tx event and Partition event can happen in any order
+                let results = &[
+                    "Transactions added to tx pool",
+                    "Transactions committed",
+                    "Partition PoW received successfully",
+                ];
+                compute_handle_event(network, compute, results).await;
+                compute_handle_event(network, compute, results).await;
+                compute_handle_event(network, compute, results).await;
+            } else {
+                // Compute node needs to process the UTXO request sent by the miner
+                if let Some(addr) = miner_has_aggregation_tx_active(network, miner).await {
+                    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
+
+                    // Send the UTXO set to the miner
+                    {
+                        let compute_node = network.compute(compute).unwrap();
+                        compute_node
+                            .lock()
+                            .await
+                            .send_fetched_utxo_set()
+                            .await
+                            .unwrap();
+                    }
+
+                    // Miner handles the UTXO set and updates its balance
+                    miner_handle_event(network, miner, "Received UTXO set for aggregating tx")
+                        .await;
+
+                    {
+                        let miner_node = network.miner(miner).unwrap();
+                        miner_node.lock().await.update_running_total().await;
+
+                        let running_total = miner_node
+                            .lock()
+                            .await
+                            .get_wallet_db()
+                            .get_fund_store()
+                            .running_total()
+                            .clone();
+
+                        let utxo_bal = compute_get_utxo_balance_for_addresses(
+                            network,
+                            compute,
+                            vec![addr.clone()],
+                        )
+                        .await
+                        .get_asset_values()
+                        .tokens;
+
+                        if let Some(amount) = prev_mining_reward {
+                            // Negate the mining reward from the running total as this check
+                            // happens in the next immediate block after the aggregation tx is processed.
+                            let actual_running_total = running_total.tokens - amount;
+                            assert_eq!(utxo_bal, actual_running_total);
+                        }
+                    }
+                }
+                compute_handle_event(network, compute, &["Partition PoW received successfully"])
+                    .await;
+            }
+        }
         for miner in in_miners {
             miner_process_found_block_pow(network, miner).await;
-            compute_handle_event(network, compute, "Received PoW successfully").await;
+            compute_handle_event(network, compute, &["Received PoW successfully"]).await;
         }
     }
     node_all_handle_event(network, compute_nodes, &["Pipeline halted"]).await;
@@ -1000,7 +1238,7 @@ async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
         let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
         for miner in &in_miners {
             miner_process_found_block_pow(network, miner).await;
-            compute_handle_error(network, compute, "Not block currently mined").await;
+            compute_handle_error(network, compute, &["Not block currently mined"]).await;
         }
     }
 }
@@ -1061,7 +1299,7 @@ async fn proof_winner(network_config: NetworkConfig) {
     // Act
     // Does not allow miner reuse.
     //
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
@@ -1083,8 +1321,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .map(|i| (i.0.clone(), i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
         expected_before,
-        "Info Before: {:?}",
-        info_before
+        "Info Before: {info_before:?}"
     );
     assert_eq!(
         info_after
@@ -1092,8 +1329,7 @@ async fn proof_winner(network_config: NetworkConfig) {
             .map(|i| (i.0.clone(), i.1.len(), i.2.len()))
             .collect::<Vec<_>>(),
         expected_after,
-        "Info After: {:?}",
-        info_after
+        "Info After: {info_after:?}"
     );
 
     test_step_complete(network).await;
@@ -1113,8 +1349,12 @@ async fn proof_winner_act(network: &mut Network) {
     info!("Test Step Miner winner:");
     for compute in compute_nodes {
         let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
-        compute_flood_rand_num_to_requesters(network, compute).await;
-        miner_all_handle_event(network, c_miners, "Received random number successfully").await;
+        let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
+        let in_miners = &in_miners;
+
+        compute_flood_rand_and_block_to_partition(network, compute).await;
+        let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
+        node_all_handle_different_event(network, c_miners, &all_evts).await;
     }
 }
 
@@ -1242,9 +1482,12 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn main_loops_few_txs_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11300, 1);
-    main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
+async fn main_loops_few_txs_raft_1_node_with_file_backup() {
+    let mut network_config = complete_network_config_with_n_compute_raft(11300, 1);
+    network_config.in_memory_db = false;
+    network_config.backup_block_modulo = Some(2);
+    remove_all_node_dbs(&network_config);
+    main_loops_raft_1_node_common(network_config, vec![3], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1336,9 +1579,9 @@ async fn main_loops_raft_1_node_common(
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![(0..seed_wallet_count)
+        user_initial_transactions: (0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect()],
+            .collect::<Vec<WalletTxSpec>>(),
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: tx_max_count,
@@ -1354,7 +1597,7 @@ async fn main_loops_raft_1_node_common(
     let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
     let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
     for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
-        let tag = format!("Before start {}", idx);
+        let tag = format!("Before start {idx}");
         modify_network(&mut network, &tag, modify_cfg).await;
 
         for node_name in compute_nodes {
@@ -1417,7 +1660,7 @@ async fn receive_payment_tx_user() {
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
-    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     // Ignore donations:
@@ -1487,7 +1730,7 @@ async fn receive_testnet_donation_payment_tx_user() {
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
-    compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     let after = node_all_get_wallet_info(&mut network, user_nodes).await;
@@ -1553,7 +1796,12 @@ async fn reject_payment_txs() {
         user_send_transaction_to_compute(&mut network, "user2", "compute1", tx).await;
     }
     for _tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
-        compute_handle_error(&mut network, "compute1", "No valid transactions provided").await;
+        compute_handle_error(
+            &mut network,
+            "compute1",
+            &["No valid transactions provided"],
+        )
+        .await;
     }
     add_transactions_act(&mut network, &valid_txs).await;
 
@@ -1593,7 +1841,7 @@ async fn gen_transactions_common(
     // Arrange
     //
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]],
+        user_initial_transactions: vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)],
         user_setup_tx_chunk_size: None,
         user_setup_tx_in_per_tx: Some(2),
         user_setup_tx_max_count: 4,
@@ -1604,7 +1852,7 @@ async fn gen_transactions_common(
     // Act
     //
     node_send_startup_requests(&mut network, "user1").await;
-    compute_handle_event(&mut network, "compute1", "Received block notification").await;
+    compute_handle_event(&mut network, "compute1", &["Received block notification"]).await;
     modify_network(&mut network, "After block notification request", modify_cfg).await;
 
     let mut tx_expected = Vec::new();
@@ -1619,8 +1867,8 @@ async fn gen_transactions_common(
         compute_flood_block_to_users(&mut network, "compute1").await;
         user_handle_event(&mut network, "user1", "Block mining notified").await;
         let transactions = user_process_mining_notified(&mut network, "user1").await;
-        compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
-        compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+        compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+        compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
         let committed = compute_committed_tx_pool(&mut network, "compute1").await;
 
         tx_expected.push(transactions.unwrap());
@@ -1650,12 +1898,17 @@ async fn proof_of_work_reject() {
     let block_num = 1;
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
-    compute_flood_rand_num_to_requesters(&mut network, compute).await;
+    compute_flood_rand_and_block_to_partition(&mut network, compute).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
     miner_handle_event(&mut network, miner, "Partition PoW complete").await;
     miner_process_found_partition_pow(&mut network, miner).await;
-    compute_handle_event(&mut network, compute, "Partition PoW received successfully").await;
-    compute_handle_event(&mut network, compute, "Winning PoW intake open").await;
+    compute_handle_event(
+        &mut network,
+        compute,
+        &["Partition PoW received successfully"],
+    )
+    .await;
+    compute_handle_event(&mut network, compute, &["Winning PoW intake open"]).await;
 
     //
     // Act
@@ -1668,7 +1921,7 @@ async fn proof_of_work_reject() {
             coinbase: Default::default(),
         };
         compute_inject_next_event(&mut network, "user1", compute, request).await;
-        compute_handle_error(&mut network, compute, "Not block currently mined").await;
+        compute_handle_error(&mut network, compute, &["Not block currently mined"]).await;
     }
     {
         // For not currently mined block number.
@@ -1678,7 +1931,7 @@ async fn proof_of_work_reject() {
             coinbase: Default::default(),
         };
         compute_inject_next_event(&mut network, miner, compute, request).await;
-        compute_handle_error(&mut network, compute, "Not block currently mined").await;
+        compute_handle_error(&mut network, compute, &["Not block currently mined"]).await;
     }
     {
         // For miner in partition and correct block, but wrong nonce/coinbase
@@ -1688,7 +1941,7 @@ async fn proof_of_work_reject() {
             coinbase: Default::default(),
         };
         compute_inject_next_event(&mut network, miner, compute, request).await;
-        compute_handle_error(&mut network, compute, "Coinbase transaction invalid").await;
+        compute_handle_error(&mut network, compute, &["Coinbase transaction invalid"]).await;
     }
 
     //
@@ -1768,11 +2021,82 @@ async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
     )];
 
     let network_config = complete_network_config_with_n_compute_raft(10480, 1);
-    handle_message_lost_common(network_config, &modify_cfg).await
+    handle_message_lost_common_with_pow(network_config, CfgPow::First, &modify_cfg).await
+}
+
+/// In this test we simulate a network partition where the miners chosen to mine the block
+/// suddenly disconnect, leaving the pipeline in a stuck state.
+///
+/// To address this issue the pipeline needs to reset to participant intake
+#[tokio::test(flavor = "current_thread")]
+async fn handle_messages_lost_reset_pipeline_stage() {
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11520, 1);
+    // Enable pipeline resets when message retrigger threshold has been reached
+    network_config.enable_pipeline_reset = Some(true);
+    network_config.test_duration_divider = 10;
+    let mut network = Network::create_from_config(&network_config).await;
+
+    let modify_cfg = vec![
+        // Miner 1 get's dropped as soon as it's supposed to mine the block
+        ("After Winning PoW intake open", CfgModif::Drop("miner1")),
+        // The pipeline status changes back to participant intake after a the threshold
+        // for retrigger messages has been reached
+        (
+            "After Winning PoW intake open",
+            CfgModif::HandleEvents(&[("compute1", "Pipeline reset")]),
+        ),
+        // After the pipeline status has been reset, the pipeline should be able to
+        // accept participants again, so we respawn Miner 1
+        ("After Winning PoW intake open", CfgModif::Respawn("miner1")),
+        (
+            "After Winning PoW intake open",
+            CfgModif::Reconnect("miner1"),
+        ),
+        (
+            "After Winning PoW intake open",
+            CfgModif::HandleEvents(&[("compute1", "Received partition request successfully")]),
+        ),
+    ];
+
+    //
+    // Act
+    //
+    create_first_block_act(&mut network).await;
+
+    // Normal PoW procedure
+    proof_of_work_participation_act(&mut network, CfgNum::All, CfgPow::First).await;
+
+    // Disconnect Miner 1 and wait for pipeline reset
+    // Reconnect Miner 1 and continue with pipeline from participant intake
+    modify_network(&mut network, "After Winning PoW intake open", &modify_cfg).await;
+
+    // Normal PoW procedure
+    proof_of_work_participation_act(&mut network, CfgNum::All, CfgPow::First).await;
+    proof_of_work_block_act(&mut network, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Assert
+    //
+    let actual0 = storage_get_last_stored_info(&mut network, "storage1").await;
+    let actual0_values = actual0.1.as_ref();
+    let actual0_values = actual0_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
+    assert_eq!(actual0_values, Some((0, 1)), "Actual: {actual0:?}");
 }
 
 async fn handle_message_lost_common(
+    network_config: NetworkConfig,
+    modify_cfg: &[(&str, CfgModif)],
+) {
+    handle_message_lost_common_with_pow(network_config, CfgPow::Parallel, modify_cfg).await
+}
+
+async fn handle_message_lost_common_with_pow(
     mut network_config: NetworkConfig,
+    cfg_pow: CfgPow,
     modify_cfg: &[(&str, CfgModif)],
 ) {
     test_step_start();
@@ -1795,23 +2119,35 @@ async fn handle_message_lost_common(
     });
     let expected_events_b1_stored = network.all_active_nodes_events(|t, _| match t {
         NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
+        NodeType::Compute if cfg_pow == CfgPow::Parallel => vec![
+            "Partition PoW received successfully".to_owned(),
+            "Received PoW successfully".to_owned(),
+            "Pipeline halted".to_owned(),
+        ],
         NodeType::Compute => vec![
             "Partition PoW received successfully".to_owned(),
             "Winning PoW intake open".to_owned(),
+            "Partition PoW received successfully".to_owned(),
             "Received PoW successfully".to_owned(),
             "Pipeline halted".to_owned(),
+        ],
+        NodeType::Miner if cfg_pow == CfgPow::Parallel => vec![
+            "Pre-block received successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
+            "Block PoW complete".to_owned(),
         ],
         NodeType::Miner => vec![
             "Received random number successfully".to_owned(),
             "Partition PoW complete".to_owned(),
             "Pre-block received successfully".to_owned(),
+            "Partition PoW complete".to_owned(),
             "Block PoW complete".to_owned(),
         ],
         NodeType::User => vec![],
     });
 
     create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     let stored0 = storage_get_last_block_stored(&mut network, "storage1").await;
 
@@ -1829,7 +2165,7 @@ async fn handle_message_lost_common(
     let actual1 = storage_get_last_stored_info(&mut network, "storage1").await;
     let actual1_values = actual1.1.as_ref();
     let actual1_values = actual1_values.map(|(_, b_num, min_tx)| (*b_num, *min_tx));
-    assert_eq!(actual1_values, Some((1, 1)), "Actual: {:?}", actual1);
+    assert_eq!(actual1_values, Some((1, 1)), "Actual: {actual1:?}");
 
     let stored0 = stored0.unwrap();
     let actual_w0 = node_all_combined_get_wallet_info(&mut network, miner_nodes).await;
@@ -1930,10 +2266,29 @@ async fn request_blockchain_item_act(
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_blockchain_item(network, miner_from, block_key).await;
+    let storage_node_addr = network
+        .storage(storage_to)
+        .unwrap()
+        .clone()
+        .lock()
+        .await
+        .local_address();
+    miner_request_blockchain_item(network, miner_from, block_key, storage_node_addr).await;
     storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
     storage_send_blockchain_item(network, storage_to).await;
     miner_handle_event(network, miner_from, "Blockchain item received").await;
+}
+
+async fn miner_request_blockchain_item(
+    network: &mut Network,
+    miner_from: &str,
+    block_key: &str,
+    storage_node_addr: SocketAddr,
+) {
+    let mut m = network.miner(miner_from).unwrap().lock().await;
+    m.request_blockchain_item(block_key.to_owned(), storage_node_addr)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1975,7 +2330,7 @@ async fn catchup_fetch_blockchain_item_raft() {
     for (i, block) in blocks.iter().enumerate() {
         info!("Test Step Storage add block {}", i);
 
-        let tag = format!("Before store block {}", i);
+        let tag = format!("Before store block {i}");
         modify_network(&mut network, &tag, &modify_cfg).await;
         let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
 
@@ -2041,7 +2396,7 @@ async fn relaunch_with_new_raft_nodes() {
 
         // Create intiial snapshoot in compute and storage
         create_first_block_act(&mut network).await;
-        proof_of_work_act(&mut network, CfgNum::All).await;
+        proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
         send_block_to_storage_act(&mut network, CfgNum::All).await;
         network.close_raft_loops_and_drop().await
     };
@@ -2210,7 +2565,7 @@ async fn request_utxo_set_act(
     address_list: UtxoFetchType,
 ) {
     user_send_request_utxo_set(network, user, address_list).await;
-    compute_handle_event(network, compute, "Received UTXO fetch request").await;
+    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
     compute_send_utxo_set(network, compute).await;
     user_handle_event(network, user, "Received UTXO set").await;
 }
@@ -2269,7 +2624,7 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
     // Act
     //
     create_first_block_act(&mut network).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     let before = node_all_get_wallet_info(&mut network, user_nodes).await;
@@ -2307,7 +2662,7 @@ async fn request_utxo_set_and_update_running_total_act(
 ) {
     user_trigger_update_wallet_from_utxo_set(network, user, address_list).await;
     user_handle_event(network, user, "Request UTXO set").await;
-    compute_handle_event(network, compute, "Received UTXO fetch request").await;
+    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
     compute_send_utxo_set(network, compute).await;
     user_handle_event(network, user, "Received UTXO set").await;
     user_update_running_total(network, user).await;
@@ -2325,18 +2680,26 @@ pub async fn create_receipt_asset_raft_1_node() {
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
     create_first_block_act(&mut network).await;
+    let receipt_metadata = Some("receipt_metadata".to_string());
 
     //
     // Act
     //
     let actual_running_total_before = node_get_wallet_info(&mut network, "user1").await.0;
-    let tx_hash = create_receipt_asset_act(&mut network, "user1", "compute1", 10).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     let actual_running_total_after = node_get_wallet_info(&mut network, "user1").await.0;
@@ -2346,7 +2709,10 @@ pub async fn create_receipt_asset_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(10, None)])
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(10, None, receipt_metadata)]
+        )
     );
     assert_eq!(
         actual_running_total_before,
@@ -2374,11 +2740,13 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     network_config.compute_seed_utxo =
         make_compute_seed_utxo_with_info(&[("000000", vec![(COMMON_PUB_KEY, TokenAmount(0))])]);
     create_first_block_act(&mut network).await;
+    let receipt_metadata = Some("receipt_metadata".to_string());
 
     //
     // Act
     //
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None));
+    let asset_hash =
+        construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, receipt_metadata.clone()));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
@@ -2389,16 +2757,17 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
         COMMON_PUB_ADDR.to_string(),
         COMMON_PUB_KEY.to_string(),
         signature,
+        receipt_metadata.clone(),
     )
     .await;
 
-    compute_handle_event(&mut network, "compute1", "Transactions committed").await;
+    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
     let actual_utxo_receipt: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
-        .map(|v| v.into_iter().map(|(_, v)| v.value).collect())
+        .map(|v| v.into_values().map(|v| v.value).collect())
         .collect();
 
     //
@@ -2406,7 +2775,10 @@ pub async fn create_receipt_asset_on_compute_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_receipt,
-        node_all(compute_nodes, vec![Asset::receipt(1, None)]) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
+        node_all(
+            compute_nodes,
+            vec![Asset::receipt(1, None, receipt_metadata)]
+        ) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Receipt`s */
     );
 
     test_step_complete(network).await;
@@ -2427,10 +2799,20 @@ pub async fn make_receipt_based_payment_raft_1_node() {
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    // This metadata ONLY forms part of the create transaction
+    // , and is not present in any on-spending
+    let receipt_metadata = Some("receipt metadata".to_string());
 
     create_first_block_act(&mut network).await;
     node_connect_to(&mut network, "user1", "user2").await;
-    let tx_hash = create_receipt_asset_act(&mut network, "user2", "compute1", 5).await;
+    let tx_hash = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -2514,6 +2896,7 @@ pub async fn make_receipt_based_payment_raft_1_node() {
         vec![Asset::receipt(
             1,
             Some(tx_hash.clone()), /* tx_hash of create transaction */
+            None,                  /* metadata of create transaction */
         )],
     ];
     assert!(actual_assets.iter().all(|v| expected_assets.contains(v)));
@@ -2558,12 +2941,27 @@ pub async fn make_multiple_receipt_based_payments_raft_1_node() {
         ]
     };
 
+    let receipt_metadata = Some("receipt metadata".to_string());
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     // Receipt type "one" belongs to "user1"
-    let tx_hash_1 = create_receipt_asset_act(&mut network, "user1", "compute1", 5).await;
+    let tx_hash_1 = create_receipt_asset_act(
+        &mut network,
+        "user1",
+        "compute1",
+        5,
+        receipt_metadata.clone(),
+    )
+    .await;
     // Receipt type "two" belongs to "user2"
-    let tx_hash_2 = create_receipt_asset_act(&mut network, "user2", "compute1", 10).await;
+    let tx_hash_2 = create_receipt_asset_act(
+        &mut network,
+        "user2",
+        "compute1",
+        10,
+        receipt_metadata.clone(),
+    )
+    .await;
     node_connect_to(&mut network, "user1", "user2").await;
 
     //
@@ -2696,10 +3094,12 @@ async fn create_receipt_asset_act(
     user: &str,
     compute: &str,
     receipt_amount: u64,
+    receipt_metadata: Option<String>,
 ) -> String {
-    let tx_hash = user_send_receipt_asset(network, user, compute, receipt_amount).await;
-    compute_handle_event(network, compute, "Transactions added to tx pool").await;
-    compute_handle_event(network, compute, "Transactions committed").await;
+    let tx_hash =
+        user_send_receipt_asset(network, user, compute, receipt_amount, receipt_metadata).await;
+    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
+    compute_handle_event(network, compute, &["Transactions committed"]).await;
     tx_hash
 }
 
@@ -2710,6 +3110,7 @@ async fn compute_create_receipt_asset_tx(
     script_public_key: String,
     public_key: String,
     signature: String,
+    receipt_metadata: Option<String>,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
     let drs_tx_hash_spec = DrsTxHashSpec::Create; /* Generate unique DRS tx hash */
@@ -2720,6 +3121,7 @@ async fn compute_create_receipt_asset_tx(
             public_key,
             signature,
             drs_tx_hash_spec,
+            receipt_metadata,
         )
         .unwrap();
     c.receive_transactions(vec![tx]);
@@ -2738,12 +3140,12 @@ async fn make_receipt_based_payment_act(
     user_send_receipt_based_payment_response(network, to).await;
     user_handle_event(network, from, "Received receipt-based payment response").await;
     user_send_receipt_based_payment_to_desinations(network, from, compute).await;
-    compute_handle_event(network, compute, "Transactions added to tx pool").await;
+    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
     user_handle_event(network, to, "Payment transaction received").await;
     user_send_receipt_based_payment_to_desinations(network, to, compute).await;
-    compute_handle_event(network, compute, "Transactions added to tx pool").await;
+    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
     user_handle_event(network, from, "Payment transaction received").await;
-    compute_handle_event(network, compute, "Transactions committed").await;
+    compute_handle_event(network, compute, &["Transactions committed"]).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2792,19 +3194,18 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g44831b7fd9987d898cec6aefca5790f";
-    create_receipt_asset_txs.insert(
-        tx_hash.to_owned(),
-        construct_receipt_create_tx(
-            0,
-            decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
-            &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
-            1,
-            DrsTxHashSpec::Create,
-        ),
+    let tx = construct_receipt_create_tx(
+        0,
+        decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
+        &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
+        1,
+        DrsTxHashSpec::Create,
+        None,
     );
+    let tx_hash = construct_tx_hash(&tx);
+    create_receipt_asset_txs.insert(tx_hash.to_owned(), tx);
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
-    proof_of_work_act(&mut network, CfgNum::All).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
@@ -2846,12 +3247,12 @@ async fn reject_receipt_based_payment() {
     //
     for i in 0..2 {
         user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_send_txs[i]).await;
-        compute_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
+        compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
         user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_recv_txs[i]).await;
         compute_handle_event(
             &mut network,
             "compute1",
-            "Some transactions invalid. Adding valid transactions only",
+            &["Some transactions invalid. Adding valid transactions only"],
         )
         .await;
     }
@@ -2869,6 +3270,178 @@ async fn reject_receipt_based_payment() {
         ),
         (0, 0)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_pause_update_and_resume_raft_3_nodes() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_raft(11550, 3);
+
+    // Initial network config as loaded
+    let initial_network_config = ComputeNodeSharedConfig {
+        compute_partition_full_size: network_config.compute_partition_full_size,
+        compute_mining_event_timeout: 500,
+    };
+
+    // This is the configuration we want applied to all compute nodes during runtime
+    let shared_config_to_send = ComputeNodeSharedConfig {
+        compute_partition_full_size: 5,
+        compute_mining_event_timeout: 10000,
+    };
+
+    let compute_ring = &[
+        "compute1".to_string(),
+        "compute2".to_string(),
+        "compute3".to_string(),
+    ];
+
+    let mut network = Network::create_from_config(&network_config).await;
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // Create pause all nodes at block 0 + 1 = 1
+    compute_initiate_coordinated_pause_act("compute1", compute_ring, &mut network, 1).await;
+    create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+
+    // Confirm that the nodes are actually all paused.
+    let all_nodes_paused_after_block_create =
+        compute_all_nodes_paused(&mut network, compute_ring).await;
+
+    // All nodes should be paused now
+    // ,and ready to update their configs
+    // with the one received from "compute1"
+    compute_initiate_send_shared_config_act(
+        shared_config_to_send,
+        "compute1",
+        compute_ring,
+        &mut network,
+    )
+    .await;
+
+    // All shared config values should now be the same
+    let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
+
+    // Resume the nodes again
+    compute_initiate_coordinated_resume_act("compute1", compute_ring, &mut network).await;
+
+    // Confirm all nodes are now resumed
+    let all_nodes_resumed_after_coordinated_resume =
+        compute_all_nodes_resumed(&mut network, compute_ring).await;
+
+    // Normal operation should continue here
+    proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Assert
+    //
+    assert!(all_nodes_paused_after_block_create);
+    assert!(all_nodes_same_config);
+    assert!(all_nodes_resumed_after_coordinated_resume);
+    assert!(initial_network_config != shared_config_to_send);
+}
+
+async fn compute_get_shared_config(
+    network: &mut Network,
+    compute: &str,
+) -> ComputeNodeSharedConfig {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_shared_config()
+}
+
+async fn all_nodes_same_config(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_shared_config_same = true;
+    let first_shared_config = compute_get_shared_config(network, &compute_ring[0]).await;
+    for compute in compute_ring {
+        let shared_config = compute_get_shared_config(network, compute).await;
+        if shared_config != first_shared_config {
+            all_shared_config_same = false;
+            break;
+        }
+    }
+    all_shared_config_same
+}
+
+async fn compute_all_nodes_paused(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_nodes_paused = true;
+    for compute in compute_ring {
+        let c = network.compute(compute).unwrap().lock().await;
+        if !c.is_paused().await {
+            all_nodes_paused = false;
+            break;
+        }
+    }
+    all_nodes_paused
+}
+
+async fn compute_all_nodes_resumed(network: &mut Network, compute_ring: &[String]) -> bool {
+    let mut all_nodes_resumed = true;
+    for compute in compute_ring {
+        let c = network.compute(compute).unwrap().lock().await;
+        if c.is_paused().await {
+            all_nodes_resumed = false;
+            break;
+        }
+    }
+    all_nodes_resumed
+}
+
+async fn compute_initiate_coordinated_pause_act(
+    compute: &str,
+    compute_ring: &[String],
+    network: &mut Network,
+    b_num_from_current: u64,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.pause_nodes(b_num_from_current);
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(
+        network,
+        compute_ring,
+        &["Received coordinated pause request"],
+    )
+    .await;
+    node_all_handle_event(network, compute_ring, &["Node pause configuration set"]).await;
+}
+
+async fn compute_initiate_send_shared_config_act(
+    shared_config: ComputeNodeSharedConfig,
+    compute: &str,
+    compute_peers: &[String],
+    network: &mut Network,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.send_shared_config(shared_config);
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(network, compute_peers, &["Received shared config"]).await;
+    node_all_handle_event(network, compute_peers, &["Shared config applied"]).await;
+}
+
+async fn compute_initiate_coordinated_resume_act(
+    compute: &str,
+    compute_ring: &[String],
+    network: &mut Network,
+) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    let _ = c.resume_nodes();
+    drop(c); // Drop compute node to avoid borrow checker violation
+    node_all_handle_event(
+        network,
+        compute_ring,
+        &["Received coordinated resume request"],
+    )
+    .await;
+    node_all_handle_event(network, compute_ring, &["Node resumed"]).await;
 }
 
 //
@@ -3099,7 +3672,7 @@ async fn node_send_startup_requests(network: &mut Network, node: &str) {
 // ComputeNode helpers
 //
 
-async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &str) {
+async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &[&str]) {
     let mut c = network.compute(compute).unwrap().lock().await;
     compute_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
 }
@@ -3110,11 +3683,11 @@ async fn compute_all_handle_event(
     reason_str: &str,
 ) {
     for compute in compute_group {
-        compute_handle_event(network, compute, reason_str).await;
+        compute_handle_event(network, compute, &[reason_str]).await;
     }
 }
 
-async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &str) {
+async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &[&str]) {
     let mut c = network.compute(compute).unwrap().lock().await;
     compute_handle_event_for_node(&mut c, false, reason_str, &mut test_timeout()).await;
 }
@@ -3125,30 +3698,30 @@ async fn compute_all_handle_error(
     reason_str: &str,
 ) {
     for compute in compute_group {
-        compute_handle_error(network, compute, reason_str).await;
+        compute_handle_error(network, compute, &[reason_str]).await;
     }
 }
 
 async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     c: &mut ComputeNode,
     success_val: bool,
-    reason_val: &str,
+    reason_val: &[&str],
     exit: &mut E,
 ) {
-    let addr = c.address();
+    let addr = c.local_address();
     match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
-            if success == success_val && reason == reason_val =>
+            if success == success_val && reason_val.contains(&reason) =>
         {
-            info!("Compute handle_next_event {} sucess ({})", reason_val, addr);
+            info!("Compute handle_next_event {} success ({})", reason, addr);
         }
         other => {
             error!(
-                "Unexpected Compute result: {:?} (expected:{})({})",
+                "Unexpected Compute result: {:?} (expected:{:?})({})",
                 other, reason_val, addr
             );
             panic!(
-                "Unexpected Compute result: {:?} (expected:{})({})",
+                "Unexpected Compute result: {:?} (expected:{:?})({})",
                 other, reason_val, addr
             );
         }
@@ -3164,13 +3737,14 @@ async fn compute_one_handle_event(
 
     let mut compute = compute.lock().await;
     for reason in reason_str {
-        compute_handle_event_for_node(&mut compute, true, reason, &mut test_timeout()).await;
+        compute_handle_event_for_node(&mut compute, true, &[reason.as_str()], &mut test_timeout())
+            .await;
     }
 
     debug!("Start wait for completion of other in raft group");
 
     let mut exit = test_timeout_barrier(barrier);
-    compute_handle_event_for_node(&mut compute, true, "Barrier complete", &mut exit).await;
+    compute_handle_event_for_node(&mut compute, true, &["Barrier complete"], &mut exit).await;
 
     debug!("Stop wait for event");
 }
@@ -3335,6 +3909,11 @@ async fn compute_get_utxo_balance_for_user(
         .clone()
 }
 
+async fn miner_get_last_aggregation_address(network: &mut Network, miner: &str) -> Option<String> {
+    let miner = network.miner(miner).unwrap().lock().await;
+    miner.has_aggregation_tx_active()
+}
+
 async fn compute_get_utxo_balance_for_addresses(
     network: &mut Network,
     compute: &str,
@@ -3343,6 +3922,11 @@ async fn compute_get_utxo_balance_for_addresses(
     let c = network.compute(compute).unwrap().lock().await;
     c.get_committed_utxo_tracked_set()
         .get_balance_for_addresses(&addresses)
+}
+
+async fn compute_get_prev_mining_reward(network: &mut Network, compute: &str) -> TokenAmount {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_current_mining_reward()
 }
 
 async fn compute_all_inject_next_event(
@@ -3368,14 +3952,9 @@ async fn compute_inject_next_event(
     c.inject_next_event(from_addr, request).unwrap();
 }
 
-async fn compute_flood_rand_num_to_requesters(network: &mut Network, compute: &str) {
+async fn compute_flood_rand_and_block_to_partition(network: &mut Network, compute: &str) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    c.flood_rand_num_to_requesters().await.unwrap();
-}
-
-async fn compute_flood_block_to_partition(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    c.flood_block_to_partition().await.unwrap();
+    c.flood_rand_and_block_to_partition().await.unwrap();
 }
 
 async fn compute_flood_transactions_to_partition(network: &mut Network, compute: &str) {
@@ -3549,7 +4128,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
             // Check match expected block_hash:
             let mut reader = Cursor::new(stored_value.as_slice());
             let header = match deserialize_from::<_, BlockHeader>(&mut reader) {
-                Err(e) => return Some(format!("error: {:?}", e)),
+                Err(e) => return Some(format!("error: {e:?}")),
                 Ok(v) => v,
             };
 
@@ -3566,7 +4145,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         }
 
         match deserialize::<StoredSerializingBlock>(&stored_value) {
-            Err(e) => return Some(format!("error: {:?}", e)),
+            Err(e) => return Some(format!("error: {e:?}")),
             Ok(v) => v,
         }
     };
@@ -3582,7 +4161,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         let stored_value =
             checked_blockchain_item_data(stored_value, BlockchainItemType::Tx).unwrap();
         let stored_tx = match deserialize::<Transaction>(&stored_value) {
-            Err(e) => return Some(format!("error tx hash: {:?} : {:?}", e, tx_hash)),
+            Err(e) => return Some(format!("error tx hash: {e:?} : {tx_hash:?}")),
             Ok(v) => v,
         };
         block_txs.insert(tx_hash.clone(), stored_tx);
@@ -3599,7 +4178,7 @@ fn storage_get_stored_complete_block_for_node(s: &StorageNode, block_hash: &str)
         unicorn_witness: Default::default(),
     };
     let complete = CompleteBlock { common, extra_info };
-    Some(format!("{:?}", complete))
+    Some(format!("{complete:?}"))
 }
 
 async fn storage_all_get_last_stored_info(
@@ -3646,12 +4225,15 @@ async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = s.address();
+    let addr = s.local_address();
     match s.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("Storage handle_next_event {} sucess ({})", reason_val, addr);
+            info!(
+                "Storage handle_next_event {} success ({})",
+                reason_val, addr
+            );
         }
         other => {
             error!(
@@ -3706,12 +4288,12 @@ async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = u.address();
+    let addr = u.local_address();
     match u.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("User handle_next_event {} sucess ({})", reason_val, addr);
+            info!("User handle_next_event {} success ({})", reason_val, addr);
         }
         other => {
             error!(
@@ -3833,7 +4415,7 @@ async fn user_trigger_update_wallet_from_utxo_set(
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     u.api_inputs()
         .1
-        .inject_next_event(u.address(), request)
+        .inject_next_event(u.local_address(), request)
         .unwrap();
 }
 
@@ -3843,7 +4425,14 @@ async fn user_send_request_utxo_set(
     address_list: UtxoFetchType,
 ) {
     let mut u = network.user(user).unwrap().lock().await;
-    u.send_request_utxo_set(address_list).await.unwrap();
+    let compute_addr = u.compute_address();
+    u.send_request_utxo_set(
+        address_list,
+        compute_addr,
+        crate::interfaces::NodeType::User,
+    )
+    .await
+    .unwrap();
 }
 
 async fn user_send_receipt_based_payment_request(
@@ -3882,11 +4471,12 @@ async fn user_send_receipt_asset(
     user: &str,
     compute: &str,
     receipt_amount: u64,
+    receipt_metadata: Option<String>,
 ) -> String {
     // Returns transactio hash
     let mut u = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    u.generate_receipt_asset_tx(receipt_amount, DrsTxHashSpec::Create)
+    u.generate_receipt_asset_tx(receipt_amount, DrsTxHashSpec::Create, receipt_metadata)
         .await;
     let tx_hash = construct_tx_hash(&u.get_next_payment_transaction().unwrap().1);
     u.send_next_payment_to_destinations(compute_addr)
@@ -3898,13 +4488,6 @@ async fn user_send_receipt_asset(
 //
 // MinerNode helpers
 //
-
-async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
-    let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_blockchain_item(block_key.to_owned())
-        .await
-        .unwrap();
-}
 
 async fn miner_get_blockchain_item_received_b_num(
     network: &mut Network,
@@ -3954,12 +4537,12 @@ async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = m.address();
+    let addr = m.local_address();
     match m.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
         {
-            info!("Miner handle_next_event {} sucess ({})", reason_val, addr);
+            info!("Miner handle_next_event {} success ({})", reason_val, addr);
         }
         other => {
             error!(
@@ -3999,6 +4582,14 @@ async fn miner_process_found_partition_pow(network: &mut Network, from_miner: &s
     m.process_found_partition_pow().await;
 }
 
+async fn miner_has_aggregation_tx_active(
+    network: &mut Network,
+    from_miner: &str,
+) -> Option<String> {
+    let m = network.miner(from_miner).unwrap().lock().await;
+    m.has_aggregation_tx_active()
+}
+
 async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.process_found_block_pow().await;
@@ -4029,7 +4620,6 @@ fn valid_transactions_with(
 ) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
-        println!("sk: {}, pk: {}", hex::encode(&sk), hex::encode(&pk));
         (pk, sk)
     } else {
         let sk_slice = hex::decode(COMMON_SEC_KEY).unwrap();
@@ -4084,6 +4674,25 @@ fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -
             )
         })
         .collect()
+}
+
+fn block_and_partition_evt_in_miner_pow(
+    c_miners: &[String],
+    in_miners: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    let init_evt = |m: &String| (m.clone(), vec![]);
+    let mut evts = c_miners.iter().map(init_evt).collect::<BTreeMap<_, _>>();
+    for (key, evt) in evts.iter_mut() {
+        if in_miners.contains(key) {
+            evt.push("Pre-block received successfully".to_owned());
+            evt.push("Partition PoW complete".to_owned());
+            evt.push("Block PoW complete".to_owned());
+        } else {
+            evt.push("Received random number successfully".to_owned());
+            evt.push("Partition PoW complete".to_owned());
+        }
+    }
+    evts
 }
 
 fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
@@ -4292,7 +4901,7 @@ async fn complete_block_with_seed(
     };
 
     let hash_key = construct_valid_block_pow_hash(&stored.block).unwrap();
-    let complete_str = format!("{:?}", complete);
+    let complete_str = format!("{complete:?}");
 
     ((hash_key, complete_str), complete)
 }
@@ -4318,6 +4927,9 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         user_test_auto_gen_setup: Default::default(),
         tls_config: Default::default(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
+        backup_restore: Default::default(),
+        enable_pipeline_reset: Default::default(),
     }
 }
 

@@ -1,13 +1,15 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
-use crate::compute_raft::{CommittedItem, ComputeRaft};
-use crate::configurations::{ComputeNodeConfig, ExtraNodeParams, TlsPrivateInfo};
-use crate::constants::{DB_PATH, PEER_LIMIT};
-use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
+use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
+use crate::configurations::{
+    ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
+};
+use crate::constants::{DB_PATH, PEER_LIMIT, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
+use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
-    MinedBlockExtraInfo, NodeType, ProofOfWork, Response, StorageRequest, UserRequest,
+    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
@@ -22,6 +24,7 @@ use crate::utils::{
 use crate::Node;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
+use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
 use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
@@ -29,12 +32,14 @@ use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::{
     error::Error,
     fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
+use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
@@ -43,6 +48,7 @@ use tracing_futures::Instrument;
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
 pub const USER_NOTIFY_LIST_KEY: &str = "UserNotifyListKey";
 pub const POW_RANDOM_NUM_KEY: &str = "PowRandomNumKey";
+pub const POW_PREV_RANDOM_NUM_KEY: &str = "PowPreviousRandomNumKey";
 pub const RAFT_KEY_RUN: &str = "RaftKeyRun";
 
 /// Database columns
@@ -62,6 +68,7 @@ pub type Result<T> = std::result::Result<T, ComputeError>;
 pub enum ComputeError {
     ConfigError(&'static str),
     Network(CommsError),
+    DbError(SimpleDbError),
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
     GenericError(StringError),
@@ -70,11 +77,12 @@ pub enum ComputeError {
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfigError(err) => write!(f, "Config error: {}", err),
-            Self::Network(err) => write!(f, "Network error: {}", err),
-            Self::AsyncTask(err) => write!(f, "Async task error: {}", err),
-            Self::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Self::GenericError(err) => write!(f, "Generic error: {}", err),
+            Self::ConfigError(err) => write!(f, "Config error: {err}"),
+            Self::Network(err) => write!(f, "Network error: {err}"),
+            Self::DbError(err) => write!(f, "DB error: {err}"),
+            Self::AsyncTask(err) => write!(f, "Async task error: {err}"),
+            Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::GenericError(err) => write!(f, "Generic error: {err}"),
         }
     }
 }
@@ -84,6 +92,7 @@ impl Error for ComputeError {
         match self {
             Self::ConfigError(_) => None,
             Self::Network(ref e) => Some(e),
+            Self::DbError(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::GenericError(ref e) => Some(e),
@@ -94,6 +103,12 @@ impl Error for ComputeError {
 impl From<CommsError> for ComputeError {
     fn from(other: CommsError) -> Self {
         Self::Network(other)
+    }
+}
+
+impl From<SimpleDbError> for ComputeError {
+    fn from(other: SimpleDbError) -> Self {
+        Self::DbError(other)
     }
 }
 
@@ -117,24 +132,33 @@ impl From<StringError> for ComputeError {
 
 #[derive(Debug)]
 pub struct ComputeNode {
+    shared_config: ComputeNodeSharedConfig,
+    received_shared_config: Option<ComputeNodeSharedConfig>,
     node: Node,
     node_raft: ComputeRaft,
     db: SimpleDb,
     local_events: LocalEventChannel,
+    b_num_to_pause: Option<u64>,
+    pause_node: Arc<RwLock<bool>>,
+    disable_trigger_messages: Arc<RwLock<bool>>,
     threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
     druid_pool: DruidPool,
+    previous_random_num: Vec<u8>,
     current_random_num: Vec<u8>,
+    current_trigger_messages_count: usize,
+    enable_trigger_messages_pipeline_reset: bool,
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
+    miner_removal_list: BTreeSet<SocketAddr>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
     coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
-    fetched_utxo_set: Option<(SocketAddr, UtxoSet)>,
+    fetched_utxo_set: Option<(SocketAddr, NodeType, UtxoSet)>,
     api_info: (
         SocketAddr,
         Option<TlsPrivateInfo>,
@@ -166,10 +190,13 @@ impl ComputeNode {
             .compute_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute, false).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
-        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take());
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
+        }
+        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take(), None);
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -178,17 +205,34 @@ impl ComputeNode {
 
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
         let api_keys = to_api_keys(config.api_keys.clone());
+        let enable_trigger_messages_pipeline_reset = config
+            .enable_trigger_messages_pipeline_reset
+            .unwrap_or(false);
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
+
+        let shared_config = ComputeNodeSharedConfig {
+            compute_mining_event_timeout: config.compute_mining_event_timeout,
+            compute_partition_full_size: config.compute_partition_full_size,
+        };
 
         ComputeNode {
             node,
             node_raft,
             db,
+            shared_config,
+            received_shared_config: Default::default(),
             local_events: Default::default(),
+            pause_node: Default::default(),
+            b_num_to_pause: Default::default(),
+            disable_trigger_messages: Default::default(),
             threaded_calls: Default::default(),
             current_mined_block: None,
             druid_pool: Default::default(),
+            current_trigger_messages_count: Default::default(),
+            enable_trigger_messages_pipeline_reset,
+            previous_random_num: Default::default(),
             current_random_num: Default::default(),
+            miner_removal_list: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -204,9 +248,39 @@ impl ComputeNode {
         .load_local_db()
     }
 
+    /// Determine whether or not this compute node's trigger messages are disabled
+    pub async fn trigger_messages_disabled(&self) -> bool {
+        *self.disable_trigger_messages.read().await
+    }
+
+    /// Determine whether or not this compute node is paused
+    pub async fn is_paused(&self) -> bool {
+        *self.pause_node.read().await
+    }
+
+    /// Propose a coordinated pause of all compute nodes
+    pub async fn propose_pause_nodes(&mut self, b_num: u64) {
+        self.node_raft.propose_pause_nodes(b_num).await;
+    }
+
+    /// Propose a coordinated resume of all compute nodes
+    pub async fn propose_resume_nodes(&mut self) {
+        self.node_raft.propose_resume_nodes().await;
+    }
+
+    /// Propose a coordinated pause/resume of all compute nodes
+    pub async fn propose_apply_shared_config(&mut self) {
+        self.node_raft.propose_apply_shared_config().await;
+    }
+
+    /// Returns the compute node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the compute node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Get the node's mined block if any
@@ -305,6 +379,15 @@ impl ComputeNode {
             db: self.db.take().in_memory(),
             raft_db: raft_db.in_memory(),
             ..Default::default()
+        }
+    }
+
+    /// Backup persistent dbs
+    pub async fn backup_persistent_dbs(&mut self) {
+        if self.node_raft.need_backup() {
+            if let Err(e) = self.db.file_backup() {
+                error!("Error bakup up main db: {:?}", e);
+            }
         }
     }
 
@@ -455,12 +538,26 @@ impl ComputeNode {
         error!("Flooding commit to peers not implemented");
     }
 
-    ///Sends the requested UTXO set to the user that requested it.
+    /// Sends the requested UTXO set to the peer that requested it.
     pub async fn send_fetched_utxo_set(&mut self) -> Result<()> {
-        if let Some((peer, utxo_set)) = self.fetched_utxo_set.take() {
-            self.node
-                .send(peer, UserRequest::SendUtxoSet { utxo_set })
-                .await?;
+        if let Some((peer, node_type, utxo_set)) = self.fetched_utxo_set.take() {
+            match node_type {
+                NodeType::Miner => {
+                    self.node
+                        .send(peer, MineRequest::SendUtxoSet { utxo_set })
+                        .await?
+                }
+                NodeType::User => {
+                    self.node
+                        .send(peer, UserRequest::SendUtxoSet { utxo_set })
+                        .await?
+                }
+                _ => {
+                    return Err(ComputeError::GenericError(StringError(
+                        "Invalid UTXO requester".to_string(),
+                    )))
+                }
+            }
         }
         Ok(())
     }
@@ -481,6 +578,52 @@ impl ComputeNode {
                     error!("Requested UTXO set not sent {:?}", e);
                 }
             }
+            Ok(Response {
+                success: true,
+                reason: "Received coordinated pause request",
+            }) => {
+                debug!("Received coordinated pause request");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Node pause configuration set",
+            }) => {
+                debug!("Node pause configuration set");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received coordinated resume request",
+            }) => {
+                debug!("Received coordinated resume request");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Node resumed",
+            }) => {
+                warn!("NODE RESUMED");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Received shared config",
+            }) => {
+                debug!("Shared config received");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Shared config applied",
+            }) => {
+                debug!("Shared config applied");
+            }
+            Ok(Response {
+                success: false,
+                reason: "No shared config to apply",
+            }) => {
+                warn!("No shared config to apply");
+            }
+            Ok(Response {
+                success: true,
+                reason: "Miner removal request received",
+            }) => {}
             Ok(Response {
                 success: true,
                 reason: "Shutdown",
@@ -514,8 +657,11 @@ impl ComputeNode {
                 success: true,
                 reason: "Winning PoW intake open",
             }) => {
-                self.flood_block_to_partition().await.unwrap();
-                self.flood_block_to_users().await.unwrap();
+                debug!(
+                    "Block and participants ready to mine: {:?}",
+                    self.get_mining_block()
+                );
+                self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
                 success: true,
@@ -529,6 +675,15 @@ impl ComputeNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Pipeline reset",
+            }) => {
+                warn!(
+                    "Pipeline reset to :{:?}",
+                    self.node_raft.get_mining_pipeline_status()
+                );
+            }
+            Ok(Response {
+                success: true,
                 reason: "Transactions added to tx pool",
             }) => {
                 debug!("Transactions received and processed successfully");
@@ -537,17 +692,31 @@ impl ComputeNode {
                 success: true,
                 reason: "First Block committed",
             }) => {
-                debug!("First Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_rand_num_to_requesters().await.unwrap();
-                self.flood_block_to_users().await.unwrap();
+                // Only continue with the mining process if the node is not paused
+                if !self.is_paused().await {
+                    debug!("First block ready to mine: {:?}", self.get_mining_block());
+                    self.flood_block_to_users().await.unwrap();
+                    self.flood_rand_and_block_to_partition().await.unwrap()
+                } else {
+                    warn!("NODE PAUSED");
+                    // Disable trigger messages to ensure mining cannot take place
+                    *self.disable_trigger_messages.write().await = true;
+                }
             }
             Ok(Response {
                 success: true,
                 reason: "Block committed",
             }) => {
-                debug!("Block ready to mine: {:?}", self.get_mining_block());
-                self.flood_rand_num_to_requesters().await.unwrap();
-                self.flood_block_to_users().await.unwrap();
+                // Only continue with the mining process if the node is not paused
+                if !self.is_paused().await {
+                    debug!("Block ready to mine: {:?}", self.get_mining_block());
+                    self.flood_block_to_users().await.unwrap();
+                    self.flood_rand_and_block_to_partition().await.unwrap()
+                } else {
+                    warn!("NODE PAUSED");
+                    // Disable trigger messages to ensure mining cannot take place
+                    *self.disable_trigger_messages.write().await = true;
+                }
             }
             Ok(Response {
                 success: true,
@@ -582,6 +751,14 @@ impl ComputeNode {
                 success: true,
                 reason: "Partition PoW received successfully",
             }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Sent startup requests on reconnection",
+            }) => debug!("Sent startup requests on reconnection"),
+            Ok(Response {
+                success: false,
+                reason: "Failed to send startup requests on reconnection",
+            }) => error!("Failed to send startup requests on reconnection"),
             Ok(Response {
                 success: false,
                 reason: "Partition list complete",
@@ -645,8 +822,8 @@ impl ComputeNode {
                     match self.node.send(
                         addr,
                         ComputeRequest::SendRaftCmd(msg)).await {
-                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
-                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
                 }
                 _ = self.node_raft.timeout_propose_transactions(), if ready && !shutdown => {
@@ -656,13 +833,17 @@ impl ComputeNode {
                 }
                 _ = self.node_raft.timeout_propose_mining_event(), if ready && !shutdown => {
                     trace!("handle_next_event timeout mining pipeline");
-                    if !self.node_raft.propose_mining_event_at_timeout().await {
+                    if !self.node_raft.propose_mining_event_at_timeout().await
+                        && !self.trigger_messages_disabled().await {
                         self.node_raft.re_propose_uncommitted_current_b_num().await;
                         self.resend_trigger_message().await;
+                    } else {
+                        // Reset trigger messages count
+                        self.current_trigger_messages_count = Default::default();
                     }
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
-                    if let Some(res) = self.handle_local_event(event) {
+                    if let Some(res) = self.handle_local_event(event).await {
                         return Some(Ok(res));
                     }
                 }
@@ -685,21 +866,24 @@ impl ComputeNode {
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
         match self.node_raft.received_commit(commit_data).await {
             Some(CommittedItem::FirstBlock) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "First Block committed",
                 }))
             }
             Some(CommittedItem::Block) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block committed",
                 }))
             }
             Some(CommittedItem::BlockShutdown) => {
-                self.reset_mining_block_process();
+                self.reset_mining_block_process().await;
+                self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
                     reason: "Block shutdown",
@@ -716,6 +900,10 @@ impl ComputeNode {
                     reason: "Pipeline halted",
                 }))
             }
+            Some(CommittedItem::ResetPipeline) => Some(Ok(Response {
+                success: true,
+                reason: "Pipeline reset",
+            })),
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
                     &mut self.db,
@@ -726,10 +914,17 @@ impl ComputeNode {
                     reason: "Transactions committed",
                 }))
             }
-            Some(CommittedItem::Snapshot) => Some(Ok(Response {
-                success: true,
-                reason: "Snapshot applied",
-            })),
+            Some(CommittedItem::Snapshot) => {
+                // Override values updated by the snapshot with values from the config
+                #[cfg(feature = "config_override")]
+                self.apply_shared_config(self.shared_config);
+
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Snapshot applied",
+                }))
+            }
+            Some(CommittedItem::CoordinatedCmd(cmd)) => self.handle_coordinated_cmd(cmd).await,
             None => None,
         }
     }
@@ -739,12 +934,25 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `event` - Event to process.
-    fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
+    async fn handle_local_event(&mut self, event: LocalEvent) -> Option<Response> {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
                 reason,
             }),
+            LocalEvent::ReconnectionComplete => {
+                if let Err(err) = self.send_startup_requests().await {
+                    error!("Failed to send startup requests on reconnect: {}", err);
+                    return Some(Response {
+                        success: false,
+                        reason: "Failed to send startup requests on reconnection",
+                    });
+                }
+                Some(Response {
+                    success: true,
+                    reason: "Sent startup requests on reconnection",
+                })
+            }
             LocalEvent::CoordinatedShutdown(shutdown) => {
                 self.coordinated_shutdown = shutdown;
                 Some(Response {
@@ -805,25 +1013,96 @@ impl ComputeNode {
 
         match req {
             ComputeApi(req) => self.handle_api_request(peer, req).await,
-            SendUtxoRequest { address_list } => Some(self.fetch_utxo_set(peer, address_list)),
+            SendUtxoRequest {
+                address_list,
+                requester_node_type,
+            } => Some(self.fetch_utxo_set(peer, address_list, requester_node_type)),
             SendBlockStored(info) => self.receive_block_stored(peer, info).await,
             SendPoW {
                 block_num,
                 nonce,
                 coinbase,
-            } => Some(self.receive_pow(peer, block_num, nonce, coinbase).await),
-            SendPartitionEntry { partition_entry } => {
-                Some(self.receive_partition_entry(peer, partition_entry).await)
+            } => self.receive_pow(peer, block_num, nonce, coinbase).await,
+            SendPartitionEntry {
+                pow_info,
+                partition_entry,
+            } => {
+                self.receive_partition_entry(peer, pow_info, partition_entry)
+                    .await
             }
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
             SendUserBlockNotificationRequest => {
                 Some(self.receive_block_user_notification_request(peer))
             }
             SendPartitionRequest => Some(self.receive_partition_request(peer).await),
+            SendSharedConfig { shared_config } => {
+                self.handle_shared_config(peer, shared_config).await
+            }
             Closing => self.receive_closing(peer),
+            CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
+            CoordinatedResume => self.handle_coordinated_resume(peer).await,
+            RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
             SendRaftCmd(msg) => {
                 self.node_raft.received_message(msg).await;
                 None
+            }
+        }
+    }
+
+    /// Handles a request to remove a miner
+    ///
+    /// NOTE: This request is received from a Miner node
+    /// who no longer wishes to participate in mining
+    async fn handle_request_remove_miner(&mut self, peer: SocketAddr) -> Option<Response> {
+        self.miner_removal_list.insert(peer);
+        Some(Response {
+            success: true,
+            reason: "Miner removal request received",
+        })
+    }
+
+    /// Handles a coordinated command
+    ///
+    /// ### Arguments
+    ///
+    /// *`cmd` - Command to execute
+    async fn handle_coordinated_cmd(
+        &mut self,
+        cmd: CoordinatedCommand,
+    ) -> Option<Result<Response>> {
+        match cmd {
+            CoordinatedCommand::PauseNodes { b_num } => {
+                self.b_num_to_pause = Some(b_num);
+                warn!("Pausing node at b_num: {b_num}");
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Node pause configuration set",
+                }))
+            }
+            CoordinatedCommand::ResumeNodes => {
+                // No longer needed to pause on a specific block
+                self.b_num_to_pause = None;
+                // Set the pause flag to false
+                *self.pause_node.write().await = false;
+                // Let the trigger messages be sent again to continue the mining process
+                *self.disable_trigger_messages.write().await = false;
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Node resumed",
+                }))
+            }
+            CoordinatedCommand::ApplySharedConfig => {
+                if let Some(received_shared_config) = self.received_shared_config {
+                    self.apply_shared_config(received_shared_config);
+                    return Some(Ok(Response {
+                        success: true,
+                        reason: "Shared config applied",
+                    }));
+                }
+                Some(Ok(Response {
+                    success: false,
+                    reason: "No shared config to apply",
+                }))
             }
         }
     }
@@ -841,7 +1120,7 @@ impl ComputeNode {
     ) -> Option<Response> {
         use ComputeApiRequest::*;
 
-        if peer != self.address() {
+        if peer != self.local_address() {
             // Do not process if not internal request
             return None;
         }
@@ -853,12 +1132,14 @@ impl ComputeNode {
                 public_key,
                 signature,
                 drs_tx_hash_spec,
+                metadata,
             } => match self.create_receipt_asset_tx(
                 receipt_amount,
                 script_public_key,
                 public_key,
                 signature,
                 drs_tx_hash_spec,
+                metadata,
             ) {
                 Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
                 Err(e) => {
@@ -867,6 +1148,9 @@ impl ComputeNode {
                 }
             },
             SendTransactions { transactions } => Some(self.receive_transactions(transactions)),
+            PauseNodes { b_num } => Some(self.pause_nodes(b_num)),
+            ResumeNodes => Some(self.resume_nodes()),
+            SendSharedConfig { shared_config } => Some(self.send_shared_config(shared_config)),
         }
     }
 
@@ -890,6 +1174,104 @@ impl ComputeNode {
         Some(Response {
             success: true,
             reason: "Shutdown",
+        })
+    }
+
+    /// Determine if the node should pause
+    pub fn should_pause(&self) -> bool {
+        if let Some(b_num) = self.b_num_to_pause {
+            return self.node_raft.get_current_block_num() >= b_num;
+        }
+        false
+    }
+
+    /// Apply a received config to the node
+    pub fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
+        warn!("Applying shared config: {:?}", received_shared_config);
+
+        let ComputeNodeSharedConfig {
+            compute_mining_event_timeout,
+            compute_partition_full_size,
+        } = received_shared_config;
+
+        self.node_raft
+            .update_mining_event_timeout_duration(compute_mining_event_timeout);
+        self.node_raft
+            .update_partition_full_size(compute_partition_full_size);
+
+        self.shared_config = received_shared_config;
+        self.received_shared_config = None;
+    }
+
+    /// Handle a coordinated pause request or initialization
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    async fn handle_coordinated_pause(&mut self, peer: SocketAddr, b_num: u64) -> Option<Response> {
+        // We are initiation the coordinated pause
+        if self.local_address() == peer {
+            let current_b_num = self.node_raft.get_current_block_num();
+            let b_num_to_pause = current_b_num + b_num;
+            info!("Initiating coordinated pause for b_num {}", b_num_to_pause);
+            self.propose_pause_nodes(b_num_to_pause).await;
+            self.initiate_pause_nodes(b_num_to_pause).await.unwrap();
+        } else {
+            // We are receiving the coordinated pause so we just need b_num here
+            // - the original coordinator of the pause event has already added current b_num
+            //
+            // Note: See conditional statement above
+            self.propose_pause_nodes(b_num).await;
+        }
+        Some(Response {
+            success: true,
+            reason: "Received coordinated pause request",
+        })
+    }
+
+    /// Handle a coordinated resume request or initialization
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    async fn handle_coordinated_resume(&mut self, peer: SocketAddr) -> Option<Response> {
+        self.propose_resume_nodes().await;
+        // We are initiating the coordinated resume
+        if self.local_address() == peer {
+            info!("Initiating coordinated resume");
+            self.initiate_resume_nodes().await.unwrap();
+        }
+        Some(Response {
+            success: true,
+            reason: "Received coordinated resume request",
+        })
+    }
+
+    /// Handle a shared config request
+    ///
+    /// ### Arguments
+    ///
+    /// * `peer` - Sending peer's socket address
+    /// * `shared_config` - Shared config that was sent or should get sent
+    async fn handle_shared_config(
+        &mut self,
+        peer: SocketAddr,
+        shared_config: ComputeNodeSharedConfig,
+    ) -> Option<Response> {
+        self.propose_apply_shared_config().await;
+        // We are initiating the shared config sending process
+        if self.local_address() == peer {
+            info!("Initiating shared config");
+            self.initiate_send_shared_config(shared_config)
+                .await
+                .unwrap();
+        }
+        // The sharing of a shared config was initiated by a peer
+        debug!("Received shared config {:?} from {}", &shared_config, peer);
+        self.received_shared_config = Some(shared_config);
+        Some(Response {
+            success: true,
+            reason: "Received shared config",
         })
     }
 
@@ -919,6 +1301,7 @@ impl ComputeNode {
     ///
     /// * `peer` - Sending peer's socket address
     async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+        trace!("Received partition request from {peer:?}");
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -950,43 +1333,61 @@ impl ComputeNode {
     async fn receive_partition_entry(
         &mut self,
         peer: SocketAddr,
+        pow_info: PowInfo,
         partition_entry: ProofOfWork,
-    ) -> Response {
-        if self.node_raft.get_mining_pipeline_status() != &MiningPipelineStatus::ParticipantIntake {
-            return Response {
-                success: false,
-                reason: "Partition list complete",
-            };
+    ) -> Option<Response> {
+        if pow_info.b_num != self.node_raft.get_current_block_num() {
+            // Out of date entry
+            return None;
         }
+
+        let status = self.node_raft.get_mining_pipeline_status().clone();
+        let random_number = match (&status, pow_info.participant_only) {
+            (MiningPipelineStatus::ParticipantOnlyIntake, true) => &self.previous_random_num,
+            (MiningPipelineStatus::AllItemsIntake, false) => &self.current_random_num,
+            (MiningPipelineStatus::Halted, _) => {
+                return Some(Response {
+                    success: false,
+                    reason: "Partition list complete",
+                });
+            }
+            _ => return None,
+        };
 
         let valid_pow = format_parition_pow_address(peer) == partition_entry.address
-            && validate_pow_for_address(&partition_entry, &Some(&self.current_random_num));
+            && validate_pow_for_address(&partition_entry, &Some(random_number));
 
         if !valid_pow {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "PoW received is invalid",
-            };
+            });
         }
 
-        self.node_raft
-            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer))
-            .await;
+        if !self
+            .node_raft
+            .propose_mining_pipeline_item(MiningPipelineItem::MiningParticipant(peer, status))
+            .await
+        {
+            return None;
+        }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Partition PoW received successfully",
-        }
+        })
     }
 
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<()> {
-        self.node
+        let _ = self
+            .node
             .send_to_all(Some(self.storage_addr).into_iter(), StorageRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
                 ComputeRequest::Closing,
@@ -994,12 +1395,14 @@ impl ComputeNode {
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(self.request_list.iter().copied(), MineRequest::Closing)
             .await
             .unwrap();
 
-        self.node
+        let _ = self
+            .node
             .send_to_all(
                 self.user_notification_list.iter().copied(),
                 UserRequest::Closing,
@@ -1010,49 +1413,121 @@ impl ComputeNode {
         Ok(())
     }
 
-    /// Floods the random number to everyone who requested
-    pub async fn flood_rand_num_to_requesters(&mut self) -> Result<()> {
-        let rnum = self.current_random_num.clone();
+    pub fn get_current_mining_reward(&self) -> TokenAmount {
+        *self.node_raft.get_current_reward()
+    }
+
+    /// Floods the current block to participants for mining
+    pub async fn flood_rand_and_block_to_partition(&mut self) -> Result<()> {
+        let (rnum, participant_only) = match self.node_raft.get_mining_pipeline_status() {
+            MiningPipelineStatus::ParticipantOnlyIntake => (self.previous_random_num.clone(), true),
+            MiningPipelineStatus::AllItemsIntake => (self.current_random_num.clone(), false),
+            MiningPipelineStatus::Halted => return Ok(()),
+        };
+
         let win_coinbases = self.node_raft.get_last_mining_transaction_hashes().clone();
+        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+
         info!(
             "RANDOM NUMBER IN COMPUTE: {:?}, (mined:{})",
             rnum,
             win_coinbases.len()
         );
+        debug!("BLOCK TO SEND: {:?}", block);
 
-        self.node
+        let header = block.header.clone();
+        let b_num = header.b_num;
+        let reward = self.node_raft.get_current_reward();
+        let pow_info = PowInfo {
+            participant_only,
+            b_num,
+        };
+
+        let miner_removal_list = self.miner_removal_list.clone();
+        let all_participants = self.node_raft.get_mining_participants();
+        let participants = all_participants
+            .iter()
+            .filter(|participant| !miner_removal_list.contains(participant))
+            .copied();
+        let non_participants = self
+            .request_list
+            .difference(all_participants.lookup())
+            .copied();
+
+        let mut unsent_miners = vec![];
+
+        let _ = self
+            .node
             .send_to_all(
-                self.request_list.iter().copied(),
-                MineRequest::SendRandomNum {
-                    rnum,
-                    win_coinbases,
+                self.miner_removal_list.iter().copied(),
+                MineRequest::MinerRemovedAck,
+            )
+            .await;
+
+        if let Ok(unsent_nodes) = self
+            .node
+            .send_to_all(
+                participants,
+                MineRequest::SendBlock {
+                    pow_info,
+                    rnum: rnum.clone(),
+                    win_coinbases: win_coinbases.clone(),
+                    block: Some(header.clone()),
+                    reward: *reward,
+                    b_num: header.b_num,
                 },
             )
             .await
-            .unwrap();
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
+
+        if let Ok(unsent_nodes) = self
+            .node
+            .send_to_all(
+                non_participants,
+                MineRequest::SendBlock {
+                    pow_info,
+                    rnum,
+                    win_coinbases,
+                    block: None,
+                    reward: *reward,
+                    b_num: header.b_num,
+                },
+            )
+            .await
+        {
+            unsent_miners.extend(unsent_nodes);
+        }
+
+        if !unsent_miners.is_empty() || !self.miner_removal_list.is_empty() {
+            let miner_removal_list = self.miner_removal_list.clone();
+            unsent_miners.extend(miner_removal_list);
+            self.flush_stale_miners(unsent_miners);
+            self.miner_removal_list.clear();
+        }
 
         Ok(())
     }
 
-    /// Floods the current block to participants for mining
-    pub async fn flood_block_to_partition(&mut self) -> Result<()> {
-        debug!("BLOCK TO SEND: {:?}", self.node_raft.get_mining_block());
-        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
-        let header = block.header.clone();
-        let reward = self.node_raft.get_current_reward();
+    pub fn flush_stale_miners(&mut self, stale_miners: Vec<SocketAddr>) {
+        trace!("Flushing stale miners from mining pipeline and request list {stale_miners:?}");
 
-        self.node
-            .send_to_all(
-                self.node_raft.get_mining_participants_iter(),
-                MineRequest::SendBlock {
-                    block: header,
-                    reward: *reward,
-                },
-            )
-            .await
-            .unwrap();
+        // Flush stale miners
+        self.request_list
+            .retain(|addr| !stale_miners.contains(addr));
 
-        Ok(())
+        // Update DB
+        if let Err(e) = self.db.put_cf(
+            DB_COL_INTERNAL,
+            REQUEST_LIST_KEY,
+            &serialize(&self.request_list).unwrap(),
+        ) {
+            error!("Error writing updated miner request list to disk: {e:?}");
+        }
+
+        // Cleanup miners from block pipeline
+        self.node_raft.flush_stale_miners(&stale_miners);
     }
 
     /// Floods the current block to participants for mining
@@ -1077,13 +1552,25 @@ impl ComputeNode {
     pub async fn flood_block_to_users(&mut self) -> Result<()> {
         let block: Block = self.node_raft.get_mining_block().clone().unwrap();
 
-        self.node
+        let unsent = self
+            .node
             .send_to_all(
                 self.user_notification_list.iter().copied(),
                 UserRequest::BlockMining { block },
             )
-            .await
-            .unwrap();
+            .await?;
+
+        if !unsent.is_empty() {
+            warn!("Purging users: {:?}", unsent);
+            self.user_notification_list.retain(|v| !unsent.contains(v));
+            self.db
+                .put_cf(
+                    DB_COL_INTERNAL,
+                    USER_NOTIFY_LIST_KEY,
+                    &serialize(&self.user_notification_list).unwrap(),
+                )
+                .unwrap();
+        }
 
         Ok(())
     }
@@ -1114,8 +1601,19 @@ impl ComputeNode {
     }
 
     /// Reset the mining block processing to allow a new block.
-    fn reset_mining_block_process(&mut self) {
+    async fn reset_mining_block_process(&mut self) {
+        self.previous_random_num = Some(std::mem::take(&mut self.current_random_num))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(generate_pow_random_num);
+
         self.current_random_num = generate_pow_random_num();
+        self.db
+            .put_cf(
+                DB_COL_INTERNAL,
+                POW_PREV_RANDOM_NUM_KEY,
+                &self.previous_random_num,
+            )
+            .unwrap();
         self.db
             .put_cf(
                 DB_COL_INTERNAL,
@@ -1123,7 +1621,13 @@ impl ComputeNode {
                 &self.current_random_num,
             )
             .unwrap();
+
         self.current_mined_block = None;
+        self.node_raft.clear_block_pipeline_proposed_keys();
+        // If the node should pause, set the pause node flag to true
+        if self.should_pause() {
+            *self.pause_node.write().await = true;
+        }
     }
 
     /// Load and apply the local database to our state
@@ -1154,21 +1658,23 @@ impl ComputeNode {
             Err(e) => panic!("Error accessing db: {:?}", e),
         };
 
-        self.current_random_num = {
-            let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY) {
-                Ok(Some(num)) => num,
-                Ok(None) => generate_pow_random_num(),
-                Err(e) => panic!("Error accessing db: {:?}", e),
+        for (num, key) in [
+            (&mut self.current_random_num, POW_RANDOM_NUM_KEY),
+            (&mut self.previous_random_num, POW_PREV_RANDOM_NUM_KEY),
+        ] {
+            *num = {
+                let current_random_num = match self.db.get_cf(DB_COL_INTERNAL, key) {
+                    Ok(Some(num)) => num,
+                    Ok(None) => generate_pow_random_num(),
+                    Err(e) => panic!("Error accessing db: {:?}", e),
+                };
+                debug!("load_local_db: {} {:?}", key, current_random_num);
+                if let Err(e) = self.db.put_cf(DB_COL_INTERNAL, key, &current_random_num) {
+                    panic!("Error accessing db: {:?}", e);
+                }
+                current_random_num
             };
-            debug!("load_local_db: current_random_num {:?}", current_random_num);
-            if let Err(e) = self
-                .db
-                .put_cf(DB_COL_INTERNAL, POW_RANDOM_NUM_KEY, &current_random_num)
-            {
-                panic!("Error accessing db: {:?}", e);
-            }
-            current_random_num
-        };
+        }
 
         self.node_raft.set_key_run({
             let key_run = match self.db.get_cf(DB_COL_INTERNAL, RAFT_KEY_RUN) {
@@ -1206,7 +1712,7 @@ impl ComputeNode {
         block_num: u64,
         nonce: Vec<u8>,
         coinbase: Transaction,
-    ) -> Response {
+    ) -> Option<Response> {
         let pow_mining_block = (self.node_raft.get_mining_block().as_ref())
             .filter(|b| block_num == b.header.b_num)
             .filter(|_| self.node_raft.get_mining_participants().contains(&address));
@@ -1217,29 +1723,29 @@ impl ComputeNode {
             mining_block.header.clone()
         } else {
             trace!(?address, "Received outdated PoW");
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Not block currently mined",
-            };
+            });
         };
 
         // Check coinbase amount and structure
         let coinbase_amount = self.node_raft.get_current_reward();
         if !coinbase.is_coinbase() || coinbase.outputs[0].value.token_amount() != *coinbase_amount {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Coinbase transaction invalid",
-            };
+            });
         }
 
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
         let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
         if !validate_pow_block(&block_to_check) {
-            return Response {
+            return Some(Response {
                 success: false,
                 reason: "Invalid PoW for block",
-            };
+            });
         }
 
         // TODO: D and P will need to change with keccak prime intro
@@ -1252,14 +1758,18 @@ impl ComputeNode {
         };
 
         // Propose the received PoW to the block pipeline
-        self.node_raft
+        if !self
+            .node_raft
             .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, pow_info))
-            .await;
+            .await
+        {
+            return None;
+        }
 
-        Response {
+        Some(Response {
             success: true,
             reason: "Received PoW successfully",
-        }
+        })
     }
 
     /// Receives block info from its storage node
@@ -1304,16 +1814,39 @@ impl ComputeNode {
                     error!("Resend block to storage failed {:?}", e);
                 }
             }
-            MiningPipelineStatus::ParticipantIntake => {
+            MiningPipelineStatus::ParticipantOnlyIntake => {
                 info!("Resend partition random number to miners");
-                if let Err(e) = self.flood_rand_num_to_requesters().await {
+                if let Err(e) = self.flood_rand_and_block_to_partition().await {
                     error!("Resend partition random number to miners failed {:?}", e);
                 }
             }
-            MiningPipelineStatus::WinningPoWIntake => {
-                info!("Resend block to partition miners");
-                if let Err(e) = self.flood_block_to_partition().await {
-                    error!("Resend block to partition miners failed {:?}", e);
+            MiningPipelineStatus::AllItemsIntake => {
+                info!("Resend block and rand to partition miners");
+                if let Err(e) = self.flood_rand_and_block_to_partition().await {
+                    error!("Resend block and rand to partition miners failed {:?}", e);
+                }
+                if self.enable_trigger_messages_pipeline_reset {
+                    let mining_participants = &self.node_raft.get_mining_participants().unsorted;
+                    let disconnected_participants =
+                        self.node.unconnected_peers(mining_participants).await;
+
+                    // If all miners participating in this mining round disconnected
+                    // and we've reached the appropriate threshold for maximum number of
+                    // retries, we need to propose the pipeline revert to participant intake
+                    //
+                    // NB: This vote requires a unanimous_majority vote
+                    //
+                    // TODO: Apply the same logic to any other pipeline stages that might get stuck
+                    if disconnected_participants.len() == mining_participants.len() {
+                        self.current_trigger_messages_count += 1;
+                    }
+                    if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
+                    {
+                        self.current_trigger_messages_count = Default::default();
+                        self.node_raft
+                            .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)
+                            .await;
+                    }
                 }
             }
         }
@@ -1334,6 +1867,7 @@ impl ComputeNode {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
         Ok(create_receipt_asset_tx_from_sig(
@@ -1343,6 +1877,7 @@ impl ComputeNode {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata,
         )?)
     }
 
@@ -1356,7 +1891,7 @@ impl ComputeNode {
     /// ### Arguments
     ///
     /// * `transactions` - Transactions to be processed
-    fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
+    pub fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
@@ -1414,12 +1949,56 @@ impl ComputeNode {
             reason: "Transactions added to tx pool",
         }
     }
+
+    /// Execute the initialization of a coordinated pause by invoking peers
+    ///
+    /// NOTE: Current block number has already been added to b_num from the coordinator
+    pub async fn initiate_pause_nodes(&mut self, b_num: u64) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::CoordinatedPause { b_num },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Execute the initialization of a coordinated resume by invoking peers
+    pub async fn initiate_resume_nodes(&mut self) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::CoordinatedResume,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Execute the initialization of a shared config application
+    /// by sending the shared config to peers
+    pub async fn initiate_send_shared_config(
+        &mut self,
+        shared_config: ComputeNodeSharedConfig,
+    ) -> Result<()> {
+        self.node
+            .send_to_all(
+                self.node_raft.raft_peer_addrs().copied(),
+                ComputeRequest::SendSharedConfig { shared_config },
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl ComputeInterface for ComputeNode {
-    fn fetch_utxo_set(&mut self, peer: SocketAddr, address_list: UtxoFetchType) -> Response {
+    fn fetch_utxo_set(
+        &mut self,
+        peer: SocketAddr,
+        address_list: UtxoFetchType,
+        node_type: NodeType,
+    ) -> Response {
         self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((peer, self.get_committed_utxo_set_to_send())),
+            UtxoFetchType::All => Some((peer, node_type, self.get_committed_utxo_set_to_send())),
             UtxoFetchType::AnyOf(addresses) => {
                 let utxo_set = self.get_committed_utxo_set();
                 let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
@@ -1433,7 +2012,7 @@ impl ComputeInterface for ComputeNode {
                             .map(|(k, v)| (k.clone(), v.clone()))
                     })
                     .collect();
-                Some((peer, utxo_subset))
+                Some((peer, node_type, utxo_subset))
             }
         };
         Response {
@@ -1469,6 +2048,13 @@ impl ComputeInterface for ComputeNode {
 }
 
 impl ComputeApi for ComputeNode {
+    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
+        ComputeNodeSharedConfig {
+            compute_mining_event_timeout: self.node_raft.get_compute_mining_event_timeout(),
+            compute_partition_full_size: self.node_raft.get_compute_partition_full_size(),
+        }
+    }
+
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         self.node_raft.get_committed_utxo_tracked_set()
     }
@@ -1488,6 +2074,7 @@ impl ComputeApi for ComputeNode {
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
+        metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
         self.create_receipt_asset_tx(
             receipt_amount,
@@ -1495,7 +2082,65 @@ impl ComputeApi for ComputeNode {
             public_key,
             signature,
             drs_tx_hash_spec,
+            metadata,
         )
+    }
+
+    fn pause_nodes(&mut self, b_num: u64) -> Response {
+        if self
+            .inject_next_event(
+                self.local_address(),
+                ComputeRequest::CoordinatedPause { b_num },
+            )
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate coordinated pause",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt coordinated node pause",
+        }
+    }
+
+    fn resume_nodes(&mut self) -> Response {
+        if self
+            .inject_next_event(self.local_address(), ComputeRequest::CoordinatedResume)
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate coordinated resume",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt coordinated node resume",
+        }
+    }
+
+    fn send_shared_config(
+        &mut self,
+        shared_config: crate::configurations::ComputeNodeSharedConfig,
+    ) -> Response {
+        if self
+            .inject_next_event(
+                self.local_address(),
+                ComputeRequest::SendSharedConfig { shared_config },
+            )
+            .is_err()
+        {
+            return Response {
+                success: false,
+                reason: "Failed to initiate sharing of config",
+            };
+        }
+        Response {
+            success: true,
+            reason: "Attempt send shared config",
+        }
     }
 }
 

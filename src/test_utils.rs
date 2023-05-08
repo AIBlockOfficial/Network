@@ -90,6 +90,9 @@ pub struct NetworkConfig {
     pub user_test_auto_gen_setup: UserAutoGenTxSetup,
     pub tls_config: TestTlsSpec,
     pub routes_pow: BTreeMap<String, usize>,
+    pub backup_block_modulo: Option<u64>,
+    pub backup_restore: Option<bool>,
+    pub enable_pipeline_reset: Option<bool>,
 }
 
 /// Node info to create node
@@ -591,16 +594,26 @@ impl ArcNode {
             None
         }
     }
+
+    pub async fn get_local_event_tx(&self) -> LocalEventSender {
+        match self {
+            ArcNode::Compute(c) => c.lock().await.local_event_tx().clone(),
+            ArcNode::Miner(m) => m.lock().await.local_event_tx().clone(),
+            ArcNode::Storage(s) => s.lock().await.local_event_tx().clone(),
+            ArcNode::User(u) => u.lock().await.local_event_tx().clone(),
+            ArcNode::PreLaunch(p) => p.lock().await.local_event_tx().clone(),
+        }
+    }
 }
 
 ///Dispatch to address
 async fn address(node: &ArcNode) -> SocketAddr {
     match node {
-        ArcNode::Miner(v) => v.lock().await.address(),
-        ArcNode::Compute(v) => v.lock().await.address(),
-        ArcNode::Storage(v) => v.lock().await.address(),
-        ArcNode::User(v) => v.lock().await.address(),
-        ArcNode::PreLaunch(v) => v.lock().await.address(),
+        ArcNode::Miner(v) => v.lock().await.local_address(),
+        ArcNode::Compute(v) => v.lock().await.local_address(),
+        ArcNode::Storage(v) => v.lock().await.local_address(),
+        ArcNode::User(v) => v.lock().await.local_address(),
+        ArcNode::PreLaunch(v) => v.lock().await.local_address(),
     }
 }
 
@@ -654,7 +667,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "compute_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().left_future(),
             ))
         }
@@ -662,7 +675,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "storage_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().right_future(),
             ))
         }
@@ -889,12 +902,7 @@ pub async fn close_raft_loops(
         close_raft_loop(node).await
     }
 
-    join_all(
-        std::mem::take(raft_loop_handles)
-            .into_iter()
-            .map(|(_, v)| v),
-    )
-    .await;
+    join_all(std::mem::take(raft_loop_handles).into_values()).await;
 }
 
 /// Stop node listening on port
@@ -934,10 +942,11 @@ pub async fn connect_all_nodes(arc_nodes: &BTreeMap<String, ArcNode>, dead: &BTr
     // Need to connect first so Raft messages can be sent.
     info!("Start connect to peers");
     for (name, node) in arc_nodes {
+        let local_event_tx = node.get_local_event_tx().await;
         let (node_conn, mut addrs, _) = connect_info_peers(node).await;
         addrs.retain(|a| !dead.contains(a));
 
-        loop_connnect_to_peers_async(node_conn, addrs, None).await;
+        loop_connnect_to_peers_async(node_conn, addrs, None, local_event_tx).await;
         info!(?name, "Peer connect complete");
     }
 
@@ -1022,20 +1031,17 @@ async fn init_miner(
     // Create node
     let node_info = &info.node_infos[name];
     let config = MinerNodeConfig {
-        miner_node_idx: node_info.index,
+        miner_address: node_info.node_spec.address,
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         miner_compute_node_idx,
-        miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
         routes_pow: config.routes_pow.clone(),
+        backup_block_modulo: Default::default(),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1059,7 +1065,7 @@ async fn init_storage(
     extra: ExtraNodeParams,
 ) -> ArcStorageNode {
     let node_info = &info.node_infos[name];
-    let storage_raft = if config.storage_raft { 1 } else { 0 };
+    let storage_raft = usize::from(config.storage_raft);
 
     let config = StorageNodeConfig {
         storage_node_idx: node_info.index,
@@ -1068,13 +1074,14 @@ async fn init_storage(
         api_keys: Default::default(),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         storage_raft,
         storage_api_port: 3001,
         storage_api_use_tls: true,
         storage_raft_tick_timeout: 200 / config.test_duration_divider,
         storage_catchup_duration: 2000 / config.test_duration_divider,
         routes_pow: Default::default(),
+        backup_block_modulo: config.backup_block_modulo,
+        backup_restore: config.backup_restore,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1098,7 +1105,7 @@ async fn init_compute(
     extra: ExtraNodeParams,
 ) -> ArcComputeNode {
     let node_info = &info.node_infos[name];
-    let compute_raft = if config.compute_raft { 1 } else { 0 };
+    let compute_raft = usize::from(config.compute_raft);
 
     let config = ComputeNodeConfig {
         compute_db_mode: node_info.db_mode,
@@ -1122,6 +1129,9 @@ async fn init_compute(
         compute_api_port: 3002,
         compute_api_use_tls: true,
         routes_pow: Default::default(),
+        backup_block_modulo: config.backup_block_modulo,
+        backup_restore: config.backup_restore,
+        enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
@@ -1145,24 +1155,30 @@ async fn init_user(
     extra: ExtraNodeParams,
 ) -> ArcUserNode {
     let node_info = &info.node_infos[name];
+
+    let user_wallet_seeds = if config.user_wallet_seeds.is_empty()
+        || config.user_wallet_seeds.len() <= node_info.index
+    {
+        vec![]
+    } else {
+        config.user_wallet_seeds[node_info.index].clone()
+    };
+
     let config = UserNodeConfig {
-        user_node_idx: node_info.index,
+        user_address: node_info.node_spec.address,
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         user_compute_node_idx: 0,
-        peer_user_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         user_api_port: 3000,
         user_api_use_tls: true,
-        user_wallet_seeds: config.user_wallet_seeds.clone(),
+        user_wallet_seeds,
         passphrase: config.passphrase.clone(),
         user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
         routes_pow: Default::default(),
+        backup_block_modulo: Default::default(),
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);
@@ -1222,18 +1238,22 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
         use NodeType::*;
         let db_paths = match node.node_type {
             Miner | User => {
-                let v = format!("{}/{}.{}", WALLET_PATH, DB_PATH_TEST, port);
+                let v = format!("{WALLET_PATH}/{DB_PATH_TEST}.{port}");
                 vec![v]
             }
             Compute => {
-                let v1 = format!("{}/{}.compute.{}", DB_PATH, DB_PATH_TEST, port);
-                let v2 = format!("{}/{}.compute_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                vec![v1, v2]
+                let v1 = format!("{DB_PATH}/{DB_PATH_TEST}.compute.{port}");
+                let v2 = format!("{DB_PATH}/{DB_PATH_TEST}.compute_raft.{port}");
+                let v3 = format!("{v1}_backup");
+                let v4 = format!("{v2}_backup");
+                vec![v1, v2, v3, v4]
             }
             Storage => {
-                let v1 = format!("{}/{}.storage.{}", DB_PATH, DB_PATH_TEST, port);
-                let v2 = format!("{}/{}.storage_raft.{}", DB_PATH, DB_PATH_TEST, port);
-                vec![v1, v2]
+                let v1 = format!("{DB_PATH}/{DB_PATH_TEST}.storage.{port}");
+                let v2 = format!("{DB_PATH}/{DB_PATH_TEST}.storage_raft.{port}");
+                let v3 = format!("{v1}_backup");
+                let v4 = format!("{v2}_backup");
+                vec![v1, v2, v3, v4]
             }
         };
         for to_remove in db_paths {
@@ -1280,8 +1300,7 @@ pub async fn node_join_all_checked<T, E: std::fmt::Debug>(
 
     if !failed_join.is_empty() {
         Err(StringError(format!(
-            "Failed joined {:?}, out of {:?} (extra: {:?})",
-            failed_join, node_group, extra
+            "Failed joined {failed_join:?}, out of {node_group:?} (extra: {extra:?})"
         )))
     } else {
         Ok(())
@@ -1314,7 +1333,7 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
 }
 
 pub fn get_test_tls_name(name: &str, spec: &TestTlsSpec) -> String {
-    let tls_name = format!("{}.zenotta.xyz", name);
+    let tls_name = format!("{name}.zenotta.xyz");
     if spec.pem_certificates.contains_key(&tls_name)
         || spec.pem_certificates_with_ca.contains_key(&tls_name)
     {
@@ -1355,7 +1374,7 @@ pub async fn get_bound_common_tls_configs(
         let name = &mapping[&address];
         let tls_spec = update_spec(name, tls_spec.make_tls_spec(&mapping));
         let config = TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap();
-        let config = config.with_listener(tcp_listener);
+        let config = config.with_listener(tcp_listener).await;
         configs.push(config);
     }
     configs

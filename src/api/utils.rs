@@ -15,9 +15,6 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-// Indicates that any API key may be used
-pub const ANY_API_KEY: &str = "any_key";
-
 // Clone component/struct to use in route
 pub fn with_node_component<T: Clone + Send>(
     comp: T,
@@ -63,8 +60,7 @@ pub fn auth_request(
         .and_then(move |path: FullPath, headers: HeaderMap| {
             let route_path = path.as_str()[1..].to_owned(); /* Slice to remove '/' prefix */
             let route_difficulty = routes_pow.lock().unwrap().get(&route_path).cloned();
-            let keys = api_keys.lock().unwrap().clone();
-            let need_api_key = !keys.contains(ANY_API_KEY);
+            let needed_keys = api_keys.lock().unwrap().get(&route_path).cloned();
 
             async move {
                 // Extract headers
@@ -96,12 +92,14 @@ pub fn auth_request(
                     return err_unauthorized;
                 }
 
-                // API key is needed, but the corresponding API key is not provided/invalid
-                if need_api_key && !keys.contains(api_key) {
-                    return err_unauthorized;
+                // API key is needed
+                if let Some(needed_api_keys) = needed_keys {
+                    if !needed_api_keys.contains(&api_key.to_string()) {
+                        return err_unauthorized;
+                    }
                 }
 
-                let hash_content = format!("{}-{}", nonce, id);
+                let hash_content = format!("{nonce}-{id}");
 
                 // This route requires PoW
                 if let Some(difficulty) = route_difficulty {
@@ -148,7 +146,7 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
         // This should not happen! All errors should be handled
         error!("Unhandled API rejection: {:?}", err);
         error.code = StatusCode::INTERNAL_SERVER_ERROR;
-        error.message = ApiErrorType::Generic(format!("Unhandled rejection: {:?}", err));
+        error.message = ApiErrorType::Generic(format!("Unhandled rejection: {err:?}"));
     }
 
     Ok(common_error_reply(
@@ -188,7 +186,7 @@ async fn insert_cache_value(
     cache: &ReplyCache,
 ) -> Result<JsonReply, JsonReply> {
     if !call_id.is_empty() {
-        let _ = cache.insert(String::from(call_id), response.clone()).await;
+        cache.insert(String::from(call_id), response.clone()).await;
     }
 
     response

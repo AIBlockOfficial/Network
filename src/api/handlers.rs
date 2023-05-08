@@ -6,6 +6,7 @@ use crate::api::responses::{
 use crate::api::utils::map_string_err;
 use crate::comms_handler::Node;
 use crate::compute::ComputeError;
+use crate::configurations::ComputeNodeSharedConfig;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
@@ -25,7 +26,7 @@ use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
 use naom::primitives::druid::DdeValues;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use naom::script::lang::Script;
-use naom::utils::transaction_utils::construct_address_for;
+use naom::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -83,12 +84,14 @@ pub struct CreateReceiptAssetDataCompute {
     pub script_public_key: String,
     pub public_key: String,
     pub signature: String,
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateReceiptAssetDataUser {
     pub receipt_amount: u64,
     pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub metadata: Option<String>,
 }
 
 /// Information needed for the creaion of TxIn script.
@@ -159,6 +162,7 @@ pub struct FetchPendingtResult {
 
 /// Gets the state of the connected wallet and returns it.
 /// Returns a `WalletInfo` struct
+/// extra is used to deonte spent_transactions or which page of transaction_pages
 pub async fn get_wallet_info(
     wallet_db: WalletDb,
     extra: Option<String>,
@@ -173,10 +177,21 @@ pub async fn get_wallet_info(
     };
 
     let mut addresses = AddressesWithOutPoints::new();
-    let txs = match extra.as_deref() {
-        Some("spent") => fund_store.spent_transactions().clone(),
-        _ => fund_store.transactions().clone(),
-    };
+    let txs;
+    if let Some(param) = extra.as_deref() {
+        if let Ok(page_usize) = param.parse::<usize>() {
+            txs = fund_store.transaction_pages(page_usize).clone();
+        } else if param.parse::<u64>().is_ok() {
+            txs = fund_store.transaction_pages(0).clone();
+        } else {
+            txs = match extra.as_deref() {
+                Some("spent") => fund_store.spent_transactions().clone(),
+                _ => fund_store.transactions().clone(),
+            };
+        }
+    } else {
+        txs = fund_store.transactions().clone();
+    }
 
     for (out_point, asset) in txs {
         addresses
@@ -224,7 +239,7 @@ pub async fn get_export_keypairs(
 
 /// Gets a newly generated payment address
 pub async fn get_payment_address(
-    wallet_db: WalletDb,
+    mut wallet_db: WalletDb,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
@@ -268,7 +283,7 @@ pub async fn get_debug_data(
             let aux_type = node_type_as_str(aux.get_node_type());
             let aux_peers = aux.get_peer_list().await;
             DebugData {
-                node_type: format!("{}/{}", node_type, aux_type),
+                node_type: format!("{node_type}/{aux_type}"),
                 node_api: debug_paths,
                 node_peers: [node_peers, aux_peers].concat(),
                 routes_pow,
@@ -294,7 +309,7 @@ pub async fn get_current_mining_block(
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    let data: Option<BlockPoWReceived> = current_block.lock().unwrap().clone();
+    let data: Option<BlockPoWReceived> = current_block.lock().await.clone();
     r.into_ok(
         "Current mining block successfully retrieved",
         json_serialize_embed(data),
@@ -323,6 +338,28 @@ pub async fn get_utxo_addresses(
     )
 }
 
+//POST get a compute node's config which is shareable amongst its peers
+pub async fn get_shared_config_compute(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_shared_config(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok(
+        "Successfully fetched shared config",
+        json_serialize_embed(res),
+    )
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve an item from the blockchain db by hash key
@@ -333,6 +370,16 @@ pub async fn post_blockchain_entry_by_key(
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     get_json_reply_stored_value_from_db(db, &key, true, call_id, route)
+}
+
+/// Post to batch retrieve multiple transactions from the blockchain db by hash keys
+pub async fn post_transactions_by_key(
+    db: Arc<Mutex<SimpleDb>>,
+    keys: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    get_json_reply_items_from_db(db, keys, route, call_id)
 }
 
 /// Post to retrieve block information by number
@@ -346,7 +393,7 @@ pub async fn post_block_by_num(
         .iter()
         .map(|num| indexed_block_hash_key(*num))
         .collect();
-    get_json_reply_blocks_from_db(db, keys, route, call_id)
+    get_json_reply_items_from_db(db, keys, route, call_id)
 }
 
 /// Post to import new keypairs to the connected wallet
@@ -405,7 +452,7 @@ pub async fn post_make_payment(
         }
     };
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:make_payment error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -449,7 +496,7 @@ pub async fn post_make_ip_payment(
         }
     };
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:make_payment error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -477,7 +524,7 @@ pub async fn post_request_donation(
 
     let request = UserRequest::UserApi(UserApiRequest::RequestDonation { paying_peer });
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:request_donation error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -497,7 +544,7 @@ pub async fn post_update_running_total(
     });
     let r = CallResponse::new(route, &call_id);
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:update_running_total error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -570,15 +617,17 @@ pub async fn post_create_receipt_asset_user(
     let CreateReceiptAssetDataUser {
         receipt_amount,
         drs_tx_hash_spec,
+        metadata,
     } = receipt_data;
 
     let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest {
         receipt_amount,
         drs_tx_hash_spec,
+        metadata,
     });
     let r = CallResponse::new(route, &call_id);
 
-    if let Err(e) = peer.inject_next_event(peer.address(), request) {
+    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:create_receipt_asset error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
@@ -602,12 +651,14 @@ pub async fn post_create_receipt_asset(
         script_public_key,
         public_key,
         signature,
+        metadata,
     } = create_receipt_asset_data;
 
     let r = CallResponse::new(route, &call_id);
 
     // Create receipt asset on the Compute node
     let spk = script_public_key.clone();
+    let md = metadata.clone();
     let (tx_hash, compute_resp) = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
@@ -618,6 +669,7 @@ pub async fn post_create_receipt_asset(
                     public_key,
                     signature,
                     drs_tx_hash_spec,
+                    md
                 )?;
             let compute_resp = c.receive_transactions(vec![tx]);
             Ok::<(String, Response), ComputeError>((tx_hash, compute_resp))
@@ -631,7 +683,7 @@ pub async fn post_create_receipt_asset(
     match compute_resp.success {
         true => {
             // Response content
-            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()));
+            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()), metadata);
             let api_asset = APIAsset::new(Asset::Receipt(receipt_asset), None);
             let create_info = APICreateResponseContent::new(api_asset, script_public_key, tx_hash);
             let response_data = json_serialize_embed(create_info);
@@ -697,6 +749,10 @@ pub async fn post_change_wallet_passphrase(
 
     let r = CallResponse::new(route, &call_id);
 
+    if new_passphrase.is_empty() {
+        //New passphrase cannot be blank
+        return r.into_err(StatusCode::UNAUTHORIZED, ApiErrorType::BlankPassphrase);
+    }
     match db
         .change_wallet_passphrase(old_passphrase, new_passphrase)
         .await
@@ -762,6 +818,81 @@ pub async fn post_payment_address_construction(
         "Address successfully constructed",
         json_serialize_embed("null"),
     )
+}
+
+//POST pause nodes in a coordinated manner
+pub async fn pause_nodes(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+    b_num: Option<u64>, // NOTE: Nodes will pause at b_num + b_num
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        // NOTE: Nodes will pause at current_block + b_num; default is 1 block from current block
+        move |c| c.pause_nodes(b_num.unwrap_or(1)),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:pause_nodes error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
+}
+
+//POST resume nodes in a coordinated manner
+pub async fn resume_nodes(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        |c| c.resume_nodes(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:resume_nodes error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
+}
+
+//POST update a compute node's config, sharing it to all other peers
+pub async fn update_shared_config(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    shared_config: ComputeNodeSharedConfig,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.send_shared_config(shared_config),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    if !res.success {
+        debug!("route:update_shared_config error: {:?}", res.reason);
+        return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
+    }
+
+    r.into_ok(res.reason, json_serialize_embed("null"))
 }
 
 //======= Helpers =======//
@@ -859,9 +990,9 @@ fn get_json_reply_stored_value_from_db(
     r.into_ok("Database item(s) successfully retrieved", json_content)
 }
 
-/// Fetches JSON blocks. Blocks which for whatever reason are
+/// Fetches JSON items. Items which for whatever reason are
 /// unretrievable will be replaced with a default (best handling?)
-pub fn get_json_reply_blocks_from_db(
+pub fn get_json_reply_items_from_db(
     db: Arc<Mutex<SimpleDb>>,
     keys: Vec<String>,
     route: &'static str,
@@ -877,7 +1008,7 @@ pub fn get_json_reply_blocks_from_db(
         })
         .collect();
 
-    // Make JSON tupple with key and Block
+    // Make JSON tupple with key and JSON item
     let key_values: Vec<_> = key_values
         .iter()
         .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
@@ -895,16 +1026,16 @@ pub fn get_json_reply_blocks_from_db(
 }
 
 /// Threaded call for API
-pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + 'static>(
+pub async fn make_api_threaded_call<'a, T: ?Sized, R: Send + Sized + Sync + 'static>(
     tx: &mut ThreadedCallSender<T>,
-    f: impl FnOnce(&mut T) -> R + Send + Sized + 'static,
+    f: impl FnOnce(&mut T) -> R + Send + Sized + Sync + 'static,
     tag: &'a str,
 ) -> Result<R, StringError> {
     threaded_call::make_threaded_call(tx, f, tag).await
 }
 
 /// Constructs the mapping of output address to asset for `create_transactions`
-pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAsset> {
+pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (String, APIAsset)> {
     let mut tx_info = BTreeMap::new();
 
     for tx in transactions {
@@ -912,7 +1043,7 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, APIAs
             let address = out.script_public_key.clone().unwrap_or_default();
             let asset = APIAsset::new(out.value.clone(), None);
 
-            tx_info.insert(address, asset);
+            tx_info.insert(construct_tx_hash(tx), (address, asset));
         }
     }
 

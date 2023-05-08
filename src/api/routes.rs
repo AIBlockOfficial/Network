@@ -6,11 +6,12 @@ use crate::api::utils::{
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::ComputeApi;
-use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
+use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
 use crate::wallet::WalletDb;
 use std::sync::{Arc, Mutex};
+
 use warp::{Filter, Rejection, Reply};
 
 //======= GET ROUTES =======//
@@ -44,7 +45,7 @@ pub fn wallet_info(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "wallet_info";
     warp_path(dp, route)
         .and(warp::get())
@@ -74,7 +75,7 @@ pub fn export_keypairs(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "export_keypairs";
     warp_path(dp, route)
         .and(warp::get())
@@ -98,7 +99,7 @@ pub fn payment_address(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "payment_address";
     warp_path(dp, route)
         .and(warp::get())
@@ -122,7 +123,7 @@ pub fn latest_block(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "latest_block";
     warp_path(dp, route)
         .and(warp::get())
@@ -147,7 +148,7 @@ pub fn debug_data(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "debug_data";
     warp_path(&mut dp, route)
         .and(warp::get())
@@ -173,11 +174,11 @@ pub fn debug_data(
 // GET current block being mined
 pub fn current_mining_block(
     dp: &mut DbgPaths,
-    current_block: Arc<Mutex<Option<BlockPoWReceived>>>,
+    current_block: CurrentBlockWithMutex,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "current_mining_block";
     warp_path(dp, route)
         .and(warp::get())
@@ -201,7 +202,7 @@ pub fn utxo_addresses(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "utxo_addresses";
     warp_path(dp, route)
         .and(warp::get())
@@ -213,6 +214,30 @@ pub fn utxo_addresses(
                 call_id.clone(),
                 cache,
                 handlers::get_utxo_addresses(a, route, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
+// GET current config for node
+pub fn get_shared_config(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "get_shared_config";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_shared_config_compute(tc, route, call_id),
             )
         })
         .with(get_cors())
@@ -249,7 +274,7 @@ pub fn blockchain_entry_by_key(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "blockchain_entry";
     warp_path(dp, route)
         .and(warp::post())
@@ -274,7 +299,7 @@ pub fn block_by_num(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "block_by_num";
     warp_path(dp, route)
         .and(warp::post())
@@ -292,6 +317,31 @@ pub fn block_by_num(
         .with(post_cors())
 }
 
+// POST get block information by number
+pub fn transactions_by_key(
+    dp: &mut DbgPaths,
+    db: Arc<Mutex<SimpleDb>>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "transactions_by_key";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(db))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_transactions_by_key(db, info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 // POST save keypair
 // TODO: Requires password
 pub fn import_keypairs(
@@ -300,7 +350,7 @@ pub fn import_keypairs(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "import_keypairs";
     warp_path(dp, route)
         .and(warp::post())
@@ -326,7 +376,7 @@ pub fn make_payment(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "make_payment";
     warp_path(dp, route)
         .and(warp::post())
@@ -353,7 +403,7 @@ pub fn make_ip_payment(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "make_ip_payment";
     warp_path(dp, route)
         .and(warp::post())
@@ -379,7 +429,7 @@ pub fn request_donation(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "request_donation";
     warp_path(dp, route)
         .and(warp::post())
@@ -404,7 +454,7 @@ pub fn update_running_total(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "update_running_total";
     warp_path(dp, route)
         .and(warp::post())
@@ -429,7 +479,7 @@ pub fn fetch_balance(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "fetch_balance";
     warp_path(dp, route)
         .and(warp::post())
@@ -454,7 +504,7 @@ pub fn fetch_pending(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "fetch_pending";
     warp_path(dp, route)
         .and(warp::post())
@@ -479,7 +529,7 @@ pub fn create_receipt_asset(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "create_receipt_asset";
     warp_path(dp, route)
         .and(warp::post())
@@ -504,7 +554,7 @@ pub fn create_receipt_asset_user(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "create_receipt_asset";
     warp_path(dp, route)
         .and(warp::post())
@@ -529,7 +579,7 @@ pub fn change_passphrase(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "change_passphrase";
     warp_path(dp, route)
         .and(warp::post())
@@ -554,7 +604,7 @@ pub fn create_transactions(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
     let route = "create_transactions";
     warp_path(dp, route)
         .and(warp::post())
@@ -579,7 +629,7 @@ pub fn blocks_by_tx_hashes(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
     let route = "check_transaction_presence";
     warp_path(dp, route)
         .and(warp::post())
@@ -603,7 +653,7 @@ pub fn address_construction(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "address_construction";
     warp_path(dp, route)
         .and(warp::post())
@@ -620,6 +670,80 @@ pub fn address_construction(
         .with(post_cors())
 }
 
+// POST pause nodes
+pub fn pause_nodes(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "pause_nodes";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and_then(move |call_id: String, cache, tc, b_num| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::pause_nodes(tc, route, call_id, b_num),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST resume nodes
+pub fn resume_nodes(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "resume_nodes";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::resume_nodes(tc, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST update config in a coordinated manner, sharing it to peers
+pub fn update_shared_config(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "update_shared_config";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and(with_node_component(threaded_calls))
+        .and_then(move |call_id: String, shared_config, cache, tc| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::update_shared_config(tc, shared_config, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 //======= NODE ROUTES =======//
 //TODO: Nodes share similar routes; We need to find a way to reduce ambiguity
 
@@ -629,7 +753,7 @@ pub fn user_node_routes(
     routes_pow_info: RoutesPoWInfo,
     db: WalletDb,
     node: Node,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -730,7 +854,7 @@ pub fn storage_node_routes(
     routes_pow_info: RoutesPoWInfo,
     db: Arc<Mutex<SimpleDb>>,
     node: Node,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -742,6 +866,13 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
+    .or(transactions_by_key(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(latest_block(
         dp,
         db.clone(),
@@ -789,7 +920,7 @@ pub fn compute_node_routes(
     routes_pow_info: RoutesPoWInfo,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     node: Node,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -817,13 +948,41 @@ pub fn compute_node_routes(
     ))
     .or(utxo_addresses(
         dp,
-        threaded_calls,
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
     ))
     .or(address_construction(
         dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(pause_nodes(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(resume_nodes(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(update_shared_config(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(get_shared_config(
+        dp,
+        threaded_calls,
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -847,7 +1006,7 @@ pub fn miner_node_routes(
     current_block: CurrentBlockWithMutex,
     db: WalletDb,
     node: Node,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -920,7 +1079,7 @@ pub fn miner_node_with_user_routes(
     db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
     user_node: Node, /* Additional User `Node` */
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);

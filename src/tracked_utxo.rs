@@ -4,7 +4,7 @@ use naom::primitives::asset::AssetValues;
 use naom::primitives::transaction::{OutPoint, Transaction};
 use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
 
 #[derive(Default, Debug, Clone, Serialize)]
@@ -58,7 +58,7 @@ impl TrackedUtxoSet {
     pub fn remove_tracked_utxo_entry<'a>(&mut self, key: &'a OutPoint) -> Option<&'a OutPoint> {
         self.base.remove(key)?.script_public_key.and_then(|spk| {
             let pk_cache_entry = self.pk_cache.get_mut(&spk)?;
-            pk_cache_entry.retain(|op| op.t_hash != key.t_hash);
+            pk_cache_entry.retain(|op| op.t_hash != key.t_hash && op.n != key.n);
             if pk_cache_entry.is_empty() {
                 self.pk_cache.remove(&spk);
             }
@@ -70,10 +70,16 @@ impl TrackedUtxoSet {
     pub fn get_balance_for_addresses(&self, addresses: &[String]) -> TrackedUtxoBalance {
         let mut address_list = AddressesWithOutPoints::new();
         let mut total = AssetValues::default();
+        let mut known_op: BTreeSet<OutPoint> = Default::default();
 
         for address in addresses {
             if let Some(ops) = self.get_pk_cache_vec(address) {
                 for op in ops {
+                    // Ignore `OutPoint` values already present
+                    if known_op.get(op).is_some() {
+                        continue;
+                    }
+                    known_op.insert(op.clone());
                     let t_out = self.base.get(op).unwrap();
                     let asset = t_out.value.clone().with_fixed_hash(op);
                     address_list

@@ -55,6 +55,11 @@ impl RaftStore {
         self.presistent.take()
     }
 
+    /// Consume store and return peristent storage
+    pub fn backup_persistent(&self) -> Result<(), SimpleDbError> {
+        self.presistent.file_backup()
+    }
+
     /// Saves the current HardState.
     pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
         let bytes = hs.write_to_bytes()?;
@@ -249,7 +254,7 @@ fn from_ser_err(err: BincodeError) -> StorageError {
 
 /// Format entry key for db
 fn format_entry_key(index: u64) -> String {
-    format!("{}_{}", ENTRY_KEY, index)
+    format!("{ENTRY_KEY}_{index}")
 }
 
 fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatchDone) -> RaftResult<()> {
@@ -260,7 +265,7 @@ fn batch_write(presistent: &mut SimpleDb, batch: SimpleDbWriteBatchDone) -> Raft
 fn get_persistent_entry(presistent: &SimpleDb, index: u64) -> RaftResult<Option<Entry>> {
     let key = format_entry_key(index);
     if let Some(bytes) = presistent
-        .get_cf(DB_COL_DEFAULT, &key)
+        .get_cf(DB_COL_DEFAULT, key)
         .map_err(from_db_err)?
     {
         Ok(Some(protobuf::parse_from_bytes::<Entry>(&bytes)?))

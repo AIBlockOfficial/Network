@@ -2,9 +2,9 @@
 
 use clap::{App, Arg, ArgMatches};
 use std::net::SocketAddr;
-use system::configurations::ComputeNodeConfig;
-use system::ComputeNode;
-use system::{
+use znp::configurations::ComputeNodeConfig;
+use znp::ComputeNode;
+use znp::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
@@ -12,14 +12,14 @@ use system::{
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut config = configuration(load_settings(matches));
 
-    println!("Start node with config {:?}", config);
+    println!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = ComputeNode::new(config, Default::default()).await.unwrap();
     let api_inputs = node.api_inputs();
 
-    println!("API Inputs: {:?}", api_inputs);
-    println!("Started node at {}", node.address());
+    println!("API Inputs: {api_inputs:?}");
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
@@ -172,6 +172,14 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("enable_pipeline_reset")
+                .long("enable_pipeline_reset")
+                .help(
+                    "Enable the compute node to vote for a pipeline reset if it should get stuck.",
+                )
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -210,6 +218,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("compute_mining_event_timeout", 500)
         .unwrap();
+    settings
+        .set_default("enable_pipeline_reset", false)
+        .unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -229,6 +240,14 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
     if let Some(use_tls) = matches.value_of("api_use_tls") {
         settings.set("compute_api_use_tls", use_tls).unwrap();
+    }
+    if let Some(enable_pipeline_reset) = matches.value_of("enable_pipeline_reset") {
+        settings
+            .set(
+                "enable_trigger_messages_pipeline_reset",
+                enable_pipeline_reset,
+            )
+            .unwrap();
     }
 
     if let Some(index) = matches.value_of("index") {
@@ -259,7 +278,7 @@ fn configuration(settings: config::Config) -> ComputeNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

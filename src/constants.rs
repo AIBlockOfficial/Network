@@ -66,6 +66,9 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
 /*------- LIMIT CONSTANTS -------*/
 
+/// Maximum number of attempts to resend trigger messages before proposing to reset the mining pipeline
+pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 10;
+
 /// Limit for the transaction pool per compute node
 pub const TX_POOL_LIMIT: usize = 10_000_000;
 
@@ -86,6 +89,13 @@ pub const BLOCK_SIZE_IN_TX: usize = BLOCK_SIZE / 500;
 
 /// Number of rounds for Miller Rabin primality testing
 pub const MR_PRIME_ITERS: u32 = 15;
+
+/// Number of old backups to keep before purging
+pub const OLD_BACKUP_COUNT: usize = 5;
+
+/// Coinbase locktime constant
+/// TODO: Update to 5 once locktime tests are introduced
+pub const COINBASE_MATURITY: u64 = if cfg!(test) { 0 } else { 100 };
 
 /*------- TESTS -------*/
 

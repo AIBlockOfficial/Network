@@ -1,10 +1,13 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{BLOCK_PREPEND, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL};
+use crate::constants::{
+    BLOCK_PREPEND, COINBASE_MATURITY, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL,
+};
 use crate::interfaces::{
-    BlockchainItem, BlockchainItemMeta, DruidDroplet, ProofOfWork, StoredSerializingBlock,
+    BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
 use crate::wallet::WalletDb;
+use crate::Rs2JsMsg;
 use bincode::serialize;
 use futures::future::join_all;
 use naom::constants::TOTAL_TOKENS;
@@ -23,7 +26,7 @@ use naom::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use rand::{self, Rng};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -38,7 +41,7 @@ use tokio::time::Instant;
 use tracing::{trace, warn};
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
-pub type ApiKeys = Arc<Mutex<HashSet<String>>>;
+pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
 pub type LocalEventSender = MpscTracingSender<LocalEvent>;
 pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 
@@ -46,6 +49,7 @@ pub type LocalEventReceiver = mpsc::Receiver<LocalEvent>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalEvent {
     CoordinatedShutdown(u64),
+    ReconnectionComplete,
     Exit(&'static str),
     Ignore,
 }
@@ -137,6 +141,11 @@ impl<T> RunningTaskOrResult<T> {
             None
         }
     }
+
+    /// Return true if running task
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Running(_))
+    }
 }
 
 /// Channel for low volume local events
@@ -214,6 +223,25 @@ impl DeserializedBlockchainItem {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct BackupCheck {
+    modulo_block_num: Option<u64>,
+}
+
+impl BackupCheck {
+    pub fn new(modulo_block_num: Option<u64>) -> Self {
+        Self { modulo_block_num }
+    }
+
+    pub fn need_backup(&self, current_block: u64) -> bool {
+        if let Some(modulo) = self.modulo_block_num {
+            current_block != 0 && current_block % modulo == 0
+        } else {
+            false
+        }
+    }
+}
+
 /// Install a global tracing subscriber that listens for events and
 /// filters based on the value of the [`RUST_LOG` environment variable],
 /// if one is not already set.
@@ -242,7 +270,10 @@ pub async fn loop_connnect_to_peers_async(
     mut node: Node,
     peers: Vec<SocketAddr>,
     mut close_rx: Option<oneshot::Receiver<()>>,
+    mut local_events_tx: LocalEventSender,
 ) {
+    let mut is_initial_conn = true;
+
     loop {
         for peer in node.unconnected_peers(&peers).await {
             trace!(?peer, "Try to connect to");
@@ -250,7 +281,21 @@ pub async fn loop_connnect_to_peers_async(
                 trace!(?peer, ?e, "Try to connect to failed");
             } else {
                 trace!(?peer, "Try to connect to succeeded");
+                if !is_initial_conn {
+                    trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
+                    local_events_tx
+                        .send(LocalEvent::ReconnectionComplete, "Reconnect Complete")
+                        .await
+                        .unwrap();
+                }
             }
+        }
+
+        if node.unconnected_peers(&peers).await.is_empty() {
+            // We finished our initial connections, now set the flag to false
+            // to indicate that connections after this are actual reconnections
+            // and therefore requires Miners to send PartitionRequest
+            is_initial_conn = false;
         }
 
         let delay_retry = tokio::time::sleep(Duration::from_millis(500));
@@ -315,7 +360,7 @@ pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
 ///
 /// * `wallet_db`    - &WalletDb object. Reference to a wallet database
 pub async fn create_and_save_fake_to_wallet(
-    wallet_db: &WalletDb,
+    wallet_db: &mut WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (final_address, address_keys) = wallet_db.generate_payment_address().await;
     let (receiver_addr, _) = wallet_db.generate_payment_address().await;
@@ -344,12 +389,12 @@ pub async fn create_and_save_fake_to_wallet(
 ///
 /// * `addr`    - Socket address of used in the proof of work
 pub fn format_parition_pow_address(addr: SocketAddr) -> String {
-    format!("{}", addr)
+    format!("{addr}")
 }
 
 /// Calculates the reward for the next block, to be placed within the coinbase tx
 ///
-/// ### Argeumtsn
+/// ### Arguments
 ///
 /// * `current_circulation` - Current circulation of all tokens
 pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
@@ -407,9 +452,10 @@ pub fn generate_random_num(len: usize) -> Vec<u8> {
 /// * `rand_num`  - A random number used to generate the ProofOfWork in an Option<Vec<u8>>
 pub fn generate_pow_for_address(
     peer: SocketAddr,
+    pow_info: PowInfo,
     address: String,
     rand_num: Option<Vec<u8>>,
-) -> task::JoinHandle<(ProofOfWork, SocketAddr)> {
+) -> task::JoinHandle<(ProofOfWork, PowInfo, SocketAddr)> {
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
@@ -420,7 +466,7 @@ pub fn generate_pow_for_address(
             pow.nonce = generate_pow_nonce();
         }
 
-        (pow, peer)
+        (pow, pow_info, peer)
     })
 }
 
@@ -693,7 +739,7 @@ pub fn make_wallet_tx_info(
     seed: &WalletTxSpec,
 ) -> (OutPoint, PublicKey, SecretKey, TokenAmount, Option<u64>) {
     let tx_out_p = decode_wallet_out_point(&seed.out_point);
-    let amount = TokenAmount(seed.amount as u64);
+    let amount = TokenAmount(seed.amount);
     let sk = decode_secret_key(&seed.secret_key).unwrap();
     let pk = decode_pub_key(&seed.public_key).unwrap();
     let version = seed.address_version;
@@ -733,7 +779,7 @@ pub fn decode_pub_key(key: &str) -> Result<PublicKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Public key decoding error: {}", key)))
+    Err(StringError(format!("Public key decoding error: {key}")))
 }
 
 /// Decodes a secret key
@@ -747,7 +793,7 @@ pub fn decode_secret_key(key: &str) -> Result<SecretKey, StringError> {
             return Ok(key);
         }
     }
-    Err(StringError(format!("Secret key decoding error: {}", key)))
+    Err(StringError(format!("Secret key decoding error: {key}")))
 }
 
 /// Decodes a signature
@@ -761,7 +807,7 @@ pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
             return Ok(sig);
         }
     }
-    Err(StringError(format!("Signature decoding error: {}", sig)))
+    Err(StringError(format!("Signature decoding error: {sig}")))
 }
 
 /// Stop listening for connection and disconnect existing ones
@@ -785,11 +831,12 @@ pub async fn shutdown_connections(node_conn: &mut Node) {
 pub fn loops_re_connect_disconnect(
     node_conn: Node,
     addrs_to_connect: Vec<SocketAddr>,
-    mut local_events_tx: LocalEventSender,
+    local_events_tx: LocalEventSender,
 ) -> (
     (impl Future<Output = ()>, oneshot::Sender<()>),
     (impl Future<Output = ()>, oneshot::Sender<()>),
 ) {
+    let mut local_events_tx_for_disconnect = local_events_tx.clone();
     // PERMANENT CONNEXION HANDLING
     let re_connect = {
         let (stop_re_connect_tx, stop_re_connect_rx) = tokio::sync::oneshot::channel::<()>();
@@ -797,8 +844,13 @@ pub fn loops_re_connect_disconnect(
         (
             async move {
                 println!("Start connect to requested peers");
-                loop_connnect_to_peers_async(node_conn, addrs_to_connect, Some(stop_re_connect_rx))
-                    .await;
+                loop_connnect_to_peers_async(
+                    node_conn,
+                    addrs_to_connect,
+                    Some(stop_re_connect_rx),
+                    local_events_tx,
+                )
+                .await;
                 println!("Reconnect complete");
             },
             stop_re_connect_tx,
@@ -821,8 +873,12 @@ pub fn loops_re_connect_disconnect(
                     };
 
                     paused = pause_and_disconnect_on_path(&mut node_conn, paused).await;
-                    shutdown_num =
-                        shutdown_on_path(&mut node_conn, &mut local_events_tx, shutdown_num).await;
+                    shutdown_num = shutdown_on_path(
+                        &mut node_conn,
+                        &mut local_events_tx_for_disconnect,
+                        shutdown_num,
+                    )
+                    .await;
                 }
                 println!("Complete mode input check");
             },
@@ -840,7 +896,7 @@ pub fn loops_re_connect_disconnect(
 /// * `node_conn`   - Node to use for connections
 /// * `paused`      - Current paused state
 async fn pause_and_disconnect_on_path(node_conn: &mut Node, paused: bool) -> bool {
-    let disconnect = format!("disconnect_{}", node_conn.address().port());
+    let disconnect = format!("disconnect_{}", node_conn.local_address().port());
     let path = std::path::Path::new(&disconnect);
     match (paused, path.exists()) {
         (false, true) => {
@@ -852,7 +908,7 @@ async fn pause_and_disconnect_on_path(node_conn: &mut Node, paused: bool) -> boo
 
             warn!(
                 "disconnect from {:?} all {:?}",
-                node_conn.address(),
+                node_conn.local_address(),
                 diconnect_addrs
             );
             node_conn.set_pause_listening(true).await;
@@ -884,9 +940,9 @@ async fn shutdown_on_path(
     local_events_tx: &mut LocalEventSender,
     shutdown_num: Option<(u64, bool)>,
 ) -> Option<(u64, bool)> {
-    let shutdown_now_one = format!("shutdown_now_{}", node_conn.address().port());
+    let shutdown_now_one = format!("shutdown_now_{}", node_conn.local_address().port());
     let shutdown_now_all = "shutdown_now".to_owned();
-    let shutdown_coord_one = format!("shutdown_coordinated_{}", node_conn.address().port());
+    let shutdown_coord_one = format!("shutdown_coordinated_{}", node_conn.local_address().port());
     let shutdown_coord_all = "shutdown_coordinated".to_owned();
 
     let now = true;
@@ -907,7 +963,7 @@ async fn shutdown_on_path(
         if shutdown_num != result {
             warn!(
                 "shutdown from {:?} at block {:?} now={}",
-                node_conn.address(),
+                node_conn.local_address(),
                 block_num,
                 is_now
             );
@@ -1004,9 +1060,10 @@ pub fn create_receipt_asset_tx_from_sig(
     public_key: String,
     signature: String,
     drs_tx_hash_spec: DrsTxHashSpec,
+    metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
     let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone());
+    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone(), metadata);
     let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
     let tx_out = TxOut::new_asset(script_public_key, receipt);
     let public_key = decode_pub_key(&public_key)?;
@@ -1023,8 +1080,29 @@ pub fn create_receipt_asset_tx_from_sig(
     Ok((tx, tx_hash))
 }
 
+/// Constructs a coinbase transaction
+/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Compute
+/// construction or mining later
+///
+/// ### Arguments
+///
+/// * `b_num`       - Block number for the current coinbase block
+/// * `amount`      - Amount of tokens allowed in coinbase
+/// * `address`     - Address to send the coinbase amount to
+pub fn construct_coinbase_tx(b_num: u64, amount: TokenAmount, address: String) -> Transaction {
+    let tx_in = TxIn::new_from_script(Script::new_for_coinbase(b_num));
+    let tx_out = TxOut {
+        value: Asset::Token(amount),
+        script_public_key: Some(address),
+        locktime: b_num + COINBASE_MATURITY,
+        ..Default::default()
+    };
+
+    construct_tx_core(vec![tx_in], vec![tx_out])
+}
+
 /// Confert to ApiKeys data structure
-pub fn to_api_keys(api_keys: Vec<String>) -> ApiKeys {
+pub fn to_api_keys(api_keys: BTreeMap<String, Vec<String>>) -> ApiKeys {
     Arc::new(Mutex::new(api_keys.into_iter().collect()))
 }
 
@@ -1047,6 +1125,15 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
         modulus: "6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151".to_owned(),
         iterations: 2,
         security: 1
+    }
+}
+
+/// Attempt to send a message to the UI
+///
+/// NOTE: This channel is not guaranteed to be open, so we ignore any errors
+pub async fn try_send_to_ui(ui_tx: Option<&mpsc::Sender<Rs2JsMsg>>, msg: Rs2JsMsg) {
+    if let Some(ui_tx) = ui_tx {
+        let _res = ui_tx.send(msg).await;
     }
 }
 
