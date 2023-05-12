@@ -91,6 +91,7 @@ pub struct NetworkConfig {
     pub tls_config: TestTlsSpec,
     pub routes_pow: BTreeMap<String, usize>,
     pub backup_block_modulo: Option<u64>,
+    pub utxo_re_align_block_modulo: Option<u64>,
     pub backup_restore: Option<bool>,
     pub enable_pipeline_reset: Option<bool>,
 }
@@ -1130,6 +1131,7 @@ async fn init_compute(
         compute_api_use_tls: true,
         routes_pow: Default::default(),
         backup_block_modulo: config.backup_block_modulo,
+        utxo_re_align_block_modulo: config.utxo_re_align_block_modulo,
         backup_restore: config.backup_restore,
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
     };

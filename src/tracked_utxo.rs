@@ -28,6 +28,43 @@ pub struct TrackedUtxoSet {
 }
 
 impl TrackedUtxoSet {
+    /// Get a clone of `pk_cache`
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during testing
+    pub fn get_pk_cache(&self) -> HashMap<String, Vec<OutPoint>> {
+        self.pk_cache.clone()
+    }
+
+    /// Remove a `pk_cache` entry
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - `script_public_key` to remove
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during testing
+    pub fn remove_pk_cache_entry(&mut self, entry: &str) {
+        self.pk_cache.remove(entry);
+    }
+
+    /// Re-align `pk_cache` to `base`
+    pub fn re_align(&mut self) {
+        self.pk_cache = create_pk_cache_from_base(&self.base);
+    }
+
+    /// Get base `UtxoSet` length
+    pub fn get_base_outpoint_count(&self) -> u64 {
+        self.base.len() as u64
+    }
+
+    /// Get tracked `UtxoSet` set length
+    pub fn get_tracked_outpoint_count(&self) -> u64 {
+        self.pk_cache.values().map(|v| v.len() as u64).sum()
+    }
+
     /// Create a new TrackedUtxoSet from `UtxoSet` base
     pub fn new(base: UtxoSet) -> Self {
         let pk_cache = create_pk_cache_from_base(&base);

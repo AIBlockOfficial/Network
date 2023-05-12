@@ -193,6 +193,11 @@ impl ActiveRaft {
     }
 
     /// Create a snapshot at the given idx with the given data.
+    ///
+    /// ## Arguments
+    /// * `idx` - The index of the snapshot
+    /// * `data` - The data to snapshot
+    /// * `backup` - Whether or not to backup the DB
     pub fn create_snapshot(&mut self, idx: u64, data: RaftData, backup: bool) {
         if self.use_raft {
             self.cmd_tx

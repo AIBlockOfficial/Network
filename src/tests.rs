@@ -40,7 +40,7 @@ use naom::utils::transaction_utils::{
     construct_address, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -3351,6 +3351,87 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     assert!(initial_network_config != shared_config_to_send);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn compute_re_align_utxo_set_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11650, 1);
+    let utxo_re_align_block_count = 2;
+    network_config.utxo_re_align_block_modulo = Some(utxo_re_align_block_count);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // Create blocks 1 to 4
+    //
+    // At block 3, re-alignment will take place
+    for i in 1..utxo_re_align_block_count + 2 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+        proof_of_work_act(
+            &mut network,
+            CfgPow::Parallel,
+            CfgNum::Majority,
+            false,
+            None,
+        )
+        .await;
+        send_block_to_storage_act(&mut network, CfgNum::Majority).await;
+
+        // After the first block, misalign `pk_cache` with `base` of `TrackedUtxoSet`
+        if i == 1 {
+            let mut committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+            if let Some(entry) = committed_utxo_set.first_entry() {
+                let addr_to_remove = entry.get().script_public_key.clone().unwrap_or_default();
+                // Remove entry for mis-alignment
+                compute_remove_entry_from_pk_cache(&mut network, "compute1", &addr_to_remove).await;
+            }
+        }
+    }
+
+    let pk_cache_after_re_alignment = compute_get_pk_cache(&mut network, "compute1").await;
+    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+
+    // Ensure that `pk_cache` is contains all `OutPoint` values from `committed_utxo_set`
+    let all_outpoints_present = move || {
+        for (out_point, tx_out) in committed_utxo_set.into_iter() {
+            let addr = tx_out.script_public_key.clone().unwrap_or_default();
+            let pk_cache_entry = pk_cache_after_re_alignment.get(&addr).unwrap();
+            if !pk_cache_entry.contains(&out_point) {
+                return false;
+            }
+        }
+        true
+    };
+
+    //
+    // Assert
+    //
+    assert!(all_outpoints_present());
+}
+
+async fn compute_remove_entry_from_pk_cache<'a>(network: &mut Network, compute: &str, entry: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.remove_pk_cache_entry(entry);
+}
+
+async fn compute_get_pk_cache(
+    network: &mut Network,
+    compute: &str,
+) -> HashMap<String, Vec<OutPoint>> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_pk_cache()
+}
+
 async fn compute_get_shared_config(
     network: &mut Network,
     compute: &str,
@@ -4928,6 +5009,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         tls_config: Default::default(),
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
+        utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
     }
