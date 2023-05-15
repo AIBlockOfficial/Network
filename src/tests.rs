@@ -3427,7 +3427,7 @@ async fn compute_remove_entry_from_pk_cache<'a>(network: &mut Network, compute: 
 async fn compute_get_pk_cache(
     network: &mut Network,
     compute: &str,
-) -> HashMap<String, Vec<OutPoint>> {
+) -> HashMap<String, BTreeSet<OutPoint>> {
     let c = network.compute(compute).unwrap().lock().await;
     c.get_pk_cache()
 }

@@ -368,7 +368,7 @@ impl ComputeNode {
     /// ## NOTE
     ///
     /// Only used during tests
-    pub fn get_pk_cache(&self) -> HashMap<String, Vec<OutPoint>> {
+    pub fn get_pk_cache(&self) -> HashMap<String, BTreeSet<OutPoint>> {
         self.node_raft.get_committed_utxo_tracked_pk_cache()
     }
 
