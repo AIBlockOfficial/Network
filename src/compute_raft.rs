@@ -19,10 +19,10 @@ use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{OutPoint, Transaction};
+use naom::primitives::transaction::Transaction;
 use naom::utils::transaction_utils::get_inputs_previous_out_point;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -870,7 +870,10 @@ impl ComputeRaft {
     /// ## NOTE
     ///
     /// Only used during tests
-    pub fn get_committed_utxo_tracked_pk_cache(&self) -> HashMap<String, BTreeSet<OutPoint>> {
+    #[cfg(test)]
+    pub fn get_committed_utxo_tracked_pk_cache(
+        &self,
+    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
         self.consensused.utxo_set.get_pk_cache()
     }
 
@@ -883,6 +886,7 @@ impl ComputeRaft {
     /// ## NOTE
     ///
     /// Only used during tests
+    #[cfg(test)]
     pub fn committed_utxo_remove_pk_cache(&mut self, entry: &str) {
         self.consensused.utxo_set.remove_pk_cache_entry(entry)
     }

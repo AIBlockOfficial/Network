@@ -33,6 +33,7 @@ impl TrackedUtxoSet {
     /// ## NOTE
     ///
     /// Only used during testing
+    #[cfg(test)]
     pub fn get_pk_cache(&self) -> HashMap<String, BTreeSet<OutPoint>> {
         self.pk_cache.clone()
     }
@@ -46,6 +47,7 @@ impl TrackedUtxoSet {
     /// ## NOTE
     ///
     /// Only used during testing
+    #[cfg(test)]
     pub fn remove_pk_cache_entry(&mut self, entry: &str) {
         self.pk_cache.remove(entry);
     }

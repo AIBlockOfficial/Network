@@ -26,12 +26,12 @@ use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use naom::primitives::asset::TokenAmount;
 use naom::primitives::block::Block;
-use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction};
+use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
 use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::{
     error::Error,
@@ -368,7 +368,10 @@ impl ComputeNode {
     /// ## NOTE
     ///
     /// Only used during tests
-    pub fn get_pk_cache(&self) -> HashMap<String, BTreeSet<OutPoint>> {
+    #[cfg(test)]
+    pub fn get_pk_cache(
+        &self,
+    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
         self.node_raft.get_committed_utxo_tracked_pk_cache()
     }
 
@@ -381,6 +384,7 @@ impl ComputeNode {
     /// ## NOTE
     ///
     /// Only used during tests
+    #[cfg(test)]
     pub fn remove_pk_cache_entry(&mut self, entry: &str) {
         self.node_raft.committed_utxo_remove_pk_cache(entry);
     }
