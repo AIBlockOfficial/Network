@@ -3,8 +3,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constants {
-    pub const NETWORK_VERSION: u32 = 3;
-    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"3");
+    // This points to the previous DB version
+    pub const NETWORK_VERSION: u32 = 4;
+    pub const NETWORK_VERSION_SERIALIZED: Option<&[u8]> = Some(b"4");
     pub const DB_PATH: &str = "src/db/db";
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
@@ -241,6 +242,13 @@ pub mod compute_raft {
         FirstUpgradeBlock,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, PartialEq, Eq)]
+    pub enum CoordinatedCommand {
+        PauseNodes { b_num: u64 },
+        ResumeNodes,
+        ApplySharedConfig,
+    }
+
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -255,6 +263,7 @@ pub mod compute_raft {
         pub utxo_set: TrackedUtxoSet,
         pub current_block_stored_info:
             BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+        pub current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
         pub last_committed_raft_idx_and_term: (u64, u64),
         pub current_circulation: TokenAmount,
         pub block_pipeline: MiningPipelineInfo,
@@ -369,6 +378,7 @@ pub mod storage {
     pub const DB_COL_BC_NAMED: &str = "block_chain_named";
     pub const DB_COL_BC_META: &str = "block_chain_meta";
     pub const DB_COL_BC_JSON: &str = "block_chain_json";
+    pub const DB_COL_BC_V0_6_0: &str = "block_chain_v0.6.0";
     pub const DB_COL_BC_V0_5_0: &str = "block_chain_v0.5.0";
     pub const DB_COL_BC_V0_4_0: &str = "block_chain_v0.4.0";
     pub const DB_COL_BC_V0_3_0: &str = "block_chain_v0.3.0";
@@ -376,6 +386,7 @@ pub mod storage {
 
     /// Version columns
     pub const DB_COLS_BC: &[(&str, u32)] = &[
+        (DB_COL_BC_V0_6_0, 4),
         (DB_COL_BC_V0_5_0, 3),
         (DB_COL_BC_V0_4_0, 2),
         (DB_COL_BC_V0_3_0, 1),
@@ -393,6 +404,7 @@ pub mod storage {
             DB_COL_BC_NAMED,
             DB_COL_BC_META,
             DB_COL_BC_JSON,
+            DB_COL_BC_V0_6_0,
             DB_COL_BC_V0_5_0,
             DB_COL_BC_V0_4_0,
             DB_COL_BC_V0_3_0,

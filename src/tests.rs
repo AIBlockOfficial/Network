@@ -22,7 +22,7 @@ use crate::tracked_utxo::TrackedUtxoBalance;
 use crate::transactor::Transactor;
 use crate::user::UserNode;
 use crate::utils::{
-    apply_mining_tx, calculate_reward, construct_valid_block_pow_hash,
+    apply_mining_tx, calculate_reward, construct_coinbase_tx, construct_valid_block_pow_hash,
     create_valid_create_transaction_with_ins_outs, create_valid_transaction_with_ins_outs,
     decode_pub_key, decode_secret_key, generate_pow_for_block, get_sanction_addresses,
     tracing_log_try_init, LocalEvent, StringError,
@@ -37,10 +37,10 @@ use naom::primitives::druid::DruidExpectation;
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxOut};
 use naom::script::StackEntry;
 use naom::utils::transaction_utils::{
-    construct_address, construct_coinbase_tx, construct_receipt_create_tx, construct_tx_hash,
+    construct_address, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -215,15 +215,19 @@ async fn full_flow_multi_miners_no_raft() {
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     test_step_start();
-
+    //
+    // Arrange
+    //
     let network_config = complete_network_config_with_n_compute_miner(11030, true, 1, 1);
-
     let mut network = Network::create_from_config(&network_config).await;
-
     let active_nodes = network.all_active_nodes().clone();
     let miner_addr = &active_nodes[&NodeType::Miner][0];
     let compute_addr = &active_nodes[&NodeType::Compute][0];
     let mut prev_mining_reward = TokenAmount(0);
+
+    //
+    // Act
+    //
 
     // Genesis block
     create_first_block_act(&mut network).await;
@@ -232,7 +236,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 
     let mut handle_aggregation_tx: bool;
     // Create more blocks
-    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) {
+    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
         // Check if the miner is _about_ to send aggregation tx
@@ -262,23 +266,23 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
         .await;
 
         send_block_to_storage_act(&mut network, CfgNum::All).await;
-
-        // Assert that the miner has aggregated the winnings under a single address
-        {
-            if handle_aggregation_tx {
-                let miner_node = network.miner(miner_addr).unwrap();
-                let txs = miner_node
-                    .lock()
-                    .await
-                    .get_wallet_db()
-                    .get_fund_store()
-                    .transactions()
-                    .len();
-
-                assert_eq!(txs, 1);
-            }
-        }
     }
+
+    //
+    // Assert
+    //
+
+    // Assert that the miner has aggregated the winnings under a single address
+    let miner_node = network.miner(miner_addr).unwrap();
+    let txs = miner_node
+        .lock()
+        .await
+        .get_wallet_db()
+        .get_fund_store()
+        .transactions()
+        .len();
+
+    assert_eq!(txs, 1);
 
     test_step_complete(network).await;
 }
@@ -569,7 +573,8 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
 
                     let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
                     for c in compute_nodes {
-                        if network.compute(&c).unwrap().lock().await.address() == compute_addr {
+                        if network.compute(&c).unwrap().lock().await.local_address() == compute_addr
+                        {
                             compute_handle_event(
                                 network,
                                 &c,
@@ -993,7 +998,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("61860386429385715129932038563928327665132428362661384643349545082089391531133-416435139657154596314786853335634683227532614868699105742210979896123845505259182064943177222638942624441844628610187675305048065512855941094501920628364805");
+    let expected_seed1 = Some("106228469607590785158439105345663906454407776332951582911215086478921447072494-890801478181097874306473746009596725559978631952297198866826970472802729293224119401323816857729365460297789241934487318750450632705046684127753444374170213");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -1111,7 +1116,6 @@ async fn proof_of_work_participation_act(network: &mut Network, cfg_num: CfgNum,
             let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
             compute_flood_rand_and_block_to_partition(network, compute).await;
             miner_all_handle_event(network, c_miners, "Received random number successfully").await;
-
             for miner in c_miners.iter() {
                 miner_handle_event(network, miner, "Partition PoW complete").await;
                 miner_process_found_partition_pow(network, miner).await;
@@ -1575,9 +1579,9 @@ async fn main_loops_raft_1_node_common(
     network_config.compute_seed_utxo =
         make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![(0..seed_wallet_count)
+        user_initial_transactions: (0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
-            .collect()],
+            .collect::<Vec<WalletTxSpec>>(),
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: tx_max_count,
@@ -1837,7 +1841,7 @@ async fn gen_transactions_common(
     // Arrange
     //
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
-        user_initial_transactions: vec![vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)]],
+        user_initial_transactions: vec![wallet_seed(VALID_TXS_IN[0], &DEFAULT_SEED_AMOUNT)],
         user_setup_tx_chunk_size: None,
         user_setup_tx_in_per_tx: Some(2),
         user_setup_tx_max_count: 4,
@@ -2262,10 +2266,29 @@ async fn request_blockchain_item_act(
     storage_to: &str,
     block_key: &str,
 ) {
-    miner_request_blockchain_item(network, miner_from, block_key).await;
+    let storage_node_addr = network
+        .storage(storage_to)
+        .unwrap()
+        .clone()
+        .lock()
+        .await
+        .local_address();
+    miner_request_blockchain_item(network, miner_from, block_key, storage_node_addr).await;
     storage_handle_event(network, storage_to, "Blockchain item fetched from storage").await;
     storage_send_blockchain_item(network, storage_to).await;
     miner_handle_event(network, miner_from, "Blockchain item received").await;
+}
+
+async fn miner_request_blockchain_item(
+    network: &mut Network,
+    miner_from: &str,
+    block_key: &str,
+    storage_node_addr: SocketAddr,
+) {
+    let mut m = network.miner(miner_from).unwrap().lock().await;
+    m.request_blockchain_item(block_key.to_owned(), storage_node_addr)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3171,18 +3194,16 @@ async fn reject_receipt_based_payment() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
     let mut create_receipt_asset_txs = BTreeMap::default();
-    let tx_hash = "g81dcfb4f3d6726395adbe0a2a1ac133";
-    create_receipt_asset_txs.insert(
-        tx_hash.to_owned(),
-        construct_receipt_create_tx(
-            0,
-            decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
-            &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
-            1,
-            DrsTxHashSpec::Create,
-            None,
-        ),
+    let tx = construct_receipt_create_tx(
+        0,
+        decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
+        &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
+        1,
+        DrsTxHashSpec::Create,
+        None,
     );
+    let tx_hash = construct_tx_hash(&tx);
+    create_receipt_asset_txs.insert(tx_hash.to_owned(), tx);
     add_transactions_act(&mut network, &create_receipt_asset_txs).await;
     proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
@@ -3328,6 +3349,87 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     assert!(all_nodes_same_config);
     assert!(all_nodes_resumed_after_coordinated_resume);
     assert!(initial_network_config != shared_config_to_send);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_re_align_utxo_set_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11650, 1);
+    let utxo_re_align_block_count = 2;
+    network_config.utxo_re_align_block_modulo = Some(utxo_re_align_block_count);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // Create blocks 1 to 4
+    //
+    // At block 3, re-alignment will take place
+    for i in 1..utxo_re_align_block_count + 2 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+        proof_of_work_act(
+            &mut network,
+            CfgPow::Parallel,
+            CfgNum::Majority,
+            false,
+            None,
+        )
+        .await;
+        send_block_to_storage_act(&mut network, CfgNum::Majority).await;
+
+        // After the first block, misalign `pk_cache` with `base` of `TrackedUtxoSet`
+        if i == 1 {
+            let mut committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+            if let Some(entry) = committed_utxo_set.first_entry() {
+                let addr_to_remove = entry.get().script_public_key.clone().unwrap_or_default();
+                // Remove entry for mis-alignment
+                compute_remove_entry_from_pk_cache(&mut network, "compute1", &addr_to_remove).await;
+            }
+        }
+    }
+
+    let pk_cache_after_re_alignment = compute_get_pk_cache(&mut network, "compute1").await;
+    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+
+    // Ensure that `pk_cache` is contains all `OutPoint` values from `committed_utxo_set`
+    let all_outpoints_present = move || {
+        for (out_point, tx_out) in committed_utxo_set.into_iter() {
+            let addr = tx_out.script_public_key.clone().unwrap_or_default();
+            let pk_cache_entry = pk_cache_after_re_alignment.get(&addr).unwrap();
+            if !pk_cache_entry.contains(&out_point) {
+                return false;
+            }
+        }
+        true
+    };
+
+    //
+    // Assert
+    //
+    assert!(all_outpoints_present());
+}
+
+async fn compute_remove_entry_from_pk_cache<'a>(network: &mut Network, compute: &str, entry: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.remove_pk_cache_entry(entry);
+}
+
+async fn compute_get_pk_cache(
+    network: &mut Network,
+    compute: &str,
+) -> HashMap<String, BTreeSet<OutPoint>> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_pk_cache()
 }
 
 async fn compute_get_shared_config(
@@ -3687,7 +3789,7 @@ async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     reason_val: &[&str],
     exit: &mut E,
 ) {
-    let addr = c.address();
+    let addr = c.local_address();
     match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason_val.contains(&reason) =>
@@ -4204,7 +4306,7 @@ async fn storage_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = s.address();
+    let addr = s.local_address();
     match s.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
@@ -4267,7 +4369,7 @@ async fn user_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = u.address();
+    let addr = u.local_address();
     match u.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
@@ -4394,7 +4496,7 @@ async fn user_trigger_update_wallet_from_utxo_set(
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet { address_list });
     u.api_inputs()
         .1
-        .inject_next_event(u.address(), request)
+        .inject_next_event(u.local_address(), request)
         .unwrap();
 }
 
@@ -4468,13 +4570,6 @@ async fn user_send_receipt_asset(
 // MinerNode helpers
 //
 
-async fn miner_request_blockchain_item(network: &mut Network, miner_from: &str, block_key: &str) {
-    let mut m = network.miner(miner_from).unwrap().lock().await;
-    m.request_blockchain_item(block_key.to_owned())
-        .await
-        .unwrap();
-}
-
 async fn miner_get_blockchain_item_received_b_num(
     network: &mut Network,
     miner: &str,
@@ -4523,7 +4618,7 @@ async fn miner_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
     reason_val: &str,
     exit: &mut E,
 ) {
-    let addr = m.address();
+    let addr = m.local_address();
     match m.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
             if success == success_val && reason == reason_val =>
@@ -4914,6 +5009,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         tls_config: Default::default(),
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
+        utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
     }
