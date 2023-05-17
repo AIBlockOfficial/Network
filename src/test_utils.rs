@@ -1043,6 +1043,7 @@ async fn init_miner(
         miner_api_use_tls: true,
         routes_pow: config.routes_pow.clone(),
         backup_block_modulo: Default::default(),
+        backup_restore: config.backup_restore,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);

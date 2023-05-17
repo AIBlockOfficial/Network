@@ -14,8 +14,8 @@ use crate::utils::{
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
     RunningTaskOrResult,
 };
-use crate::wallet::{WalletDb, WalletDbError};
-use crate::Node;
+use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
+use crate::{db_utils, Node};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -180,6 +180,12 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
             .address;
+
+        // Restore old keys if backup is present
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.miner_db_mode, &DB_SPEC, None).unwrap();
+        }
+
         let wallet_db = WalletDb::new(
             config.miner_db_mode,
             extra.wallet_db.take(),
@@ -1306,6 +1312,9 @@ impl MinerNode {
             .store_locked_coinbase(new_locked_coinbase)
             .await;
         self.wallet_db.set_locked_coinbase(value).await;
+
+        // Backup wallet after committing the coinbase
+        self.wallet_db.backup_persistent_store().await.unwrap();
 
         // Notify the end user that a winning PoW has been found
         try_send_to_ui(
