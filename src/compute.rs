@@ -353,13 +353,40 @@ impl ComputeNode {
         self.node_raft.get_local_tx_druid_pool()
     }
 
-    // The current druid pool of pending DDE transactions
+    /// The current druid pool of pending DDE transactions
     pub fn get_pending_druid_pool(&self) -> &DruidPool {
         &self.druid_pool
     }
 
+    /// Get request list
     pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
         &self.request_list
+    }
+
+    /// Get a clone of `pk_cache` element of `TrackedUtxoSet`
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn get_pk_cache(
+        &self,
+    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+        self.node_raft.get_committed_utxo_tracked_pk_cache()
+    }
+
+    /// Remove a `pk_cache` entry from `TrackedUtxoSet`
+    ///
+    /// ## Arguments
+    ///
+    /// * `entry` - The entry to remove
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn remove_pk_cache_entry(&mut self, entry: &str) {
+        self.node_raft.committed_utxo_remove_pk_cache(entry);
     }
 
     /// Return the raft loop to spawn in it own task.

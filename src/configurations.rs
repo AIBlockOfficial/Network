@@ -141,6 +141,8 @@ pub struct ComputeNodeConfig {
     pub routes_pow: BTreeMap<String, usize>,
     /// Backup block that given modulo result in 0
     pub backup_block_modulo: Option<u64>,
+    /// Check UTXO set block modulo
+    pub utxo_re_align_block_modulo: Option<u64>,
     /// Restore backup if true
     pub backup_restore: Option<bool>,
     /// Enable trigger messages to reset the pipeline when it gets stuck
