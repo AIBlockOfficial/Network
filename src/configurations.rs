@@ -216,6 +216,8 @@ pub struct MinerNodeConfig {
     pub routes_pow: BTreeMap<String, usize>,
     /// Backup block that given modulo result in 0
     pub backup_block_modulo: Option<u64>,
+    /// Restore backup if true
+    pub backup_restore: Option<bool>,
 }
 
 /// Configuration option for a user node
