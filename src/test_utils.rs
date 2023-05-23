@@ -91,6 +91,7 @@ pub struct NetworkConfig {
     pub tls_config: TestTlsSpec,
     pub routes_pow: BTreeMap<String, usize>,
     pub backup_block_modulo: Option<u64>,
+    pub utxo_re_align_block_modulo: Option<u64>,
     pub backup_restore: Option<bool>,
     pub enable_pipeline_reset: Option<bool>,
 }
@@ -609,11 +610,11 @@ impl ArcNode {
 ///Dispatch to address
 async fn address(node: &ArcNode) -> SocketAddr {
     match node {
-        ArcNode::Miner(v) => v.lock().await.address(),
-        ArcNode::Compute(v) => v.lock().await.address(),
-        ArcNode::Storage(v) => v.lock().await.address(),
-        ArcNode::User(v) => v.lock().await.address(),
-        ArcNode::PreLaunch(v) => v.lock().await.address(),
+        ArcNode::Miner(v) => v.lock().await.local_address(),
+        ArcNode::Compute(v) => v.lock().await.local_address(),
+        ArcNode::Storage(v) => v.lock().await.local_address(),
+        ArcNode::User(v) => v.lock().await.local_address(),
+        ArcNode::PreLaunch(v) => v.lock().await.local_address(),
     }
 }
 
@@ -667,7 +668,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "compute_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().left_future(),
             ))
         }
@@ -675,7 +676,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
             let node = n.lock().await;
             Some((
                 "storage_node".to_owned(),
-                node.address(),
+                node.local_address(),
                 node.raft_loop().right_future(),
             ))
         }
@@ -1031,21 +1032,18 @@ async fn init_miner(
     // Create node
     let node_info = &info.node_infos[name];
     let config = MinerNodeConfig {
-        miner_node_idx: node_info.index,
+        miner_address: node_info.node_spec.address,
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         miner_compute_node_idx,
-        miner_storage_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
         routes_pow: config.routes_pow.clone(),
         backup_block_modulo: Default::default(),
+        backup_restore: config.backup_restore,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1078,7 +1076,6 @@ async fn init_storage(
         api_keys: Default::default(),
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         storage_raft,
         storage_api_port: 3001,
         storage_api_use_tls: true,
@@ -1135,6 +1132,7 @@ async fn init_compute(
         compute_api_use_tls: true,
         routes_pow: Default::default(),
         backup_block_modulo: config.backup_block_modulo,
+        utxo_re_align_block_modulo: config.utxo_re_align_block_modulo,
         backup_restore: config.backup_restore,
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
     };
@@ -1160,20 +1158,25 @@ async fn init_user(
     extra: ExtraNodeParams,
 ) -> ArcUserNode {
     let node_info = &info.node_infos[name];
+
+    let user_wallet_seeds = if config.user_wallet_seeds.is_empty()
+        || config.user_wallet_seeds.len() <= node_info.index
+    {
+        vec![]
+    } else {
+        config.user_wallet_seeds[node_info.index].clone()
+    };
+
     let config = UserNodeConfig {
-        user_node_idx: node_info.index,
+        user_address: node_info.node_spec.address,
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         user_compute_node_idx: 0,
-        peer_user_node_idx: 0,
         compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        miner_nodes: info.miner_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
         user_api_port: 3000,
         user_api_use_tls: true,
-        user_wallet_seeds: config.user_wallet_seeds.clone(),
+        user_wallet_seeds,
         passphrase: config.passphrase.clone(),
         user_auto_donate: config.user_auto_donate,
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
@@ -1374,7 +1377,7 @@ pub async fn get_bound_common_tls_configs(
         let name = &mapping[&address];
         let tls_spec = update_spec(name, tls_spec.make_tls_spec(&mapping));
         let config = TcpTlsConfig::from_tls_spec(address, &tls_spec).unwrap();
-        let config = config.with_listener(tcp_listener);
+        let config = config.with_listener(tcp_listener).await;
         configs.push(config);
     }
     configs

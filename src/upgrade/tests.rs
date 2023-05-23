@@ -609,7 +609,7 @@ async fn test_step_complete(network: Network) {
 }
 
 fn create_old_db(spec: &SimpleDbSpec, db_mode: DbMode, entries: &[DbEntryType]) -> SimpleDb {
-    let mut db = new_db(db_mode, spec, None);
+    let mut db = new_db(db_mode, spec, None, None);
     db.import_items(entries.iter().copied()).unwrap();
     db
 }
@@ -650,8 +650,9 @@ fn open_as_version_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     match specs {
         Specs::Db(spec, raft_spec) => {
-            let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db)?;
-            let raft_db = new_db_with_version(info.db_mode, raft_spec, version, old_dbs.raft_db)?;
+            let db = new_db_with_version(info.db_mode, spec, version, old_dbs.db, None)?;
+            let raft_db =
+                new_db_with_version(info.db_mode, raft_spec, version, old_dbs.raft_db, None)?;
             Ok(ExtraNodeParams {
                 db: Some(db),
                 raft_db: Some(raft_db),
@@ -659,7 +660,8 @@ fn open_as_version_node_db(
             })
         }
         Specs::Wallet(spec) => {
-            let wallet_db = new_db_with_version(info.db_mode, spec, version, old_dbs.wallet_db)?;
+            let wallet_db =
+                new_db_with_version(info.db_mode, spec, version, old_dbs.wallet_db, None)?;
             Ok(ExtraNodeParams {
                 wallet_db: Some(wallet_db),
                 ..Default::default()
@@ -715,6 +717,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         tls_config: get_test_tls_spec(),
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
+        utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
     }
@@ -799,7 +802,7 @@ fn get_test_auto_gen_setup(count_override: Option<usize>) -> UserAutoGenTxSetup 
     ];
 
     UserAutoGenTxSetup {
-        user_initial_transactions: vec![user1_tx],
+        user_initial_transactions: user1_tx,
         user_setup_tx_chunk_size: Some(5),
         user_setup_tx_in_per_tx: Some(3),
         user_setup_tx_max_count: count_override.unwrap_or(100000),
@@ -812,6 +815,8 @@ fn in_memory(dbs: ExtraNodeParams) -> ExtraNodeParams {
         raft_db: dbs.raft_db.and_then(|v| v.in_memory()),
         wallet_db: dbs.wallet_db.and_then(|v| v.in_memory()),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 
@@ -821,6 +826,8 @@ fn filter_dbs(dbs: ExtraNodeParams, filter_dbs: &ExtraNodeParamsFilter) -> Extra
         raft_db: dbs.raft_db.filter(|_| filter_dbs.raft_db),
         wallet_db: dbs.wallet_db.filter(|_| filter_dbs.wallet_db),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 
@@ -830,6 +837,8 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
         raft_db: dbs.raft_db.as_ref().and_then(|v| v.cloned_in_memory()),
         wallet_db: dbs.wallet_db.as_ref().and_then(|v| v.cloned_in_memory()),
         shared_wallet_db: None,
+        custom_wallet_spec: None,
+        disable_tcp_listener: false,
     }
 }
 

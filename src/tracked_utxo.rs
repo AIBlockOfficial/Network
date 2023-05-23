@@ -24,10 +24,49 @@ pub struct TrackedUtxoSet {
     /// The `UtxoSet`
     base: UtxoSet,
     /// Cache mapping of Some `script_public_key` to `OutPoints` present in `base`.
-    pk_cache: HashMap<String, Vec<OutPoint>>,
+    pk_cache: HashMap<String, BTreeSet<OutPoint>>,
 }
 
 impl TrackedUtxoSet {
+    /// Get a clone of `pk_cache`
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during testing
+    #[cfg(test)]
+    pub fn get_pk_cache(&self) -> HashMap<String, BTreeSet<OutPoint>> {
+        self.pk_cache.clone()
+    }
+
+    /// Remove a `pk_cache` entry
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - `script_public_key` to remove
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during testing
+    #[cfg(test)]
+    pub fn remove_pk_cache_entry(&mut self, entry: &str) {
+        self.pk_cache.remove(entry);
+    }
+
+    /// Re-align `pk_cache` to `base`
+    pub fn re_align(&mut self) {
+        self.pk_cache = create_pk_cache_from_base(&self.base);
+    }
+
+    /// Get base `UtxoSet` length
+    pub fn get_base_outpoint_count(&self) -> u64 {
+        self.base.len() as u64
+    }
+
+    /// Get tracked `UtxoSet` set length
+    pub fn get_tracked_outpoint_count(&self) -> u64 {
+        self.pk_cache.values().map(|v| v.len() as u64).sum()
+    }
+
     /// Create a new TrackedUtxoSet from `UtxoSet` base
     pub fn new(base: UtxoSet) -> Self {
         let pk_cache = create_pk_cache_from_base(&base);
@@ -40,7 +79,7 @@ impl TrackedUtxoSet {
     }
 
     /// Get all `OutPoints` for a `script_public_key`
-    pub fn get_pk_cache_vec(&self, key: &str) -> Option<&Vec<OutPoint>> {
+    pub fn get_pk_cache_vec(&self, key: &str) -> Option<&BTreeSet<OutPoint>> {
         self.pk_cache.get(key)
     }
 
@@ -58,7 +97,7 @@ impl TrackedUtxoSet {
     pub fn remove_tracked_utxo_entry<'a>(&mut self, key: &'a OutPoint) -> Option<&'a OutPoint> {
         self.base.remove(key)?.script_public_key.and_then(|spk| {
             let pk_cache_entry = self.pk_cache.get_mut(&spk)?;
-            pk_cache_entry.retain(|op| op != key);
+            pk_cache_entry.retain(|op| op.t_hash != key.t_hash && op.n != key.n);
             if pk_cache_entry.is_empty() {
                 self.pk_cache.remove(&spk);
             }
@@ -107,8 +146,8 @@ impl TrackedUtxoSet {
 }
 
 /// Create `pk_cache` entries from base `UtxoSet`
-pub fn create_pk_cache_from_base(base: &UtxoSet) -> HashMap<String, Vec<OutPoint>> {
-    let mut pk_cache: HashMap<String, Vec<OutPoint>> = HashMap::new();
+pub fn create_pk_cache_from_base(base: &UtxoSet) -> HashMap<String, BTreeSet<OutPoint>> {
+    let mut pk_cache: HashMap<String, BTreeSet<OutPoint>> = HashMap::new();
     extend_pk_cache_vec(
         &mut pk_cache,
         get_pk_with_out_point_from_utxo_set_cloned(base.iter()),
@@ -118,10 +157,12 @@ pub fn create_pk_cache_from_base(base: &UtxoSet) -> HashMap<String, Vec<OutPoint
 
 /// Extend `pk_cache` entries
 pub fn extend_pk_cache_vec<'a>(
-    pk_cache: &mut HashMap<String, Vec<OutPoint>>,
+    pk_cache: &mut HashMap<String, BTreeSet<OutPoint>>,
     spk: impl Iterator<Item = (String, OutPoint)> + 'a,
 ) {
-    spk.for_each(|(spk, op)| pk_cache.entry(spk).or_default().push(op));
+    spk.for_each(|(spk, op)| {
+        pk_cache.entry(spk).or_default().insert(op);
+    });
 }
 
 impl Deref for TrackedUtxoSet {
@@ -141,7 +182,7 @@ impl Serialize for TrackedUtxoSet {
 impl<'a> Deserialize<'a> for TrackedUtxoSet {
     fn deserialize<D: Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
         let base: UtxoSet = Deserialize::deserialize(deserializer)?;
-        let pk_cache: HashMap<String, Vec<OutPoint>> = create_pk_cache_from_base(&base);
+        let pk_cache: HashMap<String, BTreeSet<OutPoint>> = create_pk_cache_from_base(&base);
         Ok(TrackedUtxoSet { base, pk_cache })
     }
 }

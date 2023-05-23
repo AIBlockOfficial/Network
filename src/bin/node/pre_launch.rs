@@ -1,9 +1,9 @@
 //! App to run a pre-launch node.
 
 use clap::{App, Arg, ArgMatches};
-use system::configurations::PreLaunchNodeConfig;
-use system::PreLaunchNode;
-use system::{
+use znp::configurations::PreLaunchNodeConfig;
+use znp::PreLaunchNode;
+use znp::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
     ResponseResult,
 };
@@ -16,7 +16,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         .await
         .unwrap();
 
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
@@ -166,7 +166,7 @@ fn configuration(settings: config::Config) -> PreLaunchNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::{DbMode, PreLaunchNodeType};
+    use znp::configurations::{DbMode, PreLaunchNodeType};
 
     type Expected = (DbMode, Option<String>, PreLaunchNodeType);
 

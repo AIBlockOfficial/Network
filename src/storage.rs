@@ -170,16 +170,16 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage).await?;
+        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage, false).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC).unwrap();
+            db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC, None).unwrap();
         }
         let db = {
-            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take());
+            let raw_db = db_utils::new_db(config.storage_db_mode, &DB_SPEC, extra.db.take(), None);
             Arc::new(Mutex::new(raw_db))
         };
 
@@ -204,9 +204,14 @@ impl StorageNode {
         .load_local_db()
     }
 
+    /// Returns the storage node's local endpoint.
+    pub fn local_address(&self) -> SocketAddr {
+        self.node.local_address()
+    }
+
     /// Returns the storage node's public endpoint.
-    pub fn address(&self) -> SocketAddr {
-        self.node.address()
+    pub async fn public_address(&self) -> Option<SocketAddr> {
+        self.node.public_address().await
     }
 
     /// Returns the storage node's API info
@@ -436,8 +441,8 @@ impl StorageNode {
                     match self.node.send(
                         addr,
                         StorageRequest::SendRaftCmd(msg)).await {
-                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.address(), e),
-                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.address()),
+                            Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
+                            Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
 
                 }

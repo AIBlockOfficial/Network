@@ -2,9 +2,9 @@
 
 use clap::{App, Arg, ArgMatches};
 use std::net::SocketAddr;
-use system::configurations::ComputeNodeConfig;
-use system::ComputeNode;
-use system::{
+use znp::configurations::ComputeNodeConfig;
+use znp::ComputeNode;
+use znp::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
@@ -19,7 +19,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let api_inputs = node.api_inputs();
 
     println!("API Inputs: {api_inputs:?}");
-    println!("Started node at {}", node.address());
+    println!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
@@ -278,7 +278,7 @@ fn configuration(settings: config::Config) -> ComputeNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use system::configurations::DbMode;
+    use znp::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 
