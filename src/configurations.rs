@@ -218,6 +218,8 @@ pub struct MinerNodeConfig {
     pub backup_block_modulo: Option<u64>,
     /// Restore backup if true
     pub backup_restore: Option<bool>,
+    /// When provided, all new coinbase transactions will be assigned to this address
+    pub static_miner_address: Option<String>,
 }
 
 /// Configuration option for a user node

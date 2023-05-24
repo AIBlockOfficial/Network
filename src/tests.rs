@@ -5012,6 +5012,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
+        static_miner_address: Default::default(),
     }
 }
 
