@@ -294,7 +294,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_miner(11030, true, 1, 1);
+    let network_config = complete_network_config_with_n_compute_miner(11031, true, 1, 1);
     let mut network = Network::create_from_config(&network_config).await;
     let active_nodes = network.all_active_nodes().clone();
     let miner = &active_nodes[&NodeType::Miner][0];
@@ -317,7 +317,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
-    // Create a three blocks
+    // Run the network to mine 2 blocks
     for _ in 0..2 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
         proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
@@ -340,7 +340,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     let tokens_after_mining = user_get_tokens_held(&mut network, user).await;
 
     assert_eq!(initial_tokens, TokenAmount(0));
-    assert_eq!(tokens_after_mining, TokenAmount(7510185)); // 7510185 is the amount of tokens won after mining 2 rounds
+    assert_eq!(tokens_after_mining, TokenAmount(7510185)); // 7510185 is the amount of tokens won after mining 2 blocks
 }
 
 #[tokio::test(flavor = "current_thread")]
