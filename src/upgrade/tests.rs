@@ -721,6 +721,8 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
         static_miner_address: Default::default(),
+        mining_api_key: Default::default(),
+        compute_miner_whitelist: Default::default(),
     }
     .with_groups(1, 1)
 }

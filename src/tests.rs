@@ -1,6 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
+use crate::compute_raft::MinerWhitelist;
 use crate::configurations::{
     ComputeNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
 };
@@ -3341,12 +3342,23 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     let initial_network_config = ComputeNodeSharedConfig {
         compute_partition_full_size: network_config.compute_partition_full_size,
         compute_mining_event_timeout: 500,
+        compute_miner_whitelist: Default::default(), // No whitelisting
     };
 
     // This is the configuration we want applied to all compute nodes during runtime
     let shared_config_to_send = ComputeNodeSharedConfig {
         compute_partition_full_size: 5,
         compute_mining_event_timeout: 10000,
+        compute_miner_whitelist: MinerWhitelist {
+            active: true, // This will enable whitelisting
+            miner_api_keys: Some(
+                // Filter based on API keys
+                vec!["key1".to_string(), "key2".to_string()]
+                    .into_iter()
+                    .collect(),
+            ),
+            miner_addresses: None,
+        },
     };
 
     let compute_ring = &[
@@ -3377,12 +3389,15 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     // ,and ready to update their configs
     // with the one received from "compute1"
     compute_initiate_send_shared_config_act(
-        shared_config_to_send,
+        shared_config_to_send.clone(),
         "compute1",
         compute_ring,
         &mut network,
     )
     .await;
+
+    // The miner should now get disconnected, since whitelisting has been applied
+    miner_handle_event_failure(&mut network, "miner1", "Miner not authorized").await;
 
     // All shared config values should now be the same
     let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
@@ -3393,10 +3408,6 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     // Confirm all nodes are now resumed
     let all_nodes_resumed_after_coordinated_resume =
         compute_all_nodes_resumed(&mut network, compute_ring).await;
-
-    // Normal operation should continue here
-    proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
-    send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     //
     // Assert
@@ -4667,6 +4678,11 @@ fn miner_blockchain_item_meta(item: &BlockchainItem) -> (char, u64, u32) {
     }
 }
 
+async fn miner_handle_event_failure(network: &mut Network, miner: &str, reason_val: &str) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    miner_handle_event_for_node(&mut m, false, reason_val, &mut test_timeout()).await;
+}
+
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
     miner_handle_event_for_node(&mut m, true, reason_val, &mut test_timeout()).await;
@@ -5084,6 +5100,8 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
         static_miner_address: Default::default(),
+        compute_miner_whitelist: Default::default(),
+        mining_api_key: Default::default(),
     }
 }
 

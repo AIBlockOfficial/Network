@@ -732,6 +732,7 @@ pub mod convert {
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
+            miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
             special_handling,
         }
     }
