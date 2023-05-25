@@ -348,6 +348,11 @@ impl MinerNode {
         self.wallet_db.set_ui_feedback_tx(tx);
     }
 
+    /// Set static miner address.
+    pub fn set_static_miner_address(&mut self, addr: String) {
+        self.static_miner_address = Some(addr);
+    }
+
     /// Extract persistent dbs
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         let wallet_db = self.wallet_db.take_closed_persistent_store().await;
