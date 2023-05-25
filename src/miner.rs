@@ -157,6 +157,7 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
+    static_miner_address: Option<String>,
     aggregation_status: AggregationStatus,
     wait_partition_task: bool,
     received_utxo_set: Option<UtxoSet>,
@@ -207,6 +208,7 @@ impl MinerNode {
         )
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
+        let static_miner_address = config.static_miner_address.clone();
 
         MinerNode {
             node,
@@ -221,6 +223,7 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
+            static_miner_address,
             aggregation_status: Default::default(),
             received_utxo_set: None,
             wait_partition_task: Default::default(),
@@ -343,6 +346,11 @@ impl MinerNode {
     pub fn set_ui_feedback_tx(&mut self, tx: mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx.clone());
         self.wallet_db.set_ui_feedback_tx(tx);
+    }
+
+    /// Set static miner address.
+    pub fn set_static_miner_address(&mut self, addr: String) {
+        self.static_miner_address = Some(addr);
     }
 
     /// Extract persistent dbs
@@ -1274,7 +1282,11 @@ impl MinerNode {
     /// Commit our winning mining tx to wallet
     async fn commit_found_coinbase(&mut self) {
         trace!("Committing our latest winning");
-        self.current_payment_address = Some(generate_mining_address(&mut self.wallet_db).await);
+        self.current_payment_address = Some(
+            self.static_miner_address
+                .clone()
+                .unwrap_or(generate_mining_address(&mut self.wallet_db).await),
+        );
         let (hash, transaction) = std::mem::replace(
             &mut self.current_coinbase,
             store_last_coinbase(&self.wallet_db, None).await,
@@ -1534,13 +1546,20 @@ impl MinerNode {
             None
         };
 
-        self.current_payment_address =
-            if let Some(addr) = load_mining_address(&self.wallet_db).await? {
-                debug!("load_local_db: current_payment_address {:?}", addr);
-                Some(addr)
-            } else {
-                Some(generate_mining_address(&mut self.wallet_db).await)
-            };
+        self.current_payment_address = match self.static_miner_address.clone() {
+            Some(static_address) => {
+                warn!("using static miner address: {:?}", static_address);
+                Some(static_address)
+            }
+            None => {
+                if let Some(addr) = load_mining_address(&self.wallet_db).await? {
+                    debug!("load_local_db: current_payment_address {:?}", addr);
+                    Some(addr)
+                } else {
+                    Some(generate_mining_address(&mut self.wallet_db).await)
+                }
+            }
+        };
 
         Ok(self)
     }

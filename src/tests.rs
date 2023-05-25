@@ -288,6 +288,62 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_miner(11031, true, 1, 1);
+    let mut network = Network::create_from_config(&network_config).await;
+    let active_nodes = network.all_active_nodes().clone();
+    let miner = &active_nodes[&NodeType::Miner][0];
+    let compute = &active_nodes[&NodeType::Compute][0];
+    let user = &active_nodes[&NodeType::User][0];
+    let static_addr = user_generate_static_address_for_miner(&mut network, user).await;
+
+    // Update miner's static winning address
+    miner_set_static_miner_address(&mut network, miner, static_addr.clone()).await;
+
+    user_update_running_total(&mut network, user).await;
+    let initial_tokens = user_get_tokens_held(&mut network, user).await;
+
+    //
+    // Act
+    //
+
+    // Genesis block
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    // Run the network to mine 2 blocks
+    for _ in 0..2 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+        proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
+        send_block_to_storage_act(&mut network, CfgNum::All).await;
+    }
+
+    // Refresh the User's wallet
+    request_utxo_set_act(
+        &mut network,
+        user,
+        compute,
+        UtxoFetchType::AnyOf(vec![static_addr.clone()]),
+    )
+    .await;
+
+    //
+    // Assert
+    //
+    user_update_running_total(&mut network, user).await;
+    let tokens_after_mining = user_get_tokens_held(&mut network, user).await;
+
+    assert_eq!(initial_tokens, TokenAmount(0));
+    assert_eq!(tokens_after_mining, TokenAmount(7510185)); // 7510185 is the amount of tokens won after mining 2 blocks
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_raft_1_node() {
     full_flow_multi_miners(complete_network_config_with_n_compute_miner(
         11010, true, 1, 3,
@@ -4447,6 +4503,11 @@ async fn user_send_address_request(
         .unwrap();
 }
 
+async fn user_generate_static_address_for_miner(network: &mut Network, user: &str) -> String {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.generate_static_address_for_miner().await
+}
+
 async fn user_send_donation_address_to_peer(network: &mut Network, from_user: &str, to_user: &str) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
@@ -4480,6 +4541,11 @@ async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> V
 async fn user_update_running_total(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     u.update_running_total().await;
+}
+
+async fn user_get_tokens_held(network: &mut Network, user: &str) -> TokenAmount {
+    let u = network.user(user).unwrap().lock().await;
+    u.get_wallet_db().get_fund_store().running_total().tokens
 }
 
 async fn user_get_all_known_addresses(network: &mut Network, user: &str) -> Vec<String> {
@@ -4674,6 +4740,11 @@ async fn miner_has_aggregation_tx_active(
 async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.process_found_block_pow().await;
+}
+
+async fn miner_set_static_miner_address(network: &mut Network, miner: &str, static_addr: String) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    m.set_static_miner_address(static_addr);
 }
 
 //
@@ -5012,6 +5083,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
+        static_miner_address: Default::default(),
     }
 }
 

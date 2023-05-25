@@ -1314,6 +1314,13 @@ impl UserNode {
         }
     }
 
+    #[cfg(test)]
+    /// Generate a new payment address
+    pub async fn generate_static_address_for_miner(&mut self) -> String {
+        let (addr, _) = self.wallet_db.generate_payment_address().await;
+        addr
+    }
+
     /// Receives a request for a new payment address to be produced
     ///
     /// ### Arguments

@@ -94,6 +94,7 @@ pub struct NetworkConfig {
     pub utxo_re_align_block_modulo: Option<u64>,
     pub backup_restore: Option<bool>,
     pub enable_pipeline_reset: Option<bool>,
+    pub static_miner_address: Option<String>,
 }
 
 /// Node info to create node
@@ -1044,6 +1045,7 @@ async fn init_miner(
         routes_pow: config.routes_pow.clone(),
         backup_block_modulo: Default::default(),
         backup_restore: config.backup_restore,
+        static_miner_address: config.static_miner_address.clone(),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
