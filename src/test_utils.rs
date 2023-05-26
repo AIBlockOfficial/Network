@@ -4,6 +4,7 @@
 
 use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsListner};
 use crate::compute::ComputeNode;
+use crate::compute_raft::MinerWhitelist;
 use crate::configurations::{
     ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
     PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
@@ -95,6 +96,8 @@ pub struct NetworkConfig {
     pub backup_restore: Option<bool>,
     pub enable_pipeline_reset: Option<bool>,
     pub static_miner_address: Option<String>,
+    pub mining_api_key: Option<String>,
+    pub compute_miner_whitelist: MinerWhitelist,
 }
 
 /// Node info to create node
@@ -1046,6 +1049,7 @@ async fn init_miner(
         backup_block_modulo: Default::default(),
         backup_restore: config.backup_restore,
         static_miner_address: config.static_miner_address.clone(),
+        mining_api_key: config.mining_api_key.clone(),
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1137,6 +1141,7 @@ async fn init_compute(
         utxo_re_align_block_modulo: config.utxo_re_align_block_modulo,
         backup_restore: config.backup_restore,
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
+        compute_miner_whitelist: config.compute_miner_whitelist.clone(),
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);

@@ -47,6 +47,13 @@ pub enum CoordinatedCommand {
     ApplySharedConfig,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MinerWhitelist {
+    pub active: bool,
+    pub miner_api_keys: Option<HashSet<String>>,
+    pub miner_addresses: Option<HashSet<SocketAddr>>,
+}
+
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -152,6 +159,8 @@ pub struct ComputeConsensused {
     last_mining_transaction_hashes: Vec<String>,
     /// Special handling for processing blocks.
     special_handling: Option<SpecialHandling>,
+    /// Whitelisted miner nodes.
+    miner_whitelist: MinerWhitelist,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -166,6 +175,7 @@ pub struct ComputeConsensusedImport {
     pub last_committed_raft_idx_and_term: (u64, u64),
     pub current_circulation: TokenAmount,
     pub special_handling: Option<SpecialHandling>,
+    pub miner_whitelist: MinerWhitelist,
 }
 
 /// Consensused Compute fields and consensus management.
@@ -286,9 +296,29 @@ impl ComputeRaft {
         }
     }
 
+    /// Determine whether the compute node has whitelisting active.
+    pub fn get_compute_whitelisting_active(&self) -> bool {
+        self.consensused.miner_whitelist.active
+    }
+
+    /// Return full settings for miner whitelisting
+    pub fn get_compute_miner_whitelist(&self) -> MinerWhitelist {
+        self.consensused.miner_whitelist.clone()
+    }
+
     /// Get the full mining partition size
     pub fn get_compute_partition_full_size(&self) -> usize {
         self.consensused.partition_full_size
+    }
+
+    /// Get the compute nodes whitelist miner API keys
+    pub fn get_compute_miner_whitelist_api_keys(&self) -> Option<HashSet<String>> {
+        self.consensused.miner_whitelist.miner_api_keys.clone()
+    }
+
+    /// Get the compute nodes whitelist miner API keys
+    pub fn get_compute_miner_whitelist_addresses(&self) -> Option<HashSet<SocketAddr>> {
+        self.consensused.miner_whitelist.miner_addresses.clone()
     }
 
     /// Get the compute mining event timeout in MS
@@ -305,6 +335,29 @@ impl ComputeRaft {
     pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
         self.consensused
             .update_partition_full_size(partition_full_size);
+    }
+
+    /// Update the miner whitelisting state
+    pub fn update_compute_miner_whitelist_active(&mut self, active: bool) {
+        self.consensused.update_miner_whitelist_active(active);
+    }
+
+    /// Update the miner API keys
+    pub fn update_compute_miner_whitelist_api_keys(
+        &mut self,
+        miner_whitelist_api_keys: Option<HashSet<String>>,
+    ) {
+        self.consensused
+            .update_miner_whitelist_api_keys(miner_whitelist_api_keys);
+    }
+
+    /// Update the miner API keys
+    pub fn update_compute_miner_whitelist_addresses(
+        &mut self,
+        miner_whitelist_addresses: Option<HashSet<SocketAddr>>,
+    ) {
+        self.consensused
+            .update_miner_whitelist_addresses(miner_whitelist_addresses);
     }
 
     /// Set the key run for all proposals (load from db before first proposal).
@@ -1001,6 +1054,24 @@ impl ComputeConsensused {
         self.partition_full_size = partition_full_size;
     }
 
+    /// Update the miner IP addresses used for whitelisting
+    pub fn update_miner_whitelist_addresses(
+        &mut self,
+        miner_addresses: Option<HashSet<SocketAddr>>,
+    ) {
+        self.miner_whitelist.miner_addresses = miner_addresses;
+    }
+
+    /// Activate/Deactivate the miner whitelist
+    pub fn update_miner_whitelist_active(&mut self, active: bool) {
+        self.miner_whitelist.active = active;
+    }
+
+    /// Update the miner API keys used for whitelisting
+    pub fn update_miner_whitelist_api_keys(&mut self, miner_api_keys: Option<HashSet<String>>) {
+        self.miner_whitelist.miner_api_keys = miner_api_keys;
+    }
+
     /// Specify the raft group size
     pub fn with_peers_len(mut self, peers_len: usize) -> Self {
         self.unanimous_majority = peers_len;
@@ -1047,6 +1118,7 @@ impl ComputeConsensused {
             last_committed_raft_idx_and_term,
             current_circulation,
             special_handling,
+            miner_whitelist,
         } = consensused;
 
         let block_pipeline = MiningPipelineInfoImport {
@@ -1071,6 +1143,7 @@ impl ComputeConsensused {
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
             special_handling,
+            miner_whitelist,
         }
     }
 
@@ -1091,6 +1164,7 @@ impl ComputeConsensused {
             utxo_set: self.utxo_set.into_utxoset(),
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
+            miner_whitelist: self.miner_whitelist,
             special_handling,
         }
     }
@@ -1843,6 +1917,7 @@ mod test {
             utxo_re_align_block_modulo: Default::default(),
             backup_restore: Default::default(),
             enable_trigger_messages_pipeline_reset: Default::default(),
+            compute_miner_whitelist: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

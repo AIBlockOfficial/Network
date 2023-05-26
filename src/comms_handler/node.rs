@@ -94,7 +94,7 @@ use futures::future::join_all;
 use futures::SinkExt;
 use rand::prelude::*;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{fmt, io};
@@ -1141,6 +1141,17 @@ impl Node {
     /// Get node type
     pub fn get_node_type(&self) -> NodeType {
         self.node_type
+    }
+
+    /// Get a list of peers
+    pub async fn get_peers(&self) -> BTreeMap<SocketAddr, Option<NodeType>> {
+        let peer_clone = self.peers.clone();
+        let peers = peer_clone.read().await;
+        let mut return_map = BTreeMap::new();
+        for (key, value) in peers.iter() {
+            return_map.insert(*key, value.peer_type);
+        }
+        return_map
     }
 
     /// Get list of node peers

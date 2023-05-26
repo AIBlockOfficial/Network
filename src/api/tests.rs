@@ -929,7 +929,7 @@ async fn test_get_shared_config() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"compute_mining_event_timeout\":0,\"compute_partition_full_size\":0}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"compute_mining_event_timeout\":0,\"compute_partition_full_size\":0,\"compute_miner_whitelist\":{\"active\":false,\"miner_api_keys\":null,\"miner_addresses\":null}}}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2268,6 +2268,7 @@ async fn test_post_update_shared_config() {
     let shared_config_body = ComputeNodeSharedConfig {
         compute_mining_event_timeout: 10000,
         compute_partition_full_size: 5,
+        compute_miner_whitelist: Default::default(),
     };
     let compute = ComputeTest::new(Default::default());
     let request = warp::test::request()

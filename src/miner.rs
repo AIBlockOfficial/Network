@@ -163,6 +163,7 @@ pub struct MinerNode {
     received_utxo_set: Option<UtxoSet>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
+    mining_api_key: Option<String>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
 }
@@ -209,6 +210,7 @@ impl MinerNode {
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
         let static_miner_address = config.static_miner_address.clone();
+        let mining_api_key = config.mining_api_key.clone();
 
         MinerNode {
             node,
@@ -230,6 +232,7 @@ impl MinerNode {
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
+            mining_api_key,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
         }
         .load_local_db()
@@ -520,6 +523,10 @@ impl MinerNode {
                 reason: "Received miner removed ack from non-compute peer",
             }) => {}
             Ok(Response {
+                success: false,
+                reason: "Received miner unauthorized notification from non-compute peer",
+            }) => {}
+            Ok(Response {
                 success: true,
                 reason,
             }) => {
@@ -694,6 +701,7 @@ impl MinerNode {
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             Closing => self.receive_closing(peer),
             MinerRemovedAck => Some(self.handle_receive_miner_removed_ack(peer).await),
+            MinerNotAuthorized => Some(self.handle_receive_miner_not_authorized(peer).await),
             MinerApi(api_request) => self.handle_miner_api(peer, api_request).await,
         }
     }
@@ -725,6 +733,36 @@ impl MinerNode {
             MineApiRequest::ConnectToCompute => Some(self.handle_connect_to_compute().await),
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
+            }
+        }
+    }
+
+    /// Handle miner not being authorized
+    pub async fn handle_receive_miner_not_authorized(&mut self, peer: SocketAddr) -> Response {
+        if self.compute_address() == peer {
+            *self.pause_node.write().await = true;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Error {
+                    error: "Miner not authorized".to_string(),
+                },
+            )
+            .await;
+            Response {
+                success: false,
+                reason: "Miner not authorized",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Received miner unauthorized notification from non-compute peer",
             }
         }
     }
@@ -1263,7 +1301,12 @@ impl MinerNode {
     pub async fn send_partition_request(&mut self) -> Result<()> {
         let peer_span = error_span!("sending partition participation request");
         self.node
-            .send(self.compute_addr, ComputeRequest::SendPartitionRequest {})
+            .send(
+                self.compute_addr,
+                ComputeRequest::SendPartitionRequest {
+                    mining_api_key: self.mining_api_key.clone(),
+                },
+            )
             .instrument(peer_span)
             .await?;
 

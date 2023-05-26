@@ -1,3 +1,4 @@
+use crate::compute_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::wallet::WalletDb;
 use naom::primitives::asset::TokenAmount;
@@ -147,15 +148,19 @@ pub struct ComputeNodeConfig {
     pub backup_restore: Option<bool>,
     /// Enable trigger messages to reset the pipeline when it gets stuck
     pub enable_trigger_messages_pipeline_reset: Option<bool>,
+    /// Enable API-key based whitelisting for miners
+    pub compute_miner_whitelist: MinerWhitelist,
 }
 
 /// Configuration option for a compute node that can be shared across peers
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ComputeNodeSharedConfig {
     /// Timeout duration between mining event pipelines
     pub compute_mining_event_timeout: usize,
     /// Partition full size
     pub compute_partition_full_size: usize,
+    /// Miner whitelisting
+    pub compute_miner_whitelist: MinerWhitelist,
 }
 
 /// Configuration option for a storage node
@@ -220,6 +225,8 @@ pub struct MinerNodeConfig {
     pub backup_restore: Option<bool>,
     /// When provided, all new coinbase transactions will be assigned to this address
     pub static_miner_address: Option<String>,
+    /// When provided, the miner will use this API key to participate in mining
+    pub mining_api_key: Option<String>,
 }
 
 /// Configuration option for a user node
