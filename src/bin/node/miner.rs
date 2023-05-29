@@ -236,6 +236,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("mining_api_key")
+                .long("mining_api_key")
+                .help("Use an API key to participate in mining.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .help("Run the compute node using the given initial block config file.")
@@ -468,6 +474,10 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
                 .set("user_wallet_seeds", user_wallet_seeds[user_index].clone())
                 .unwrap();
         }
+    }
+
+    if let Some(mining_api_key) = matches.value_of("mining_api_key") {
+        settings.set("mining_api_key", mining_api_key).unwrap();
     }
 
     if let Some(certificate) = matches.value_of("tls_certificate_override") {
