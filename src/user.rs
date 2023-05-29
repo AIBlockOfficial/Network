@@ -482,7 +482,7 @@ impl UserNode {
                 error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
             }
             Err(error) => {
-                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+                error!("ERROR HANDLING RESPONSE: {:?}", error);
             }
         };
 
