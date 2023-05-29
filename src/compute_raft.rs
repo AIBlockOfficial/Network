@@ -13,6 +13,7 @@ use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
     calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
+    UtxoReAlignCheck,
 };
 use bincode::{deserialize, serialize};
 use naom::crypto::sha3_256;
@@ -44,6 +45,13 @@ pub enum CoordinatedCommand {
     #[default]
     ResumeNodes,
     ApplySharedConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MinerWhitelist {
+    pub active: bool,
+    pub miner_api_keys: Option<HashSet<String>>,
+    pub miner_addresses: Option<HashSet<SocketAddr>>,
 }
 
 /// Item serialized into RaftData and process by Raft.
@@ -151,6 +159,8 @@ pub struct ComputeConsensused {
     last_mining_transaction_hashes: Vec<String>,
     /// Special handling for processing blocks.
     special_handling: Option<SpecialHandling>,
+    /// Whitelisted miner nodes.
+    miner_whitelist: MinerWhitelist,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -165,6 +175,7 @@ pub struct ComputeConsensusedImport {
     pub last_committed_raft_idx_and_term: (u64, u64),
     pub current_circulation: TokenAmount,
     pub special_handling: Option<SpecialHandling>,
+    pub miner_whitelist: MinerWhitelist,
 }
 
 /// Consensused Compute fields and consensus management.
@@ -205,6 +216,8 @@ pub struct ComputeRaft {
     shutdown_no_commit_process: bool,
     /// Check for backup needed
     backup_check: BackupCheck,
+    /// Check UTXO set alignment if needed
+    utxo_re_align_check: UtxoReAlignCheck,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -258,6 +271,7 @@ impl ComputeRaft {
             dedup_b_num: None,
         });
         let backup_check = BackupCheck::new(config.backup_block_modulo);
+        let utxo_re_align_check = UtxoReAlignCheck::new(config.utxo_re_align_block_modulo);
 
         Self {
             first_raft_peer,
@@ -278,12 +292,33 @@ impl ComputeRaft {
             proposed_and_consensused_tx_pool_len_max: BLOCK_SIZE_IN_TX * 2,
             shutdown_no_commit_process: false,
             backup_check,
+            utxo_re_align_check,
         }
+    }
+
+    /// Determine whether the compute node has whitelisting active.
+    pub fn get_compute_whitelisting_active(&self) -> bool {
+        self.consensused.miner_whitelist.active
+    }
+
+    /// Return full settings for miner whitelisting
+    pub fn get_compute_miner_whitelist(&self) -> MinerWhitelist {
+        self.consensused.miner_whitelist.clone()
     }
 
     /// Get the full mining partition size
     pub fn get_compute_partition_full_size(&self) -> usize {
         self.consensused.partition_full_size
+    }
+
+    /// Get the compute nodes whitelist miner API keys
+    pub fn get_compute_miner_whitelist_api_keys(&self) -> Option<HashSet<String>> {
+        self.consensused.miner_whitelist.miner_api_keys.clone()
+    }
+
+    /// Get the compute nodes whitelist miner API keys
+    pub fn get_compute_miner_whitelist_addresses(&self) -> Option<HashSet<SocketAddr>> {
+        self.consensused.miner_whitelist.miner_addresses.clone()
     }
 
     /// Get the compute mining event timeout in MS
@@ -300,6 +335,29 @@ impl ComputeRaft {
     pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
         self.consensused
             .update_partition_full_size(partition_full_size);
+    }
+
+    /// Update the miner whitelisting state
+    pub fn update_compute_miner_whitelist_active(&mut self, active: bool) {
+        self.consensused.update_miner_whitelist_active(active);
+    }
+
+    /// Update the miner API keys
+    pub fn update_compute_miner_whitelist_api_keys(
+        &mut self,
+        miner_whitelist_api_keys: Option<HashSet<String>>,
+    ) {
+        self.consensused
+            .update_miner_whitelist_api_keys(miner_whitelist_api_keys);
+    }
+
+    /// Update the miner API keys
+    pub fn update_compute_miner_whitelist_addresses(
+        &mut self,
+        miner_whitelist_addresses: Option<HashSet<SocketAddr>>,
+    ) {
+        self.consensused
+            .update_miner_whitelist_addresses(miner_whitelist_addresses);
     }
 
     /// Set the key run for all proposals (load from db before first proposal).
@@ -454,6 +512,7 @@ impl ComputeRaft {
                 return Some(CommittedItem::Transactions);
             }
             ComputeRaftItem::Block(info) => {
+                let b_num = info.block_num;
                 if !self.consensused.is_current_block(info.block_num) {
                     trace!("Ignore invalid or outdated block stored info {:?}", key);
                     return None;
@@ -470,12 +529,14 @@ impl ComputeRaft {
                     // before generating block.
                     self.consensused.apply_ready_block_stored_info();
                     if self.is_shutdown_on_commit() {
+                        self.event_processed_re_align_utxo_set(b_num);
                         self.event_processed_generate_snapshot();
                         return Some(CommittedItem::BlockShutdown);
                     } else {
                         self.consensused.generate_block().await;
                         self.consensused.start_items_intake();
                         self.set_next_propose_mining_event_timeout_at();
+                        self.event_processed_re_align_utxo_set(b_num);
                         self.event_processed_generate_snapshot();
                         return Some(CommittedItem::Block);
                     }
@@ -857,6 +918,32 @@ impl ComputeRaft {
         self.consensused.get_committed_utxo_tracked_set()
     }
 
+    /// Get a clone of `pk_cache` element of `TrackedUtxoSet`
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn get_committed_utxo_tracked_pk_cache(
+        &self,
+    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+        self.consensused.utxo_set.get_pk_cache()
+    }
+
+    /// Remove an entry from `pk_cache` element of `TrackedUtxoSet` ONLY
+    ///
+    /// ## Arguments
+    ///
+    /// * `entry` - entry to remove
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn committed_utxo_remove_pk_cache(&mut self, entry: &str) {
+        self.consensused.utxo_set.remove_pk_cache_entry(entry)
+    }
+
     /// Take mining block when mining is completed, use to populate mined block.
     pub fn take_mining_block(&mut self) -> Option<(Block, BTreeMap<String, Transaction>)> {
         self.consensused.take_mining_block()
@@ -865,6 +952,16 @@ impl ComputeRaft {
     /// Take all the transactions hashes last commited
     pub fn take_local_tx_hash_last_commited(&mut self) -> Vec<String> {
         std::mem::take(&mut self.local_tx_hash_last_commited)
+    }
+
+    /// Re-align tracked UTXO set with base UTXO set if needed
+    ///
+    /// ## Arguments
+    /// * `b_num` - block number
+    pub fn event_processed_re_align_utxo_set(&mut self, b_num: u64) {
+        if self.need_utxo_re_alignment(b_num) {
+            self.consensused.re_align_utxo_set();
+        }
     }
 
     /// Generate a snapshot, needs to happen at the end of the event processing.
@@ -927,12 +1024,52 @@ impl ComputeRaft {
             false
         }
     }
+
+    /// Get whether we need a re-alignment between the base UTXO set and the tracked UTXO set
+    pub fn need_utxo_re_alignment(&self, b_num: u64) -> bool {
+        if self.utxo_re_align_check.need_check(b_num) {
+            // Determine if `OutPoint` totals differ between base UTXO set and tracked UTXO set
+            let base_count = self.consensused.utxo_set.get_base_outpoint_count();
+            let tracked_count = self.consensused.utxo_set.get_tracked_outpoint_count();
+            if base_count != tracked_count {
+                error!(
+                    "need_utxo_re_alignment: base_count: {}, tracked_count: {}",
+                    base_count, tracked_count
+                );
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl ComputeConsensused {
+    /// Re-align tracked UTXO set with base UTXO set
+    pub fn re_align_utxo_set(&mut self) {
+        self.utxo_set.re_align();
+    }
+
     /// Update the mining partition size
     pub fn update_partition_full_size(&mut self, partition_full_size: usize) {
         self.partition_full_size = partition_full_size;
+    }
+
+    /// Update the miner IP addresses used for whitelisting
+    pub fn update_miner_whitelist_addresses(
+        &mut self,
+        miner_addresses: Option<HashSet<SocketAddr>>,
+    ) {
+        self.miner_whitelist.miner_addresses = miner_addresses;
+    }
+
+    /// Activate/Deactivate the miner whitelist
+    pub fn update_miner_whitelist_active(&mut self, active: bool) {
+        self.miner_whitelist.active = active;
+    }
+
+    /// Update the miner API keys used for whitelisting
+    pub fn update_miner_whitelist_api_keys(&mut self, miner_api_keys: Option<HashSet<String>>) {
+        self.miner_whitelist.miner_api_keys = miner_api_keys;
     }
 
     /// Specify the raft group size
@@ -981,6 +1118,7 @@ impl ComputeConsensused {
             last_committed_raft_idx_and_term,
             current_circulation,
             special_handling,
+            miner_whitelist,
         } = consensused;
 
         let block_pipeline = MiningPipelineInfoImport {
@@ -1005,6 +1143,7 @@ impl ComputeConsensused {
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
             special_handling,
+            miner_whitelist,
         }
     }
 
@@ -1025,6 +1164,7 @@ impl ComputeConsensused {
             utxo_set: self.utxo_set.into_utxoset(),
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
             current_circulation: self.current_circulation,
+            miner_whitelist: self.miner_whitelist,
             special_handling,
         }
     }
@@ -1774,8 +1914,10 @@ mod test {
             compute_api_port: 3003,
             routes_pow: Default::default(),
             backup_block_modulo: Default::default(),
+            utxo_re_align_block_modulo: Default::default(),
             backup_restore: Default::default(),
             enable_trigger_messages_pipeline_reset: Default::default(),
+            compute_miner_whitelist: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

@@ -437,6 +437,12 @@ pub enum MineApiRequest {
     ConnectToCompute,
     // Disconnect from compute Node
     DisconnectFromCompute,
+    // Set static miner address
+    SetStaticMinerAddress {
+        address: Option<String>,
+    },
+    // Get static miner address
+    GetStaticMinerAddress,
 }
 
 /// Encapsulates miner requests
@@ -462,6 +468,7 @@ pub enum MineRequest {
         utxo_set: UtxoSet,
     },
     MinerRemovedAck,
+    MinerNotAuthorized,
     MinerApi(MineApiRequest),
     Closing,
 }
@@ -477,12 +484,17 @@ impl fmt::Debug for MineRequest {
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             Closing => write!(f, "Closing"),
             MinerRemovedAck => write!(f, "MinerRemovedAck"),
+            MinerNotAuthorized => write!(f, "MinerNotAuthorized"),
             MinerApi(MineApiRequest::GetConnectionStatus) => write!(f, "GetConnectionStatus"),
             MinerApi(MineApiRequest::GetMiningStatus) => write!(f, "GetMiningStatus"),
             MinerApi(MineApiRequest::InitiatePauseMining) => write!(f, "InitiatePauseMining"),
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
             MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
             MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
+                write!(f, "SetStaticMinerAddress")
+            }
+            MinerApi(MineApiRequest::GetStaticMinerAddress) => write!(f, "GetStaticMinerAddress"),
         }
     }
 }
@@ -575,7 +587,9 @@ pub enum ComputeRequest {
     SendTransactions {
         transactions: Vec<Transaction>,
     },
-    SendPartitionRequest,
+    SendPartitionRequest {
+        mining_api_key: Option<String>,
+    },
     SendUserBlockNotificationRequest,
     CoordinatedPause {
         b_num: u64, // Pause the nodes on current b_num + b_num
@@ -608,7 +622,7 @@ impl fmt::Debug for ComputeRequest {
             SendPartitionEntry { .. } => write!(f, "SendPartitionEntry"),
             SendTransactions { .. } => write!(f, "SendTransactions"),
             SendUserBlockNotificationRequest => write!(f, "SendUserBlockNotificationRequest"),
-            SendPartitionRequest => write!(f, "SendPartitionRequest"),
+            SendPartitionRequest { .. } => write!(f, "SendPartitionRequest"),
             SendSharedConfig { .. } => write!(f, "SendSharedConfig"),
             Closing => write!(f, "Closing"),
             CoordinatedPause { .. } => write!(f, "CoordinatedPause"),

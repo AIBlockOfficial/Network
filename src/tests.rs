@@ -1,6 +1,7 @@
 //! Test suite for the network functions.
 
 use crate::compute::ComputeNode;
+use crate::compute_raft::MinerWhitelist;
 use crate::configurations::{
     ComputeNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
 };
@@ -40,7 +41,7 @@ use naom::utils::transaction_utils::{
     construct_address, construct_receipt_create_tx, construct_tx_hash,
     construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -285,6 +286,62 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     assert_eq!(txs, 1);
 
     test_step_complete(network).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let network_config = complete_network_config_with_n_compute_miner(11031, true, 1, 1);
+    let mut network = Network::create_from_config(&network_config).await;
+    let active_nodes = network.all_active_nodes().clone();
+    let miner = &active_nodes[&NodeType::Miner][0];
+    let compute = &active_nodes[&NodeType::Compute][0];
+    let user = &active_nodes[&NodeType::User][0];
+    let static_addr = user_generate_static_address_for_miner(&mut network, user).await;
+
+    // Update miner's static winning address
+    miner_set_static_miner_address(&mut network, miner, static_addr.clone()).await;
+
+    user_update_running_total(&mut network, user).await;
+    let initial_tokens = user_get_tokens_held(&mut network, user).await;
+
+    //
+    // Act
+    //
+
+    // Genesis block
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    // Run the network to mine 2 blocks
+    for _ in 0..2 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+        proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
+        send_block_to_storage_act(&mut network, CfgNum::All).await;
+    }
+
+    // Refresh the User's wallet
+    request_utxo_set_act(
+        &mut network,
+        user,
+        compute,
+        UtxoFetchType::AnyOf(vec![static_addr.clone()]),
+    )
+    .await;
+
+    //
+    // Assert
+    //
+    user_update_running_total(&mut network, user).await;
+    let tokens_after_mining = user_get_tokens_held(&mut network, user).await;
+
+    assert_eq!(initial_tokens, TokenAmount(0));
+    assert_eq!(tokens_after_mining, TokenAmount(7510185)); // 7510185 is the amount of tokens won after mining 2 blocks
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -998,7 +1055,7 @@ async fn create_block_with_seed() {
     // Assert
     //
     let expected_seed0 = Some("102382207707718734792748219972459444372508601011471438062299221139355828742917-4092482189202844858141461446747443254065713079405017303649880917821984131927979764736076459305831834761744847895656303682167530187457916798745160233343351193");
-    let expected_seed1 = Some("79517952505538256861151843445639717368411728498040253818577148745236066939200-608851237869384074028927848965267137933543514368566184368468310593042514786217666803052921017960590742912236121984406032569439142243677586678666897386789165");
+    let expected_seed1 = Some("106228469607590785158439105345663906454407776332951582911215086478921447072494-890801478181097874306473746009596725559978631952297198866826970472802729293224119401323816857729365460297789241934487318750450632705046684127753444374170213");
     assert_eq!((seed0, seed1), (expected_seed0, expected_seed1));
 
     test_step_complete(network).await;
@@ -3285,12 +3342,23 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     let initial_network_config = ComputeNodeSharedConfig {
         compute_partition_full_size: network_config.compute_partition_full_size,
         compute_mining_event_timeout: 500,
+        compute_miner_whitelist: Default::default(), // No whitelisting
     };
 
     // This is the configuration we want applied to all compute nodes during runtime
     let shared_config_to_send = ComputeNodeSharedConfig {
         compute_partition_full_size: 5,
         compute_mining_event_timeout: 10000,
+        compute_miner_whitelist: MinerWhitelist {
+            active: true, // This will enable whitelisting
+            miner_api_keys: Some(
+                // Filter based on API keys
+                vec!["key1".to_string(), "key2".to_string()]
+                    .into_iter()
+                    .collect(),
+            ),
+            miner_addresses: None,
+        },
     };
 
     let compute_ring = &[
@@ -3321,12 +3389,15 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     // ,and ready to update their configs
     // with the one received from "compute1"
     compute_initiate_send_shared_config_act(
-        shared_config_to_send,
+        shared_config_to_send.clone(),
         "compute1",
         compute_ring,
         &mut network,
     )
     .await;
+
+    // The miner should now get disconnected, since whitelisting has been applied
+    miner_handle_event_failure(&mut network, "miner1", "Miner not authorized").await;
 
     // All shared config values should now be the same
     let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
@@ -3338,10 +3409,6 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     let all_nodes_resumed_after_coordinated_resume =
         compute_all_nodes_resumed(&mut network, compute_ring).await;
 
-    // Normal operation should continue here
-    proof_of_work_act(&mut network, CfgPow::Parallel, CfgNum::All, false, None).await;
-    send_block_to_storage_act(&mut network, CfgNum::All).await;
-
     //
     // Assert
     //
@@ -3349,6 +3416,87 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     assert!(all_nodes_same_config);
     assert!(all_nodes_resumed_after_coordinated_resume);
     assert!(initial_network_config != shared_config_to_send);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compute_re_align_utxo_set_1_node() {
+    test_step_start();
+
+    //
+    // Arrange
+    //
+    let mut network_config = complete_network_config_with_n_compute_raft(11650, 1);
+    let utxo_re_align_block_count = 2;
+    network_config.utxo_re_align_block_modulo = Some(utxo_re_align_block_count);
+    let mut network = Network::create_from_config(&network_config).await;
+
+    // Complete very first mining round
+    create_first_block_act(&mut network).await;
+    proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
+    send_block_to_storage_act(&mut network, CfgNum::All).await;
+
+    //
+    // Act
+    //
+
+    // Create blocks 1 to 4
+    //
+    // At block 3, re-alignment will take place
+    for i in 1..utxo_re_align_block_count + 2 {
+        create_block_act(&mut network, Cfg::All, CfgNum::All).await;
+        proof_of_work_act(
+            &mut network,
+            CfgPow::Parallel,
+            CfgNum::Majority,
+            false,
+            None,
+        )
+        .await;
+        send_block_to_storage_act(&mut network, CfgNum::Majority).await;
+
+        // After the first block, misalign `pk_cache` with `base` of `TrackedUtxoSet`
+        if i == 1 {
+            let mut committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+            if let Some(entry) = committed_utxo_set.first_entry() {
+                let addr_to_remove = entry.get().script_public_key.clone().unwrap_or_default();
+                // Remove entry for mis-alignment
+                compute_remove_entry_from_pk_cache(&mut network, "compute1", &addr_to_remove).await;
+            }
+        }
+    }
+
+    let pk_cache_after_re_alignment = compute_get_pk_cache(&mut network, "compute1").await;
+    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+
+    // Ensure that `pk_cache` is contains all `OutPoint` values from `committed_utxo_set`
+    let all_outpoints_present = move || {
+        for (out_point, tx_out) in committed_utxo_set.into_iter() {
+            let addr = tx_out.script_public_key.clone().unwrap_or_default();
+            let pk_cache_entry = pk_cache_after_re_alignment.get(&addr).unwrap();
+            if !pk_cache_entry.contains(&out_point) {
+                return false;
+            }
+        }
+        true
+    };
+
+    //
+    // Assert
+    //
+    assert!(all_outpoints_present());
+}
+
+async fn compute_remove_entry_from_pk_cache<'a>(network: &mut Network, compute: &str, entry: &str) {
+    let mut c = network.compute(compute).unwrap().lock().await;
+    c.remove_pk_cache_entry(entry);
+}
+
+async fn compute_get_pk_cache(
+    network: &mut Network,
+    compute: &str,
+) -> HashMap<String, BTreeSet<OutPoint>> {
+    let c = network.compute(compute).unwrap().lock().await;
+    c.get_pk_cache()
 }
 
 async fn compute_get_shared_config(
@@ -4366,6 +4514,11 @@ async fn user_send_address_request(
         .unwrap();
 }
 
+async fn user_generate_static_address_for_miner(network: &mut Network, user: &str) -> String {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.generate_static_address_for_miner().await
+}
+
 async fn user_send_donation_address_to_peer(network: &mut Network, from_user: &str, to_user: &str) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
@@ -4399,6 +4552,11 @@ async fn user_get_received_utxo_set_keys(network: &mut Network, user: &str) -> V
 async fn user_update_running_total(network: &mut Network, user: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     u.update_running_total().await;
+}
+
+async fn user_get_tokens_held(network: &mut Network, user: &str) -> TokenAmount {
+    let u = network.user(user).unwrap().lock().await;
+    u.get_wallet_db().get_fund_store().running_total().tokens
 }
 
 async fn user_get_all_known_addresses(network: &mut Network, user: &str) -> Vec<String> {
@@ -4520,6 +4678,11 @@ fn miner_blockchain_item_meta(item: &BlockchainItem) -> (char, u64, u32) {
     }
 }
 
+async fn miner_handle_event_failure(network: &mut Network, miner: &str, reason_val: &str) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    miner_handle_event_for_node(&mut m, false, reason_val, &mut test_timeout()).await;
+}
+
 async fn miner_handle_event(network: &mut Network, miner: &str, reason_val: &str) {
     let mut m = network.miner(miner).unwrap().lock().await;
     miner_handle_event_for_node(&mut m, true, reason_val, &mut test_timeout()).await;
@@ -4593,6 +4756,11 @@ async fn miner_has_aggregation_tx_active(
 async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) {
     let mut m = network.miner(from_miner).unwrap().lock().await;
     m.process_found_block_pow().await;
+}
+
+async fn miner_set_static_miner_address(network: &mut Network, miner: &str, static_addr: String) {
+    let mut m = network.miner(miner).unwrap().lock().await;
+    m.set_static_miner_address(Some(static_addr)).await;
 }
 
 //
@@ -4928,8 +5096,12 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         tls_config: Default::default(),
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
+        utxo_re_align_block_modulo: Default::default(),
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
+        static_miner_address: Default::default(),
+        compute_miner_whitelist: Default::default(),
+        mining_api_key: Default::default(),
     }
 }
 

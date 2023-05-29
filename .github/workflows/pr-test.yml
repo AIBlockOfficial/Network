@@ -20,6 +20,10 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Clippy check
+        timeout-minutes: 30
+        run: cargo clippy --all-targets --all-features -- -Dwarnings
+
       - name: Run integration tests
         timeout-minutes: 30
-        run: cargo test --release -- --test-threads=2
+        run: cargo test --release -- --test-threads=1

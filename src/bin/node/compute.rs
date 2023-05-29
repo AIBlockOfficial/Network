@@ -196,6 +196,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let api_setting_file = matches
         .value_of("api_config")
         .unwrap_or("src/bin/api_config.json");
+    let miner_white_list_file = matches
+        .value_of("compute_miner_whitelist")
+        .unwrap_or("src/bin/compute_miner_whitelist.json");
 
     settings
         .set_default("sanction_list", Vec::<String>::new())
@@ -233,6 +236,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
     settings
         .merge(config::File::with_name(api_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(miner_white_list_file))
         .unwrap();
 
     if let Some(port) = matches.value_of("api_port") {

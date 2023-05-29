@@ -14,8 +14,8 @@ use crate::utils::{
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
     RunningTaskOrResult,
 };
-use crate::wallet::{WalletDb, WalletDbError};
-use crate::Node;
+use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
+use crate::{db_utils, Node};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -157,11 +157,13 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
+    static_miner_address: Arc<RwLock<Option<String>>>,
     aggregation_status: AggregationStatus,
     wait_partition_task: bool,
     received_utxo_set: Option<UtxoSet>,
     mining_partition_task: RunningTaskOrResult<(ProofOfWork, PowInfo, SocketAddr)>,
     mining_block_task: RunningTaskOrResult<BlockPoWInfo>,
+    mining_api_key: Option<String>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
 }
@@ -180,6 +182,12 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?
             .address;
+
+        // Restore old keys if backup is present
+        if config.backup_restore.unwrap_or(false) {
+            db_utils::restore_file_backup(config.miner_db_mode, &DB_SPEC, None).unwrap();
+        }
+
         let wallet_db = WalletDb::new(
             config.miner_db_mode,
             extra.wallet_db.take(),
@@ -201,6 +209,8 @@ impl MinerNode {
         )
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
+        let static_miner_address = Arc::new(RwLock::new(config.static_miner_address.clone()));
+        let mining_api_key = config.mining_api_key.clone();
 
         MinerNode {
             node,
@@ -215,12 +225,14 @@ impl MinerNode {
             last_pow: None,
             current_coinbase: None,
             current_payment_address: None,
+            static_miner_address,
             aggregation_status: Default::default(),
             received_utxo_set: None,
             wait_partition_task: Default::default(),
             mining_partition_task: Default::default(),
             mining_block_task: Default::default(),
             blockchain_item_received: Default::default(),
+            mining_api_key,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
         }
         .load_local_db()
@@ -337,6 +349,16 @@ impl MinerNode {
     pub fn set_ui_feedback_tx(&mut self, tx: mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx.clone());
         self.wallet_db.set_ui_feedback_tx(tx);
+    }
+
+    /// Set static mining address
+    pub async fn set_static_miner_address(&mut self, address: Option<String>) {
+        *self.static_miner_address.write().await = address;
+    }
+
+    /// Get static miner address
+    pub async fn get_static_miner_address(&self) -> Option<String> {
+        self.static_miner_address.read().await.clone()
     }
 
     /// Extract persistent dbs
@@ -495,6 +517,10 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Static miner address set",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "Node is paused",
             }) => {}
             Ok(Response {
@@ -505,6 +531,14 @@ impl MinerNode {
                 success: false,
                 reason: "Received miner removed ack from non-compute peer",
             }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Received miner unauthorized notification from non-compute peer",
+            }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Miner not authorized",
+            }) => return ResponseResult::Exit,
             Ok(Response {
                 success: true,
                 reason,
@@ -680,6 +714,7 @@ impl MinerNode {
             SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
             Closing => self.receive_closing(peer),
             MinerRemovedAck => Some(self.handle_receive_miner_removed_ack(peer).await),
+            MinerNotAuthorized => Some(self.handle_receive_miner_not_authorized(peer).await),
             MinerApi(api_request) => self.handle_miner_api(peer, api_request).await,
         }
     }
@@ -711,6 +746,61 @@ impl MinerNode {
             MineApiRequest::ConnectToCompute => Some(self.handle_connect_to_compute().await),
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
+            }
+            MineApiRequest::SetStaticMinerAddress { address } => {
+                Some(self.handle_set_static_miner_address(address).await)
+            }
+            MineApiRequest::GetStaticMinerAddress => self.handle_get_static_miner_address().await,
+        }
+    }
+
+    pub async fn handle_set_static_miner_address(&mut self, address: Option<String>) -> Response {
+        self.set_static_miner_address(address).await;
+
+        Response {
+            success: true,
+            reason: "Static miner address set",
+        }
+    }
+
+    pub async fn handle_get_static_miner_address(&mut self) -> Option<Response> {
+        let static_miner_address = self.get_static_miner_address().await;
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "static_miner_address": static_miner_address.clone(),
+            })),
+        )
+        .await;
+        None
+    }
+
+    /// Handle miner not being authorized
+    pub async fn handle_receive_miner_not_authorized(&mut self, peer: SocketAddr) -> Response {
+        if self.compute_address() == peer {
+            *self.pause_node.write().await = true;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Value(serde_json::json!({
+                    "mining": false,
+                })),
+            )
+            .await;
+            try_send_to_ui(
+                self.ui_feedback_tx.as_ref(),
+                Rs2JsMsg::Error {
+                    error: "Miner not authorized".to_string(),
+                },
+            )
+            .await;
+            Response {
+                success: false,
+                reason: "Miner not authorized",
+            }
+        } else {
+            Response {
+                success: false,
+                reason: "Received miner unauthorized notification from non-compute peer",
             }
         }
     }
@@ -1249,7 +1339,12 @@ impl MinerNode {
     pub async fn send_partition_request(&mut self) -> Result<()> {
         let peer_span = error_span!("sending partition participation request");
         self.node
-            .send(self.compute_addr, ComputeRequest::SendPartitionRequest {})
+            .send(
+                self.compute_addr,
+                ComputeRequest::SendPartitionRequest {
+                    mining_api_key: self.mining_api_key.clone(),
+                },
+            )
             .instrument(peer_span)
             .await?;
 
@@ -1268,7 +1363,11 @@ impl MinerNode {
     /// Commit our winning mining tx to wallet
     async fn commit_found_coinbase(&mut self) {
         trace!("Committing our latest winning");
-        self.current_payment_address = Some(generate_mining_address(&mut self.wallet_db).await);
+        self.current_payment_address = Some(
+            self.get_static_miner_address()
+                .await
+                .unwrap_or(generate_mining_address(&mut self.wallet_db).await),
+        );
         let (hash, transaction) = std::mem::replace(
             &mut self.current_coinbase,
             store_last_coinbase(&self.wallet_db, None).await,
@@ -1306,6 +1405,9 @@ impl MinerNode {
             .store_locked_coinbase(new_locked_coinbase)
             .await;
         self.wallet_db.set_locked_coinbase(value).await;
+
+        // Backup wallet after committing the coinbase
+        self.wallet_db.backup_persistent_store().await.unwrap();
 
         // Notify the end user that a winning PoW has been found
         try_send_to_ui(
@@ -1525,13 +1627,20 @@ impl MinerNode {
             None
         };
 
-        self.current_payment_address =
-            if let Some(addr) = load_mining_address(&self.wallet_db).await? {
-                debug!("load_local_db: current_payment_address {:?}", addr);
-                Some(addr)
-            } else {
-                Some(generate_mining_address(&mut self.wallet_db).await)
-            };
+        self.current_payment_address = match self.get_static_miner_address().await {
+            Some(static_address) => {
+                warn!("using static miner address: {:?}", static_address);
+                Some(static_address)
+            }
+            None => {
+                if let Some(addr) = load_mining_address(&self.wallet_db).await? {
+                    debug!("load_local_db: current_payment_address {:?}", addr);
+                    Some(addr)
+                } else {
+                    Some(generate_mining_address(&mut self.wallet_db).await)
+                }
+            }
+        };
 
         Ok(self)
     }

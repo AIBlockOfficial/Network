@@ -31,7 +31,7 @@ use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::{
     error::Error,
@@ -152,7 +152,8 @@ pub struct ComputeNode {
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
-    miner_removal_list: BTreeSet<SocketAddr>,
+    miner_removal_list: Arc<RwLock<BTreeSet<SocketAddr>>>,
+    miner_received_api_keys: Arc<RwLock<BTreeMap<SocketAddr, String>>>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
@@ -213,6 +214,7 @@ impl ComputeNode {
         let shared_config = ComputeNodeSharedConfig {
             compute_mining_event_timeout: config.compute_mining_event_timeout,
             compute_partition_full_size: config.compute_partition_full_size,
+            compute_miner_whitelist: config.compute_miner_whitelist,
         };
 
         ComputeNode {
@@ -233,6 +235,7 @@ impl ComputeNode {
             previous_random_num: Default::default(),
             current_random_num: Default::default(),
             miner_removal_list: Default::default(),
+            miner_received_api_keys: Default::default(),
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
@@ -353,13 +356,40 @@ impl ComputeNode {
         self.node_raft.get_local_tx_druid_pool()
     }
 
-    // The current druid pool of pending DDE transactions
+    /// The current druid pool of pending DDE transactions
     pub fn get_pending_druid_pool(&self) -> &DruidPool {
         &self.druid_pool
     }
 
+    /// Get request list
     pub fn get_request_list(&self) -> &BTreeSet<SocketAddr> {
         &self.request_list
+    }
+
+    /// Get a clone of `pk_cache` element of `TrackedUtxoSet`
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn get_pk_cache(
+        &self,
+    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+        self.node_raft.get_committed_utxo_tracked_pk_cache()
+    }
+
+    /// Remove a `pk_cache` entry from `TrackedUtxoSet`
+    ///
+    /// ## Arguments
+    ///
+    /// * `entry` - The entry to remove
+    ///
+    /// ## NOTE
+    ///
+    /// Only used during tests
+    #[cfg(test)]
+    pub fn remove_pk_cache_entry(&mut self, entry: &str) {
+        self.node_raft.committed_utxo_remove_pk_cache(entry);
     }
 
     /// Return the raft loop to spawn in it own task.
@@ -649,6 +679,10 @@ impl ComputeNode {
             }) => {}
             Ok(Response {
                 success: true,
+                reason: "Removing unauthorized miner",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "Received PoW successfully",
             }) => {
                 debug!("Proposing winning PoW entry");
@@ -917,7 +951,7 @@ impl ComputeNode {
             Some(CommittedItem::Snapshot) => {
                 // Override values updated by the snapshot with values from the config
                 #[cfg(feature = "config_override")]
-                self.apply_shared_config(self.shared_config);
+                self.apply_shared_config(self.shared_config.clone()).await;
 
                 Some(Ok(Response {
                     success: true,
@@ -1034,7 +1068,9 @@ impl ComputeNode {
             SendUserBlockNotificationRequest => {
                 Some(self.receive_block_user_notification_request(peer))
             }
-            SendPartitionRequest => Some(self.receive_partition_request(peer).await),
+            SendPartitionRequest { mining_api_key } => {
+                Some(self.receive_partition_request(peer, mining_api_key).await)
+            }
             SendSharedConfig { shared_config } => {
                 self.handle_shared_config(peer, shared_config).await
             }
@@ -1054,7 +1090,7 @@ impl ComputeNode {
     /// NOTE: This request is received from a Miner node
     /// who no longer wishes to participate in mining
     async fn handle_request_remove_miner(&mut self, peer: SocketAddr) -> Option<Response> {
-        self.miner_removal_list.insert(peer);
+        self.miner_removal_list.write().await.insert(peer);
         Some(Response {
             success: true,
             reason: "Miner removal request received",
@@ -1092,8 +1128,8 @@ impl ComputeNode {
                 }))
             }
             CoordinatedCommand::ApplySharedConfig => {
-                if let Some(received_shared_config) = self.received_shared_config {
-                    self.apply_shared_config(received_shared_config);
+                if let Some(received_shared_config) = self.received_shared_config.take() {
+                    self.apply_shared_config(received_shared_config).await;
                     return Some(Ok(Response {
                         success: true,
                         reason: "Shared config applied",
@@ -1186,18 +1222,57 @@ impl ComputeNode {
     }
 
     /// Apply a received config to the node
-    pub fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
+    pub async fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
         warn!("Applying shared config: {:?}", received_shared_config);
 
         let ComputeNodeSharedConfig {
             compute_mining_event_timeout,
             compute_partition_full_size,
-        } = received_shared_config;
+            compute_miner_whitelist,
+        } = received_shared_config.clone();
 
         self.node_raft
             .update_mining_event_timeout_duration(compute_mining_event_timeout);
         self.node_raft
             .update_partition_full_size(compute_partition_full_size);
+        self.node_raft
+            .update_compute_miner_whitelist_active(compute_miner_whitelist.active);
+        self.node_raft.update_compute_miner_whitelist_api_keys(
+            compute_miner_whitelist.miner_api_keys.clone(),
+        );
+        self.node_raft
+            .update_compute_miner_whitelist_addresses(compute_miner_whitelist.miner_addresses);
+
+        // Whitelisting is active, remove all miner nodes not whitelisted
+        if compute_miner_whitelist.active {
+            let mut miners_to_remove: Vec<SocketAddr> = Vec::new();
+            for (peer, node_type) in self.node.get_peers().await.into_iter() {
+                if node_type == Some(NodeType::Miner) {
+                    let mining_api_key = self
+                        .miner_received_api_keys
+                        .read()
+                        .await
+                        .get(&peer)
+                        .cloned();
+
+                    if !self.check_miner_whitelisted(peer, mining_api_key) {
+                        debug!("Removing unauthorized miner: {peer:?}");
+                        if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await
+                        {
+                            error!("Error sending request to {peer:?}: {e}");
+                        }
+                        self.miner_received_api_keys.write().await.remove(&peer);
+                        miners_to_remove.push(peer);
+                    }
+                }
+            }
+            let disconnect_handles = self.node.disconnect_all(Some(&miners_to_remove)).await;
+            for handle in disconnect_handles {
+                if let Err(e) = handle.await {
+                    error!("Error disconnecting from peer: {:?}", e);
+                }
+            }
+        }
 
         self.shared_config = received_shared_config;
         self.received_shared_config = None;
@@ -1262,7 +1337,7 @@ impl ComputeNode {
         // We are initiating the shared config sending process
         if self.local_address() == peer {
             info!("Initiating shared config");
-            self.initiate_send_shared_config(shared_config)
+            self.initiate_send_shared_config(shared_config.clone())
                 .await
                 .unwrap();
         }
@@ -1295,13 +1370,77 @@ impl ComputeNode {
         }
     }
 
+    /// Check if a miner is whitelisted
+    ///
+    /// ### Arguments
+    ///
+    /// * `miner_address` - Address of the miner
+    /// * `miner_api_key` - API key of the miner
+    pub fn check_miner_whitelisted(
+        &self,
+        miner_address: SocketAddr,
+        miner_api_key: Option<String>,
+    ) -> bool {
+        if !self.node_raft.get_compute_whitelisting_active() {
+            // No whitelisting active, all miners are allowed
+            return true;
+        }
+        self.node_raft
+            .get_compute_miner_whitelist_api_keys()
+            .unwrap_or_default()
+            .contains(&miner_api_key.unwrap_or_default())
+            || self
+                .node_raft
+                .get_compute_miner_whitelist_addresses()
+                .unwrap_or_default()
+                .contains(&miner_address)
+    }
+
     /// Receive a partition request from a miner node
     /// TODO: This may need to be part of the ComputeInterface depending on key agreement
     /// ### Arguments
     ///
-    /// * `peer` - Sending peer's socket address
-    async fn receive_partition_request(&mut self, peer: SocketAddr) -> Response {
+    /// * `peer`            - Sending peer's socket address
+    /// * `mining_api_key`  - Sending peer's API key
+    async fn receive_partition_request(
+        &mut self,
+        peer: SocketAddr,
+        mining_api_key: Option<String>,
+    ) -> Response {
         trace!("Received partition request from {peer:?}");
+        // TODO: Change structure to be more efficient
+        if !self.check_miner_whitelisted(peer, mining_api_key.clone())
+            || self
+                .miner_received_api_keys
+                .read()
+                .await
+                .iter()
+                .any(|(_, v)| Some(v) == mining_api_key.as_ref())
+        {
+            debug!("Removing unauthorized miner: {peer:?}");
+            if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await {
+                error!("Error sending request to {peer:?}: {e}");
+            }
+            let disconnect_handles = self.node.disconnect_all(Some(&[peer])).await;
+            for handle in disconnect_handles {
+                if let Err(e) = handle.await {
+                    error!("Error disconnecting from {peer:?}: {e}");
+                }
+            }
+            return Response {
+                success: true,
+                reason: "Removing unauthorized miner",
+            };
+        }
+
+        // If the miner node provided an API key, store in memory
+        if let Some(api_key) = mining_api_key.clone() {
+            self.miner_received_api_keys
+                .write()
+                .await
+                .insert(peer, api_key);
+        }
+
         self.request_list.insert(peer);
         self.db
             .put_cf(
@@ -1443,7 +1582,7 @@ impl ComputeNode {
             b_num,
         };
 
-        let miner_removal_list = self.miner_removal_list.clone();
+        let miner_removal_list = self.miner_removal_list.read().await.clone();
         let all_participants = self.node_raft.get_mining_participants();
         let participants = all_participants
             .iter()
@@ -1459,7 +1598,7 @@ impl ComputeNode {
         let _ = self
             .node
             .send_to_all(
-                self.miner_removal_list.iter().copied(),
+                miner_removal_list.iter().copied(),
                 MineRequest::MinerRemovedAck,
             )
             .await;
@@ -1500,11 +1639,26 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
-        if !unsent_miners.is_empty() || !self.miner_removal_list.is_empty() {
-            let miner_removal_list = self.miner_removal_list.clone();
+        // Get all connected peers
+        let connected_miners = self
+            .node
+            .get_peers()
+            .await
+            .into_keys()
+            .collect::<HashSet<SocketAddr>>();
+
+        // Remove disconnected peers' API keys
+        self.miner_received_api_keys
+            .write()
+            .await
+            .retain(|addr, _| {
+                connected_miners.contains(addr) && !miner_removal_list.contains(addr)
+            });
+
+        if !unsent_miners.is_empty() || !miner_removal_list.is_empty() {
             unsent_miners.extend(miner_removal_list);
             self.flush_stale_miners(unsent_miners);
-            self.miner_removal_list.clear();
+            self.miner_removal_list.write().await.clear();
         }
 
         Ok(())
@@ -2052,6 +2206,7 @@ impl ComputeApi for ComputeNode {
         ComputeNodeSharedConfig {
             compute_mining_event_timeout: self.node_raft.get_compute_mining_event_timeout(),
             compute_partition_full_size: self.node_raft.get_compute_partition_full_size(),
+            compute_miner_whitelist: self.node_raft.get_compute_miner_whitelist(),
         }
     }
 
