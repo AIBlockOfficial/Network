@@ -157,7 +157,7 @@ pub struct MinerNode {
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
     current_payment_address: Option<String>,
-    static_miner_address: Option<String>,
+    static_miner_address: Arc<RwLock<Option<String>>>,
     aggregation_status: AggregationStatus,
     wait_partition_task: bool,
     received_utxo_set: Option<UtxoSet>,
@@ -209,7 +209,7 @@ impl MinerNode {
         )
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
-        let static_miner_address = config.static_miner_address.clone();
+        let static_miner_address = Arc::new(RwLock::new(config.static_miner_address.clone()));
         let mining_api_key = config.mining_api_key.clone();
 
         MinerNode {
@@ -351,9 +351,14 @@ impl MinerNode {
         self.wallet_db.set_ui_feedback_tx(tx);
     }
 
-    /// Set static miner address.
-    pub fn set_static_miner_address(&mut self, addr: String) {
-        self.static_miner_address = Some(addr);
+    /// Set static mining address
+    pub async fn set_static_miner_address(&mut self, address: Option<String>) {
+        *self.static_miner_address.write().await = address;
+    }
+
+    /// Get static miner address
+    pub async fn get_static_miner_address(&self) -> Option<String> {
+        self.static_miner_address.read().await.clone()
     }
 
     /// Extract persistent dbs
@@ -512,6 +517,10 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
+                reason: "Static miner address set",
+            }) => {}
+            Ok(Response {
+                success: true,
                 reason: "Node is paused",
             }) => {}
             Ok(Response {
@@ -526,6 +535,10 @@ impl MinerNode {
                 success: false,
                 reason: "Received miner unauthorized notification from non-compute peer",
             }) => {}
+            Ok(Response {
+                success: false,
+                reason: "Miner not authorized",
+            }) => return ResponseResult::Exit,
             Ok(Response {
                 success: true,
                 reason,
@@ -734,7 +747,32 @@ impl MinerNode {
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
             }
+            MineApiRequest::SetStaticMinerAddress { address } => {
+                Some(self.handle_set_static_miner_address(address).await)
+            }
+            MineApiRequest::GetStaticMinerAddress => self.handle_get_static_miner_address().await,
         }
+    }
+
+    pub async fn handle_set_static_miner_address(&mut self, address: Option<String>) -> Response {
+        self.set_static_miner_address(address).await;
+
+        Response {
+            success: true,
+            reason: "Static miner address set",
+        }
+    }
+
+    pub async fn handle_get_static_miner_address(&mut self) -> Option<Response> {
+        let static_miner_address = self.get_static_miner_address().await;
+        try_send_to_ui(
+            self.ui_feedback_tx.as_ref(),
+            Rs2JsMsg::Value(serde_json::json!({
+                "static_miner_address": static_miner_address.clone(),
+            })),
+        )
+        .await;
+        None
     }
 
     /// Handle miner not being authorized
@@ -1326,8 +1364,8 @@ impl MinerNode {
     async fn commit_found_coinbase(&mut self) {
         trace!("Committing our latest winning");
         self.current_payment_address = Some(
-            self.static_miner_address
-                .clone()
+            self.get_static_miner_address()
+                .await
                 .unwrap_or(generate_mining_address(&mut self.wallet_db).await),
         );
         let (hash, transaction) = std::mem::replace(
@@ -1589,7 +1627,7 @@ impl MinerNode {
             None
         };
 
-        self.current_payment_address = match self.static_miner_address.clone() {
+        self.current_payment_address = match self.get_static_miner_address().await {
             Some(static_address) => {
                 warn!("using static miner address: {:?}", static_address);
                 Some(static_address)

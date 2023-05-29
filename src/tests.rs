@@ -4760,7 +4760,7 @@ async fn miner_process_found_block_pow(network: &mut Network, from_miner: &str) 
 
 async fn miner_set_static_miner_address(network: &mut Network, miner: &str, static_addr: String) {
     let mut m = network.miner(miner).unwrap().lock().await;
-    m.set_static_miner_address(static_addr);
+    m.set_static_miner_address(Some(static_addr)).await;
 }
 
 //

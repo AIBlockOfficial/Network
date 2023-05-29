@@ -31,7 +31,7 @@ use naom::utils::druid_utils::druid_expectations_are_met;
 use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::{
     error::Error,
@@ -152,8 +152,8 @@ pub struct ComputeNode {
     partition_full_size: usize,
     request_list: BTreeSet<SocketAddr>,
     request_list_first_flood: Option<usize>,
-    miner_removal_list: BTreeSet<SocketAddr>,
-    miner_received_api_keys: BTreeMap<SocketAddr, String>,
+    miner_removal_list: Arc<RwLock<BTreeSet<SocketAddr>>>,
+    miner_received_api_keys: Arc<RwLock<BTreeMap<SocketAddr, String>>>,
     storage_addr: SocketAddr,
     sanction_list: Vec<String>,
     user_notification_list: BTreeSet<SocketAddr>,
@@ -1090,7 +1090,7 @@ impl ComputeNode {
     /// NOTE: This request is received from a Miner node
     /// who no longer wishes to participate in mining
     async fn handle_request_remove_miner(&mut self, peer: SocketAddr) -> Option<Response> {
-        self.miner_removal_list.insert(peer);
+        self.miner_removal_list.write().await.insert(peer);
         Some(Response {
             success: true,
             reason: "Miner removal request received",
@@ -1243,19 +1243,25 @@ impl ComputeNode {
         self.node_raft
             .update_compute_miner_whitelist_addresses(compute_miner_whitelist.miner_addresses);
 
-        // Whitelisting is active, remove all nodes not whitelisted
+        // Whitelisting is active, remove all miner nodes not whitelisted
         if compute_miner_whitelist.active {
             let mut miners_to_remove: Vec<SocketAddr> = Vec::new();
             for (peer, node_type) in self.node.get_peers().await.into_iter() {
                 if node_type == Some(NodeType::Miner) {
-                    let mining_api_key = self.miner_received_api_keys.get(&peer).cloned();
+                    let mining_api_key = self
+                        .miner_received_api_keys
+                        .read()
+                        .await
+                        .get(&peer)
+                        .cloned();
+
                     if !self.check_miner_whitelisted(peer, mining_api_key) {
                         debug!("Removing unauthorized miner: {peer:?}");
                         if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await
                         {
                             error!("Error sending request to {peer:?}: {e}");
                         }
-                        self.miner_received_api_keys.remove(&peer);
+                        self.miner_received_api_keys.write().await.remove(&peer);
                         miners_to_remove.push(peer);
                     }
                 }
@@ -1402,10 +1408,14 @@ impl ComputeNode {
         mining_api_key: Option<String>,
     ) -> Response {
         trace!("Received partition request from {peer:?}");
-
+        // TODO: Change structure to be more efficient
         if !self.check_miner_whitelisted(peer, mining_api_key.clone())
-            || self.miner_received_api_keys.contains_key(&peer)
-        // Prevent duplicate API keys getting used
+            || self
+                .miner_received_api_keys
+                .read()
+                .await
+                .iter()
+                .any(|(_, v)| Some(v) == mining_api_key.as_ref())
         {
             debug!("Removing unauthorized miner: {peer:?}");
             if let Err(e) = self.node.send(peer, MineRequest::MinerNotAuthorized).await {
@@ -1424,8 +1434,11 @@ impl ComputeNode {
         }
 
         // If the miner node provided an API key, store in memory
-        if let Some(miner_api_key) = mining_api_key {
-            self.miner_received_api_keys.insert(peer, miner_api_key);
+        if let Some(api_key) = mining_api_key.clone() {
+            self.miner_received_api_keys
+                .write()
+                .await
+                .insert(peer, api_key);
         }
 
         self.request_list.insert(peer);
@@ -1569,7 +1582,7 @@ impl ComputeNode {
             b_num,
         };
 
-        let miner_removal_list = self.miner_removal_list.clone();
+        let miner_removal_list = self.miner_removal_list.read().await.clone();
         let all_participants = self.node_raft.get_mining_participants();
         let participants = all_participants
             .iter()
@@ -1585,7 +1598,7 @@ impl ComputeNode {
         let _ = self
             .node
             .send_to_all(
-                self.miner_removal_list.iter().copied(),
+                miner_removal_list.iter().copied(),
                 MineRequest::MinerRemovedAck,
             )
             .await;
@@ -1626,11 +1639,26 @@ impl ComputeNode {
             unsent_miners.extend(unsent_nodes);
         }
 
-        if !unsent_miners.is_empty() || !self.miner_removal_list.is_empty() {
-            let miner_removal_list = self.miner_removal_list.clone();
+        // Get all connected peers
+        let connected_miners = self
+            .node
+            .get_peers()
+            .await
+            .into_keys()
+            .collect::<HashSet<SocketAddr>>();
+
+        // Remove disconnected peers' API keys
+        self.miner_received_api_keys
+            .write()
+            .await
+            .retain(|addr, _| {
+                connected_miners.contains(addr) && !miner_removal_list.contains(addr)
+            });
+
+        if !unsent_miners.is_empty() || !miner_removal_list.is_empty() {
             unsent_miners.extend(miner_removal_list);
             self.flush_stale_miners(unsent_miners);
-            self.miner_removal_list.clear();
+            self.miner_removal_list.write().await.clear();
         }
 
         Ok(())

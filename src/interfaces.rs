@@ -437,6 +437,12 @@ pub enum MineApiRequest {
     ConnectToCompute,
     // Disconnect from compute Node
     DisconnectFromCompute,
+    // Set static miner address
+    SetStaticMinerAddress {
+        address: Option<String>,
+    },
+    // Get static miner address
+    GetStaticMinerAddress,
 }
 
 /// Encapsulates miner requests
@@ -485,6 +491,10 @@ impl fmt::Debug for MineRequest {
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
             MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
             MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
+                write!(f, "SetStaticMinerAddress")
+            }
+            MinerApi(MineApiRequest::GetStaticMinerAddress) => write!(f, "GetStaticMinerAddress"),
         }
     }
 }
