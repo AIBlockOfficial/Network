@@ -295,7 +295,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_miner(11031, true, 1, 1);
+    let network_config = complete_network_config_with_n_compute_miner(11040, true, 1, 1);
     let mut network = Network::create_from_config(&network_config).await;
     let active_nodes = network.all_active_nodes().clone();
     let miner = &active_nodes[&NodeType::Miner][0];
