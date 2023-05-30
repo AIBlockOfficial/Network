@@ -723,6 +723,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         static_miner_address: Default::default(),
         mining_api_key: Default::default(),
         compute_miner_whitelist: Default::default(),
+        peer_limit: 1000,
     }
     .with_groups(1, 1)
 }

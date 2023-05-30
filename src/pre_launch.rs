@@ -2,7 +2,6 @@ use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{
     DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType, TlsSpec,
 };
-use crate::constants::PEER_LIMIT;
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{DbItem, NodeType, PreLaunchRequest, Response};
 use crate::raft_store::{get_presistent_committed, CommittedIndex};
@@ -80,6 +79,8 @@ struct PreLaunchNodeConfigSelected {
     pub db_spec: SimpleDbSpec,
     /// Raft db spec
     pub raft_db_spec: SimpleDbSpec,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 impl PreLaunchNodeConfigSelected {
@@ -92,6 +93,7 @@ impl PreLaunchNodeConfigSelected {
                 pre_launch_nodes: config.compute_nodes,
                 db_spec: crate::compute::DB_SPEC,
                 raft_db_spec: crate::compute_raft::DB_SPEC,
+                peer_limit: config.peer_limit,
             },
             PreLaunchNodeType::Storage => Self {
                 pre_launch_node_idx: config.storage_node_idx,
@@ -100,6 +102,7 @@ impl PreLaunchNodeConfigSelected {
                 pre_launch_nodes: config.storage_nodes,
                 db_spec: crate::storage::DB_SPEC,
                 raft_db_spec: crate::storage_raft::DB_SPEC,
+                peer_limit: config.peer_limit,
             },
         }
     }
@@ -136,7 +139,13 @@ impl PreLaunchNode {
             .address;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::PreLaunch, false).await?;
+        let node = Node::new(
+            &tcp_tls_config,
+            config.peer_limit,
+            NodeType::PreLaunch,
+            false,
+        )
+        .await?;
         let db = {
             let spec = &config.db_spec;
             db_utils::new_db(config.pre_launch_db_mode, spec, extra.db.take(), None)
@@ -283,7 +292,7 @@ impl PreLaunchNode {
                 error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
             }
             Err(error) => {
-                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+                error!("ERROR HANDLING RESPONSE: {:?}", error);
             }
         };
 

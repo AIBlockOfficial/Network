@@ -1,6 +1,5 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
-use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
@@ -164,7 +163,7 @@ impl UserNode {
         let disable_tcp_listener = extra.disable_tcp_listener;
         let node = Node::new(
             &tcp_tls_config,
-            PEER_LIMIT,
+            config.peer_limit,
             NodeType::User,
             disable_tcp_listener,
         )
@@ -482,7 +481,7 @@ impl UserNode {
                 error!("WARNING: UNHANDLED RESPONSE TYPE FAILURE: {:?}", reason);
             }
             Err(error) => {
-                panic!("ERROR HANDLING RESPONSE: {:?}", error);
+                error!("ERROR HANDLING RESPONSE: {:?}", error);
             }
         };
 

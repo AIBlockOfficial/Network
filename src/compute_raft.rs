@@ -1918,6 +1918,7 @@ mod test {
             backup_restore: Default::default(),
             enable_trigger_messages_pipeline_reset: Default::default(),
             compute_miner_whitelist: Default::default(),
+            peer_limit: 1000,
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);

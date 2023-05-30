@@ -98,6 +98,7 @@ pub struct NetworkConfig {
     pub static_miner_address: Option<String>,
     pub mining_api_key: Option<String>,
     pub compute_miner_whitelist: MinerWhitelist,
+    pub peer_limit: usize,
 }
 
 /// Node info to create node
@@ -1050,6 +1051,7 @@ async fn init_miner(
         backup_restore: config.backup_restore,
         static_miner_address: config.static_miner_address.clone(),
         mining_api_key: config.mining_api_key.clone(),
+        peer_limit: config.peer_limit,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Miner {}", info_str);
@@ -1090,6 +1092,7 @@ async fn init_storage(
         routes_pow: Default::default(),
         backup_block_modulo: config.backup_block_modulo,
         backup_restore: config.backup_restore,
+        peer_limit: config.peer_limit,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Storage {}", info);
@@ -1142,6 +1145,7 @@ async fn init_compute(
         backup_restore: config.backup_restore,
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
         compute_miner_whitelist: config.compute_miner_whitelist.clone(),
+        peer_limit: config.peer_limit,
     };
     let info = format!("{} -> {}", name, node_info.node_spec.address);
     info!("New Compute {}", info);
@@ -1189,6 +1193,7 @@ async fn init_user(
         user_test_auto_gen_setup: config.user_test_auto_gen_setup.clone(),
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
+        peer_limit: config.peer_limit,
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);
@@ -1226,6 +1231,7 @@ async fn init_pre_launch(
         storage_db_mode: node_info.db_mode,
         compute_nodes: info.compute_nodes.clone(),
         storage_nodes: info.storage_nodes.clone(),
+        peer_limit: config.peer_limit,
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec.address);

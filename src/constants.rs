@@ -72,9 +72,6 @@ pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 10;
 /// Limit for the transaction pool per compute node
 pub const TX_POOL_LIMIT: usize = 10_000_000;
 
-/// Limit for the number of peers a compute node may have
-pub const PEER_LIMIT: usize = 250;
-
 /// Limit for the number of PoWs a compute node may have for UnicornShard creation
 pub const UNICORN_LIMIT: usize = 5;
 

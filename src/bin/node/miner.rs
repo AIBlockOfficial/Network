@@ -1,7 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg, ArgMatches};
-use config::Value;
+use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use znp::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
@@ -236,6 +236,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("mining_api_key")
+                .long("mining_api_key")
+                .help("Use an API key to participate in mining.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .help("Run the compute node using the given initial block config file.")
@@ -396,6 +402,10 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("miner_address", address).unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
+        settings.set("peer_limit", 1000).unwrap();
+    }
+
     // Set node's address from the miner_node's map if it is not supplied as an argument
     // NOTE: Index will be defaulted to 0 if not updated in the above block
     if matches.value_of("address").is_none() {
@@ -468,6 +478,10 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
                 .set("user_wallet_seeds", user_wallet_seeds[user_index].clone())
                 .unwrap();
         }
+    }
+
+    if let Some(mining_api_key) = matches.value_of("mining_api_key") {
+        settings.set("mining_api_key", mining_api_key).unwrap();
     }
 
     if let Some(certificate) = matches.value_of("tls_certificate_override") {

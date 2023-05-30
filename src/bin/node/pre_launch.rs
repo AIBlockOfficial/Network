@@ -1,6 +1,7 @@
 //! App to run a pre-launch node.
 
 use clap::{App, Arg, ArgMatches};
+use config::ConfigError;
 use znp::configurations::PreLaunchNodeConfig;
 use znp::PreLaunchNode;
 use znp::{
@@ -121,6 +122,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(tls_setting_file))
         .unwrap();
+
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
+        settings.set("peer_limit", 1000).unwrap();
+    }
 
     if let Some(index) = matches.value_of("index") {
         settings.set("compute_node_idx", index).unwrap();
