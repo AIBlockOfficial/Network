@@ -5102,6 +5102,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         static_miner_address: Default::default(),
         compute_miner_whitelist: Default::default(),
         mining_api_key: Default::default(),
+        peer_limit: 1000,
     }
 }
 

@@ -4,7 +4,7 @@ use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
 use crate::configurations::{
     ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
 };
-use crate::constants::{DB_PATH, PEER_LIMIT, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
+use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
@@ -191,7 +191,7 @@ impl ComputeNode {
             .compute_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Compute, false).await?;
+        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Compute, false).await?;
         let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
 
         if config.backup_restore.unwrap_or(false) {

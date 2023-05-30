@@ -1,6 +1,7 @@
 //! App to run a storage node.
 
 use clap::{App, Arg, ArgMatches};
+use config::ConfigError;
 use std::net::SocketAddr;
 use znp::configurations::StorageNodeConfig;
 use znp::StorageNode;
@@ -202,6 +203,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(api_setting_file))
         .unwrap();
+
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
+        settings.set("peer_limit", 1000).unwrap();
+    }
 
     if let Some(port) = matches.value_of("api_port") {
         settings.set("storage_api_port", port).unwrap();

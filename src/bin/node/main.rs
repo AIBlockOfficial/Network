@@ -1,4 +1,4 @@
-//! App to run a Zennota node.
+//! App to run a Zenotta node.
 
 use clap::{App, ArgMatches};
 

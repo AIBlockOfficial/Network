@@ -1,6 +1,5 @@
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
-use crate::constants::PEER_LIMIT;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
     ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
@@ -203,7 +202,7 @@ impl MinerNode {
         let api_keys = to_api_keys(config.api_keys.clone());
         let node = Node::new(
             &tcp_tls_config,
-            PEER_LIMIT,
+            config.peer_limit,
             NodeType::Miner,
             disable_tcp_listener,
         )

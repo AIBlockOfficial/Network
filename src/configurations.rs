@@ -150,6 +150,8 @@ pub struct ComputeNodeConfig {
     pub enable_trigger_messages_pipeline_reset: Option<bool>,
     /// Enable API-key based whitelisting for miners
     pub compute_miner_whitelist: MinerWhitelist,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 /// Configuration option for a compute node that can be shared across peers
@@ -194,6 +196,8 @@ pub struct StorageNodeConfig {
     pub backup_block_modulo: Option<u64>,
     /// Restore backup if true
     pub backup_restore: Option<bool>,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 /// Configuration option for a storage node
@@ -227,6 +231,8 @@ pub struct MinerNodeConfig {
     pub static_miner_address: Option<String>,
     /// When provided, the miner will use this API key to participate in mining
     pub mining_api_key: Option<String>,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 /// Configuration option for a user node
@@ -261,6 +267,8 @@ pub struct UserNodeConfig {
     pub routes_pow: BTreeMap<String, usize>,
     /// Backup block that given modulo result in 0
     pub backup_block_modulo: Option<u64>,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 /// Configuration option for a pre-launch node
@@ -282,6 +290,8 @@ pub struct PreLaunchNodeConfig {
     pub compute_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
+    /// Limit for the number of peers this node can have
+    pub peer_limit: usize,
 }
 
 /// Type of node in pre-launch mode
