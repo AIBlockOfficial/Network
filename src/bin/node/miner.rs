@@ -1,7 +1,7 @@
 //! App to run a mining node.
 
 use clap::{App, Arg, ArgMatches};
-use config::Value;
+use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use znp::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
@@ -400,6 +400,10 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
             };
         }
         settings.set("miner_address", address).unwrap();
+    }
+
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
+        settings.set("peer_limit", 1000).unwrap();
     }
 
     // Set node's address from the miner_node's map if it is not supplied as an argument

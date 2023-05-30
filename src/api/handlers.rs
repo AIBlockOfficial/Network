@@ -18,7 +18,7 @@ use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
-use crate::wallet::{WalletDb, WalletDbError};
+use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
 use naom::constants::D_DISPLAY_PLACES;
 use naom::crypto::sign_ed25519::PublicKey;
@@ -48,7 +48,7 @@ enum BlockchainData {
 /// Values are encrypted
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Addresses {
-    pub addresses: BTreeMap<String, Vec<u8>>,
+    pub addresses: BTreeMap<String, AddressStoreHex>,
 }
 
 /// Information about a wallet to be returned to requester
@@ -228,12 +228,14 @@ pub async fn get_export_keypairs(
     let mut addresses = BTreeMap::new();
 
     for addr in known_addr {
-        addresses.insert(addr.clone(), wallet_db.get_address_store_encrypted(&addr));
+        addresses.insert(addr.clone(), wallet_db.get_address_store(&addr).into());
     }
+
+    let response_data = Addresses { addresses };
 
     r.into_ok(
         "Key-pairs successfully exported",
-        json_serialize_embed(addresses),
+        json_serialize_embed(response_data),
     )
 }
 
@@ -407,11 +409,24 @@ pub async fn post_import_keypairs(
     let response_data = json_serialize_embed(response_keys);
     let r = CallResponse::new(route, &call_id);
 
-    for (addr, address_set) in keypairs.addresses.iter() {
-        match db
-            .save_encrypted_address_to_wallet(addr.clone(), address_set.clone())
-            .await
-        {
+    let mut key_pairs_converted = BTreeMap::new();
+    for (address, address_store_hex) in keypairs.addresses.into_iter() {
+        match AddressStore::try_from_hex_store(address_store_hex) {
+            Ok(address_store) => {
+                key_pairs_converted.insert(address, address_store);
+            }
+            Err(e) => {
+                return r.into_err_with_data(
+                    StatusCode::BAD_REQUEST,
+                    ApiErrorType::BadRequest,
+                    json_serialize_embed(e.to_string()),
+                )
+            }
+        };
+    }
+
+    for (addr, address_set) in key_pairs_converted.into_iter() {
+        match db.save_address_to_wallet(addr, address_set).await {
             Ok(_) => {}
             Err(_e) => {
                 return r.into_err_with_data(

@@ -6,6 +6,7 @@ use crate::db_utils::{
 use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info};
 use crate::Rs2JsMsg;
 use bincode::{deserialize, serialize};
+use hex::FromHexError;
 use naom::crypto::pbkdf2 as pwhash;
 use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
 use naom::crypto::sign_ed25519 as sign;
@@ -53,6 +54,7 @@ pub enum WalletDbError {
     AsyncTask(task::JoinError),
     Serialization(bincode::Error),
     Database(SimpleDbError),
+    HexError(FromHexError),
     PassphraseError,
     InsufficientFundsError,
     MasterKeyRetrievalError,
@@ -66,6 +68,7 @@ impl fmt::Display for WalletDbError {
             Self::AsyncTask(err) => write!(f, "Async Error: {err}"),
             Self::Serialization(err) => write!(f, "Serialization Error: {err}"),
             Self::Database(err) => write!(f, "Database Error: {err}"),
+            Self::HexError(err) => write!(f, "Hex Error: {err}"),
             Self::PassphraseError => write!(f, "PassphraseError"),
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
@@ -81,6 +84,7 @@ impl error::Error for WalletDbError {
             Self::Serialization(ref e) => Some(e),
             Self::AsyncTask(ref e) => Some(e),
             Self::Database(ref e) => Some(e),
+            Self::HexError(ref e) => Some(e),
             Self::PassphraseError => None,
             Self::InsufficientFundsError => None,
             Self::MasterKeyRetrievalError => None,
@@ -113,11 +117,48 @@ impl From<SimpleDbError> for WalletDbError {
     }
 }
 
+impl From<FromHexError> for WalletDbError {
+    fn from(other: FromHexError) -> Self {
+        Self::HexError(other)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressStore {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
     pub address_version: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressStoreHex {
+    pub public_key: String,
+    pub secret_key: String,
+    pub address_version: Option<u64>,
+}
+
+impl From<AddressStore> for AddressStoreHex {
+    fn from(other: AddressStore) -> Self {
+        Self {
+            public_key: hex::encode(other.public_key.as_ref()),
+            secret_key: hex::encode(other.secret_key.as_ref()),
+            address_version: other.address_version,
+        }
+    }
+}
+
+impl AddressStore {
+    pub fn try_from_hex_store(hex_store: AddressStoreHex) -> Result<Self> {
+        let public_key = hex::decode(hex_store.public_key)?;
+        let secret_key = hex::decode(hex_store.secret_key)?;
+        Ok(Self {
+            public_key: PublicKey::from_slice(&public_key)
+                .ok_or(WalletDbError::HexError(FromHexError::InvalidStringLength))?,
+            secret_key: SecretKey::from_slice(&secret_key)
+                .ok_or(WalletDbError::HexError(FromHexError::InvalidStringLength))?,
+            address_version: hex_store.address_version,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,7 +391,7 @@ impl WalletDb {
     ///
     /// * `address` - Address to save to wallet
     /// * `keys`    - Address-related keys to save
-    async fn save_address_to_wallet(&self, address: String, keys: AddressStore) -> Result<()> {
+    pub async fn save_address_to_wallet(&self, address: String, keys: AddressStore) -> Result<()> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
         Ok(task::spawn_blocking(move || {

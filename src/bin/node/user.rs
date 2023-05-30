@@ -1,7 +1,7 @@
 //! App to run a user node.
 
 use clap::{App, Arg, ArgMatches};
-use config::Value;
+use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use znp::configurations::UserNodeConfig;
@@ -226,6 +226,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(api_setting_file))
         .unwrap();
+
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
+        settings.set("peer_limit", 1000).unwrap();
+    }
 
     // If index is passed, take note of the index to set address later
     if let Some(idx) = matches.value_of("index") {

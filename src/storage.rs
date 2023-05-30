@@ -2,7 +2,7 @@ use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig, TlsPrivateInfo};
 use crate::constants::{
     DB_PATH, INDEXED_BLOCK_HASH_PREFIX_KEY, INDEXED_TX_HASH_PREFIX_KEY, LAST_BLOCK_HASH_KEY,
-    NAMED_CONSTANT_PREPEND, PEER_LIMIT,
+    NAMED_CONSTANT_PREPEND,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
@@ -170,7 +170,7 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, PEER_LIMIT, NodeType::Storage, false).await?;
+        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Storage, false).await?;
         let node_raft = StorageRaft::new(&config, extra.raft_db.take());
         let catchup_fetch = StorageFetch::new(&config, addr);
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
