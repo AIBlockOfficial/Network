@@ -23,11 +23,11 @@ use crate::utils::{
     decode_secret_key, generate_pow_for_block, to_api_keys, to_route_pow_infos,
     tracing_log_try_init, validate_pow_block, ApiKeys,
 };
-use crate::wallet::{WalletDb, WalletDbError};
+use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::ComputeRequest;
 use bincode::serialize;
 use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
-use naom::crypto::sign_ed25519::{self as sign};
+use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey};
 use naom::primitives::asset::{Asset, TokenAmount};
 use naom::primitives::block::{Block, BlockHeader};
 use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
@@ -40,6 +40,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tracing::error;
 use warp::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::Filter;
 
@@ -52,20 +53,6 @@ const COMMON_VALID_POW_NONCE: &str = "81234";
 const COMMON_PUB_KEY: &str = "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_SEC_KEY: &str = "3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c";
 const COMMON_PUB_ADDR: &str = "13bd3351b78beb2d0dadf2058dcc926c";
-
-const COMMON_ADDR_STORE: (&str, [u8; 152]) = (
-    "4348536e3d5a13e347262b5023963edf",
-    [
-        195, 253, 191, 157, 40, 253, 233, 186, 96, 35, 27, 83, 83, 224, 191, 126, 133, 101, 235,
-        168, 233, 122, 174, 109, 18, 247, 175, 139, 253, 55, 164, 187, 238, 175, 251, 110, 53, 47,
-        158, 241, 103, 144, 49, 65, 247, 147, 145, 140, 12, 129, 123, 19, 187, 121, 31, 163, 16,
-        231, 248, 38, 243, 200, 34, 91, 4, 241, 40, 42, 97, 236, 37, 180, 26, 16, 34, 171, 12, 92,
-        4, 8, 53, 193, 181, 209, 97, 76, 164, 76, 0, 122, 44, 120, 212, 27, 145, 224, 20, 207, 215,
-        134, 23, 178, 170, 157, 218, 55, 14, 64, 185, 128, 63, 131, 194, 24, 6, 228, 34, 50, 252,
-        118, 94, 153, 105, 236, 92, 122, 169, 219, 119, 9, 250, 255, 20, 40, 148, 74, 182, 73, 180,
-        83, 10, 240, 193, 201, 45, 5, 205, 34, 188, 174, 229, 96,
-    ],
-);
 
 const COMMON_ADDRS: &[&str] = &[
     "0008536e3d5a13e347262b5023963000",
@@ -286,7 +273,7 @@ async fn get_db_with_block_no_mutex() -> SimpleDb {
 // Util function to create a transaction.
 // Returns the hash of the tx and the tx itself
 fn get_transaction() -> (String, Transaction) {
-    generate_transaction("tx_hash", COMMON_ADDR_STORE.0)
+    generate_transaction("tx_hash", COMMON_PUB_ADDR)
 }
 
 // Generates a transaction using the given `tx_hash` and `script_public_key`
@@ -414,11 +401,15 @@ async fn test_get_export_keypairs() {
     //
     let db = get_wallet_db("").await;
     let (address, keys) = (
-        COMMON_ADDR_STORE.0.to_string(),
-        COMMON_ADDR_STORE.1.to_vec(),
+        COMMON_PUB_ADDR.to_string(),
+        AddressStore {
+            public_key: PublicKey::from_slice(&hex::decode(COMMON_PUB_KEY).unwrap()).unwrap(),
+            secret_key: SecretKey::from_slice(&hex::decode(COMMON_SEC_KEY).unwrap()).unwrap(),
+            address_version: None,
+        },
     );
 
-    db.save_encrypted_address_to_wallet(address.clone(), keys.clone())
+    db.save_address_to_wallet(address.clone(), keys.clone())
         .await
         .unwrap();
 
@@ -440,7 +431,7 @@ async fn test_get_export_keypairs() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Key-pairs successfully exported\",\"route\":\"export_keypairs\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":[195,253,191,157,40,253,233,186,96,35,27,83,83,224,191,126,133,101,235,168,233,122,174,109,18,247,175,139,253,55,164,187,238,175,251,110,53,47,158,241,103,144,49,65,247,147,145,140,12,129,123,19,187,121,31,163,16,231,248,38,243,200,34,91,4,241,40,42,97,236,37,180,26,16,34,171,12,92,4,8,53,193,181,209,97,76,164,76,0,122,44,120,212,27,145,224,20,207,215,134,23,178,170,157,218,55,14,64,185,128,63,131,194,24,6,228,34,50,252,118,94,153,105,236,92,122,169,219,119,9,250,255,20,40,148,74,182,73,180,83,10,240,193,201,45,5,205,34,188,174,229,96]}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Key-pairs successfully exported\",\"route\":\"export_keypairs\",\"content\":{\"addresses\":{\"13bd3351b78beb2d0dadf2058dcc926c\":{\"public_key\":\"5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c\",\"secret_key\":\"3053020101300506032b6570042204200186bc08f16428d2059227082b93e439ff50f8c162f24b9594b132f2cc15fca4a1230321005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c\",\"address_version\":null}}}}");
 }
 
 /// Test get user debug data
@@ -1360,7 +1351,7 @@ async fn test_post_make_payment() {
     let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
     let encapsulated_data = EncapsulatedPayment {
-        address: COMMON_ADDR_STORE.0.to_string(),
+        address: COMMON_PUB_ADDR.to_string(),
         amount: TokenAmount(25),
         passphrase: String::new(),
     };
@@ -1394,7 +1385,7 @@ async fn test_post_make_payment() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"4348536e3d5a13e347262b5023963edf\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"13bd3351b78beb2d0dadf2058dcc926c\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
     let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
@@ -1594,10 +1585,14 @@ async fn test_post_import_keypairs_success() {
     let _ = tracing_log_try_init();
 
     let db = get_wallet_db("").await;
-    let mut addresses: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut addresses: BTreeMap<String, AddressStoreHex> = BTreeMap::new();
     addresses.insert(
-        COMMON_ADDR_STORE.0.to_string(),
-        COMMON_ADDR_STORE.1.to_vec(),
+        COMMON_PUB_ADDR.to_string(),
+        AddressStoreHex {
+            public_key: COMMON_PUB_KEY.to_string(),
+            secret_key: COMMON_SEC_KEY.to_string(),
+            address_version: None,
+        },
     );
     let imported_addresses = Addresses { addresses };
     let ks = to_api_keys(Default::default());
@@ -1616,15 +1611,17 @@ async fn test_post_import_keypairs_success() {
         .reply(&filter)
         .await;
 
+    error!("res: {:?}", res);
+
     let wallet_addresses_after = db.get_known_addresses();
 
     // Header to match
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     assert_eq!(wallet_addresses_before, Vec::<String>::new());
-    assert_eq!(wallet_addresses_after, vec![COMMON_ADDR_STORE.0]);
+    assert_eq!(wallet_addresses_after, vec![COMMON_PUB_ADDR.to_string()]);
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Key-pairs successfully imported\",\"route\":\"import_keypairs\",\"content\":[\"4348536e3d5a13e347262b5023963edf\"]}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Key-pairs successfully imported\",\"route\":\"import_keypairs\",\"content\":[\"13bd3351b78beb2d0dadf2058dcc926c\"]}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1637,7 +1634,7 @@ async fn test_post_fetch_balance() {
     let tx_vals = vec![get_transaction()];
     let compute = ComputeTest::new(tx_vals);
     let addresses = PublicKeyAddresses {
-        address_list: vec![COMMON_ADDR_STORE.0.to_string()],
+        address_list: vec![COMMON_PUB_ADDR.to_string()],
     };
 
     let request = warp::test::request()
@@ -1670,7 +1667,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Balance successfully fetched\",\"route\":\"fetch_balance\",\"content\":{\"total\":{\"tokens\":25200,\"receipts\":{}},\"address_list\":{\"4348536e3d5a13e347262b5023963edf\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}}"
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Balance successfully fetched\",\"route\":\"fetch_balance\",\"content\":{\"total\":{\"tokens\":25200,\"receipts\":{}},\"address_list\":{\"13bd3351b78beb2d0dadf2058dcc926c\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}}"
     );
 }
 
@@ -1731,7 +1728,7 @@ async fn test_post_update_running_total() {
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
 
     let addresses = PublicKeyAddresses {
-        address_list: vec![COMMON_ADDR_STORE.0.to_string()],
+        address_list: vec![COMMON_PUB_ADDR.to_string()],
     };
     let address_list = UtxoFetchType::AnyOf(addresses.address_list.clone());
 
