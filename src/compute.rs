@@ -1393,7 +1393,9 @@ impl ComputeNode {
                 .node_raft
                 .get_compute_miner_whitelist_addresses()
                 .unwrap_or_default()
-                .contains(&miner_address)
+                .iter()
+                // Only check IP address, since we do not know ephemeral port beforehand
+                .any(|addr| addr.ip() == miner_address.ip())
     }
 
     /// Receive a partition request from a miner node
