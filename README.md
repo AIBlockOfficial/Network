@@ -1,14 +1,12 @@
-# Zenotta Network Protocol
+# A-Block Network
 
-A repo for the development of the Zenotta Network Protocol (ZNP).
-
-**We will regularly be updating links and easter eggs inside the code. Please join us on [this link](https://us02web.zoom.us/j/83251305547?pwd=SkhtYlpuV0c3K0d1a1hyby9mT1o0dz09) on April 13th, 10h00 CET to discuss the design of a social compute. It has a sustainable mining client which also will provide distributed compute at the infrastructure layer. The protocol layer will introduce a very novel file system, all of which feeds an application layer that can be built using APIs. We believe you've never seen anything quite like this and look forward to engaging with you in our community!**
+A repo for the development of the A-Block Network.
 
 ..
 
 ## Setup
 
-The Zenotta Network Protocol (in fact, almost all of Zenotta's code) runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
+The A-Block Network runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
 
 ```
 curl https://sh.rustup.rs -sSf | sh
@@ -46,7 +44,7 @@ You can then set up the project on your local machine using the following steps:
 make
 ```
 
-You will also require a local instances of the Zenotta `NAOM` and `Keccak Prime` repo, which is a crate dependency. The dependency 
+You will also require a local instances of the A-Block `NAOM` and `Keccak Prime` repo, which is a crate dependency. The dependency 
 is listed in the `Cargo.toml` as:
 
 ```
@@ -86,7 +84,7 @@ If you run into TLS problems on the API routes, you can pass `--api_use_tls=0` t
 ensure that your local version has the latest code for the project and minimizes the possibility of unnecessary merge 
 conflicts.**
 
-Zenotta's Git flow generally involves working on each new task in a new branch, which you should checkout from `develop` and can be done as in the following example
+A-Block's Git flow generally involves working on each new task in a new branch, which you should checkout from `develop` and can be done as in the following example
 
 ```
 git checkout -b branch_name
@@ -107,7 +105,7 @@ Steps to deploy the node binaries in choice of your environment.
 
 - Run the pipeline for branch of your choice with following variables.
 - Set `deploy_binaries` to `true` to enforce infrastructure changes.
-- Set `zenotta_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc.
+- Set `a_block_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc.
 - Successful run of `infra` pipeline will present with you IP addresses of different nodes.
 - IP address of node will still need to be configured in `node_settings.toml` and `tls_certificates.json` manually post rollout.
 

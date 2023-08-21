@@ -22,4 +22,4 @@ basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 
 [req_distinguished_name]
-CN = node.zenotta.xyz
+CN = node.a-block.net

@@ -1,10 +1,10 @@
 [package]
-name = "znp"
+name = "ablock_network"
 version = "0.2.0"
 authors = ["Byron Houwens <zhion360@gmail.com>"]
 edition = "2018"
 readme = "README.md"
-description = "The Zenotta Network Protocol (ZNP), the network that supports the Zenotta blockchain"
+description = "The A-Block Network, the network that supports the A-Block chain"
 
 [dependencies]
 async-std = "1.7.0"

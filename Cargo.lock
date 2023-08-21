@@ -3,6 +3,46 @@
 version = 3
 
 [[package]]
+name = "ablock_network"
+version = "0.2.0"
+dependencies = [
+ "async-std",
+ "async-stream",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "chrono",
+ "clap",
+ "config",
+ "futures",
+ "futures-util",
+ "hex",
+ "keccak_prime",
+ "merkle-log",
+ "merkletree",
+ "moka",
+ "naom",
+ "protobuf",
+ "raft",
+ "rand 0.7.3",
+ "ring",
+ "rocksdb",
+ "rug",
+ "rust-crypto",
+ "serde 1.0.163",
+ "serde_json",
+ "sha3",
+ "tokio",
+ "tokio-rustls 0.22.0",
+ "tokio-stream",
+ "tokio-util 0.6.10",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "warp",
+]
+
+[[package]]
 name = "actix-macros"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3422,43 +3462,3 @@ name = "zeroize"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a0956f1ba7c7909bfb66c2e9e4124ab6f6482560f6628b5aaeba39207c9aad9"
-
-[[package]]
-name = "znp"
-version = "0.2.0"
-dependencies = [
- "async-std",
- "async-stream",
- "async-trait",
- "bincode",
- "bytes",
- "chrono",
- "clap",
- "config",
- "futures",
- "futures-util",
- "hex",
- "keccak_prime",
- "merkle-log",
- "merkletree",
- "moka",
- "naom",
- "protobuf",
- "raft",
- "rand 0.7.3",
- "ring",
- "rocksdb",
- "rug",
- "rust-crypto",
- "serde 1.0.163",
- "serde_json",
- "sha3",
- "tokio",
- "tokio-rustls 0.22.0",
- "tokio-stream",
- "tokio-util 0.6.10",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "warp",
-]

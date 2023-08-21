@@ -51,7 +51,7 @@ pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
 pub type ArcUserNode = Arc<Mutex<UserNode>>;
 pub type ArcPreLaunchNode = Arc<Mutex<PreLaunchNode>>;
 
-/// Represents a virtual configurable Zenotta network.
+/// Represents a virtual configurable A-Block network.
 pub struct Network {
     config: NetworkConfig,
     /// The info needed to create network nodes
@@ -1349,19 +1349,19 @@ pub fn get_test_tls_spec() -> TestTlsSpec {
 }
 
 pub fn get_test_tls_name(name: &str, spec: &TestTlsSpec) -> String {
-    let tls_name = format!("{name}.zenotta.xyz");
+    let tls_name = format!("{name}.a-block.net");
     if spec.pem_certificates.contains_key(&tls_name)
         || spec.pem_certificates_with_ca.contains_key(&tls_name)
     {
         tls_name
     } else {
-        "node.zenotta.xyz".to_owned()
+        "node.a-block.net".to_owned()
     }
 }
 
 pub fn get_common_tls_config() -> TcpTlsConfig {
     let addr = "127.0.0.1:0".parse().unwrap();
-    let mapping = vec![(addr, "node.zenotta.xyz".to_owned())]
+    let mapping = vec![(addr, "node.a-block.net".to_owned())]
         .into_iter()
         .collect();
     let tls_spec = get_test_tls_spec().make_tls_spec(&mapping);

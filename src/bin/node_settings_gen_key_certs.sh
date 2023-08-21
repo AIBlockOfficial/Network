@@ -44,11 +44,11 @@ then
     then
       echo "Generating ... key & csr is set to $n"
       openssl genpkey -algorithm Ed25519 -out $n.key
-      openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName=DNS:$n.zenotta.xyz,DNS:127.0.0.1.$port_v1.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v2.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v3.nodes.zenotta.xyz"
+      openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.a-block.net" -addext "subjectAltName=DNS:$n.a-block.net,DNS:127.0.0.1.$port_v1.nodes.a-block.net,DNS:127.0.0.1.$port_v2.nodes.a-block.net,DNS:127.0.0.1.$port_v3.nodes.a-block.net"
     fi
 
     cp ca_root.cnf temp.cnf
-    printf "\n[SAN]\nsubjectAltName=DNS:$n.zenotta.xyz,DNS:127.0.0.1.$port_v1.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v2.nodes.zenotta.xyz,DNS:127.0.0.1.$port_v3.nodes.zenotta.xyz\nextendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" >> temp.cnf
+    printf "\n[SAN]\nsubjectAltName=DNS:$n.a-block.net,DNS:127.0.0.1.$port_v1.nodes.a-block.net,DNS:127.0.0.1.$port_v2.nodes.a-block.net,DNS:127.0.0.1.$port_v3.nodes.a-block.net\nextendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" >> temp.cnf
 
     openssl ca -config temp.cnf -extensions SAN -cert ca_intermediate.pem -keyfile ca_intermediate.key -days 999 -notext -batch -in $n.csr -out $n.pem
     cat $n.pem ca_intermediate.bundle.pem > $n.bundle.pem
@@ -63,8 +63,8 @@ then
   for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
   do
     openssl genpkey -algorithm Ed25519 -out $n.key
-    openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.zenotta.xyz" -addext "subjectAltName = DNS:$n.zenotta.xyz"
-    openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.zenotta.xyz" -days 999
+    openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.a-block.net" -addext "subjectAltName = DNS:$n.a-block.net"
+    openssl req -config node.cnf -new -x509 -in $n.csr -key $n.key -out $n.pem -addext "subjectAltName = DNS:$n.a-block.net" -days 999
   done
 fi
 
@@ -93,15 +93,15 @@ echo "pub const TEST_PEM_CERTIFICATES: &[(&str, &str)] = &[" >> test_tls_certifi
 for n in ca_root compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs cert ... n is set to $n"
-  printf "            \"$n.zenotta.xyz\": %s,\n" "$(jq -Rs . <$n.pem)" >> tls_certificates.json
-  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.pem)" >> test_tls_certificates.rs
+  printf "            \"$n.a-block.net\": %s,\n" "$(jq -Rs . <$n.pem)" >> tls_certificates.json
+  printf "(\"$n.a-block.net\", %s),\n" "$(jq -Rs . <$n.pem)" >> test_tls_certificates.rs
 done
 
-printf "            \"node.zenotta.xyz\": %s\n" "$(jq -Rs . <node.pem)" >> tls_certificates.json
+printf "            \"node.a-block.net\": %s\n" "$(jq -Rs . <node.pem)" >> tls_certificates.json
 echo "        }," >> tls_certificates.json
 echo "        \"pem_pkcs8_private_keys\": {" >> tls_certificates.json
 
-printf "(\"node.zenotta.xyz\", %s),\n" "$(jq -Rs . <node.pem)" >> test_tls_certificates.rs
+printf "(\"node.a-block.net\", %s),\n" "$(jq -Rs . <node.pem)" >> test_tls_certificates.rs
 echo "];" >> test_tls_certificates.rs
 echo "" >> test_tls_certificates.rs
 echo "/// PKCS8 Keys for node DNS names" >> test_tls_certificates.rs
@@ -110,37 +110,37 @@ echo "pub const TEST_PKCS8_KEYS: &[(&str, &str)] = &[" >> test_tls_certificates.
 for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs keys ... n is set to $n"
-  printf "            \"$n.zenotta.xyz\": %s,\n" "$(jq -Rs . <$n.key)" >> tls_certificates.json
-  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.key)" >> test_tls_certificates.rs
+  printf "            \"$n.a-block.net\": %s,\n" "$(jq -Rs . <$n.key)" >> tls_certificates.json
+  printf "(\"$n.a-block.net\", %s),\n" "$(jq -Rs . <$n.key)" >> test_tls_certificates.rs
 done
 
-printf "            \"node.zenotta.xyz\": %s\n" "$(jq -Rs . <node.key)" >> tls_certificates.json
+printf "            \"node.a-block.net\": %s\n" "$(jq -Rs . <node.key)" >> tls_certificates.json
 echo "        }," >> tls_certificates.json
 echo "        \"socket_name_mapping\": {" >> tls_certificates.json
-echo "            \"127.0.0.1:12300\": \"compute1.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12301\": \"compute2.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12302\": \"compute3.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12330\": \"storage1.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12331\": \"storage2.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12332\": \"storage3.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12340\": \"miner1.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12341\": \"miner2.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12342\": \"miner3.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12343\": \"miner4.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12344\": \"miner5.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12345\": \"miner6.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12346\": \"miner7.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12347\": \"miner8.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12348\": \"miner9.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12349\": \"miner10.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12360\": \"user1.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12361\": \"user2.zenotta.xyz\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12362\": \"user3.zenotta.xyz\"" >> tls_certificates.json
+echo "            \"127.0.0.1:12300\": \"compute1.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12301\": \"compute2.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12302\": \"compute3.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12330\": \"storage1.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12331\": \"storage2.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12332\": \"storage3.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12340\": \"miner1.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12341\": \"miner2.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12342\": \"miner3.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12343\": \"miner4.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12344\": \"miner5.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12345\": \"miner6.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12346\": \"miner7.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12347\": \"miner8.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12348\": \"miner9.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12349\": \"miner10.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12360\": \"user1.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12361\": \"user2.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12362\": \"user3.a-block.net\"" >> tls_certificates.json
 echo "        }" >> tls_certificates.json
 echo "    }" >> tls_certificates.json
 echo "}" >> tls_certificates.json
 
-printf "(\"node.zenotta.xyz\", %s),\n" "$(jq -Rs . <node.key)" >> test_tls_certificates.rs
+printf "(\"node.a-block.net\", %s),\n" "$(jq -Rs . <node.key)" >> test_tls_certificates.rs
 echo "];" >> test_tls_certificates.rs
 
 echo "" >> test_tls_certificates.rs
@@ -150,7 +150,7 @@ echo "pub const TEST_PEM_CERTIFICATES_WITH_CA: &[(&str, &str)] = &[" >> test_tls
 for n in node101 miner101 miner102 user101 user102
 do
   echo "Generating test rs cert ... n is set to $n"
-  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.bundle.pem)" >> test_tls_certificates.rs
+  printf "(\"$n.a-block.net\", %s),\n" "$(jq -Rs . <$n.bundle.pem)" >> test_tls_certificates.rs
 done
 
 echo "];" >> test_tls_certificates.rs
@@ -161,7 +161,7 @@ echo "pub const TEST_PKCS8_KEYS_WITH_CA: &[(&str, &str)] = &[" >> test_tls_certi
 for n in node101 miner101 miner102 user101 user102
 do
   echo "Generating test rs keys ... n is set to $n"
-  printf "(\"$n.zenotta.xyz\", %s),\n" "$(jq -Rs . <$n.key)" >> test_tls_certificates.rs
+  printf "(\"$n.a-block.net\", %s),\n" "$(jq -Rs . <$n.key)" >> test_tls_certificates.rs
 done
 
 echo "];" >> test_tls_certificates.rs

@@ -1,4 +1,4 @@
-//! App to run a Zenotta node.
+//! App to run an A-Block node.
 
 use clap::{App, ArgMatches};
 
@@ -32,8 +32,8 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
 }
 
 fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("Zenotta Node")
-        .about("Runs a Zenotta node.")
+    App::new("A-Block Node")
+        .about("Runs an A-Block node.")
         .subcommand(user::clap_app())
         .subcommand(miner::clap_app())
         .subcommand(compute::clap_app())

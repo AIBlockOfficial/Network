@@ -382,10 +382,10 @@ async fn nodes_tls_mismatch() {
     //
     let configs =
         get_bound_common_tls_configs(&["compute1", "compute2", "compute3"], |name, mut s| {
-            if name == "compute1.zenotta.xyz" {
+            if name == "compute1.a-block.net" {
                 let mapping = &mut s.socket_name_mapping;
-                let key1 = find_key_with_value(mapping, "compute2.zenotta.xyz").unwrap();
-                let key2 = find_key_with_value(mapping, "compute3.zenotta.xyz").unwrap();
+                let key1 = find_key_with_value(mapping, "compute2.a-block.net").unwrap();
+                let key2 = find_key_with_value(mapping, "compute3.a-block.net").unwrap();
                 swap_map_values(mapping, &key1, &key2);
             }
             s
@@ -444,15 +444,15 @@ async fn nodes_tls_ca_mismatch() {
     let configs =
         get_bound_common_tls_configs(&["compute1", "compute2", "miner101"], |name, mut s| {
             match name {
-                "compute1.zenotta.xyz" => {
+                "compute1.a-block.net" => {
                     debug!("Socket Mapping: {:?}", &s.socket_name_mapping);
                     let untrusted_names = s.untrusted_names.as_mut().unwrap();
-                    untrusted_names.insert("ca_root.zenotta.xyz".to_owned());
+                    untrusted_names.insert("ca_root.a-block.net".to_owned());
                 }
-                "compute2.zenotta.xyz" => {
+                "compute2.a-block.net" => {
                     let untrusted_names = s.untrusted_names.as_mut().unwrap();
-                    untrusted_names.remove("miner101.zenotta.xyz");
-                    s.pem_certificates.remove("miner101.zenotta.xyz");
+                    untrusted_names.remove("miner101.a-block.net");
+                    s.pem_certificates.remove("miner101.a-block.net");
                 }
                 _ => (),
             }
@@ -515,9 +515,9 @@ async fn nodes_tls_ca_unmapped_mismatch() {
         let mut configs = Vec::new();
         let tls_spec = get_test_tls_spec();
         for (address, name) in [
-            ("127.0.0.1:12515", "node101.zenotta.xyz"),
-            ("127.0.0.1:12520", "miner101.zenotta.xyz"),
-            ("127.0.0.1:12530", "miner102.zenotta.xyz"),
+            ("127.0.0.1:12515", "node101.a-block.net"),
+            ("127.0.0.1:12520", "miner101.a-block.net"),
+            ("127.0.0.1:12530", "miner102.a-block.net"),
         ]
         .iter()
         {

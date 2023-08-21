@@ -54,7 +54,7 @@ build:
 deploy:
   stage: deploy
   variables:
-    zenotta_env: $zenotta_env
+    a_block_env: $a_block_env
     znp_project_id: $CI_PROJECT_ID
     znp_job_id: $BUILD_CI_JOB_ID
     znp_deploy_binaries: "true"

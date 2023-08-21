@@ -392,5 +392,5 @@ pub fn socket_name_mapping_or_default(
 }
 
 pub fn default_name_mapping(addr: SocketAddr) -> String {
-    format!("{}.{}.nodes.zenotta.xyz", addr.ip(), addr.port())
+    format!("{}.{}.nodes.a-block.net", addr.ip(), addr.port())
 }

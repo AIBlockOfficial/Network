@@ -113,7 +113,7 @@ fn raft_for_spec(spec: &DbSpecInfo) -> &str {
 }
 
 fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("Zenotta Database Upgrade")
+    App::new("ABlock Database Upgrade")
         .about("Runs database upgrade.")
         .arg(
             Arg::with_name("config")

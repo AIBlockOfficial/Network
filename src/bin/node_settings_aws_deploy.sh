@@ -112,10 +112,10 @@ echo " "
 if [ "$CHECK_CONNECTION" = "1" ]
 then
     set -x
-    ssh -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_1 echo test_connection
-    ssh -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_2 echo test_connection
-    ssh -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_3 echo test_connection
-    ssh -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_4 echo test_connection
+    ssh -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_1 echo test_connection
+    ssh -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_2 echo test_connection
+    ssh -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3 echo test_connection
+    ssh -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_4 echo test_connection
     set +x
 fi
 
@@ -127,10 +127,10 @@ echo " "
 if [ "$GET_EXISTING_LOGS" = "1" ]
 then
     set -x
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_1:~/znp/storage_0.log ./
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_2:~/znp/miner_0.log ./
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_3:~/znp/compute_0.log ./
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_4:~/znp/user_0.log ./
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_1:~/znp/storage_0.log ./
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_2:~/znp/miner_0.log ./
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3:~/znp/compute_0.log ./
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_4:~/znp/user_0.log ./
     set +x
     if [ "$ONLY_GET_EXISTING_LOGS" = "1" ]
     then
@@ -148,17 +148,17 @@ if [ "$UPLOAD_FIRST" = "1" ]
 then
     echo "Upload first"
     set -v
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $UPLOAD $NODE_ADDR_1:~/
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem src/bin/node_settings_aws_deploy.sh $NODE_ADDR_1:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $UPLOAD $NODE_ADDR_1:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem src/bin/node_settings_aws_deploy.sh $NODE_ADDR_1:~/
     set +v
 fi
 if [ "$UPLOAD_OTHERS" = "1" ]
 then
     echo "Upload Others"
     set -v
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $UPLOAD $NODE_ADDR_2:~/
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $UPLOAD $NODE_ADDR_3:~/
-    scp -o ConnectTimeout=5 -i ~/.ssh/Zenotta-Node.pem $UPLOAD $NODE_ADDR_4:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $UPLOAD $NODE_ADDR_2:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $UPLOAD $NODE_ADDR_3:~/
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $UPLOAD $NODE_ADDR_4:~/
     set +v
 fi
 
@@ -178,21 +178,21 @@ if [ "$COMPLETE_DEPLOY_FIRST" = "1" ]
 then
     echo "Complete deploy first"
     set -x
-    scp -i ~/.ssh/Zenotta-Node.pem target/release/node_settings_aws_run_storage_0.sh $NODE_ADDR_1:~/
-    ssh  -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_1 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_storage_0.sh
+    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_storage_0.sh $NODE_ADDR_1:~/
+    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_1 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_storage_0.sh
     set +x
 fi
 if [ "$COMPLETE_DEPLOY_OTHERS" = "1" ]
 then
     echo "Complete deploy Others"
     set -x
-    scp -i ~/.ssh/Zenotta-Node.pem target/release/node_settings_aws_run_miner_0.sh $NODE_ADDR_2:~/
-    scp -i ~/.ssh/Zenotta-Node.pem target/release/node_settings_aws_run_compute_0.sh $NODE_ADDR_3:~/
-    scp -i ~/.ssh/Zenotta-Node.pem target/release/node_settings_aws_run_user_0.sh $NODE_ADDR_4:~/
+    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_miner_0.sh $NODE_ADDR_2:~/
+    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_compute_0.sh $NODE_ADDR_3:~/
+    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_user_0.sh $NODE_ADDR_4:~/
 
-    ssh  -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_2 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_miner_0.sh
-    ssh  -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_3 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_compute_0.sh
-    ssh  -i ~/.ssh/Zenotta-Node.pem $NODE_ADDR_4 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_user_0.sh
+    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_2 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_miner_0.sh
+    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_compute_0.sh
+    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_4 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_user_0.sh
 
     set +x
 fi

@@ -149,7 +149,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("api_use_tls")
                 .long("api_use_tls")
-                .env("ZENOTTA_API_USE_TLS")
+                .env("ABLOCK_API_USE_TLS")
                 .help("Whether to use TLS for API: 0 to disable")
                 .takes_value(true),
         )
@@ -169,7 +169,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
-                .env("ZENOTTA_TLS_PRIVATE_KEY")
+                .env("ABLOCK_TLS_PRIVATE_KEY")
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
