@@ -3,9 +3,9 @@
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
-use znp::configurations::ComputeNodeConfig;
-use znp::ComputeNode;
-use znp::{
+use ablock_network::configurations::ComputeNodeConfig;
+use ablock_network::ComputeNode;
+use ablock_network::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
@@ -289,7 +289,7 @@ fn configuration(settings: config::Config) -> ComputeNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use znp::configurations::DbMode;
+    use ablock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

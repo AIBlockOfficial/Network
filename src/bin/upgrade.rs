@@ -2,8 +2,8 @@
 
 use clap::{App, Arg};
 use std::collections::BTreeSet;
-use znp::configurations::DbMode;
-use znp::upgrade::{
+use ablock_network::configurations::DbMode;
+use ablock_network::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
     get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
     UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
@@ -234,8 +234,8 @@ fn configuration(
 #[cfg(test)]
 mod test {
     use super::*;
-    use znp::configurations::DbMode;
-    use znp::get_test_common_unicorn;
+    use ablock_network::configurations::DbMode;
+    use ablock_network::get_test_common_unicorn;
 
     #[test]
     fn validate_startup_read_all_raft_1() {

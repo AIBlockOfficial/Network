@@ -3,9 +3,9 @@
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
-use znp::configurations::StorageNodeConfig;
-use znp::StorageNode;
-use znp::{
+use ablock_network::configurations::StorageNodeConfig;
+use ablock_network::StorageNode;
+use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
@@ -243,7 +243,7 @@ fn configuration(settings: config::Config) -> StorageNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use znp::configurations::DbMode;
+    use ablock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

@@ -2,9 +2,9 @@
 
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
-use znp::configurations::PreLaunchNodeConfig;
-use znp::PreLaunchNode;
-use znp::{
+use ablock_network::configurations::PreLaunchNodeConfig;
+use ablock_network::PreLaunchNode;
+use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
     ResponseResult,
 };
@@ -171,7 +171,7 @@ fn configuration(settings: config::Config) -> PreLaunchNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use znp::configurations::{DbMode, PreLaunchNodeType};
+    use ablock_network::configurations::{DbMode, PreLaunchNodeType};
 
     type Expected = (DbMode, Option<String>, PreLaunchNodeType);
 

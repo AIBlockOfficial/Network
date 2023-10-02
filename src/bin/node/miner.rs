@@ -4,12 +4,12 @@ use clap::{App, Arg, ArgMatches};
 use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use znp::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
-use znp::{
+use ablock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
+use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
-use znp::{MinerNode, UserNode};
+use ablock_network::{MinerNode, UserNode};
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
@@ -551,7 +551,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use znp::configurations::DbMode;
+    use ablock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
     type UserExpected = Option<(DbMode, Option<String>)>;
