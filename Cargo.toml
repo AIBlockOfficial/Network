@@ -22,7 +22,7 @@ merkletree = "0.21.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
 naom = { version = "1.3.0" }
-keccak_prime = { git = "https://github.com/zenotta/keccak-prime" }
+keccak_prime = { git = "https://github.com/ABlockOfficial/Keccak-Prime" }
 protobuf = "~2.0"
 raft = "0.5.0"
 rand = "0.7.3"
@@ -47,4 +47,4 @@ mock = []
 config_override = []
 
 [patch.crates-io]
-raft = { git = "https://github.com/Zenotta/raft-rs", branch = "0.5.1" }
+raft = { git = "https://github.com/ABlockOfficial/raft-rs", branch = "0.5.1" }
