@@ -830,12 +830,6 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
     .or(debug_data(
         dp_vec,
         node,
@@ -992,12 +986,6 @@ pub fn miner_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1083,12 +1071,6 @@ pub fn miner_node_with_user_routes(
     .or(current_mining_block(
         dp,
         current_block,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(address_construction(
-        dp,
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
