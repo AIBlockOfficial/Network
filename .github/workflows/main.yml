@@ -22,12 +22,3 @@ jobs:
     needs: build
     with:
       IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}:${{ github.sha }}
-#   deploy:
-#     uses: ablockofficial/platform/.github/workflows/deploy.yml@main
-#     secrets: inherit
-#     needs: scan-image
-#     with:
-#       REGION: ${{ vars.REGION }}
-#       PROJECT_ID: ${{ vars.PROJECT_ID }}
-#       CLUSTER_NAME: ${{ vars.CLUSTER_NAME }}
-#       DEPLOYMENT: a-block-io
