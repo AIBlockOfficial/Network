@@ -1,16 +1,19 @@
-FROM rust:1.68.2-slim-bullseye as build
+FROM rust:1.70.0-slim-bullseye AS chef
 
-# Install build dependancies
 RUN apt-get update && apt-get -y install git build-essential m4 llvm libclang-dev diffutils curl
-
+RUN cargo install cargo-chef 
 WORKDIR /a-block
-
-# Output artifact to workdir
 ENV CARGO_TARGET_DIR=/a-block
 
-COPY ./ ./.
+FROM chef AS planner
 
-# Build for release
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef as builder
+COPY --from=planner /a-block/recipe.json /a-block/recipe.json
+RUN cargo chef cook --release --recipe-path /a-block/recipe.json
+COPY . .
 RUN cargo build --release
 
 # Use distroless
@@ -26,7 +29,7 @@ ENV API_USE_TLS="--api_use_tls=0"
 ENV RUST_LOG=info,debug
 
 # Copy node bin
-COPY --from=build /a-block/release/node ./node
+COPY --from=builder /a-block/release/node ./node
 
 # Default config for the node
 COPY .docker/conf/* /etc/.
