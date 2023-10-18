@@ -1,6 +1,6 @@
 FROM rust:1.70.0-slim-bullseye AS chef
 
-RUN apt-get update && apt-get -y install git build-essential m4 llvm libclang-dev diffutils curl
+RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl
 RUN cargo install cargo-chef 
 WORKDIR /a-block
 ENV CARGO_TARGET_DIR=/a-block
@@ -10,14 +10,16 @@ FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM chef as builder
+FROM chef AS builder
 COPY --from=planner /a-block/recipe.json /a-block/recipe.json
 RUN cargo chef cook --release --recipe-path /a-block/recipe.json
 COPY . .
 RUN cargo build --release
 
 # Use distroless
-FROM cgr.dev/chainguard/static:latest
+FROM cgr.dev/chainguard/static@sha256:ef5add7fd46cf1ce7d33d6de517833ac5c7e749db9b15249f9c472a772f3af27
+
+USER nonroot
 
 # Set these in the environment to override
 ENV NODE_TYPE="compute"
