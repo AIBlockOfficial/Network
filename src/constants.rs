@@ -1,4 +1,4 @@
-pub use naom::constants::*;
+pub use a_block_chain::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 

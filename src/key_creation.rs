@@ -1,9 +1,9 @@
 #![allow(non_snake_case, unused)]
 
+use a_block_chain::crypto::sha3_256;
+use a_block_chain::crypto::sign_ed25519 as sign;
+use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
 use hex::encode;
-use naom::crypto::sha3_256;
-use naom::crypto::sign_ed25519 as sign;
-use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
 use rug::integer::Order;
 use rug::ops::Pow;
 use rug::Integer;

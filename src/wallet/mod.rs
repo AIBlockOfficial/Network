@@ -5,18 +5,18 @@ use crate::db_utils::{
 };
 use crate::utils::{get_paiments_for_wallet, make_wallet_tx_info};
 use crate::Rs2JsMsg;
-use bincode::{deserialize, serialize};
-use hex::FromHexError;
-use naom::crypto::pbkdf2 as pwhash;
-use naom::crypto::secretbox_chacha20_poly1305 as secretbox;
-use naom::crypto::sign_ed25519 as sign;
-use naom::crypto::sign_ed25519::{PublicKey, SecretKey};
-use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
-use naom::utils::transaction_utils::{
+use a_block_chain::crypto::pbkdf2 as pwhash;
+use a_block_chain::crypto::secretbox_chacha20_poly1305 as secretbox;
+use a_block_chain::crypto::sign_ed25519 as sign;
+use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use a_block_chain::utils::transaction_utils::{
     construct_address_for, construct_payment_tx_ins, construct_tx_hash,
     construct_tx_in_signable_hash,
 };
+use bincode::{deserialize, serialize};
+use hex::FromHexError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -539,7 +539,7 @@ impl WalletDb {
             None => self.generate_payment_address().await.0,
         };
 
-        let tx_outs: Vec<TxOut> = vec![TxOut::new_asset(excess_addr, asset)];
+        let tx_outs: Vec<TxOut> = vec![TxOut::new_asset(excess_addr, asset, None)];
         let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
 
         Ok((tx_ins, tx_outs))
@@ -567,7 +567,7 @@ impl WalletDb {
                 Some(address) => address,
                 None => self.generate_payment_address().await.0,
             };
-            tx_outs.push(TxOut::new_asset(excess_address, excess));
+            tx_outs.push(TxOut::new_asset(excess_address, excess, None));
         }
 
         let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
@@ -1246,7 +1246,7 @@ pub fn tx_constructor_from_prev_out(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use naom::utils::transaction_utils::construct_address;
+    use a_block_chain::utils::transaction_utils::construct_address;
 
     #[test]
     /// Creating a valid payment address

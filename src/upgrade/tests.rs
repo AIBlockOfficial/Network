@@ -17,7 +17,7 @@ use crate::test_utils::{
 use crate::tests::compute_committed_tx_pool;
 use crate::utils::{get_test_common_unicorn, tracing_log_try_init};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
-use naom::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -751,8 +751,8 @@ fn cfg_upgrade() -> UpgradeCfg {
 }
 
 fn get_expected_last_block_stored() -> BlockStoredInfo {
-    use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-    use naom::script::{lang::Script, StackEntry};
+    use a_block_chain::primitives::transaction::{Transaction, TxIn, TxOut};
+    use a_block_chain::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),

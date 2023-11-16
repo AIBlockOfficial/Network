@@ -1,7 +1,7 @@
 use crate::compute_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::wallet::WalletDb;
-use naom::primitives::asset::TokenAmount;
+use a_block_chain::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

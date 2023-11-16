@@ -1,13 +1,13 @@
 //! App to run a pre-launch node.
 
-use clap::{App, Arg, ArgMatches};
-use config::ConfigError;
 use ablock_network::configurations::PreLaunchNodeConfig;
 use ablock_network::PreLaunchNode;
 use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
     ResponseResult,
 };
+use clap::{App, Arg, ArgMatches};
+use config::ConfigError;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));

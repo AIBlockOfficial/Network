@@ -422,7 +422,7 @@ impl PreLaunchNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -453,7 +453,7 @@ impl PreLaunchNode {
         })
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///

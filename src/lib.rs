@@ -54,7 +54,7 @@ pub use utils::{
 };
 pub use wallet::WalletDb;
 
-#[cfg(not(features = "mock"))]
+#[cfg(not(feature = "mock"))]
 pub(crate) use comms_handler::Node;
-#[cfg(features = "mock")]
+#[cfg(feature = "mock")]
 pub(crate) use mock::{Node, RingNode};

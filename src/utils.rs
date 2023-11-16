@@ -8,23 +8,23 @@ use crate::interfaces::{
 };
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
-use bincode::serialize;
-use futures::future::join_all;
-use naom::constants::TOTAL_TOKENS;
-use naom::crypto::sha3_256;
-use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
-use naom::primitives::transaction::DrsTxHashSpec;
-use naom::primitives::{
+use a_block_chain::constants::TOTAL_TOKENS;
+use a_block_chain::crypto::sha3_256;
+use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use a_block_chain::primitives::transaction::DrsTxHashSpec;
+use a_block_chain::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_hex_txs_hash, Block, BlockHeader},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
-use naom::script::{lang::Script, StackEntry};
-use naom::utils::transaction_utils::{
+use a_block_chain::script::{lang::Script, StackEntry};
+use a_block_chain::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
     construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
+use bincode::serialize;
+use futures::future::join_all;
 use rand::{self, Rng};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -738,7 +738,7 @@ pub fn make_utxo_set_from_seed(
                                 addr
                             };
 
-                        TxOut::new_token_amount(script_public_key, out.amount)
+                        TxOut::new_token_amount(script_public_key, out.amount, None)
                     })
                     .collect(),
                 inputs: genesis_tx_in.clone().into_iter().collect(),
@@ -1064,17 +1064,17 @@ pub fn concat_maps<K: Clone + Ord, V: Clone>(
         .collect()
 }
 
-/// Create a new receipt asset transaction (only used on Compute node)
+/// Create a new item asset transaction (only used on Compute node)
 ///
 /// ### Arguments
 ///
-/// * `receipt_amount`      - Receipt amount
+/// * `item_amount`      - Item amount
 /// * `script_public_key`   - Public address key
 /// * `public key`          - Public key
 /// * `signature`           - Signature
-pub fn create_receipt_asset_tx_from_sig(
+pub fn create_item_asset_tx_from_sig(
     b_num: u64,
-    receipt_amount: u64,
+    item_amount: u64,
     script_public_key: String,
     public_key: String,
     signature: String,
@@ -1082,9 +1082,9 @@ pub fn create_receipt_asset_tx_from_sig(
     metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
     let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone(), metadata);
-    let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
-    let tx_out = TxOut::new_asset(script_public_key, receipt);
+    let item = Asset::item(item_amount, drs_tx_hash_create.clone(), metadata);
+    let asset_hash = construct_tx_in_signable_asset_hash(&item);
+    let tx_out = TxOut::new_asset(script_public_key, item, None);
     let public_key = decode_pub_key(&public_key)?;
     let signature = decode_signature(&signature)?;
 
