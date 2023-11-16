@@ -1,15 +1,15 @@
 //! App to run a mining node.
 
-use clap::{App, Arg, ArgMatches};
-use config::{ConfigError, Value};
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use ablock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 use ablock_network::{MinerNode, UserNode};
+use clap::{App, Arg, ArgMatches};
+use config::{ConfigError, Value};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));

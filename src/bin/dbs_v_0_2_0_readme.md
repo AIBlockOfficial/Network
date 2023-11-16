@@ -7,7 +7,7 @@
 ## In a separate clone of znp and noam:
  * checkout ZNP at tag v0.2.0
  * checkout NAOM at tag v0.2.0
- * Make sure znp cargo.toml point to corresponding naom
+ * Make sure znp cargo.toml point to corresponding a_block_chain
 
 In `src/bin/node_settings.toml`, remove all nodes not used in the network. There should only remain first of each compute/storage/miner/user.
 

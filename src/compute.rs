@@ -16,20 +16,20 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, check_druid_participants, create_receipt_asset_tx_from_sig,
+    apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig,
     format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
     validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
     LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
 use crate::Node;
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::Block;
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction};
+use a_block_chain::utils::druid_utils::druid_expectations_are_met;
+use a_block_chain::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
+use a_block_chain::utils::transaction_utils::construct_tx_hash;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::{DrsTxHashSpec, Transaction};
-use naom::utils::druid_utils::druid_expectations_are_met;
-use naom::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
-use naom::utils::transaction_utils::construct_tx_hash;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -374,7 +374,8 @@ impl ComputeNode {
     #[cfg(test)]
     pub fn get_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    {
         self.node_raft.get_committed_utxo_tracked_pk_cache()
     }
 
@@ -519,6 +520,10 @@ impl ComputeNode {
             .get_committed_current_block_num()
             .unwrap_or_default();
         let sanction_list = &self.sanction_list;
+        let b_num = self
+            .node_raft
+            .get_committed_current_block_num()
+            .unwrap_or_default();
 
         move |tx| {
             if tx.is_create_tx() {
@@ -529,7 +534,7 @@ impl ComputeNode {
             }
 
             !tx.is_coinbase()
-                && tx_is_valid(tx, |v| {
+                && tx_is_valid(tx, b_num, |v| {
                     utxo_set
                         .get(v)
                         .filter(|_| !sanction_list.contains(&v.t_hash))
@@ -1162,15 +1167,15 @@ impl ComputeNode {
         }
 
         match req {
-            SendCreateReceiptRequest {
-                receipt_amount,
+            SendCreateItemRequest {
+                item_amount,
                 script_public_key,
                 public_key,
                 signature,
                 drs_tx_hash_spec,
                 metadata,
-            } => match self.create_receipt_asset_tx(
-                receipt_amount,
+            } => match self.create_item_asset_tx(
+                item_amount,
                 script_public_key,
                 public_key,
                 signature,
@@ -1179,7 +1184,7 @@ impl ComputeNode {
             ) {
                 Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
                 Err(e) => {
-                    error!("Error creating receipt asset transaction: {:?}", e);
+                    error!("Error creating item asset transaction: {:?}", e);
                     None
                 }
             },
@@ -1190,7 +1195,7 @@ impl ComputeNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -2008,17 +2013,17 @@ impl ComputeNode {
         }
     }
 
-    /// Create a receipt asset transaction from data received
+    /// Create a item asset transaction from data received
     ///
     /// ### Arguments
     ///
-    /// * `receipt_amount`      - Amount of receipt assets
+    /// * `item_amount`      - Amount of item assets
     /// * `script_public_key`   - Public address key
     /// * `public_key`          - Public key
     /// * `signature`           - Signature
-    pub fn create_receipt_asset_tx(
+    pub fn create_item_asset_tx(
         &mut self,
-        receipt_amount: u64,
+        item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
@@ -2026,9 +2031,9 @@ impl ComputeNode {
         metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
-        Ok(create_receipt_asset_tx_from_sig(
+        Ok(create_item_asset_tx_from_sig(
             b_num,
-            receipt_amount,
+            item_amount,
             script_public_key,
             public_key,
             signature,
@@ -2224,17 +2229,17 @@ impl ComputeApi for ComputeNode {
         self.receive_transactions(transactions)
     }
 
-    fn create_receipt_asset_tx(
+    fn create_item_asset_tx(
         &mut self,
-        receipt_amount: u64,
+        item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
         drs_tx_hash_spec: DrsTxHashSpec,
         metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
-        self.create_receipt_asset_tx(
-            receipt_amount,
+        self.create_item_asset_tx(
+            item_amount,
             script_public_key,
             public_key,
             signature,

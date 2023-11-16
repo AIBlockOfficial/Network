@@ -15,12 +15,12 @@ use crate::utils::{
     calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
     UtxoReAlignCheck,
 };
+use a_block_chain::crypto::sha3_256;
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::Block;
+use a_block_chain::primitives::transaction::Transaction;
+use a_block_chain::utils::transaction_utils::get_inputs_previous_out_point;
 use bincode::{deserialize, serialize};
-use naom::crypto::sha3_256;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::get_inputs_previous_out_point;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
@@ -926,7 +926,8 @@ impl ComputeRaft {
     #[cfg(test)]
     pub fn get_committed_utxo_tracked_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    {
         self.consensused.utxo_set.get_pk_cache()
     }
 
@@ -1593,8 +1594,8 @@ mod test {
     use super::*;
     use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::{create_valid_transaction, get_test_common_unicorn};
-    use naom::crypto::sign_ed25519 as sign;
-    use naom::primitives::asset::TokenAmount;
+    use a_block_chain::crypto::sign_ed25519 as sign;
+    use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
     use std::collections::BTreeSet;
 

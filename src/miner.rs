@@ -15,13 +15,13 @@ use crate::utils::{
 };
 use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
 use crate::{db_utils, Node};
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::{self, BlockHeader};
+use a_block_chain::primitives::transaction::Transaction;
+use a_block_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::{self, BlockHeader};
-use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -997,7 +997,7 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -1087,7 +1087,7 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of the random number of partitioning
+    /// Handles the item of the random number of partitioning
     ///
     /// ### Arguments
     ///

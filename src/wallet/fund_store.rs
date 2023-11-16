@@ -1,5 +1,5 @@
-use naom::primitives::asset::{Asset, AssetValues};
-use naom::primitives::transaction::OutPoint;
+use a_block_chain::primitives::asset::{Asset, AssetValues};
+use a_block_chain::primitives::transaction::OutPoint;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -60,8 +60,8 @@ impl FundStore {
                 out_points_locked = self
                     .transactions
                     .keys()
+                    .filter(|&out_p| out_p.t_hash == t_hash.clone())
                     .cloned()
-                    .filter(|out_p| out_p.t_hash == t_hash.clone())
                     .collect::<Vec<OutPoint>>();
 
                 out_points_locked.iter().for_each(|out_p| {

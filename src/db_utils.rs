@@ -3,6 +3,7 @@ use crate::constants::{
     DB_PATH_LIVE, DB_PATH_TEST, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED, OLD_BACKUP_COUNT,
 };
 use rocksdb::backup::{BackupEngine, BackupEngineOptions};
+use rocksdb::Env;
 use rocksdb::{DBCompressionType, IteratorMode, Options, WriteBatch, DB};
 pub use rocksdb::{Error as DBError, DEFAULT_COLUMN_FAMILY_NAME as DB_COL_DEFAULT};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -209,8 +210,9 @@ impl SimpleDb {
     pub fn file_backup(&self) -> Result<()> {
         if let Self::File { path, db, .. } = &self {
             let backup_path = path.clone() + "_backup";
-            let backup_opts = BackupEngineOptions::default();
-            let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+            let env = Env::new().unwrap();
+            let backup_opts = BackupEngineOptions::new(backup_path.clone()).unwrap();
+            let mut backup_engine = BackupEngine::open(&backup_opts, &env).unwrap();
             let flush_before_backup = true;
 
             warn!("Backup db {} to {}", path, backup_path);
@@ -418,9 +420,10 @@ impl SimpleDb {
         match self {
             Self::File { db, .. } => {
                 let cf = db.cf_handle(cf).unwrap();
-                let iter = db
-                    .iterator_cf(cf, IteratorMode::Start)
-                    .map(|(k, v)| (k.to_vec(), v.to_vec()));
+                let iter = db.iterator_cf(cf, IteratorMode::Start).map(|iter_result| {
+                    let (k, v) = iter_result.unwrap();
+                    (k.to_vec(), v.to_vec())
+                });
                 Box::new(iter)
             }
             Self::InMemory {
@@ -676,8 +679,9 @@ pub fn restore_file_backup(
 ) -> Result<()> {
     if let Some(path) = new_db_save_path(db_mode, db_spec, custom_db_spec) {
         let backup_path = path.clone() + "_backup";
-        let backup_opts = BackupEngineOptions::default();
-        let mut backup_engine = BackupEngine::open(&backup_opts, &backup_path).unwrap();
+        let env = Env::new().unwrap();
+        let backup_opts = BackupEngineOptions::new(backup_path.clone()).unwrap();
+        let mut backup_engine = BackupEngine::open(&backup_opts, &env).unwrap();
 
         let mut restore_option = rocksdb::backup::RestoreOptions::default();
         restore_option.set_keep_log_files(true);

@@ -1,7 +1,7 @@
 use crate::active_raft::ActiveRaft;
 use crate::raft::RaftData;
+use a_block_chain::crypto::sha3_256;
 use bincode::{deserialize, serialize};
-use naom::crypto::sha3_256;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;

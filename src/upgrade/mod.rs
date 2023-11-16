@@ -353,7 +353,8 @@ pub fn upgrade_storage_db_batch<'a>(
     let column = old::storage::DB_COL_BC_V0_6_0;
     for (key, value) in db.iter_cf_clone(column) {
         if is_transaction_key(&key) {
-            let _: old::naom::Transaction = tracked_deserialize("Tx deserialize", &key, &value)?;
+            let _: old::a_block_chain::Transaction =
+                tracked_deserialize("Tx deserialize", &key, &value)?;
         } else if is_block_key(&key) {
             let stored_block: old::interfaces::StoredSerializingBlock =
                 tracked_deserialize("Block deserialize", &key, &value)?;

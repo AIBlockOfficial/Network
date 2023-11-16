@@ -1,7 +1,7 @@
 use crate::interfaces::{NodeType, UtxoFetchType, UtxoSet};
 use crate::Response;
+use a_block_chain::primitives::transaction::Transaction;
 use async_trait::async_trait;
-use naom::primitives::transaction::Transaction;
 use std::net::SocketAddr;
 
 /// A common trait that can be implemented by nodes as necessary to

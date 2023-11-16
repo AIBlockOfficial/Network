@@ -20,7 +20,7 @@ use crate::upgrade::{
     upgrade_same_version_wallet_db,
 };
 use crate::user::{
-    make_rb_payment_receipt_tx_and_response, make_rb_payment_send_transaction,
+    make_rb_payment_item_tx_and_response, make_rb_payment_send_transaction,
     make_rb_payment_send_tx_and_request, UserNode,
 };
 use crate::utils::{
@@ -28,12 +28,12 @@ use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
     LocalEventSender, ResponseResult, StringError,
 };
+use a_block_chain::crypto::sign_ed25519 as sign;
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use a_block_chain::script::lang::Script;
+use a_block_chain::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 use futures::future::join_all;
-use naom::crypto::sign_ed25519 as sign;
-use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
-use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1414,7 +1414,7 @@ pub struct RbReceiverData {
     pub receiver_half_druid: String,
 }
 
-// Generates a receipt-based transaction using the given sender and receiver data.
+// Generates a item-based transaction using the given sender and receiver data.
 pub fn generate_rb_transactions(
     rb_sender_data: RbSenderData,
     rb_receiver_data: RbReceiverData,
@@ -1477,7 +1477,7 @@ pub fn generate_rb_transactions(
         sender_expected_drs,
     );
 
-    let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
+    let (rb_receive_tx, rb_payment_response) = make_rb_payment_item_tx_and_response(
         rb_payment_request_data,
         (vec![rb_receive_tx_in], vec![TxOut::new()]),
         receiver_half_druid,
@@ -1491,11 +1491,11 @@ pub fn generate_rb_transactions(
     vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
 }
 
-/// Create a `BTreeMap` struct from a vector of (drs_tx_hash, `Receipt` amount)
+/// Create a `BTreeMap` struct from a vector of (drs_tx_hash, `Item` amount)
 ///
 /// ### Arguments
 ///
-/// * `receipts` - A vector of (drs_tx_hash, `Receipt` amount)
-pub fn map_receipts(details: Vec<(String, u64)>) -> BTreeMap<String, u64> {
+/// * `items` - A vector of (drs_tx_hash, `Item` amount)
+pub fn map_items(details: Vec<(String, u64)>) -> BTreeMap<String, u64> {
     details.into_iter().collect()
 }

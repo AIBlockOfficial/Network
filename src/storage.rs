@@ -886,7 +886,7 @@ impl StorageNode {
         Ok(self.shutdown_group.is_empty())
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///

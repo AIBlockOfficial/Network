@@ -1,8 +1,8 @@
 use crate::interfaces::{AddressesWithOutPoints, OutPointData, UtxoSet};
 use crate::utils::{get_pk_with_out_point_cloned, get_pk_with_out_point_from_utxo_set_cloned};
-use naom::primitives::asset::AssetValues;
-use naom::primitives::transaction::{OutPoint, Transaction};
-use naom::utils::transaction_utils::get_tx_out_with_out_point_cloned;
+use a_block_chain::primitives::asset::AssetValues;
+use a_block_chain::primitives::transaction::{OutPoint, Transaction};
+use a_block_chain::utils::transaction_utils::get_tx_out_with_out_point_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
@@ -123,7 +123,7 @@ impl TrackedUtxoSet {
                     let asset = t_out.value.clone().with_fixed_hash(op);
                     address_list
                         .entry(address.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(OutPointData::new(op.clone(), asset.clone()));
                     total.update_add(&asset);
                 }
