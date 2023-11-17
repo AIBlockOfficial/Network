@@ -127,6 +127,7 @@ pub struct CreateTransaction {
     pub inputs: Vec<CreateTxIn>,
     pub outputs: Vec<TxOut>,
     pub version: usize,
+    pub fees: Option<Vec<TxOut>>,
     pub druid_info: Option<DdeValues>,
 }
 /// Struct received from client to change passphrase
@@ -934,6 +935,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         outputs,
         version,
         druid_info,
+        fees,
     } = data;
 
     let inputs = {
@@ -974,6 +976,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         inputs,
         outputs,
         version,
+        fees: fees.unwrap_or_default(),
         druid_info,
     })
 }

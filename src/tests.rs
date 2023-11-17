@@ -3227,6 +3227,7 @@ async fn reject_item_based_payment() {
         1,
         DrsTxHashSpec::Create,
         None,
+        None,
     );
     let tx_hash = construct_tx_hash(&tx);
     create_item_asset_txs.insert(tx_hash.to_owned(), tx);

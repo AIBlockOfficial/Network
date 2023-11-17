@@ -1811,6 +1811,12 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
             drs_block_hash: None,
             locktime: 0,
         }],
+        fees: Some(vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            drs_block_hash: None,
+            locktime: 0,
+        }]),
         version: 1,
         druid_info: None,
     }];
