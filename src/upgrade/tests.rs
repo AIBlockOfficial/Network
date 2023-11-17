@@ -778,6 +778,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                             .to_owned(),
                     ),
                 }],
+                fees: vec![],
                 version: old::constants::NETWORK_VERSION as usize,
                 druid_info: None,
             },

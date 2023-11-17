@@ -16,11 +16,11 @@ use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
 use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::druid::DruidExpectation;
+use a_block_chain::primitives::druid::{DdeValues, DruidExpectation};
 use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
 use a_block_chain::utils::transaction_utils::{
     construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
-    construct_tx_core, construct_tx_ins_address,
+    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
 };
 use async_trait::async_trait;
 use bincode::deserialize;
@@ -1052,7 +1052,7 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
         self.next_payment = Some((peer, payment_tx));
 
         Response {
@@ -1089,7 +1089,7 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
         self.next_payment = Some((None, payment_tx));
 
         Response {
@@ -1500,6 +1500,7 @@ impl UserNode {
             &secret_key,
             item_amount,
             drs_tx_hash_spec,
+            None,
             metadata,
         );
 
@@ -1652,15 +1653,15 @@ pub fn make_rb_payment_item_tx_and_response(
         asset: sender_asset,
     };
 
-    let rb_receive_tx = construct_rb_receive_payment_tx(
-        tx_ins,
-        tx_outs,
-        sender_address,
-        0,
+    let dde_values = DdeValues {
         druid,
-        vec![receiver_druid_expectation],
-        sender_drs_tx_expectation,
-    );
+        participants: 2,
+        expectations: vec![receiver_druid_expectation],
+        drs_tx_hash: None,
+    };
+
+    let rb_receive_tx =
+        construct_rb_receive_payment_tx(tx_ins, tx_outs, None, sender_address, 0, dde_values);
 
     let rb_payment_response = RbPaymentResponseData {
         receiver_address,
@@ -1693,16 +1694,19 @@ pub fn make_rb_payment_send_transaction(
     } = rb_payment_response;
 
     let druid = sender_half_druid + &receiver_half_druid;
-
-    construct_rb_payments_send_tx(
-        tx_ins,
-        tx_outs,
-        receiver_address,
-        sender_asset.token_amount(),
-        0,
+    let druid_values = DdeValues {
         druid,
-        vec![sender_druid_expectation],
-    )
+        participants: 2,
+        expectations: vec![sender_druid_expectation],
+        drs_tx_hash: None,
+    };
+
+    let receiver = ReceiverInfo {
+        address: receiver_address,
+        asset: sender_asset,
+    };
+
+    construct_rb_payments_send_tx(tx_ins, tx_outs, None, receiver, 0, druid_values)
 }
 
 fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {

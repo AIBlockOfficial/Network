@@ -546,6 +546,7 @@ pub mod convert {
             inputs: old.inputs.into_iter().map(convert_txin).collect(),
             outputs: old.outputs.into_iter().map(convert_txout).collect(),
             version: old.version,
+            fees: vec![],
             druid_info: old.druid_info.map(convert_dde_values),
         }
     }
@@ -553,6 +554,7 @@ pub mod convert {
     pub fn convert_dde_values(old: old::a_block_chain::DdeValues) -> DdeValues {
         DdeValues {
             druid: old.druid,
+            drs_tx_hash: None,
             participants: old.participants,
             expectations: old
                 .expectations
