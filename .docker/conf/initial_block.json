@@ -1,0 +1,159 @@
+{
+    "compute_genesis_tx_in_comment": [
+        "/// The TxIn content for genesis block.",
+        "/// A marketing request: A quote from the the Magna Carta document, the 39th claim.",
+        "/// This version was updated to be more inclusive."
+    ],
+    "compute_genesis_tx_in": "+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.",
+    "compute_seed_utxo": {
+        "000000": [
+            {
+                "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                "amount": 2
+            },
+            {
+                "public_key": "4580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a",
+                "amount": 1
+            },
+            {
+                "public_key": "a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51",
+                "amount": 1
+            },
+            {
+                "public_key": "951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5",
+                "amount": 1
+            },
+            {
+                "public_key": "5eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada",
+                "amount": 1
+            }
+        ],
+        "000001": [
+            {
+                "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                "amount": 5
+            }
+        ],
+        "000010": [
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 123
+            }
+        ],
+        "000011": [
+            {
+                "public_key": "9caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
+                "amount": 1234
+            },
+            {
+                "public_key": "25564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
+                "amount": 1235
+            }
+        ]
+    },
+    "user_wallet_seeds": [
+        [
+            {
+                "out_point": "0-000010",
+                "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a123032100c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 123
+            }
+        ],
+        [
+            {
+                "out_point": "0-000011",
+                "secret_key": "3053020101300506032b65700422042005c5098f18eb4a85676c167b89455af63709779e6e4bcddf250f20ec35b510b0a1230321009caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
+                "public_key": "9caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
+                "amount": 1234
+            },
+            {
+                "out_point": "1-000011",
+                "secret_key": "3053020101300506032b6570042204203ec3e9ad312fdaf4ed144e2498c1439c4301c376eb08827f4eb2da360c34b5d7a12303210025564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
+                "public_key": "25564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
+                "amount": 1235
+            }
+        ]
+    ],
+    "user_test_auto_gen_setup": {
+        "user_initial_transactions": [],
+        "_user_initial_transactions": [
+            [
+                {
+                    "out_point": "0-000000",
+                    "secret_key": "3053020101300506032b657004220420e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555a123032100f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+                    "amount": 2
+                },
+                {
+                    "out_point": "0-000001",
+                    "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+                    "amount": 5
+                }
+            ]
+        ]
+    },
+    "generated_keys": [
+        {
+            "secret_key": "3053020101300506032b657004220420e2fa624994ec5c6f46e9a991ed8e8791c4d2ce2d7ed05a827bd45416e5a19555a123032100f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
+            "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5"
+        },
+        {
+            "secret_key": "3053020101300506032b6570042204204484d9dda49dd72ba4b0a68a478111d983a78397f8e6cba348ed06ec41a909dba1230321004580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a",
+            "public_key": "4580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420c81822091474ae24a22922ee3ab87fefb838d59710cf1e5fe9e471bf55caa189a123032100a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51",
+            "public_key": "a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51"
+        },
+        {
+            "secret_key": "3053020101300506032b65700422042068dca829734887fd5ee3c017b754eaf3a864afc04efe269cd7391be3541dcd5aa123032100951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5",
+            "public_key": "951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420ddd7806b4b26648c4187c395c4c1c3467f0d06a2afccebbc499fc74edd255d43a1230321005eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada",
+            "public_key": "5eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada"
+        },
+        {
+            "secret_key": "3053020101300506032b65700422042009784182e825fbd7e53333aa6b5f1d55bc19a992d5cf71253212264825bc89c8a123032100a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
+            "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43"
+        },
+        {
+            "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a123032100c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+            "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8"
+        },
+        {
+            "secret_key": "3053020101300506032b65700422042005c5098f18eb4a85676c167b89455af63709779e6e4bcddf250f20ec35b510b0a1230321009caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
+            "public_key": "9caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a"
+        },
+        {
+            "secret_key": "3053020101300506032b6570042204203ec3e9ad312fdaf4ed144e2498c1439c4301c376eb08827f4eb2da360c34b5d7a12303210025564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
+            "public_key": "25564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420a1523e379f175c6b5843936605a263adefb219f4dbd3db97aeb550cbabcfa4caa12303210069bfaf94b4860503696e05ad10b929a1abbc87fcb0d35d9859d6fdf2fe79af03",
+            "public_key": "69bfaf94b4860503696e05ad10b929a1abbc87fcb0d35d9859d6fdf2fe79af03"
+        },
+        {
+            "secret_key": "3053020101300506032b6570042204201cd87f8d2840351aadcb7e2482f38ab9b8c8c03ef043925f72c9d8c5bd2fc1fca12303210075e9af1934d46102baf1aa78a987771bf993bd3ef334d3677955e9f5efa4edfc",
+            "public_key": "75e9af1934d46102baf1aa78a987771bf993bd3ef334d3677955e9f5efa4edfc"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420bd9c7482a3c8c473449e4cf007c3685bce25402ac33d1e1ac12440a7fb7c4572a123032100560862d7143695202334fae706a93f6bdae04a2962d2cdeb0aeb246c2df511a8",
+            "public_key": "560862d7143695202334fae706a93f6bdae04a2962d2cdeb0aeb246c2df511a8"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420d511613be615e4aeed1b1aa70e315f214c2f8d4dab62c8fe89eb184f19c0f61fa1230321000804814edbdd3d5fc3d1a60a59a81d23f26c2fc502f23943f315629b13714704",
+            "public_key": "0804814edbdd3d5fc3d1a60a59a81d23f26c2fc502f23943f315629b137147"
+        },
+        {
+            "secret_key": "3053020101300506032b657004220420ecaf7af4fee9f4d16b87d358e42f5a7601986cdb30bd635ae90913e86625a318a1230321009ff9f98bb3ddb95ecdd2d4f0b87594b300706135d5755c1a901dfb9b29ec6773",
+            "public_key": "9ff9f98bb3ddb95ecdd2d4f0b87594b300706135d5755c1a901dfb9b29ec6773"
+        },
+        {
+            "secret_key": "3053020101300506032b6570042204205da342cf2fed19d3f398dc07d0490825f57c1e8727258299b31813131cbf260ea123032100ab7fa23583e4949bf34418795ddd724118364ba86d3c70509e6ad819b8945507",
+            "public_key": "ab7fa23583e4949bf34418795ddd724118364ba86d3c70509e6ad819b8945507"
+        }
+    ]
+}

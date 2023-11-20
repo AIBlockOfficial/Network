@@ -577,7 +577,7 @@ fn check_old_includes_new<'a>(
 ///
 /// ### Arguments
 ///
-/// * `db_moode` - Mode for the database.
+/// * `db_mode` - Mode for the database.
 /// * `db_spec`  - Database specification.
 /// * `old_db`   - Old in memory Database to try to open.
 /// * `custom_db_spec` - Custom database specification.
