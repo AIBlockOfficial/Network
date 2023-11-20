@@ -1,4 +1,4 @@
-FROM rust:1.70.0-slim-bullseye AS chef
+FROM rust:1.73.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl
 RUN cargo install cargo-chef 
@@ -17,17 +17,18 @@ COPY . .
 RUN cargo build --release
 
 # Use distroless
-FROM cgr.dev/chainguard/static@sha256:ef5add7fd46cf1ce7d33d6de517833ac5c7e749db9b15249f9c472a772f3af27
+FROM cgr.dev/chainguard/glibc-dynamic:latest
 
 USER nonroot
 
-# Set these in the environment to override
+# Set these in the environment to override [use once we have env vars available]
 ENV NODE_TYPE="compute"
-ENV NODE_SETTINGS="--config=/etc/node_settings.toml"
-ENV TLS_CERTIFICATES="--tls_config=/etc/tls_certificates.json"
-ENV INITIAL_BLOCK_CONFIG="--initial_block_config=/etc/initial_block.json"
-ENV API_CONFIG="--api_config=/etc/api_config.json"
-ENV API_USE_TLS="--api_use_tls=0"
+ENV CONFIG="/etc/node_settings.toml"
+ENV TLS_CONFIG="/etc/tls_certificates.json"
+ENV INITIAL_BLOCK_CONFIG="/etc/initial_block.json"
+ENV API_CONFIG="/etc/api_config.json"
+ENV API_USE_TLS="0"
+ENV COMPUTE_MINER_WHITELIST="/etc/compute_miner_whitelist.json"
 ENV RUST_LOG=info,debug
 
 # Copy node bin
@@ -36,6 +37,6 @@ COPY --from=builder /a-block/release/node ./node
 # Default config for the node
 COPY .docker/conf/* /etc/.
 
-ENTRYPOINT ["node"]
-CMD [NODE_TYPE, NODE_SETTINGS, TLS_CERTIFICATES, INITIAL_BLOCK_CONFIG, API_CONFIG , API_USE_TLS]
+ENTRYPOINT ["./node"]
+CMD ["compute"]
 
