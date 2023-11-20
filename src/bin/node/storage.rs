@@ -122,18 +122,21 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("config")
                 .long("config")
                 .short("c")
+                .env("CONFIG")
                 .help("Run the storage node using the given config file.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_config")
                 .long("tls_config")
+                .env("TLS_CONFIG")
                 .help("Use file to provide tls configuration options.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_config")
                 .long("api_config")
+                .env("API_CONFIG")
                 .help("Use file to provide api configuration options.")
                 .takes_value(true),
         )
@@ -148,20 +151,21 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("api_port")
                 .short("p")
                 .long("api_port")
+                .env("API_PORT")
                 .help("Run the API for the storage node as the specified port")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_use_tls")
                 .long("api_use_tls")
-                .env("ABLOCK_API_USE_TLS")
+                .env("API_USE_TLS")
                 .help("Whether to use TLS for API: 0 to disable")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
-                .env("ABLOCK_TLS_PRIVATE_KEY")
+                .env("TLS_PRIVATE_KEY")
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
