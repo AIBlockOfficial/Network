@@ -43,6 +43,7 @@ use tracing::{trace, warn};
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
 use url::Url;
+use chrono::Utc;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -1239,6 +1240,14 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
         iterations: 2,
         security: 1
     }
+}
+
+/// Get the current timestamp as a string
+pub fn get_timestamp_now() -> String {
+        // Get the current UTC time
+        let now = Utc::now();
+        // Format the timestamp as a string including milliseconds
+        now.format("%Y-%m-%d %H:%M:%S%").to_string()
 }
 
 /// Attempt to send a message to the UI
