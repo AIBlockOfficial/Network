@@ -798,6 +798,7 @@ impl ComputeRaft {
     /// Proposes a timestamp to the raft if this is the first peer.
     pub async fn propose_timestamp(&mut self) {
         if self.first_raft_peer {
+            println!("Proposing timestamp as first peer");
             self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp.clone()))
                 .await;
         }
@@ -1261,6 +1262,8 @@ impl ComputeConsensused {
         let next_block_tx = self.initial_utxo_txs.take().unwrap();
 
         let mut next_block = Block::new();
+
+        println!("next block: {:?}", next_block);
         next_block.transactions = next_block_tx.keys().cloned().collect();
         next_block.set_txs_merkle_root_and_hash().await;
 
