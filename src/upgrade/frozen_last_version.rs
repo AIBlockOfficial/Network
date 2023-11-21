@@ -535,6 +535,7 @@ pub mod convert {
             bits: old.bits,
             nonce_and_mining_tx_hash: old.nonce_and_mining_tx_hash,
             b_num: old.b_num,
+            timestamp: String::default(),
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
             txs_merkle_root_and_hash: old.txs_merkle_root_and_hash,
