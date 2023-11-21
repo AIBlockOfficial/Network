@@ -557,6 +557,10 @@ impl ComputeNode {
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
 
+        println!("");
+        println!("Proposing timestamp next");
+        println!("");
+
         self.node_raft.propose_timestamp().await;
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
