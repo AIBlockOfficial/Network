@@ -239,9 +239,15 @@ impl ComputeRaft {
         if config.backup_restore.unwrap_or(false) {
             db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
         }
+        let raw_node_ips = config
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.address.clone())
+            .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
-            &create_socket_addr_for_list(&config.compute_nodes).unwrap_or_default(),
+            &create_socket_addr_for_list(&raw_node_ips).unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
             db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
@@ -1592,7 +1598,7 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::configurations::{DbMode, TxOutSpec};
+    use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::{create_socket_addr, create_valid_transaction, get_test_common_unicorn};
     use a_block_chain::crypto::sign_ed25519 as sign;
     use a_block_chain::primitives::asset::TokenAmount;
@@ -1893,7 +1899,9 @@ mod test {
             tls_config: Default::default(),
             api_keys: Default::default(),
             compute_unicorn_fixed_param: get_test_common_unicorn(),
-            compute_nodes: vec![compute_node.to_string()],
+            compute_nodes: vec![NodeSpec {
+                address: compute_node.to_string(),
+            }],
             storage_nodes: vec![],
             user_nodes: vec![],
             compute_raft: 0,

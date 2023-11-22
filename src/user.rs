@@ -152,10 +152,12 @@ impl UserNode {
             .compute_nodes
             .get(config.user_compute_node_idx)
             .ok_or(UserError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(raw_compute_addr)
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
             .or_else(|_| Err(UserError::ConfigError("Invalid compute address")))?;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
+
+        let tls_addr = create_socket_addr(&addr).unwrap();
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(tls_addr.ip(), config.user_api_port);
         let api_tls_info = config
             .user_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());

@@ -179,7 +179,7 @@ impl ComputeNode {
             .compute_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
-        let addr = create_socket_addr(raw_addr).or_else(|_| {
+        let addr = create_socket_addr(&raw_addr.address).or_else(|_| {
             Err(ComputeError::ConfigError(
                 "Invalid compute node address in config file",
             ))
@@ -189,7 +189,7 @@ impl ComputeNode {
             .storage_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?;
-        let storage_addr = create_socket_addr(raw_storage_addr).or_else(|_| {
+        let storage_addr = create_socket_addr(&raw_storage_addr.address).or_else(|_| {
             Err(ComputeError::ConfigError(
                 "Invalid storage node address in config file",
             ))

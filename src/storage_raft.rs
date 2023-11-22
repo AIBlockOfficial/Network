@@ -119,9 +119,14 @@ impl StorageRaft {
         if config.backup_restore.unwrap_or(false) {
             db_utils::restore_file_backup(config.storage_db_mode, &DB_SPEC, None).unwrap();
         }
+        let storage_node_urls = config
+            .storage_nodes
+            .iter()
+            .map(|s| s.address.clone())
+            .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
-            &create_socket_addr_for_list(&config.storage_nodes).unwrap_or_default(),
+            &create_socket_addr_for_list(&storage_node_urls).unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db, None),

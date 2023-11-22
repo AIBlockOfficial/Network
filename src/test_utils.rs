@@ -6,7 +6,7 @@ use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsList
 use crate::compute::ComputeNode;
 use crate::compute_raft::MinerWhitelist;
 use crate::configurations::{
-    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, PreLaunchNodeConfig,
+    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
     PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
     WalletTxSpec,
 };
@@ -1035,7 +1035,7 @@ async fn init_miner(
     // Create node
     let node_info = &info.node_infos[name];
     let config = MinerNodeConfig {
-        miner_address: node_info.node_spec,
+        miner_address: node_info.node_spec.to_string(),
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
@@ -1044,7 +1044,9 @@ async fn init_miner(
             .compute_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
             .collect(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
@@ -1089,13 +1091,17 @@ async fn init_storage(
             .compute_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
             .collect(),
         storage_nodes: info
             .storage_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
             .collect(),
         storage_raft,
         storage_api_port: 3001,
@@ -1141,20 +1147,26 @@ async fn init_compute(
             .compute_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
-            .collect(),
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
+            .collect::<Vec<NodeSpec>>(),
         storage_nodes: info
             .storage_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
-            .collect(),
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
+            .collect::<Vec<NodeSpec>>(),
         user_nodes: info
             .user_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
-            .collect(),
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
+            .collect::<Vec<NodeSpec>>(),
         compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_mining_event_timeout: 500 / config.test_duration_divider,
@@ -1207,7 +1219,7 @@ async fn init_user(
     };
 
     let config = UserNodeConfig {
-        user_address: node_info.node_spec,
+        user_address: node_info.node_spec.to_string(),
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
@@ -1216,7 +1228,9 @@ async fn init_user(
             .compute_nodes
             .clone()
             .into_iter()
-            .map(|v| v.to_string())
+            .map(|v| NodeSpec {
+                address: v.to_string(),
+            })
             .collect(),
         user_api_port: 3000,
         user_api_use_tls: true,
