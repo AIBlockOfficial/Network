@@ -146,7 +146,7 @@ impl StorageFetch {
         let storage_nodes = config
             .storage_nodes
             .iter()
-            .map(|s| create_socket_addr(s).unwrap());
+            .map(|s| create_socket_addr(&s.address).unwrap());
         let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
         Self {
             timeout_duration,

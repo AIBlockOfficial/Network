@@ -156,7 +156,7 @@ impl StorageNode {
             .storage_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?;
-        let addr = create_socket_addr(raw_addr).or_else(|_| {
+        let addr = create_socket_addr(&raw_addr.address).or_else(|_| {
             Err(StorageError::ConfigError(
                 "Invalid storage address supplied",
             ))
@@ -166,7 +166,7 @@ impl StorageNode {
             .compute_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(raw_compute_addr).or_else(|_| {
+        let compute_addr = create_socket_addr(&raw_compute_addr.address).or_else(|_| {
             Err(StorageError::ConfigError(
                 "Invalid compute address supplied",
             ))
