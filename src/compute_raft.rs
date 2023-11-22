@@ -13,7 +13,7 @@ use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
     calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
-    UtxoReAlignCheck,
+    UtxoReAlignCheck, create_socket_addr_for_list,
 };
 use a_block_chain::crypto::sha3_256;
 use a_block_chain::primitives::asset::TokenAmount;
@@ -241,7 +241,7 @@ impl ComputeRaft {
         }
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
-            &config.compute_nodes,
+            &create_socket_addr_for_list(&config.compute_nodes).unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
             db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
@@ -1592,8 +1592,8 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
-    use crate::utils::{create_valid_transaction, get_test_common_unicorn};
+    use crate::configurations::{DbMode, TxOutSpec};
+    use crate::utils::{create_valid_transaction, get_test_common_unicorn, create_socket_addr};
     use a_block_chain::crypto::sign_ed25519 as sign;
     use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
@@ -1881,9 +1881,7 @@ mod test {
     }
 
     async fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
-        let compute_node = NodeSpec {
-            address: "0.0.0.0:0".parse().unwrap(),
-        };
+        let compute_node = create_socket_addr("0.0.0.0").unwrap();
         let tx_out = TxOutSpec {
             public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
                 .to_owned(),
@@ -1895,7 +1893,7 @@ mod test {
             tls_config: Default::default(),
             api_keys: Default::default(),
             compute_unicorn_fixed_param: get_test_common_unicorn(),
-            compute_nodes: vec![compute_node],
+            compute_nodes: vec![compute_node.to_string()],
             storage_nodes: vec![],
             user_nodes: vec![],
             compute_raft: 0,

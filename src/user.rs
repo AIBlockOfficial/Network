@@ -10,7 +10,7 @@ use crate::transactor::Transactor;
 use crate::utils::{
     generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
     try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RoutesPoWInfo,
+    RoutesPoWInfo, create_socket_addr,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
@@ -148,11 +148,13 @@ impl UserNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config.user_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.user_compute_node_idx)
-            .ok_or(UserError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(UserError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(raw_compute_addr).or_else(|_| {
+            Err(UserError::ConfigError("Invalid compute address"))
+        })?;
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
         let api_tls_info = config

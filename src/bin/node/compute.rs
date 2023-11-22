@@ -283,6 +283,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 }
 
 fn configuration(settings: config::Config) -> ComputeNodeConfig {
+    println!("Settings: {:#?}", settings.cache.kind);
     settings.try_into().unwrap()
 }
 

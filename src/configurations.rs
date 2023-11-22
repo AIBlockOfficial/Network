@@ -9,12 +9,6 @@ use std::net::SocketAddr;
 
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
 
-/// Configuration info for a node
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct NodeSpec {
-    pub address: SocketAddr,
-}
-
 /// Configuration info for TLS
 #[derive(Default, Clone, Deserialize)]
 pub struct TlsSpec {
@@ -109,11 +103,11 @@ pub struct ComputeNodeConfig {
     /// Configuation for unicorn
     pub compute_unicorn_fixed_param: UnicornFixedInfo,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<std::string::String>,
     /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
+    pub storage_nodes: Vec<std::string::String>,
     /// All user nodes addresses
-    pub user_nodes: Vec<NodeSpec>,
+    pub user_nodes: Vec<std::string::String>,
     /// Whether compute node will use raft or act independently (0)
     pub compute_raft: usize,
     /// API port
@@ -177,9 +171,9 @@ pub struct StorageNodeConfig {
     /// Initial API keys
     pub api_keys: BTreeMap<String, Vec<String>>,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<String>,
     /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
+    pub storage_nodes: Vec<String>,
     /// Whether storage node will use raft or act independently (0)
     pub storage_raft: usize,
     /// API port
@@ -214,7 +208,7 @@ pub struct MinerNodeConfig {
     /// Index of the compute node to use in compute_nodes
     pub miner_compute_node_idx: usize,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<String>,
     /// API port
     pub miner_api_port: u16,
     /// API use TLS
@@ -249,7 +243,7 @@ pub struct UserNodeConfig {
     /// Index of the compute node to use in compute_nodes
     pub user_compute_node_idx: usize,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<String>,
     /// API port
     pub user_api_port: u16,
     /// API use TLS
@@ -287,9 +281,9 @@ pub struct PreLaunchNodeConfig {
     /// Use specific database
     pub storage_db_mode: DbMode,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<String>,
     /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
+    pub storage_nodes: Vec<String>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
 }
