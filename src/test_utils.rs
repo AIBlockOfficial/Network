@@ -6,7 +6,7 @@ use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsList
 use crate::compute::ComputeNode;
 use crate::compute_raft::MinerWhitelist;
 use crate::configurations::{
-    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
+    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, PreLaunchNodeConfig,
     PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
     WalletTxSpec,
 };
@@ -26,7 +26,7 @@ use crate::user::{
 use crate::utils::{
     concat_maps, decode_pub_key, decode_secret_key, get_test_common_unicorn,
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
-    LocalEventSender, ResponseResult, StringError,
+    LocalEventSender, ResponseResult, StringError
 };
 use a_block_chain::crypto::sign_ed25519 as sign;
 use a_block_chain::primitives::asset::{Asset, TokenAmount};
@@ -104,7 +104,7 @@ pub struct NetworkConfig {
 /// Node info to create node
 #[derive(Clone)]
 pub struct NetworkNodeInfo {
-    pub node_spec: NodeSpec,
+    pub node_spec: SocketAddr,
     pub node_type: NodeType,
     pub db_mode: DbMode,
     pub index: usize,
@@ -114,10 +114,10 @@ pub struct NetworkNodeInfo {
 pub struct NetworkInstanceInfo {
     pub node_infos: BTreeMap<String, NetworkNodeInfo>,
     pub socket_name_mapping: BTreeMap<SocketAddr, String>,
-    pub miner_nodes: Vec<NodeSpec>,
-    pub compute_nodes: Vec<NodeSpec>,
-    pub storage_nodes: Vec<NodeSpec>,
-    pub user_nodes: Vec<NodeSpec>,
+    pub miner_nodes: Vec<SocketAddr>,
+    pub compute_nodes: Vec<SocketAddr>,
+    pub storage_nodes: Vec<SocketAddr>,
+    pub user_nodes: Vec<SocketAddr>,
 }
 
 #[derive(Clone, Default)]
@@ -360,7 +360,7 @@ impl Network {
         let dead_addr: BTreeSet<_> = self
             .dead_nodes
             .iter()
-            .map(|n| self.instance_info.node_infos[n].node_spec.address)
+            .map(|n| self.instance_info.node_infos[n].node_spec)
             .collect();
         connect_all_nodes(&self.arc_nodes, &dead_addr).await;
     }
@@ -770,7 +770,7 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         .collect();
     let socket_name_mapping: BTreeMap<_, _> = node_infos
         .iter()
-        .map(|(name, info)| (info.node_spec.address, get_test_tls_name(name, tls_config)))
+        .map(|(name, info)| (info.node_spec, get_test_tls_name(name, tls_config)))
         .collect();
 
     let mut nodes: BTreeMap<_, _> = nodes.into_iter().map(|(k, (_, v))| (k, v)).collect();
@@ -787,7 +787,7 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
 ///Return the infos necessary to initialize the node.
 fn node_infos(
     node_type: NodeType,
-    (node_names, node_specs): &(&Vec<String>, Vec<NodeSpec>),
+    (node_names, node_specs): &(&Vec<String>, Vec<SocketAddr>),
     in_memory_db: bool,
 ) -> BTreeMap<String, NetworkNodeInfo> {
     node_names
@@ -803,7 +803,7 @@ fn node_infos(
                     db_mode: if in_memory_db {
                         DbMode::InMemory
                     } else {
-                        DbMode::Test(node_spec.address.port() as usize)
+                        DbMode::Test(node_spec.port() as usize)
                     },
                     index,
                 },
@@ -813,13 +813,11 @@ fn node_infos(
 }
 
 ///Returns a u16, of the initial_port and node length, and a Vec of node specs
-fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<NodeSpec>) {
+fn node_specs(ip: IpAddr, initial_port: u16, node_len: usize) -> (u16, Vec<SocketAddr>) {
     (
         initial_port + node_len as u16,
         (0..node_len)
-            .map(|idx| NodeSpec {
-                address: SocketAddr::new(ip, initial_port + idx as u16),
-            })
+            .map(|idx| SocketAddr::new(ip, initial_port + idx as u16))
             .collect(),
     )
 }
@@ -1037,12 +1035,12 @@ async fn init_miner(
     // Create node
     let node_info = &info.node_infos[name];
     let config = MinerNodeConfig {
-        miner_address: node_info.node_spec.address,
+        miner_address: node_info.node_spec,
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         miner_compute_node_idx,
-        compute_nodes: info.compute_nodes.clone(),
+        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
@@ -1053,7 +1051,7 @@ async fn init_miner(
         mining_api_key: config.mining_api_key.clone(),
         peer_limit: config.peer_limit,
     };
-    let info_str = format!("{} -> {}", name, node_info.node_spec.address);
+    let info_str = format!("{} -> {}", name, node_info.node_spec);
     info!("New Miner {}", info_str);
     Arc::new(Mutex::new(
         MinerNode::new(config, extra).await.expect(&info_str),
@@ -1082,8 +1080,8 @@ async fn init_storage(
         storage_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
+        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
         storage_raft,
         storage_api_port: 3001,
         storage_api_use_tls: true,
@@ -1094,7 +1092,7 @@ async fn init_storage(
         backup_restore: config.backup_restore,
         peer_limit: config.peer_limit,
     };
-    let info = format!("{} -> {}", name, node_info.node_spec.address);
+    let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Storage {}", info);
     Arc::new(Mutex::new(
         StorageNode::new(config, extra).await.expect(&info),
@@ -1124,9 +1122,9 @@ async fn init_compute(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         compute_unicorn_fixed_param: get_test_common_unicorn(),
-        compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
-        user_nodes: info.user_nodes.clone(),
+        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        user_nodes: info.user_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
         compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_mining_event_timeout: 500 / config.test_duration_divider,
@@ -1147,7 +1145,7 @@ async fn init_compute(
         compute_miner_whitelist: config.compute_miner_whitelist.clone(),
         peer_limit: config.peer_limit,
     };
-    let info = format!("{} -> {}", name, node_info.node_spec.address);
+    let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Compute {}", info);
     Arc::new(Mutex::new(
         ComputeNode::new(config, extra).await.expect(&info),
@@ -1179,12 +1177,12 @@ async fn init_user(
     };
 
     let config = UserNodeConfig {
-        user_address: node_info.node_spec.address,
+        user_address: node_info.node_spec,
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         user_compute_node_idx: 0,
-        compute_nodes: info.compute_nodes.clone(),
+        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
         user_api_port: 3000,
         user_api_use_tls: true,
         user_wallet_seeds,
@@ -1196,7 +1194,7 @@ async fn init_user(
         peer_limit: config.peer_limit,
     };
 
-    let info = format!("{} -> {}", name, node_info.node_spec.address);
+    let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New User {}", info);
     Arc::new(Mutex::new(UserNode::new(config, extra).await.expect(&info)))
 }
@@ -1229,12 +1227,12 @@ async fn init_pre_launch(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
-        compute_nodes: info.compute_nodes.clone(),
-        storage_nodes: info.storage_nodes.clone(),
+        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
         peer_limit: config.peer_limit,
     };
 
-    let info = format!("{} -> {}", name, node_info.node_spec.address);
+    let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New PreLaunch {}", info);
     Arc::new(Mutex::new(
         PreLaunchNode::new(config, extra).await.expect(&info),
@@ -1250,7 +1248,7 @@ pub fn remove_all_node_dbs(config: &NetworkConfig) {
 /// Remove all db for the given instance info
 pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
     for node in info.node_infos.values() {
-        let port = node.node_spec.address.port();
+        let port = node.node_spec.port();
         use NodeType::*;
         let db_paths = match node.node_type {
             Miner | User => {

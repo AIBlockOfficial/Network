@@ -15,7 +15,7 @@ use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
     construct_valid_block_pow_hash, get_genesis_tx_in_display, to_api_keys, to_route_pow_infos,
-    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
+    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo, create_socket_addr,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -151,17 +151,22 @@ impl StorageNode {
     /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: StorageNodeConfig, mut extra: ExtraNodeParams) -> Result<StorageNode> {
-        let addr = config
+        let raw_addr = config
             .storage_nodes
             .get(config.storage_node_idx)
-            .ok_or(StorageError::ConfigError("Invalid storage index"))?
-            .address;
+            .ok_or(StorageError::ConfigError("Invalid storage index"))?;
+        let addr = create_socket_addr(raw_addr).or_else(|_| {
+            Err(StorageError::ConfigError("Invalid storage address supplied"))
+        })?;
 
-        let compute_addr = config
+
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.storage_node_idx)
-            .ok_or(StorageError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(StorageError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(raw_compute_addr).or_else(|_| {
+            Err(StorageError::ConfigError("Invalid compute address supplied"))
+        })?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);

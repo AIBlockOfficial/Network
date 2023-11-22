@@ -11,7 +11,7 @@ use crate::utils::{
     generate_pow_for_block, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo,
     to_api_keys, to_route_pow_infos, try_send_to_ui, ApiKeys, DeserializedBlockchainItem,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
-    RunningTaskOrResult,
+    RunningTaskOrResult, create_socket_addr,
 };
 use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
 use crate::{db_utils, Node};
@@ -176,11 +176,13 @@ impl MinerNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config.miner_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.miner_compute_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(MinerError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(raw_compute_addr).or_else(|_| {
+            Err(MinerError::ConfigError("Invalid compute node address in config file"))
+        })?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {

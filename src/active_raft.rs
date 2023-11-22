@@ -1,4 +1,3 @@
-use crate::configurations::NodeSpec;
 use crate::db_utils::{SimpleDb, SimpleDbError};
 use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
@@ -39,7 +38,7 @@ impl ActiveRaft {
     /// Create ActiveRaft, need to spawn the raft loop to use raft.
     pub fn new(
         node_idx: usize,
-        node_specs: &[NodeSpec],
+        node_specs: &[SocketAddr],
         use_raft: bool,
         tick_timeout_duration: Duration,
         raft_db: SimpleDb,
@@ -50,7 +49,7 @@ impl ActiveRaft {
         let peer_addr_vec: Vec<(u64, SocketAddr)> = peers
             .iter()
             .zip(node_specs.iter())
-            .map(|(idx, spec)| (*idx, spec.address))
+            .map(|(idx, spec)| (*idx, spec.clone()))
             .filter(|(idx, _)| use_raft || *idx == peer_id)
             .collect();
 
