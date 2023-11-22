@@ -32,16 +32,16 @@ use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::net::{SocketAddr, IpAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
-use url::Url;
-use trust_dns_resolver::Resolver;
-use trust_dns_resolver::config::*;
 use tracing::{trace, warn};
+use trust_dns_resolver::config::*;
+use trust_dns_resolver::Resolver;
+use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -466,9 +466,9 @@ pub fn generate_random_num(len: usize) -> Vec<u8> {
 }
 
 /// Parses a URL string and performs DNS resolution for cases where the passed URL is a domain name
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `url_str`    - URL string to parse
 pub fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
     if let Ok(url) = Url::parse(url_str) {
@@ -492,12 +492,18 @@ pub fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::erro
         // Handle as direct IP address with optional port
         let parts: Vec<&str> = url_str.split(':').collect();
         let ip = parts[0].parse::<IpAddr>()?;
-        let port = if parts.len() > 1 { parts[1].parse::<u16>()? } else { 80 };
+        let port = if parts.len() > 1 {
+            parts[1].parse::<u16>()?
+        } else {
+            80
+        };
         Ok(SocketAddr::new(ip, port))
     }
 }
 
-pub fn create_socket_addr_for_list(urls: &[String]) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
+pub fn create_socket_addr_for_list(
+    urls: &[String],
+) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
     let mut result = Vec::new();
     for url in urls {
         result.push(create_socket_addr(url)?);
@@ -1222,7 +1228,6 @@ pub mod rug_integer {
     }
 }
 
-
 /*---- TESTS ----*/
 
 #[cfg(test)]
@@ -1231,8 +1236,8 @@ mod util_tests {
     use std::net::Ipv4Addr;
 
     #[test]
-    /// Tests whether URL strings can be parsed successfully. 
-    /// Testing DNS resolution is not possible in unit tests due to the lack of static IPs to test against, 
+    /// Tests whether URL strings can be parsed successfully.
+    /// Testing DNS resolution is not possible in unit tests due to the lack of static IPs to test against,
     /// so if you have any, please add them here
     fn test_create_socket_addr() {
         let ip_raw = "0.0.0.0".to_string();
@@ -1241,7 +1246,10 @@ mod util_tests {
         let ip_addr = create_socket_addr(&ip_raw).unwrap();
         let ip_with_port_addr = create_socket_addr(&ip_with_port).unwrap();
 
-        assert_eq!(ip_addr, SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 80));
+        assert_eq!(
+            ip_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 80)
+        );
         assert_eq!(
             ip_with_port_addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12300)

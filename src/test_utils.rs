@@ -26,7 +26,7 @@ use crate::user::{
 use crate::utils::{
     concat_maps, decode_pub_key, decode_secret_key, get_test_common_unicorn,
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
-    LocalEventSender, ResponseResult, StringError
+    LocalEventSender, ResponseResult, StringError,
 };
 use a_block_chain::crypto::sign_ed25519 as sign;
 use a_block_chain::primitives::asset::{Asset, TokenAmount};
@@ -1040,7 +1040,12 @@ async fn init_miner(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         miner_compute_node_idx,
-        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        compute_nodes: info
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
         passphrase: config.passphrase.clone(),
         miner_api_port: 3004,
         miner_api_use_tls: true,
@@ -1080,8 +1085,18 @@ async fn init_storage(
         storage_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
-        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        compute_nodes: info
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
+        storage_nodes: info
+            .storage_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
         storage_raft,
         storage_api_port: 3001,
         storage_api_use_tls: true,
@@ -1122,9 +1137,24 @@ async fn init_compute(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         compute_unicorn_fixed_param: get_test_common_unicorn(),
-        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
-        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
-        user_nodes: info.user_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        compute_nodes: info
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
+        storage_nodes: info
+            .storage_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
+        user_nodes: info
+            .user_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
         compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_mining_event_timeout: 500 / config.test_duration_divider,
@@ -1182,7 +1212,12 @@ async fn init_user(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
         user_compute_node_idx: 0,
-        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        compute_nodes: info
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
         user_api_port: 3000,
         user_api_use_tls: true,
         user_wallet_seeds,
@@ -1227,8 +1262,18 @@ async fn init_pre_launch(
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
-        compute_nodes: info.compute_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
-        storage_nodes: info.storage_nodes.clone().into_iter().map(|v| v.to_string()).collect(),
+        compute_nodes: info
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
+        storage_nodes: info
+            .storage_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect(),
         peer_limit: config.peer_limit,
     };
 

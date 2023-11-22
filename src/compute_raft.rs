@@ -12,8 +12,8 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
-    UtxoReAlignCheck, create_socket_addr_for_list,
+    calculate_reward, create_socket_addr_for_list, get_total_coinbase_tokens,
+    make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
 use a_block_chain::crypto::sha3_256;
 use a_block_chain::primitives::asset::TokenAmount;
@@ -1593,7 +1593,7 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 mod test {
     use super::*;
     use crate::configurations::{DbMode, TxOutSpec};
-    use crate::utils::{create_valid_transaction, get_test_common_unicorn, create_socket_addr};
+    use crate::utils::{create_socket_addr, create_valid_transaction, get_test_common_unicorn};
     use a_block_chain::crypto::sign_ed25519 as sign;
     use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
