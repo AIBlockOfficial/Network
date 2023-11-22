@@ -7,11 +7,11 @@ use crate::interfaces::{
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
 use crate::utils::{
-    self, apply_mining_tx, construct_coinbase_tx, format_parition_pow_address,
+    self, apply_mining_tx, construct_coinbase_tx, create_socket_addr, format_parition_pow_address,
     generate_pow_for_block, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo,
     to_api_keys, to_route_pow_infos, try_send_to_ui, ApiKeys, DeserializedBlockchainItem,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
-    RunningTaskOrResult, create_socket_addr,
+    RunningTaskOrResult,
 };
 use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
 use crate::{db_utils, Node};
@@ -181,7 +181,9 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?;
         let compute_addr = create_socket_addr(raw_compute_addr).or_else(|_| {
-            Err(MinerError::ConfigError("Invalid compute node address in config file"))
+            Err(MinerError::ConfigError(
+                "Invalid compute node address in config file",
+            ))
         })?;
 
         // Restore old keys if backup is present

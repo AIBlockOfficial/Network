@@ -143,7 +143,10 @@ impl StorageFetch {
     /// Initialize with database info
     pub fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
         let timeout_duration = Duration::from_millis(config.storage_catchup_duration as u64);
-        let storage_nodes = config.storage_nodes.iter().map(|s| create_socket_addr(s).unwrap());
+        let storage_nodes = config
+            .storage_nodes
+            .iter()
+            .map(|s| create_socket_addr(s).unwrap());
         let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
         Self {
             timeout_duration,

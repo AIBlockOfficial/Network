@@ -5,7 +5,7 @@ use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
-use crate::utils::{BackupCheck, create_socket_addr_for_list};
+use crate::utils::{create_socket_addr_for_list, BackupCheck};
 use a_block_chain::crypto::sha3_256;
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
