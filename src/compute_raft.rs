@@ -1903,7 +1903,7 @@ mod test {
                 address: compute_node.to_string(),
             }],
             storage_nodes: vec![],
-            user_nodes: vec![],
+            user_nodes: Some(vec![]),
             compute_raft: 0,
             compute_raft_tick_timeout: 10,
             compute_mining_event_timeout: 500,

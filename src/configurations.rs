@@ -114,7 +114,7 @@ pub struct ComputeNodeConfig {
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
-    pub user_nodes: Vec<NodeSpec>,
+    pub user_nodes: Option<Vec<NodeSpec>>,
     /// Whether compute node will use raft or act independently (0)
     pub compute_raft: usize,
     /// API port
