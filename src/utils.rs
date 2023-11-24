@@ -35,12 +35,13 @@ use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::Resolver;
+use trust_dns_resolver::TokioAsyncResolver;
 use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
@@ -470,43 +471,73 @@ pub fn generate_random_num(len: usize) -> Vec<u8> {
 /// ### Arguments
 ///
 /// * `url_str`    - URL string to parse
-pub fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-    if let Ok(url) = Url::parse(url_str) {
-        println!("url: {:?}", url);
-        let host_str = url.host_str().ok_or("Invalid host")?;
-        println!("host_str: {:?}", host_str);
-        let port = url.port().unwrap_or(80);
+pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+    let thread_url = url_str.to_owned();
+    let handle = tokio::task::spawn_blocking(move || {
+        if let Ok(url) = Url::parse(&thread_url.clone()) {
+            // println!("url: {:?}", url);
+            let host_str = match url.host_str() {
+                Some(v) => v,
+                None => return None,
+            };
+            // println!("host_str: {:?}", host_str);
+            let port = url.port().unwrap_or(80);
 
-        // Check if the host is an IP address
-        if let Ok(ip) = host_str.parse::<IpAddr>() {
-            // Handle as direct IP address
-            Ok(SocketAddr::new(ip, port))
+            // Check if the host is an IP address
+            if let Ok(ip) = host_str.parse::<IpAddr>() {
+                // Handle as direct IP address
+                Some(SocketAddr::new(ip, port))
+            } else {
+                let io_loop = Runtime::new().unwrap();
+
+                // Handle as domain name
+                let resolver = io_loop.block_on(async {
+                    TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default())
+                });
+
+                let lookup_future = resolver.lookup_ip(host_str);
+                let response = io_loop.block_on(lookup_future).unwrap();
+                let ip = match response.iter().next() {
+                    Some(ip) => ip,
+                    None => return None,
+                };
+                Some(SocketAddr::new(ip, port))
+            }
         } else {
-            // Handle as domain name
-            let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default())?;
-            let response = resolver.lookup_ip(host_str)?;
-            let ip = response.iter().next().ok_or("No IP addresses found")?;
-            Ok(SocketAddr::new(ip, port))
+            // Handle as direct IP address with optional port
+            let parts: Vec<&str> = thread_url.split(':').collect();
+            let ip = match parts[0].parse::<IpAddr>() {
+                Ok(ip) => ip,
+                Err(_e) => return None,
+            };
+            let port = if parts.len() > 1 {
+                match parts[1].parse::<u16>() {
+                    Ok(port) => port,
+                    Err(_e) => return None,
+                }
+            } else {
+                80
+            };
+            Some(SocketAddr::new(ip, port))
         }
-    } else {
-        // Handle as direct IP address with optional port
-        let parts: Vec<&str> = url_str.split(':').collect();
-        let ip = parts[0].parse::<IpAddr>()?;
-        let port = if parts.len() > 1 {
-            parts[1].parse::<u16>()?
-        } else {
-            80
-        };
-        Ok(SocketAddr::new(ip, port))
+    });
+
+    match handle.await {
+        Ok(v) => match v {
+            Some(v) => Ok(v),
+            None => Err("Failed to parse URL".into()),
+        },
+        Err(_e) => Err("Failed to parse URL".into()),
     }
 }
 
-pub fn create_socket_addr_for_list(
+pub async fn create_socket_addr_for_list(
     urls: &[String],
 ) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
     let mut result = Vec::new();
     for url in urls {
-        result.push(create_socket_addr(url)?);
+        let socket_addr = create_socket_addr(url).await?;
+        result.push(socket_addr);
     }
     Ok(result)
 }
@@ -1235,16 +1266,16 @@ mod util_tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    #[test]
+    #[tokio::test]
     /// Tests whether URL strings can be parsed successfully.
     /// Testing DNS resolution is not possible in unit tests due to the lack of static IPs to test against,
     /// so if you have any, please add them here
-    fn test_create_socket_addr() {
+    async fn test_create_socket_addr() {
         let ip_raw = "0.0.0.0".to_string();
         let ip_with_port = "0.0.0.0:12300".to_string();
 
-        let ip_addr = create_socket_addr(&ip_raw).unwrap();
-        let ip_with_port_addr = create_socket_addr(&ip_with_port).unwrap();
+        let ip_addr = create_socket_addr(&ip_raw).await.unwrap();
+        let ip_with_port_addr = create_socket_addr(&ip_with_port).await.unwrap();
 
         assert_eq!(
             ip_addr,

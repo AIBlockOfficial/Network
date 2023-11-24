@@ -113,7 +113,7 @@ impl StorageRaft {
     ///
     /// * `config`  - Configuration option for a storage node.
     /// * `raft_db` - Override raft db to use.
-    pub fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
+    pub async fn new(config: &StorageNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.storage_raft != 0;
 
         if config.backup_restore.unwrap_or(false) {
@@ -126,7 +126,7 @@ impl StorageRaft {
             .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
             config.storage_node_idx,
-            &create_socket_addr_for_list(&storage_node_urls).unwrap_or_default(),
+            &create_socket_addr_for_list(&storage_node_urls).await.unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.storage_raft_tick_timeout as u64),
             db_utils::new_db(config.storage_db_mode, &DB_SPEC, raft_db, None),
