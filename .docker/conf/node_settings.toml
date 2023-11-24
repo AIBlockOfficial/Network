@@ -28,16 +28,13 @@ user_setup_tx_max_count = 100000
 
 #first node is leader
 [[compute_nodes]]
-address = "http://127.0.0.1:12300"
+address = "http://localhost:12300"
 
 [[storage_nodes]]
-address = "http://127.0.0.1:12330"
+address = "http://localhost:12330"
 
 [[miner_nodes]]
-address = "http://127.0.0.1:12340"
+address = "http://localhost:12340"
 
 [[user_nodes]]
-address = "http://127.0.0.1:12360"
-
-[[user_nodes]]
-address = "http://127.0.0.1:12361"
+address = "http://localhost:12360"
