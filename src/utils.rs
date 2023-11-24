@@ -1267,15 +1267,17 @@ mod util_tests {
     use std::net::Ipv4Addr;
 
     #[tokio::test]
-    /// Tests whether URL strings can be parsed successfully.
-    /// Testing DNS resolution is not possible in unit tests due to the lack of static IPs to test against,
-    /// so if you have any, please add them here
+    /// Tests whether URL strings can be parsed successfully
     async fn test_create_socket_addr() {
         let ip_raw = "0.0.0.0".to_string();
         let ip_with_port = "0.0.0.0:12300".to_string();
+        let domain = "http://localhost".to_string();
+        let domain_with_port = "http://localhost:12300".to_string();
 
         let ip_addr = create_socket_addr(&ip_raw).await.unwrap();
         let ip_with_port_addr = create_socket_addr(&ip_with_port).await.unwrap();
+        let domain_addr = create_socket_addr(&domain).await.unwrap();
+        let domain_with_port_addr = create_socket_addr(&domain_with_port).await.unwrap();
 
         assert_eq!(
             ip_addr,
@@ -1284,6 +1286,16 @@ mod util_tests {
         assert_eq!(
             ip_with_port_addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12300)
+        );
+
+        assert_eq!(
+            domain_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 80)
+        );
+
+        assert_eq!(
+            domain_with_port_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
         );
     }
 }
