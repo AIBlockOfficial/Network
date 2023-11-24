@@ -156,7 +156,7 @@ impl StorageNode {
             .storage_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?;
-        let addr = create_socket_addr(&raw_addr.address).or_else(|_| {
+        let addr = create_socket_addr(&raw_addr.address).await.or_else(|_| {
             Err(StorageError::ConfigError(
                 "Invalid storage address supplied",
             ))
@@ -166,7 +166,7 @@ impl StorageNode {
             .compute_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address).or_else(|_| {
+        let compute_addr = create_socket_addr(&raw_compute_addr.address).await.or_else(|_| {
             Err(StorageError::ConfigError(
                 "Invalid compute address supplied",
             ))
@@ -180,8 +180,8 @@ impl StorageNode {
         let api_keys = to_api_keys(config.api_keys.clone());
 
         let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Storage, false).await?;
-        let node_raft = StorageRaft::new(&config, extra.raft_db.take());
-        let catchup_fetch = StorageFetch::new(&config, addr);
+        let node_raft = StorageRaft::new(&config, extra.raft_db.take()).await;
+        let catchup_fetch = StorageFetch::new(&config, addr).await;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         if config.backup_restore.unwrap_or(false) {

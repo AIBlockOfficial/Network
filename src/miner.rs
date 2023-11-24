@@ -180,7 +180,7 @@ impl MinerNode {
             .compute_nodes
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address).or_else(|_| {
+        let compute_addr = create_socket_addr(&raw_compute_addr.address).await.or_else(|_| {
             Err(MinerError::ConfigError(
                 "Invalid compute node address in config file",
             ))
@@ -198,7 +198,7 @@ impl MinerNode {
             extra.custom_wallet_spec,
         )?;
         let disable_tcp_listener = extra.disable_tcp_listener;
-        let tls_addr = create_socket_addr(&addr).unwrap();
+        let tls_addr = create_socket_addr(&addr).await.unwrap();
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(tls_addr.ip(), config.miner_api_port);
         let api_tls_info = config

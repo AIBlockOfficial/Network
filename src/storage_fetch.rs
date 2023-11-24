@@ -139,15 +139,26 @@ pub struct StorageFetch {
     to_receive: Option<FetchReceive>,
 }
 
+
+
 impl StorageFetch {
     /// Initialize with database info
-    pub fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
+    pub async fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
         let timeout_duration = Duration::from_millis(config.storage_catchup_duration as u64);
-        let storage_nodes = config
+        let storage_nodes_filtered = config
             .storage_nodes
             .iter()
-            .map(|s| create_socket_addr(&s.address).unwrap());
-        let storage_nodes = storage_nodes.filter(|a| a != &addr).collect();
+            .filter(|v| v.address.clone() != addr.to_string());
+        
+        let mut storage_nodes = Vec::new();
+
+        for node in storage_nodes_filtered {
+            let socket_addr = create_socket_addr(&node.address);
+            if let Ok(socket) = socket_addr.await {
+                storage_nodes.push(socket);
+            }
+        }
+
         Self {
             timeout_duration,
             storage_nodes,

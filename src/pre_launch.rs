@@ -86,14 +86,14 @@ struct PreLaunchNodeConfigSelected {
 }
 
 impl PreLaunchNodeConfigSelected {
-    fn new(config: PreLaunchNodeConfig) -> Self {
+    async fn new(config: PreLaunchNodeConfig) -> Self {
         match config.node_type {
             PreLaunchNodeType::Compute => Self {
                 pre_launch_node_idx: config.compute_node_idx,
                 pre_launch_db_mode: config.compute_db_mode,
                 tls_config: config.tls_config,
                 pre_launch_nodes: create_socket_addr_for_list(&config.compute_nodes)
-                    .unwrap_or_default(),
+                    .await.unwrap_or_default(),
                 db_spec: crate::compute::DB_SPEC,
                 raft_db_spec: crate::compute_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
@@ -103,7 +103,7 @@ impl PreLaunchNodeConfigSelected {
                 pre_launch_db_mode: config.storage_db_mode,
                 tls_config: config.tls_config,
                 pre_launch_nodes: create_socket_addr_for_list(&config.storage_nodes)
-                    .unwrap_or_default(),
+                    .await.unwrap_or_default(),
                 db_spec: crate::storage::DB_SPEC,
                 raft_db_spec: crate::storage_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
@@ -135,7 +135,7 @@ impl PreLaunchNode {
         config: PreLaunchNodeConfig,
         mut extra: ExtraNodeParams,
     ) -> Result<PreLaunchNode> {
-        let config = PreLaunchNodeConfigSelected::new(config);
+        let config = PreLaunchNodeConfigSelected::new(config).await;
         let addr = config
             .pre_launch_nodes
             .get(config.pre_launch_node_idx)
