@@ -830,12 +830,12 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -866,13 +866,13 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
-    .or(transactions_by_key(
-        dp,
-        db.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(transactions_by_key(
+    //     dp,
+    //     db.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(latest_block(
         dp,
         db.clone(),
@@ -887,19 +887,19 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(blocks_by_tx_hashes(
-        dp,
-        db,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(blocks_by_tx_hashes(
+    //     dp,
+    //     db,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -946,47 +946,47 @@ pub fn compute_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(utxo_addresses(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(pause_nodes(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(resume_nodes(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(update_shared_config(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(get_shared_config(
-        dp,
-        threaded_calls,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(utxo_addresses(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(pause_nodes(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(resume_nodes(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(update_shared_config(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(get_shared_config(
+    //     dp,
+    //     threaded_calls,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1053,12 +1053,12 @@ pub fn miner_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1099,21 +1099,21 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(make_ip_payment(
-        dp,
-        db.clone(),
-        user_node.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(request_donation(
-        dp,
-        user_node.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(make_ip_payment(
+    //     dp,
+    //     db.clone(),
+    //     user_node.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(request_donation(
+    //     dp,
+    //     user_node.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(export_keypairs(
         dp,
         db.clone(),
@@ -1163,12 +1163,12 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         miner_node,
