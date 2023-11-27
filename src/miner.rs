@@ -7,7 +7,7 @@ use crate::interfaces::{
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
 use crate::utils::{
-    self, apply_mining_tx, construct_coinbase_tx, format_parition_pow_address,
+    self, apply_mining_tx, construct_coinbase_tx, create_socket_addr, format_parition_pow_address,
     generate_pow_for_block, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo,
     to_api_keys, to_route_pow_infos, try_send_to_ui, ApiKeys, DeserializedBlockchainItem,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
@@ -176,11 +176,15 @@ impl MinerNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config.miner_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.miner_compute_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(MinerError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address).await.or_else(|_| {
+            Err(MinerError::ConfigError(
+                "Invalid compute node address in config file",
+            ))
+        })?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {
@@ -194,8 +198,9 @@ impl MinerNode {
             extra.custom_wallet_spec,
         )?;
         let disable_tcp_listener = extra.disable_tcp_listener;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.miner_api_port);
+        let tls_addr = create_socket_addr(&addr).await.unwrap();
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(tls_addr.ip(), config.miner_api_port);
         let api_tls_info = config
             .miner_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());

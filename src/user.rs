@@ -8,9 +8,9 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
-    try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RoutesPoWInfo,
+    create_socket_addr, generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys,
+    to_route_pow_infos, try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult, RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
@@ -148,13 +148,16 @@ impl UserNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config.user_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.user_compute_node_idx)
-            .ok_or(UserError::ConfigError("Invalid compute index"))?
-            .address;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
+            .ok_or(UserError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .await.or_else(|_| Err(UserError::ConfigError("Invalid compute address")))?;
+
+        let tls_addr = create_socket_addr(&addr).await.unwrap();
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(tls_addr.ip(), config.user_api_port);
         let api_tls_info = config
             .user_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());

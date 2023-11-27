@@ -209,6 +209,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
     settings.set_default("compute_api_port", 3002).unwrap();
     settings.set_default("compute_api_use_tls", true).unwrap();
+
     settings.set_default("jurisdiction", "US").unwrap();
     settings.set_default("compute_node_idx", 0).unwrap();
     settings.set_default("compute_raft", 0).unwrap();
@@ -229,6 +230,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(setting_file))
         .unwrap();
+
     settings
         .merge(config::File::with_name(intial_block_setting_file))
         .unwrap();

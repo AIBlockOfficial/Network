@@ -32,13 +32,17 @@ use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
+use trust_dns_resolver::config::*;
+use trust_dns_resolver::TokioAsyncResolver;
+use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -460,6 +464,82 @@ pub fn generate_pow_random_num() -> Vec<u8> {
 pub fn generate_random_num(len: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     (0..len).map(|_| rng.gen_range(1, 200)).collect()
+}
+
+/// Parses a URL string and performs DNS resolution for cases where the passed URL is a domain name
+///
+/// ### Arguments
+///
+/// * `url_str`    - URL string to parse
+pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+    let thread_url = url_str.to_owned();
+    let handle = tokio::task::spawn_blocking(move || {
+        if let Ok(url) = Url::parse(&thread_url.clone()) {
+            // println!("url: {:?}", url);
+            let host_str = match url.host_str() {
+                Some(v) => v,
+                None => return None,
+            };
+            // println!("host_str: {:?}", host_str);
+            let port = url.port().unwrap_or(80);
+
+            // Check if the host is an IP address
+            if let Ok(ip) = host_str.parse::<IpAddr>() {
+                // Handle as direct IP address
+                Some(SocketAddr::new(ip, port))
+            } else {
+                let io_loop = Runtime::new().unwrap();
+
+                // Handle as domain name
+                let resolver = io_loop.block_on(async {
+                    TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default())
+                });
+
+                let lookup_future = resolver.lookup_ip(host_str);
+                let response = io_loop.block_on(lookup_future).unwrap();
+                let ip = match response.iter().next() {
+                    Some(ip) => ip,
+                    None => return None,
+                };
+                Some(SocketAddr::new(ip, port))
+            }
+        } else {
+            // Handle as direct IP address with optional port
+            let parts: Vec<&str> = thread_url.split(':').collect();
+            let ip = match parts[0].parse::<IpAddr>() {
+                Ok(ip) => ip,
+                Err(_e) => return None,
+            };
+            let port = if parts.len() > 1 {
+                match parts[1].parse::<u16>() {
+                    Ok(port) => port,
+                    Err(_e) => return None,
+                }
+            } else {
+                80
+            };
+            Some(SocketAddr::new(ip, port))
+        }
+    });
+
+    match handle.await {
+        Ok(v) => match v {
+            Some(v) => Ok(v),
+            None => Err("Failed to parse URL".into()),
+        },
+        Err(_e) => Err("Failed to parse URL".into()),
+    }
+}
+
+pub async fn create_socket_addr_for_list(
+    urls: &[String],
+) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
+    let mut result = Vec::new();
+    for url in urls {
+        let socket_addr = create_socket_addr(url).await?;
+        result.push(socket_addr);
+    }
+    Ok(result)
 }
 
 /// Generates a ProofOfWork for a given address
@@ -1176,5 +1256,46 @@ pub mod rug_integer {
     {
         let value: String = Deserialize::deserialize(d)?;
         Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
+    }
+}
+
+/*---- TESTS ----*/
+
+#[cfg(test)]
+mod util_tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    /// Tests whether URL strings can be parsed successfully
+    async fn test_create_socket_addr() {
+        let ip_raw = "0.0.0.0".to_string();
+        let ip_with_port = "0.0.0.0:12300".to_string();
+        let domain = "http://localhost".to_string();
+        let domain_with_port = "http://localhost:12300".to_string();
+
+        let ip_addr = create_socket_addr(&ip_raw).await.unwrap();
+        let ip_with_port_addr = create_socket_addr(&ip_with_port).await.unwrap();
+        let domain_addr = create_socket_addr(&domain).await.unwrap();
+        let domain_with_port_addr = create_socket_addr(&domain_with_port).await.unwrap();
+
+        assert_eq!(
+            ip_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 80)
+        );
+        assert_eq!(
+            ip_with_port_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12300)
+        );
+
+        assert_eq!(
+            domain_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 80)
+        );
+
+        assert_eq!(
+            domain_with_port_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
+        );
     }
 }

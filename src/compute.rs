@@ -16,7 +16,7 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig,
+    apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig, create_socket_addr,
     format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
     validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
     LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
@@ -175,16 +175,26 @@ impl ComputeNode {
     /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: ComputeNodeConfig, mut extra: ExtraNodeParams) -> Result<Self> {
-        let addr = config
+        let raw_addr = config
             .compute_nodes
             .get(config.compute_node_idx)
-            .ok_or(ComputeError::ConfigError("Invalid compute index"))?
-            .address;
-        let storage_addr = config
+            .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
+        let addr = create_socket_addr(&raw_addr.address).await.or_else(|_| {
+            Err(ComputeError::ConfigError(
+                "Invalid compute node address in config file",
+            ))
+        })?;
+
+        let raw_storage_addr = config
             .storage_nodes
             .get(config.compute_node_idx)
-            .ok_or(ComputeError::ConfigError("Invalid storage index"))?
-            .address;
+            .ok_or(ComputeError::ConfigError("Invalid storage index"))?;
+        let storage_addr = create_socket_addr(&raw_storage_addr.address).await.or_else(|_| {
+            Err(ComputeError::ConfigError(
+                "Invalid storage node address in config file",
+            ))
+        })?;
+
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.compute_api_port);
         let api_tls_info = config

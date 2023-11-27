@@ -1,3 +1,4 @@
+// use crate::comms_handler::Node;
 use crate::compute_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::wallet::WalletDb;
@@ -8,12 +9,6 @@ use std::fmt;
 use std::net::SocketAddr;
 
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
-
-/// Configuration info for a node
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct NodeSpec {
-    pub address: SocketAddr,
-}
 
 /// Configuration info for TLS
 #[derive(Default, Clone, Deserialize)]
@@ -93,6 +88,12 @@ pub enum DbMode {
     Live,
     Test(usize),
     InMemory,
+}
+
+/// Configuration info for a node
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodeSpec {
+    pub address: String,
 }
 
 /// Configuration option for a compute node
@@ -204,7 +205,7 @@ pub struct StorageNodeConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinerNodeConfig {
     /// Socket Address of this miner node
-    pub miner_address: SocketAddr,
+    pub miner_address: String,
     /// Use specific database
     pub miner_db_mode: DbMode,
     /// Configuration for handling TLS
@@ -239,7 +240,7 @@ pub struct MinerNodeConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserNodeConfig {
     /// Socket Address of this User node
-    pub user_address: SocketAddr,
+    pub user_address: String,
     /// Use specific database
     pub user_db_mode: DbMode,
     /// Configuration for handling TLS
@@ -287,9 +288,9 @@ pub struct PreLaunchNodeConfig {
     /// Use specific database
     pub storage_db_mode: DbMode,
     /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub compute_nodes: Vec<String>,
     /// All storage nodes addresses: only use first
-    pub storage_nodes: Vec<NodeSpec>,
+    pub storage_nodes: Vec<String>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
 }
