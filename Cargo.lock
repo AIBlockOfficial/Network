@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "a_block_chain"
-version = "1.4.0"
+version = "0.1.0"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",
