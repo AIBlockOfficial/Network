@@ -12,13 +12,12 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /a-block/recipe.json /a-block/recipe.json 
-COPY --from=planner /a-block/Chain /Chain
 RUN cargo chef cook --release --recipe-path /a-block/recipe.json
 COPY . .
 RUN cargo build --release
 
 # Use distroless
-FROM cgr.dev/chainguard/glibc-dynamic:latest
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:112c81208f12acaa8568222edd3083cf16fa50392afce7e2f71737e42ed3dddc
 
 USER nonroot
 
