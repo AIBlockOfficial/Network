@@ -41,7 +41,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
-use trust_dns_resolver::config::*;
 use trust_dns_resolver::TokioAsyncResolver;
 use url::Url;
 
@@ -492,9 +491,7 @@ pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std
                 let io_loop = Runtime::new().unwrap();
 
                 // Handle as domain name
-                let resolver = io_loop.block_on(async {
-                    TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default())
-                });
+                let resolver = TokioAsyncResolver::tokio_from_system_conf().unwrap();
 
                 let lookup_future = resolver.lookup_ip(host_str);
                 let response = io_loop.block_on(lookup_future).unwrap();
