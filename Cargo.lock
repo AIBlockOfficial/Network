@@ -4,7 +4,9 @@ version = 3
 
 [[package]]
 name = "a_block_chain"
-version = "0.1.0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee1e2b3adb1babca2aa05c50e0f83fc31eb4f72070a96d2b7b2c5b58cacb347b"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",

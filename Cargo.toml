@@ -21,7 +21,7 @@ hex = "0.4.2"
 merkletree = "0.21.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
-a_block_chain = { path = "../Chain" }
+a_block_chain = "1.0.0"
 keccak_prime = "0.1.0"
 protobuf = "~2.0"
 raft = "0.5.0"
