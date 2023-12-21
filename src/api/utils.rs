@@ -89,12 +89,14 @@ pub fn auth_request(
 
                 // All requests require a unique ID of 32 characters
                 if id.chars().count() != 32 {
+                    println!("Unauthorized - need 32 char string");
                     return err_unauthorized;
                 }
 
                 // API key is needed
                 if let Some(needed_api_keys) = needed_keys {
                     if !needed_api_keys.contains(&api_key.to_string()) {
+                        println!("Unauthorized - API Key needed");
                         return err_unauthorized;
                     }
                 }
@@ -104,6 +106,7 @@ pub fn auth_request(
                 // This route requires PoW
                 if let Some(difficulty) = route_difficulty {
                     if validate_pow_for_diff(difficulty, hash_content.as_bytes()).is_none() {
+                        println!("Unauthorized - Route difficulty");
                         return err_unauthorized;
                     }
                 }
