@@ -50,7 +50,7 @@ pub fn map_api_res_and_cache(
 }
 
 // Authorizes a request based on API keys as well as PoW requirements for the route
-// Successfull authorization will extract the x-request-id header value
+// Successfull authorization will extract the x-cache-id header value
 pub fn auth_request(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
@@ -65,7 +65,7 @@ pub fn auth_request(
             async move {
                 // Extract headers
                 let id = headers
-                    .get("x-request-id")
+                    .get("x-cache-id")
                     .and_then(|n| n.to_str().ok())
                     .unwrap_or_default();
 
