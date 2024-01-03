@@ -32,6 +32,7 @@ pub fn get_cors() -> warp::cors::Builder {
             "Access-Control-Allow-Headers",
             "Content-Type",
             "x-cache-id",
+            "x-request-id",
             "x-nonce",
             "x-api-key",
         ])
@@ -261,6 +262,7 @@ pub fn post_cors() -> warp::cors::Builder {
             "Access-Control-Allow-Headers",
             "Content-Type",
             "x-cache-id",
+            "x-request-id",
             "x-nonce",
             "x-api-key",
         ])
