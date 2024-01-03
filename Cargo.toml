@@ -1,6 +1,6 @@
 [package]
 name = "ablock_network"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Byron Houwens <zhion360@gmail.com>"]
 edition = "2018"
 readme = "README.md"
@@ -18,7 +18,7 @@ config = { version = "0.10.1", features = ["toml"] }
 futures = "0.3"
 futures-util = "0.3.15"
 hex = "0.4.2"
-merkletree = "0.21.0"
+merkletree = "0.23.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
 a_block_chain = "1.0.0"
@@ -29,7 +29,6 @@ rand = "0.7.3"
 ring = "0.16.20"
 rocksdb = "0.21.0"
 rug = "1.7.0"
-rust-crypto = "0.2.36"
 serde = { version = "1.0.104", features = ["derive"] }
 sha3 = "0.9.1"
 serde_json = "1.0.61"
