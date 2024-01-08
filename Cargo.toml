@@ -23,8 +23,8 @@ merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
 a_block_chain = "1.0.0"
 keccak_prime = "0.1.0"
-protobuf = "~2.0"
-raft = "0.5.0"
+protobuf = "2.6.0"
+raft = { git = "https://github.com/ABlockOfficial/raft-rs", branch = "0.5.1" }
 rand = "0.7.3"
 ring = "0.16.20"
 rocksdb = "0.21.0"
@@ -46,6 +46,3 @@ trust-dns-resolver = "0.23.2"
 [features]
 mock = []
 config_override = []
-
-[patch.crates-io]
-raft = { git = "https://github.com/ABlockOfficial/raft-rs", branch = "0.5.1" }
