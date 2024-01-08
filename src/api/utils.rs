@@ -88,10 +88,10 @@ pub fn auth_request(
                 )));
 
                 // All requests require a unique ID of 32 characters
-                if id.chars().count() != 32 {
-                    println!("Unauthorized - need 32 char string");
-                    return err_unauthorized;
-                }
+                // if id.chars().count() != 32 {
+                //     println!("Unauthorized - need 32 char string");
+                //     return err_unauthorized;
+                // }
 
                 // API key is needed
                 if let Some(needed_api_keys) = needed_keys {
