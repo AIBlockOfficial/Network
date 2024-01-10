@@ -1465,7 +1465,7 @@ impl MinerNode {
                     );
 
                     // Construct aggregation transaction
-                    let aggregating_tx = construct_tx_core(tx_ins, tx_outs);
+                    let aggregating_tx = construct_tx_core(tx_ins, tx_outs, None);
 
                     trace!("Sending aggregation tx to compute node");
 

@@ -21,7 +21,7 @@ use a_block_chain::script::{lang::Script, StackEntry};
 use a_block_chain::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
     construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
-    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use bincode::serialize;
 use futures::future::join_all;
@@ -710,7 +710,7 @@ pub fn create_valid_create_transaction_with_ins_outs(
     pub_key: PublicKey,
     secret_key: &SecretKey,
 ) -> (String, Transaction) {
-    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1);
+    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1, None);
     let ct_hash = construct_tx_hash(&create_tx);
 
     (ct_hash, create_tx)
@@ -757,7 +757,7 @@ pub fn create_valid_transaction_with_ins_outs(
         tx_outs
     };
 
-    let payment_tx = construct_tx_core(tx_ins, tx_outs);
+    let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
     let t_hash = construct_tx_hash(&payment_tx);
 
     (t_hash, payment_tx)
@@ -1095,6 +1095,20 @@ pub fn get_pk_with_out_point<'a>(
         .filter_map(|(op, txout)| txout.script_public_key.as_ref().map(|spk| (spk, op)))
 }
 
+pub fn get_pk_with_fees<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
+) -> impl Iterator<Item = (&'a String, OutPoint)> {
+    get_fees_with_out_point(txs)
+        .filter_map(|(op, fees)| fees.script_public_key.as_ref().map(|spk| (spk, op)))
+}
+
+pub fn get_pk_with_fees_cloned<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
+) -> impl Iterator<Item = (String, OutPoint)> + 'a {
+    get_fees_with_out_point(txs)
+        .filter_map(|(op, fees)| fees.script_public_key.as_ref().map(|spk| (spk.clone(), op)))
+}
+
 /// Get all the script_public_key and OutPoint from the (hash,transactions)
 ///
 /// ### Arguments
@@ -1173,7 +1187,7 @@ pub fn create_item_asset_tx_from_sig(
         script_signature: Script::new_create_asset(b_num, asset_hash, signature, public_key),
     };
 
-    let tx = construct_tx_core(vec![tx_in], vec![tx_out]);
+    let tx = construct_tx_core(vec![tx_in], vec![tx_out], None);
     let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
 
     Ok((tx, tx_hash))
@@ -1197,7 +1211,7 @@ pub fn construct_coinbase_tx(b_num: u64, amount: TokenAmount, address: String) -
         ..Default::default()
     };
 
-    construct_tx_core(vec![tx_in], vec![tx_out])
+    construct_tx_core(vec![tx_in], vec![tx_out], None)
 }
 
 /// Confert to ApiKeys data structure
