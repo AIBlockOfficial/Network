@@ -4,9 +4,9 @@ version = 3
 
 [[package]]
 name = "a_block_chain"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1072b9a7abf918d9a5a84b35675dcfe1fbc701449e84818ce82f55d6d6606821"
+checksum = "138df40b966e532187116915c29da8512ef766184271027b4748db93c6574a49"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "ablock_network"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "a_block_chain",
  "async-std",

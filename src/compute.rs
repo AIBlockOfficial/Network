@@ -189,11 +189,13 @@ impl ComputeNode {
             .storage_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?;
-        let storage_addr = create_socket_addr(&raw_storage_addr.address).await.or_else(|_| {
-            Err(ComputeError::ConfigError(
-                "Invalid storage node address in config file",
-            ))
-        })?;
+        let storage_addr = create_socket_addr(&raw_storage_addr.address)
+            .await
+            .or_else(|_| {
+                Err(ComputeError::ConfigError(
+                    "Invalid storage node address in config file",
+                ))
+            })?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.compute_api_port);
@@ -556,6 +558,12 @@ impl ComputeNode {
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
+
+        println!("");
+        println!("Proposing timestamp next");
+        println!("");
+
+        self.node_raft.propose_timestamp().await;
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
             .await?;
