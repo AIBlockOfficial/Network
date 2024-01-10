@@ -12,7 +12,7 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, create_socket_addr_for_list, get_total_coinbase_tokens, get_timestamp_now,
+    calculate_reward, create_socket_addr_for_list, get_timestamp_now, get_total_coinbase_tokens,
     make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
 use a_block_chain::crypto::sha3_256;
@@ -240,6 +240,7 @@ impl ComputeRaft {
     /// * `raft_db` - Override raft db to use.
     pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.compute_raft != 0;
+        let timestamp = get_timestamp_now();
 
         if config.backup_restore.unwrap_or(false) {
             db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
@@ -252,7 +253,9 @@ impl ComputeRaft {
             .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
-            &create_socket_addr_for_list(&raw_node_ips).await.unwrap_or_default(),
+            &create_socket_addr_for_list(&raw_node_ips)
+                .await
+                .unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
             db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
@@ -283,7 +286,6 @@ impl ComputeRaft {
         });
         let backup_check = BackupCheck::new(config.backup_block_modulo);
         let utxo_re_align_check = UtxoReAlignCheck::new(config.utxo_re_align_block_modulo);
-        let timestamp = get_timestamp_now();
 
         Self {
             first_raft_peer,
@@ -305,7 +307,7 @@ impl ComputeRaft {
             shutdown_no_commit_process: false,
             backup_check,
             utxo_re_align_check,
-            timestamp
+            timestamp,
         }
     }
 
@@ -1171,7 +1173,7 @@ impl ComputeConsensused {
             last_mining_transaction_hashes: Default::default(),
             special_handling,
             miner_whitelist,
-            timestamp
+            timestamp,
         }
     }
 

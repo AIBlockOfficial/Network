@@ -139,8 +139,6 @@ pub struct StorageFetch {
     to_receive: Option<FetchReceive>,
 }
 
-
-
 impl StorageFetch {
     /// Initialize with database info
     pub async fn new(config: &StorageNodeConfig, addr: SocketAddr) -> Self {
@@ -149,7 +147,7 @@ impl StorageFetch {
             .storage_nodes
             .iter()
             .filter(|v| v.address.clone() != addr.to_string());
-        
+
         let mut storage_nodes = Vec::new();
 
         for node in storage_nodes_filtered {

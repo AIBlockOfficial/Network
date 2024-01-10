@@ -180,11 +180,13 @@ impl MinerNode {
             .compute_nodes
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address).await.or_else(|_| {
-            Err(MinerError::ConfigError(
-                "Invalid compute node address in config file",
-            ))
-        })?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .await
+            .or_else(|_| {
+                Err(MinerError::ConfigError(
+                    "Invalid compute node address in config file",
+                ))
+            })?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {
