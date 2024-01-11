@@ -156,23 +156,18 @@ impl StorageNode {
             .storage_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid storage index"))?;
-        let addr = create_socket_addr(&raw_addr.address).await.or_else(|_| {
-            Err(StorageError::ConfigError(
+        let addr = create_socket_addr(&raw_addr.address).await.map_err(|_| StorageError::ConfigError(
                 "Invalid storage address supplied",
-            ))
-        })?;
+            ))?;
 
         let raw_compute_addr = config
             .compute_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid compute index"))?;
         let compute_addr = create_socket_addr(&raw_compute_addr.address)
-            .await
-            .or_else(|_| {
-                Err(StorageError::ConfigError(
+            .await.map_err(|_| StorageError::ConfigError(
                     "Invalid compute address supplied",
-                ))
-            })?;
+                ))?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);

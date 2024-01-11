@@ -143,7 +143,7 @@ impl PreLaunchNode {
             .get(config.pre_launch_node_idx)
             .ok_or(PreLaunchError::ConfigError("Invalid pre-launch index"))?;
 
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr.clone(), &config.tls_config)?;
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(*addr, &config.tls_config)?;
 
         let node = Node::new(
             &tcp_tls_config,
@@ -161,15 +161,12 @@ impl PreLaunchNode {
             db_utils::new_db(config.pre_launch_db_mode, spec, extra.raft_db.take(), None)
         };
 
-        let pre_launch_nodes = config.pre_launch_nodes.iter().map(|s| s);
+        let pre_launch_nodes = config.pre_launch_nodes.iter();
         let shutdown_group: BTreeSet<SocketAddr> = pre_launch_nodes
-            .clone()
-            .into_iter()
-            .map(|v| v.clone())
+            .clone().copied()
             .collect();
         let pre_launch_nodes: Vec<_> = pre_launch_nodes
-            .filter(|a| *a != addr)
-            .map(|v| v.clone())
+            .filter(|a| *a != addr).copied()
             .collect();
 
         let raft_db_send = if config.pre_launch_node_idx == 0 {
