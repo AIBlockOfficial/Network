@@ -311,7 +311,7 @@ mod test {
         // Act
         //
         let app = clap_app();
-        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let matches = app.get_matches_from_safe(args).unwrap();
         let settings = load_settings(&matches);
         let config = configuration(settings);
 
