@@ -49,7 +49,7 @@ impl ActiveRaft {
         let peer_addr_vec: Vec<(u64, SocketAddr)> = peers
             .iter()
             .zip(node_specs.iter())
-            .map(|(idx, spec)| (*idx, spec.clone()))
+            .map(|(idx, spec)| (*idx, *spec))
             .filter(|(idx, _)| use_raft || *idx == peer_id)
             .collect();
 
