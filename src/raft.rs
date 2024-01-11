@@ -95,7 +95,7 @@ impl<'a> Deserialize<'a> for RaftMessageWrapper {
     fn deserialize<D: Deserializer<'a>>(deserializer: D) -> Result<Self, D::Error> {
         let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
         Ok(RaftMessageWrapper(
-            protobuf::parse_from_bytes::<Message>(bytes).map_err(serde::de::Error::custom)?,
+            protobuf::Message::parse_from_bytes(bytes).map_err(serde::de::Error::custom)?,
         ))
     }
 }

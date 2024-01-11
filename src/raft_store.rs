@@ -268,7 +268,7 @@ fn get_persistent_entry(presistent: &SimpleDb, index: u64) -> RaftResult<Option<
         .get_cf(DB_COL_DEFAULT, key)
         .map_err(from_db_err)?
     {
-        Ok(Some(protobuf::parse_from_bytes::<Entry>(&bytes)?))
+        Ok(Some(protobuf::Message::parse_from_bytes(&bytes)?))
     } else {
         Ok(None)
     }
@@ -370,7 +370,7 @@ fn get_persistent_hardstate(presistent: &SimpleDb) -> RaftResult<Option<HardStat
         .get_cf(DB_COL_DEFAULT, HARDSTATE_KEY)
         .map_err(from_db_err)?
     {
-        Ok(Some(protobuf::parse_from_bytes::<HardState>(&bytes)?))
+        Ok(Some(protobuf::Message::parse_from_bytes(&bytes)?))
     } else {
         Ok(None)
     }
