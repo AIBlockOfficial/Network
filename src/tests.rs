@@ -4887,8 +4887,8 @@ fn substract_vec(value1: &[usize], value2: &[usize]) -> Vec<usize> {
 fn merge_txs_3(v1: &UtxoSet, v2: &UtxoSet, v3: &UtxoSet) -> UtxoSet {
     v1.clone()
         .into_iter()
-        .chain(v2.clone().into_iter())
-        .chain(v3.clone().into_iter())
+        .chain(v2.clone())
+        .chain(v3.clone())
         .collect()
 }
 
