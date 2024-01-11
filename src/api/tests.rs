@@ -74,7 +74,7 @@ struct ComputeTest {
 impl ComputeTest {
     fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
         let druid =
-            if let Some(druid_info) = tx_vals.get(0).and_then(|(_, tx)| tx.druid_info.as_ref()) {
+            if let Some(druid_info) = tx_vals.first().and_then(|(_, tx)| tx.druid_info.as_ref()) {
                 druid_info.druid.clone()
             } else {
                 "Druid1".to_owned()

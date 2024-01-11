@@ -1933,7 +1933,7 @@ impl ComputeNode {
         // Propose the received PoW to the block pipeline
         if !self
             .node_raft
-            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, pow_info))
+            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, Box::new(pow_info)))
             .await
         {
             return None;

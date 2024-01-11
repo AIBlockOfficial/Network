@@ -36,7 +36,7 @@ pub enum MiningPipelinePhaseChange {
 pub enum MiningPipelineItem {
     MiningParticipant(SocketAddr, MiningPipelineStatus),
     CompleteParticipant,
-    WinningPoW(SocketAddr, WinningPoWInfo),
+    WinningPoW(SocketAddr, Box<WinningPoWInfo>),
     CompleteMining,
     ResetPipeline,
 }
@@ -244,7 +244,7 @@ impl MiningPipelineInfo {
                 self.append_current_phase_timeout(extra.proposer_id);
             }
             (WinningPoW(addr, info), AllItemsIntake) => {
-                self.add_to_winning_pow(extra.proposer_id, (addr, info));
+                self.add_to_winning_pow(extra.proposer_id, (addr, *info));
             }
             (CompleteMining, AllItemsIntake) => {
                 self.append_current_phase_timeout(extra.proposer_id);
