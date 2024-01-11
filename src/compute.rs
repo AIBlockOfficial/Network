@@ -1,5 +1,5 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
-use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
+use crate::comms_handler::{CommsError, Event, TcpTlsConfig, Node};
 use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
 use crate::configurations::{
     ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
@@ -21,7 +21,6 @@ use crate::utils::{
     validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
     LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
-use crate::Node;
 use a_block_chain::primitives::asset::TokenAmount;
 use a_block_chain::primitives::block::Block;
 use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction};
