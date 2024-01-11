@@ -55,4 +55,4 @@ pub use utils::{
 pub use wallet::WalletDb;
 
 #[cfg(not(feature = "mock"))]
-pub(crate) use comms_handler::Node;
+pub use crate::comms_handler::Node;
