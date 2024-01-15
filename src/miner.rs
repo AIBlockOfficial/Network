@@ -1,5 +1,6 @@
-use crate::comms_handler::{CommsError, Event, TcpTlsConfig, Node};
+use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
+use crate::db_utils;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
     ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
@@ -14,7 +15,6 @@ use crate::utils::{
     RunningTaskOrResult,
 };
 use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
-use crate::db_utils;
 use a_block_chain::primitives::asset::TokenAmount;
 use a_block_chain::primitives::block::{self, BlockHeader};
 use a_block_chain::primitives::transaction::Transaction;
@@ -181,9 +181,8 @@ impl MinerNode {
             .get(config.miner_compute_node_idx)
             .ok_or(MinerError::ConfigError("Invalid compute index"))?;
         let compute_addr = create_socket_addr(&raw_compute_addr.address)
-            .await.map_err(|_| MinerError::ConfigError(
-                    "Invalid compute node address in config file",
-                ))?;
+            .await
+            .map_err(|_| MinerError::ConfigError("Invalid compute node address in config file"))?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {

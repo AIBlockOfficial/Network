@@ -24,7 +24,7 @@ use a_block_chain::utils::transaction_utils::{
     get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use bincode::serialize;
-use chrono::Local;
+use chrono::Utc;
 use futures::future::join_all;
 use rand::{self, Rng};
 use std::collections::BTreeMap;
@@ -1243,8 +1243,9 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
 }
 
 /// Get the current timestamp as a string
-pub fn get_timestamp_now() -> String {
-    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+pub fn get_timestamp_now() -> i64 {
+    let now = Utc::now();
+    now.timestamp()
 }
 
 /// Attempt to send a message to the UI
