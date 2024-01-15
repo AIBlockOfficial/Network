@@ -153,7 +153,8 @@ impl UserNode {
             .get(config.user_compute_node_idx)
             .ok_or(UserError::ConfigError("Invalid compute index"))?;
         let compute_addr = create_socket_addr(&raw_compute_addr.address)
-            .await.map_err(|_| UserError::ConfigError("Invalid compute address"))?;
+            .await
+            .map_err(|_| UserError::ConfigError("Invalid compute address"))?;
 
         let tls_addr = create_socket_addr(&addr).await.unwrap();
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;

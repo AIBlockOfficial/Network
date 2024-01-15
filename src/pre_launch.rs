@@ -162,12 +162,8 @@ impl PreLaunchNode {
         };
 
         let pre_launch_nodes = config.pre_launch_nodes.iter();
-        let shutdown_group: BTreeSet<SocketAddr> = pre_launch_nodes
-            .clone().copied()
-            .collect();
-        let pre_launch_nodes: Vec<_> = pre_launch_nodes
-            .filter(|a| *a != addr).copied()
-            .collect();
+        let shutdown_group: BTreeSet<SocketAddr> = pre_launch_nodes.clone().copied().collect();
+        let pre_launch_nodes: Vec<_> = pre_launch_nodes.filter(|a| *a != addr).copied().collect();
 
         let raft_db_send = if config.pre_launch_node_idx == 0 {
             Some(PreLaunchRequest::SendDbItems {

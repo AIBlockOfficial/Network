@@ -1,6 +1,6 @@
 [package]
 name = "ablock_network"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Byron Houwens <zhion360@gmail.com>"]
 edition = "2018"
 readme = "README.md"
@@ -21,7 +21,7 @@ hex = "0.4.2"
 merkletree = "0.23.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
-a_block_chain = "1.2.0"
+a_block_chain = "1.2.1"
 keccak_prime = "0.1.0"
 protobuf = "2.6.0"
 raft = { git = "https://github.com/ABlockOfficial/raft-rs", branch = "0.5.1" }

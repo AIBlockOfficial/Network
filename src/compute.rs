@@ -1,5 +1,5 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
-use crate::comms_handler::{CommsError, Event, TcpTlsConfig, Node};
+use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::compute_raft::{CommittedItem, ComputeRaft, CoordinatedCommand};
 use crate::configurations::{
     ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
@@ -178,18 +178,19 @@ impl ComputeNode {
             .compute_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
-        let addr = create_socket_addr(&raw_addr.address).await.map_err(|_| ComputeError::ConfigError(
-                "Invalid compute node address in config file",
-            ))?;
+        let addr = create_socket_addr(&raw_addr.address).await.map_err(|_| {
+            ComputeError::ConfigError("Invalid compute node address in config file")
+        })?;
 
         let raw_storage_addr = config
             .storage_nodes
             .get(config.compute_node_idx)
             .ok_or(ComputeError::ConfigError("Invalid storage index"))?;
         let storage_addr = create_socket_addr(&raw_storage_addr.address)
-            .await.map_err(|_| ComputeError::ConfigError(
-                    "Invalid storage node address in config file",
-                ))?;
+            .await
+            .map_err(|_| {
+                ComputeError::ConfigError("Invalid storage node address in config file")
+            })?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.compute_api_port);
@@ -1933,7 +1934,10 @@ impl ComputeNode {
         // Propose the received PoW to the block pipeline
         if !self
             .node_raft
-            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(address, Box::new(pow_info)))
+            .propose_mining_pipeline_item(MiningPipelineItem::WinningPoW(
+                address,
+                Box::new(pow_info),
+            ))
             .await
         {
             return None;

@@ -64,7 +64,7 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
     PipelineItem(MiningPipelineItem, u64),
     CoordinatedCmd(CoordinatedCommand),
-    Timestamp(String),
+    Timestamp(i64),
 }
 
 /// Commited item to process.
@@ -163,7 +163,7 @@ pub struct ComputeConsensused {
     /// Whitelisted miner nodes.
     miner_whitelist: MinerWhitelist,
     /// Timestamp for the current block
-    timestamp: String,
+    timestamp: i64,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -222,7 +222,7 @@ pub struct ComputeRaft {
     /// Check UTXO set alignment if needed
     utxo_re_align_check: UtxoReAlignCheck,
     /// Timestamp of the current block
-    timestamp: String,
+    timestamp: i64,
 }
 
 impl fmt::Debug for ComputeRaft {
