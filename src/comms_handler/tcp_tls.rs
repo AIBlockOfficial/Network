@@ -2,8 +2,9 @@
 
 use super::{CommsError, Result};
 use crate::configurations::{TlsPrivateInfo, TlsSpec};
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::collections::BTreeMap;
-use std::fmt;
+use std::convert::TryFrom;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -12,12 +13,10 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{
-    AllowAnyAnonymousOrAuthenticatedClient, Certificate, ClientConfig, NoClientAuth, PrivateKey,
-    RootCertStore, ServerConfig, Session,
+    client::ServerName, Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig,
 };
-use tokio_rustls::webpki::{DNSNameRef, EndEntityCert};
+use tokio_rustls::webpki::EndEntityCert;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
@@ -211,8 +210,9 @@ impl TcpTlsConnector {
 
         if let Some(tls_connector) = &self.tls_connector {
             let tls_name = socket_name_mapping_or_default(&self.socket_name_mapping, addr);
-            let domain = DNSNameRef::try_from_ascii_str(&tls_name)
+            let domain = ServerName::try_from(tls_name.as_str())
                 .map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+
             let stream = tls_connector.connect(domain, stream).await?;
             let peer_addr = stream.get_ref().0.peer_addr()?;
             Ok(TcpTlsStream::Client(stream, peer_addr))
@@ -227,18 +227,30 @@ impl TcpTlsConnector {
     }
 }
 
-impl fmt::Debug for TcpTlsConnector {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TcpTlsConnector()")
+fn load_certs(pem: &str) -> Vec<TlsCertificate> {
+    let mut final_certs = Vec::new();
+    let init_certs = certs(&mut Cursor::new(pem));
+
+    for cert in init_certs {
+        if cert.is_ok() {
+            final_certs.push(Certificate(cert.unwrap().to_vec()));
+        }
     }
+
+    final_certs
 }
 
-fn load_certs(pem: &str) -> Result<Vec<TlsCertificate>> {
-    certs(&mut Cursor::new(pem)).map_err(|_| CommsError::ConfigError("invalid cert"))
-}
+fn load_keys(pem: &str) -> Vec<PrivateKey> {
+    let mut final_keys = Vec::new();
+    let init_keys = pkcs8_private_keys(&mut Cursor::new(pem));
 
-fn load_keys(pem: &str) -> Result<Vec<PrivateKey>> {
-    pkcs8_private_keys(&mut Cursor::new(pem)).map_err(|_| CommsError::ConfigError("invalid key"))
+    for key in init_keys {
+        if key.is_ok() {
+            final_keys.push(PrivateKey(key.unwrap().secret_pkcs8_der().to_vec()));
+        }
+    }
+
+    final_keys
 }
 
 fn add_cert_to_root(
@@ -256,7 +268,7 @@ fn add_cert_to_root(
 fn new_root_certs(trusted_pem_certs: &[String]) -> Result<RootCertStore> {
     let mut root_store = RootCertStore::empty();
     for trusted_pem_cert in trusted_pem_certs {
-        let trusted_certs = load_certs(trusted_pem_cert)?;
+        let trusted_certs = load_certs(trusted_pem_cert);
         add_cert_to_root(&mut root_store, &trusted_certs)?;
     }
     Ok(root_store)
@@ -264,24 +276,26 @@ fn new_root_certs(trusted_pem_certs: &[String]) -> Result<RootCertStore> {
 
 fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
     let root_store = new_root_certs(&config.trusted_pem_certs)?;
-    let certs = load_certs(&config.pem_certs)?;
-    let mut keys = load_keys(&config.pem_pkcs8_private_keys)?;
-    let _client_auth = NoClientAuth::new();
-    let client_auth = AllowAnyAnonymousOrAuthenticatedClient::new(root_store);
+    let certs = load_certs(&config.pem_certs);
+    let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
-    let mut server_config = ServerConfig::new(client_auth);
-    server_config.set_single_cert(certs, keys.remove(0))?;
+    let server_config = ServerConfig::builder()
+        // .with_root_certificates(root_store)
+        .with_single_cert(certs, keys.remove(0))?;
+
     Ok(server_config)
 }
 
 fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
     let root_store = new_root_certs(&config.trusted_pem_certs)?;
-    let certs = load_certs(&config.pem_certs)?;
-    let mut keys = load_keys(&config.pem_pkcs8_private_keys)?;
+    let certs = load_certs(&config.pem_certs);
+    let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
-    let mut client_config = ClientConfig::new();
-    client_config.root_store = root_store;
-    client_config.set_single_client_cert(certs, keys.remove(0))?;
+    let mut client_config = ClientConfig::builder()
+        // .with_root_certificates(root_store)
+        .with_single_cert(certs, keys.remove(0))?;
+    // client_config.root_store = root_store;
+    // client_config.set_single_client_cert(certs, keys.remove(0))?;
     Ok(client_config)
 }
 
@@ -362,7 +376,7 @@ pub fn verify_is_valid_for_dns_names<'a>(
     tls_names: impl Iterator<Item = &'a str>,
 ) -> Result<()> {
     let domains: std::result::Result<Vec<_>, _> =
-        tls_names.map(DNSNameRef::try_from_ascii_str).collect();
+        tls_names.map(|v| ServerName::try_from(v)).collect();
     let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
 
     let cert = EndEntityCert::from(&cert.0)?;
@@ -370,7 +384,7 @@ pub fn verify_is_valid_for_dns_names<'a>(
     Ok(())
 }
 
-fn get_first_certificate(session: &impl Session) -> Option<TlsCertificate> {
+fn get_first_certificate(session: &impl ) -> Option<TlsCertificate> {
     session
         .get_peer_certificates()
         .and_then(|mut v| v.drain(..).next())
