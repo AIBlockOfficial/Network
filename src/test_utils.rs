@@ -1136,6 +1136,17 @@ async fn init_compute(
 ) -> ArcComputeNode {
     let node_info = &info.node_infos[name];
     let compute_raft = usize::from(config.compute_raft);
+    let mut user_nodes = None;
+
+    if info.user_nodes.len() > 0 {
+        user_nodes = Some(
+            info.user_nodes.clone().into_iter()
+                .map(|v| NodeSpec {
+                    address: v.to_string(),
+                })
+                .collect::<Vec<NodeSpec>>(),
+        );
+    }
 
     let config = ComputeNodeConfig {
         compute_db_mode: node_info.db_mode,
@@ -1159,14 +1170,7 @@ async fn init_compute(
                 address: v.to_string(),
             })
             .collect::<Vec<NodeSpec>>(),
-        user_nodes: info
-            .user_nodes
-            .clone()
-            .into_iter()
-            .map(|v| NodeSpec {
-                address: v.to_string(),
-            })
-            .collect::<Vec<NodeSpec>>(),
+        user_nodes,
         compute_raft,
         compute_raft_tick_timeout: 200 / config.test_duration_divider,
         compute_mining_event_timeout: 500 / config.test_duration_divider,
