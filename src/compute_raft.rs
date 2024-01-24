@@ -801,7 +801,7 @@ impl ComputeRaft {
     pub async fn propose_timestamp(&mut self) {
         if self.first_raft_peer {
             println!("Proposing timestamp as first peer");
-            self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp.clone()))
+            self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp))
                 .await;
         }
     }
@@ -1340,7 +1340,7 @@ impl ComputeConsensused {
         let b_num = self.block_pipeline.current_block_num().unwrap();
 
         block.header.previous_hash = Some(previous_hash);
-        block.header.timestamp = self.timestamp.clone();
+        block.header.timestamp = self.timestamp;
         block.header.b_num = b_num;
         block.set_txs_merkle_root_and_hash().await;
     }

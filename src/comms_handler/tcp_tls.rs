@@ -5,19 +5,19 @@ use crate::configurations::{TlsPrivateInfo, TlsSpec};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
+use std::fmt;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::fmt;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio_rustls::rustls::{
-    Certificate, ClientConfig, CommonState, PrivateKey, RootCertStore, ServerConfig 
-};
 use tokio_rustls::rustls::client::ServerName;
+use tokio_rustls::rustls::{
+    Certificate, ClientConfig, CommonState, PrivateKey, RootCertStore, ServerConfig,
+};
 use tokio_rustls::webpki::{DnsNameRef, EndEntityCert};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
@@ -242,10 +242,8 @@ fn load_certs(pem: &str) -> Vec<TlsCertificate> {
     let mut binding = Cursor::new(pem);
     let init_certs = certs(&mut binding);
 
-    for cert in init_certs {
-        if cert.is_ok() {
-            final_certs.push(Certificate(cert.unwrap().to_vec()));
-        }
+    for cert in init_certs.flatten() {
+        final_certs.push(Certificate(cert.to_vec()));
     }
 
     final_certs
@@ -256,10 +254,8 @@ fn load_keys(pem: &str) -> Vec<PrivateKey> {
     let mut binding = Cursor::new(pem);
     let init_keys = pkcs8_private_keys(&mut binding);
 
-    for key in init_keys {
-        if key.is_ok() {
-            final_keys.push(PrivateKey(key.unwrap().secret_pkcs8_der().to_vec()));
-        }
+    for key in init_keys.flatten() {
+        final_keys.push(PrivateKey(key.secret_pkcs8_der().to_vec()));
     }
 
     final_keys
@@ -396,7 +392,7 @@ pub fn verify_is_valid_for_dns_names<'a>(
     tls_names: impl Iterator<Item = &'a str>,
 ) -> Result<()> {
     let domains: std::result::Result<Vec<_>, _> =
-        tls_names.map(|v| DnsNameRef::try_from_ascii_str(v)).collect();
+        tls_names.map(DnsNameRef::try_from_ascii_str).collect();
     let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
 
     let cert = EndEntityCert::try_from(cert.0.as_slice()).unwrap();
@@ -404,11 +400,11 @@ pub fn verify_is_valid_for_dns_names<'a>(
     Ok(())
 }
 
-/// Retrieves the certificate from a TLS session connection. In later versions of rustls, this is 
+/// Retrieves the certificate from a TLS session connection. In later versions of rustls, this is
 /// a method on `CommonState`
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `session_conn` - The TLS session connection
 fn get_first_certificate(session_conn: &CommonState) -> Option<TlsCertificate> {
     match session_conn.peer_certificates() {
