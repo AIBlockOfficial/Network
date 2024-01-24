@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::fmt;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
@@ -18,7 +18,7 @@ use tokio_rustls::rustls::{
     Certificate, ClientConfig, CommonState, PrivateKey, RootCertStore, ServerConfig 
 };
 use tokio_rustls::rustls::client::ServerName;
-use tokio_rustls::webpki::EndEntityCert;
+use tokio_rustls::webpki::{DnsNameRef, EndEntityCert};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
@@ -191,6 +191,14 @@ pub struct TcpTlsConnector {
     tls_connector: Option<TlsConnector>,
 }
 
+impl fmt::Debug for TcpTlsConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TcpTlsConnector")
+            .field("socket_name_mapping", &self.socket_name_mapping)
+            .finish()
+    }
+}
+
 impl TcpTlsConnector {
     pub fn new(config: &TcpTlsConfig) -> Result<Self> {
         let tls_connector = if config.use_tls {
@@ -231,7 +239,8 @@ impl TcpTlsConnector {
 
 fn load_certs(pem: &str) -> Vec<TlsCertificate> {
     let mut final_certs = Vec::new();
-    let init_certs = certs(&mut Cursor::new(pem));
+    let mut binding = Cursor::new(pem);
+    let init_certs = certs(&mut binding);
 
     for cert in init_certs {
         if cert.is_ok() {
@@ -244,7 +253,8 @@ fn load_certs(pem: &str) -> Vec<TlsCertificate> {
 
 fn load_keys(pem: &str) -> Vec<PrivateKey> {
     let mut final_keys = Vec::new();
-    let init_keys = pkcs8_private_keys(&mut Cursor::new(pem));
+    let mut binding = Cursor::new(pem);
+    let init_keys = pkcs8_private_keys(&mut binding);
 
     for key in init_keys {
         if key.is_ok() {
@@ -277,7 +287,8 @@ fn new_root_certs(trusted_pem_certs: &[String]) -> Result<RootCertStore> {
 }
 
 fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
-    let root_store = new_root_certs(&config.trusted_pem_certs)?;
+    // TODO: Handle root_store
+    // let root_store = new_root_certs(&config.trusted_pem_certs)?;
     let certs = load_certs(&config.pem_certs);
     let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
@@ -297,7 +308,7 @@ fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
     let certs = load_certs(&config.pem_certs);
     let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
-    let mut client_config = ClientConfig::builder()
+    let client_config = ClientConfig::builder()
         .with_safe_default_cipher_suites()
         .with_safe_default_kx_groups()
         .with_safe_default_protocol_versions()
@@ -324,8 +335,8 @@ impl TcpTlsStream {
 
     pub fn peer_tls_certificate(&self) -> Option<TlsCertificate> {
         match self {
-            Self::Client(tls, _) => get_first_certificate(&*tls.into_inner().1),
-            Self::Server(tls, _) => get_first_certificate(&*tls.into_inner().1),
+            Self::Client(tls, _) => get_first_certificate(tls.get_ref().1),
+            Self::Server(tls, _) => get_first_certificate(tls.get_ref().1),
             Self::RawTcp(_, _) => None,
         }
     }
@@ -385,14 +396,11 @@ pub fn verify_is_valid_for_dns_names<'a>(
     tls_names: impl Iterator<Item = &'a str>,
 ) -> Result<()> {
     let domains: std::result::Result<Vec<_>, _> =
-        tls_names.map(|v| ServerName::try_from(v)).collect();
+        tls_names.map(|v| DnsNameRef::try_from_ascii_str(v)).collect();
     let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
 
     let cert = EndEntityCert::try_from(cert.0.as_slice()).unwrap();
-    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().filter(|e| match e {
-        ServerName::DnsName(_) => true,
-        _ => false,
-    }).copied())?;
+    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().copied())?;
     Ok(())
 }
 
@@ -402,7 +410,7 @@ pub fn verify_is_valid_for_dns_names<'a>(
 /// ### Arguments
 /// 
 /// * `session_conn` - The TLS session connection
-fn get_first_certificate(session_conn: &impl Deref<Target=CommonState>) -> Option<TlsCertificate> {
+fn get_first_certificate(session_conn: &CommonState) -> Option<TlsCertificate> {
     match session_conn.peer_certificates() {
         Some(certs) => certs.first().cloned(),
         None => None,
