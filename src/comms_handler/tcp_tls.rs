@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::io::Cursor;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -14,8 +15,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::{
-    client::ServerName, Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig,
+    Certificate, ClientConfig, CommonState, PrivateKey, RootCertStore, ServerConfig 
 };
+use tokio_rustls::rustls::client::ServerName;
 use tokio_rustls::webpki::EndEntityCert;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
@@ -280,7 +282,11 @@ fn new_server_config(config: &TcpTlsConfig) -> Result<ServerConfig> {
     let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
     let server_config = ServerConfig::builder()
-        // .with_root_certificates(root_store)
+        .with_safe_default_cipher_suites()
+        .with_safe_default_kx_groups()
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
         .with_single_cert(certs, keys.remove(0))?;
 
     Ok(server_config)
@@ -292,10 +298,13 @@ fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
     let mut keys = load_keys(&config.pem_pkcs8_private_keys);
 
     let mut client_config = ClientConfig::builder()
-        // .with_root_certificates(root_store)
+        .with_safe_default_cipher_suites()
+        .with_safe_default_kx_groups()
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
         .with_single_cert(certs, keys.remove(0))?;
-    // client_config.root_store = root_store;
-    // client_config.set_single_client_cert(certs, keys.remove(0))?;
+
     Ok(client_config)
 }
 
@@ -315,8 +324,8 @@ impl TcpTlsStream {
 
     pub fn peer_tls_certificate(&self) -> Option<TlsCertificate> {
         match self {
-            Self::Client(tls, _) => get_first_certificate(tls.get_ref().1),
-            Self::Server(tls, _) => get_first_certificate(tls.get_ref().1),
+            Self::Client(tls, _) => get_first_certificate(&*tls.into_inner().1),
+            Self::Server(tls, _) => get_first_certificate(&*tls.into_inner().1),
             Self::RawTcp(_, _) => None,
         }
     }
@@ -379,15 +388,25 @@ pub fn verify_is_valid_for_dns_names<'a>(
         tls_names.map(|v| ServerName::try_from(v)).collect();
     let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
 
-    let cert = EndEntityCert::from(&cert.0)?;
-    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().copied())?;
+    let cert = EndEntityCert::try_from(cert.0.as_slice()).unwrap();
+    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().filter(|e| match e {
+        ServerName::DnsName(_) => true,
+        _ => false,
+    }).copied())?;
     Ok(())
 }
 
-fn get_first_certificate(session: &impl ) -> Option<TlsCertificate> {
-    session
-        .get_peer_certificates()
-        .and_then(|mut v| v.drain(..).next())
+/// Retrieves the certificate from a TLS session connection. In later versions of rustls, this is 
+/// a method on `CommonState`
+/// 
+/// ### Arguments
+/// 
+/// * `session_conn` - The TLS session connection
+fn get_first_certificate(session_conn: &impl Deref<Target=CommonState>) -> Option<TlsCertificate> {
+    match session_conn.peer_certificates() {
+        Some(certs) => certs.first().cloned(),
+        None => None,
+    }
 }
 
 pub fn socket_name_mapping_or_default(
