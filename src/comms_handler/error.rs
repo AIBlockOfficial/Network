@@ -3,7 +3,7 @@ use crate::interfaces::NodeType;
 use std::net::SocketAddr;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
-use tokio_rustls::rustls::TLSError;
+use tokio_rustls::rustls::Error as TLSError;
 use tokio_rustls::webpki;
 
 #[derive(Debug)]
