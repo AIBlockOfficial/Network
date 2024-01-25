@@ -357,7 +357,7 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     bind_address.set_port(port);
 
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
+    let self_node = Node::new(&tcp_tls_config, 20, node_type, false, false)
         .await
         .unwrap();
     socket_address.set_port(self_node.local_address().port());
@@ -378,7 +378,7 @@ async fn test_get_latest_block() {
     let db = get_db_with_block().await;
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/latest_block");
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -415,7 +415,7 @@ async fn test_get_export_keypairs() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/export_keypairs");
     //
     // Act
@@ -455,7 +455,7 @@ async fn test_get_user_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -503,7 +503,7 @@ async fn test_get_storage_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -551,7 +551,7 @@ async fn test_get_compute_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -609,7 +609,7 @@ async fn test_get_miner_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -662,7 +662,7 @@ async fn test_get_miner_with_user_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -799,7 +799,7 @@ async fn auth_request_common(
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .header("x-api-key", api_key)
             .header("x-nonce", nonce)
             .path("/debug_data")
@@ -858,13 +858,13 @@ async fn test_get_wallet_info() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info");
 
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/spent");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -900,7 +900,7 @@ async fn test_get_shared_config() {
         .method("GET")
         .path("/get_shared_config")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID);
+        .header("x-cache-id", COMMON_REQ_ID);
 
     //
     // Act
@@ -949,7 +949,7 @@ async fn test_pagination() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/1");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -993,13 +993,13 @@ async fn test_pagination_zero_or_terminal() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/-10");
 
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_terminal = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/999");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -1051,16 +1051,16 @@ async fn test_cache() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info");
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/spent");
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_spent_diff_id = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/spent");
 
     let cache = create_new_cache(1);
@@ -1098,7 +1098,7 @@ async fn test_cache() {
     //repeat with same id after value expires
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/spent");
     let r_s = request_spent.reply(&filter).await;
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
@@ -1116,7 +1116,7 @@ async fn test_get_payment_address() {
     let db = get_wallet_db("").await;
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/payment_address");
     //
     // Act
@@ -1155,7 +1155,7 @@ async fn test_get_utxo_set_addresses() {
     let compute = ComputeTest::new(tx_vals);
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/utxo_addresses");
 
     //
@@ -1274,7 +1274,7 @@ async fn test_post_blockchain_entry_by_key(
         .method("POST")
         .path("/blockchain_entry")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&key)
         .reply(&filter)
         .await;
@@ -1297,7 +1297,7 @@ async fn test_post_block_info_by_nums() {
         .method("POST")
         .path("/block_by_num")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec![0_u64, 10, 0])
         .reply(&filter)
         .await;
@@ -1326,7 +1326,7 @@ async fn test_post_transactions_by_key() {
         .method("POST")
         .path("/transactions_by_key")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec!["g98d0ab9304ca82f098a86ad6251803b".to_string()])
         .reply(&filter)
         .await;
@@ -1362,7 +1362,7 @@ async fn test_post_make_payment() {
         .path("/make_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&encapsulated_data);
 
     //
@@ -1415,7 +1415,7 @@ async fn test_post_make_ip_payment() {
         .path("/make_ip_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&encapsulated_data);
     //
     // Act
@@ -1488,7 +1488,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .header("Content-Type", "application/json")
     };
 
@@ -1497,7 +1497,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", com_req_id_plus_1)
+            .header("x-cache-id", com_req_id_plus_1)
             .header("Content-Type", "application/json")
     };
 
@@ -1506,7 +1506,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", com_req_id_plus_2)
+            .header("x-cache-id", com_req_id_plus_2)
             .header("Content-Type", "application/json")
     };
     //
@@ -1553,7 +1553,7 @@ async fn test_post_request_donation() {
         .method("POST")
         .path("/request_donation")
         .remote_addr(self_socket)
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .header("Content-Type", "application/json")
         .json(&address);
     //
@@ -1606,7 +1606,7 @@ async fn test_post_import_keypairs_success() {
         .method("POST")
         .path("/import_keypairs")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&imported_addresses)
         .reply(&filter)
         .await;
@@ -1641,7 +1641,7 @@ async fn test_post_fetch_balance() {
         .method("POST")
         .path("/fetch_balance")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&addresses);
     //
     // Act
@@ -1688,7 +1688,7 @@ async fn test_post_fetch_pending() {
         .method("POST")
         .path("/fetch_pending")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&druids);
     //
     // Act
@@ -1736,7 +1736,7 @@ async fn test_post_update_running_total() {
         .method("POST")
         .path("/update_running_total")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&addresses);
     //
     // Act
@@ -1825,7 +1825,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         .method("POST")
         .path("/create_transactions")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -1887,7 +1887,7 @@ async fn test_post_create_item_asset_tx_compute() {
         .method("POST")
         .path("/create_item_asset")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -1935,7 +1935,7 @@ async fn test_post_create_item_asset_tx_user() {
         .path("/create_item_asset")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -1984,7 +1984,7 @@ async fn test_post_create_item_asset_tx_compute_failure() {
         .method("POST")
         .path("/create_item_asset")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2031,7 +2031,7 @@ async fn test_post_change_passphrase() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2076,7 +2076,7 @@ async fn test_post_change_passphrase_failure() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2121,7 +2121,7 @@ async fn test_post_change_blank_passphrase_failure() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2162,7 +2162,7 @@ async fn test_post_block_nums_by_tx_hashes() {
         .method("POST")
         .path("/check_transaction_presence")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec!["g393e26d47ede87b84808c1a5664ea41"]);
     //
     // Act
@@ -2193,7 +2193,7 @@ async fn test_post_pause_nodes() {
         .method("POST")
         .path("/pause_nodes")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&1_u64);
 
     //
@@ -2231,7 +2231,7 @@ async fn test_post_resume_nodes() {
         .method("POST")
         .path("/resume_nodes")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID);
+        .header("x-cache-id", COMMON_REQ_ID);
 
     //
     // Act
@@ -2273,7 +2273,7 @@ async fn test_post_update_shared_config() {
         .method("POST")
         .path("/update_shared_config")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&shared_config_body);
 
     //

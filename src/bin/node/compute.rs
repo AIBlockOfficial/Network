@@ -125,38 +125,50 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("config")
                 .long("config")
                 .short("c")
+                .env("CONFIG")
                 .help("Run the compute node using the given config file.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_config")
                 .long("tls_config")
+                .env("TLS_CONFIG")
                 .help("Use file to provide tls configuration options.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_config")
                 .long("api_config")
+                .env("API_CONFIG")
                 .help("Use file to provide api configuration options.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_port")
                 .long("api_port")
+                .env("API_PORT")
                 .help("The port to run the http API from")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_use_tls")
                 .long("api_use_tls")
-                .env("ABLOCK_API_USE_TLS")
+                .env("API_USE_TLS")
                 .help("Whether to use TLS for API: 0 to disable")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
+                .env("INITIAL_BLOCK_CONFIG")
                 .help("Run the compute node using the given initial block config file.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("compute_miner_whitelist")
+                .long("compute_miner_whitelist")
+                .env("COMPUTE_MINER_WHITELIST")
+                .help("Specify miner whitelist config for compute nodes.")
                 .takes_value(true),
         )
         .arg(
