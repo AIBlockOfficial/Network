@@ -4,9 +4,9 @@ version = 3
 
 [[package]]
 name = "a_block_chain"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b44df1048326e1627e60e79f2ee0ad085eab10bddee6fbdd2ae27d3241d389c"
+checksum = "b8fec280cad83b814efede7ae40c60f81e6218638cafd45d8eec4248a0e901d9"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",
@@ -20,6 +20,8 @@ dependencies = [
  "sha3",
  "time",
  "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
 ]
 
 [[package]]
