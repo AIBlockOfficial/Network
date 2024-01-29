@@ -397,9 +397,9 @@ pub async fn create_and_save_fake_to_wallet(
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
     let payment_to_save = Asset::token_u64(4000);
-    let payments = vec![(tx_out_p.clone(), payment_to_save, final_address)];
+    let payments = vec![(tx_out_p.clone(), payment_to_save, final_address, 0)];
     wallet_db
-        .save_usable_payments_to_wallet(payments)
+        .save_usable_payments_to_wallet(payments, 0)
         .await
         .unwrap();
 
@@ -664,11 +664,11 @@ fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
 /// ### Arguments
 ///
 /// * `txs`   - The transactions
-pub fn get_paiments_for_wallet<'a>(
+pub fn get_payments_for_wallet<'a>(
     txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
-) -> Vec<(OutPoint, Asset, String)> {
+) -> Vec<(OutPoint, Asset, String, u64)> {
     let utxo_iterator = get_tx_out_with_out_point_cloned(txs);
-    get_paiments_for_wallet_from_utxo(utxo_iterator)
+    get_payments_for_wallet_from_utxo(utxo_iterator)
 }
 
 /// Get the paiment info from the given UTXO set/subset
@@ -676,11 +676,18 @@ pub fn get_paiments_for_wallet<'a>(
 /// ### Arguments
 ///
 /// * `utxo_set`   - The UTXO set/subset
-pub fn get_paiments_for_wallet_from_utxo(
+pub fn get_payments_for_wallet_from_utxo(
     utxos: impl Iterator<Item = (OutPoint, TxOut)>,
-) -> Vec<(OutPoint, Asset, String)> {
+) -> Vec<(OutPoint, Asset, String, u64)> {
     utxos
-        .map(|(out_p, tx_out)| (out_p, tx_out.value, tx_out.script_public_key.unwrap()))
+        .map(|(out_p, tx_out)| {
+            (
+                out_p,
+                tx_out.value,
+                tx_out.script_public_key.unwrap(),
+                tx_out.locktime,
+            )
+        })
         .collect()
 }
 
