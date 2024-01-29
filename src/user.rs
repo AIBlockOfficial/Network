@@ -8,7 +8,7 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
-    create_socket_addr, generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys,
+    create_socket_addr, generate_half_druid, get_payments_for_wallet_from_utxo, to_api_keys,
     to_route_pow_infos, try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
     ResponseResult, RoutesPoWInfo,
 };
@@ -110,6 +110,7 @@ pub struct AutoGenTx {
 #[derive(Debug)]
 pub struct PendingPayment {
     amount: TokenAmount,
+    locktime: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -689,13 +690,19 @@ impl UserNode {
             MakeIpPayment {
                 payment_peer,
                 amount,
+                locktime,
             } => {
-                self.request_payment_address_for_peer(payment_peer, amount)
+                self.request_payment_address_for_peer(payment_peer, amount, locktime)
                     .await
             }
-            MakePayment { address, amount } => {
-                Some(self.make_payment_transactions(None, address, amount).await)
-            }
+            MakePayment {
+                address,
+                amount,
+                locktime,
+            } => Some(
+                self.make_payment_transactions(None, address, amount, locktime)
+                    .await,
+            ),
             SendCreateItemRequest {
                 item_amount,
                 drs_tx_hash_spec,
@@ -708,12 +715,14 @@ impl UserNode {
                 address,
                 amount,
                 excess_address,
+                locktime,
             } => Some(
                 self.make_payment_transactions_provided_excess(
                     None,
                     address,
                     amount,
                     Some(excess_address),
+                    locktime,
                 )
                 .await,
             ),
@@ -883,7 +892,12 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        self.wallet_db.store_payment_transaction(tx.clone()).await;
+        let b_num = self.last_block_notified.header.b_num;
+
+        self.wallet_db
+            .store_payment_transaction(tx.clone(), b_num)
+            .await;
+
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -902,8 +916,9 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .store_payment_transaction(transaction.clone())
+            .store_payment_transaction(transaction.clone(), b_num)
             .await;
         let _peer_span =
             info_span!("sending item-based transaction to compute node for processing");
@@ -967,12 +982,16 @@ impl UserNode {
     ///
     /// * `payment_peer` - Peer to send request to
     /// * `amount`       - Amount to pay
+    /// * `locktime` - Locktime for transaction
     pub async fn request_payment_address_for_peer(
         &mut self,
         payment_peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Option<Response> {
-        self.send_address_request(payment_peer, amount).await.ok()?;
+        self.send_address_request(payment_peer, amount, locktime)
+            .await
+            .ok()?;
         Some(Response {
             success: true,
             reason: "Request Payment Address",
@@ -985,7 +1004,10 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        self.wallet_db.store_payment_transaction(transaction).await;
+        let b_num = self.last_block_notified.header.b_num;
+        self.wallet_db
+            .store_payment_transaction(transaction, b_num)
+            .await;
 
         Response {
             success: true,
@@ -1004,12 +1026,12 @@ impl UserNode {
         peer: SocketAddr,
         address: String,
     ) -> Option<Response> {
-        let amount = match (
+        let (amount, locktime) = match (
             self.pending_payments.0.remove(&peer),
             self.pending_payments.1,
         ) {
-            (Some(PendingPayment { amount }), _) => amount,
-            (_, AutoDonate::Enabled(amount)) => amount,
+            (Some(PendingPayment { amount, locktime }), _) => (amount, locktime),
+            (_, AutoDonate::Enabled(amount)) => (amount, None),
             _ => {
                 return Some(Response {
                     success: false,
@@ -1019,7 +1041,7 @@ impl UserNode {
         };
 
         Some(
-            self.make_payment_transactions(Some(peer), address, amount)
+            self.make_payment_transactions(Some(peer), address, amount, locktime)
                 .await,
         )
     }
@@ -1031,20 +1053,22 @@ impl UserNode {
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    /// * `amount`  - Price/amount payed
+    /// * `amount`  - Price/amount paid
     /// * `excess_address` - Address to assign the excess to
+    /// * `locktime` - Locktime for transaction
     pub async fn make_payment_transactions_provided_excess(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
         excess_address: Option<String>,
+        locktime: Option<u64>,
     ) -> Response {
-        let tx_out = vec![TxOut::new_token_amount(address, amount, None)];
+        let tx_out = TxOut::new_token_amount(address, amount, locktime);
         let asset_required = Asset::Token(amount);
         let (tx_ins, tx_outs) = if let Ok(value) = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, tx_out, excess_address)
+            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, vec![tx_out], excess_address)
             .await
         {
             value
@@ -1106,14 +1130,16 @@ impl UserNode {
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    /// * `amount`  - Price/amount payed
+    /// * `amount`  - Price/amount paid
+    /// * `locktime` - Locktime for transaction
     pub async fn make_payment_transactions(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Response {
-        self.make_payment_transactions_provided_excess(peer, address, amount, None)
+        self.make_payment_transactions_provided_excess(peer, address, amount, None, locktime)
             .await
     }
 
@@ -1142,18 +1168,20 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`    - Socket address of peer to request from
-    /// * `amount`    - Amount being payed
+    /// * `amount`    - Amount being paid
+    /// * `locktime` - Locktime for transaction
     pub async fn send_address_request(
         &mut self,
         peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Result<()> {
         let _peer_span = info_span!("sending payment address request");
         debug!("Sending request for payment address to peer: {:?}", peer);
 
         self.pending_payments
             .0
-            .insert(peer, PendingPayment { amount });
+            .insert(peer, PendingPayment { amount, locktime });
 
         self.node
             .send(peer, UserRequest::SendAddressRequest)
@@ -1196,6 +1224,16 @@ impl UserNode {
     pub async fn send_donation_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         self.trading_peer = Some(peer);
         self.send_address_to_trading_peer().await
+    }
+
+    /// Filter locked coinbase
+    ///
+    ///
+    /// ### Arguments
+    ///
+    /// * `b_num` - Block number to filter
+    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
+        self.wallet_db.filter_locked_coinbase(b_num).await;
     }
 
     /// Received a mined block notification: allow to update pending transactions
@@ -1575,10 +1613,11 @@ impl Transactor for UserNode {
     }
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let payments = get_payments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
 
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments, b_num)
             .await
             .unwrap();
     }

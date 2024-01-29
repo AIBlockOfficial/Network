@@ -55,9 +55,6 @@ use tracing_futures::Instrument;
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
-#[cfg(test)]
-use crate::miner::NO_OF_ADDRESSES_FOR_AGGREGATION_TX;
-
 #[cfg(not(debug_assertions))] // Release
 const TEST_DURATION_DIVIDER: usize = 10;
 #[cfg(debug_assertions)] // Debug
@@ -225,6 +222,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     let miner_addr = &active_nodes[&NodeType::Miner][0];
     let compute_addr = &active_nodes[&NodeType::Compute][0];
     let mut prev_mining_reward = TokenAmount(0);
+    let address_aggregation_limit = network_config.address_aggregation_limit.unwrap_or_default();
 
     //
     // Act
@@ -237,7 +235,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
 
     let mut handle_aggregation_tx: bool;
     // Create more blocks
-    for _ in 1..(NO_OF_ADDRESSES_FOR_AGGREGATION_TX * 5) + 1 {
+    for _ in 1..(address_aggregation_limit * 5) + 1 {
         create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
         // Check if the miner is _about_ to send aggregation tx
@@ -250,7 +248,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
                 .get_wallet_db()
                 .get_known_addresses()
                 .len();
-            handle_aggregation_tx = addrs % (NO_OF_ADDRESSES_FOR_AGGREGATION_TX - 1) == 0;
+            handle_aggregation_tx = addrs % (address_aggregation_limit - 1) == 0;
         }
 
         if handle_aggregation_tx {
@@ -1239,8 +1237,7 @@ async fn proof_of_work_block_act(
                     }
 
                     // Miner handles the UTXO set and updates its balance
-                    miner_handle_event(network, miner, "Received UTXO set for aggregating tx")
-                        .await;
+                    miner_handle_event(network, miner, "Received UTXO set").await;
 
                     {
                         let miner_node = network.miner(miner).unwrap();
@@ -1699,6 +1696,7 @@ async fn receive_payment_tx_user() {
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.nodes[&NodeType::User];
     let amount = TokenAmount(5);
+    let locktime = Some(5);
 
     create_first_block_act(&mut network).await;
 
@@ -1710,7 +1708,7 @@ async fn receive_payment_tx_user() {
     node_connect_to(&mut network, "user1", "user2").await;
 
     // Process requested transactions:
-    user_send_address_request(&mut network, "user1", "user2", amount).await;
+    user_send_address_request(&mut network, "user1", "user2", amount, locktime).await;
     user_handle_event(&mut network, "user2", "New address ready to be sent").await;
 
     user_send_address_to_trading_peer(&mut network, "user2").await;
@@ -1718,13 +1716,44 @@ async fn receive_payment_tx_user() {
 
     user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
     compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     // Ignore donations:
     user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
     user_handle_error(&mut network, "user1", "Ignore unexpected transaction").await;
 
-    let after = node_all_get_wallet_info(&mut network, user_nodes).await;
+    let after_payment_user1_user2 = node_all_get_wallet_info(&mut network, user_nodes).await;
+
+    // Handle trying to spend locked funds:
+    create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, 0).await; // Create next block
+    user_send_address_request(&mut network, "user2", "user1", amount, None).await;
+    user_handle_event(&mut network, "user1", "New address ready to be sent").await;
+
+    user_send_address_to_trading_peer(&mut network, "user1").await;
+    // Insufficient funds due to locked funds:
+    user_handle_event_failure(&mut network, "user2", "Insufficient funds for payment").await;
+
+    // Handle trying to spend unlocked funds:
+    for b_num in 1..10 {
+        // Create next block
+        create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
+        // Update locked coinbase
+        users_filter_locked_coinbase(&mut network, &["user1", "user2"], b_num).await;
+    }
+
+    user_send_address_request(&mut network, "user2", "user1", amount, None).await;
+    user_handle_event(&mut network, "user1", "New address ready to be sent").await;
+
+    user_send_address_to_trading_peer(&mut network, "user1").await;
+    user_handle_event(&mut network, "user2", "Next payment transaction ready").await;
+
+    user_send_next_payment_to_destinations(&mut network, "user2", "compute1").await;
+    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
+    user_handle_event(&mut network, "user1", "Payment transaction received").await;
+
+    let after_payment_user2_user1 = node_all_get_wallet_info(&mut network, user_nodes).await;
 
     //
     // Assert
@@ -1737,11 +1766,18 @@ async fn receive_payment_tx_user() {
         vec![AssetValues::token_u64(11), AssetValues::token_u64(0),]
     );
     assert_eq!(
-        after
+        after_payment_user1_user2
             .iter()
             .map(|(total, _, _)| total.clone())
             .collect::<Vec<_>>(),
         vec![AssetValues::token_u64(6), AssetValues::token_u64(5)]
+    );
+    assert_eq!(
+        after_payment_user2_user1
+            .iter()
+            .map(|(total, _, _)| total.clone())
+            .collect::<Vec<_>>(),
+        vec![AssetValues::token_u64(11), AssetValues::token_u64(0),]
     );
 
     test_step_complete(network).await;
@@ -4390,6 +4426,11 @@ async fn storage_one_handle_event(
 // UserNode helpers
 //
 
+async fn user_handle_event_failure(network: &mut Network, user: &str, reason_val: &str) {
+    let mut u = network.user(user).unwrap().lock().await;
+    user_handle_event_for_node(&mut u, false, reason_val, &mut test_timeout()).await;
+}
+
 async fn user_handle_event(network: &mut Network, user: &str, reason_val: &str) {
     let mut u = network.user(user).unwrap().lock().await;
     user_handle_event_for_node(&mut u, true, reason_val, &mut test_timeout()).await;
@@ -4471,15 +4512,27 @@ async fn user_send_next_payment_to_destinations(
         .unwrap();
 }
 
+async fn users_filter_locked_coinbase(network: &mut Network, users: &[&str], b_num: u64) {
+    for user in users {
+        user_filter_locked_coinbase(network, user, b_num).await;
+    }
+}
+
+async fn user_filter_locked_coinbase(network: &mut Network, user: &str, b_num: u64) {
+    let mut u = network.user(user).unwrap().lock().await;
+    u.filter_locked_coinbase(b_num).await;
+}
+
 async fn user_send_address_request(
     network: &mut Network,
     from_user: &str,
     to_user: &str,
     amount: TokenAmount,
+    locktime: Option<u64>,
 ) {
     let user_node_addr = network.get_address(to_user).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_address_request(user_node_addr, amount)
+    u.send_address_request(user_node_addr, amount, locktime)
         .await
         .unwrap();
 }
@@ -5073,6 +5126,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         compute_miner_whitelist: Default::default(),
         mining_api_key: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
 }
 

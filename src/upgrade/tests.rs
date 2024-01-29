@@ -724,6 +724,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         mining_api_key: Default::default(),
         compute_miner_whitelist: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
     .with_groups(1, 1)
 }
@@ -864,7 +865,8 @@ async fn user_make_payment_transaction(
 ) {
     let mut user = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    user.make_payment_transactions(None, to_addr, amount).await;
+    user.make_payment_transactions(None, to_addr, amount, None)
+        .await;
     user.send_next_payment_to_destinations(compute_addr)
         .await
         .unwrap();
