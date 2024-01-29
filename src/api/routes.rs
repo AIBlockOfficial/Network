@@ -349,6 +349,7 @@ pub fn transactions_by_key(
 pub fn import_keypairs(
     dp: &mut DbgPaths,
     db: WalletDb,
+    node: Node,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -358,13 +359,14 @@ pub fn import_keypairs(
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
+        .and(with_node_component(node))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, db, kp, cache| {
+        .and_then(move |call_id: String, db, node, kp, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_import_keypairs(db, kp, route, call_id),
+                handlers::post_import_keypairs(node, db, kp, route, call_id),
             )
         })
         .with(post_cors())
@@ -800,6 +802,7 @@ pub fn user_node_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1030,6 +1033,7 @@ pub fn miner_node_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1126,6 +1130,7 @@ pub fn miner_node_with_user_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        user_node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

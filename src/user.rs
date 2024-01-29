@@ -8,7 +8,7 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
-    create_socket_addr, generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys,
+    create_socket_addr, generate_half_druid, get_payments_for_wallet_from_utxo, to_api_keys,
     to_route_pow_infos, try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
     ResponseResult, RoutesPoWInfo,
 };
@@ -883,7 +883,12 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        self.wallet_db.store_payment_transaction(tx.clone()).await;
+            let b_num = self.last_block_notified.header.b_num;
+
+            self.wallet_db
+                .store_payment_transaction(tx.clone(), b_num)
+                .await;
+
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -902,8 +907,9 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .store_payment_transaction(transaction.clone())
+            .store_payment_transaction(transaction.clone(), b_num)
             .await;
         let _peer_span =
             info_span!("sending item-based transaction to compute node for processing");
@@ -985,7 +991,10 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        self.wallet_db.store_payment_transaction(transaction).await;
+        let b_num = self.last_block_notified.header.b_num;
+        self.wallet_db
+            .store_payment_transaction(transaction, b_num)
+            .await;
 
         Response {
             success: true,
@@ -1575,10 +1584,11 @@ impl Transactor for UserNode {
     }
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let payments = get_payments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
 
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments, b_num)
             .await
             .unwrap();
     }
