@@ -65,7 +65,7 @@ pub enum ComputeRaftItem {
     PipelineItem(MiningPipelineItem, u64),
     CoordinatedCmd(CoordinatedCommand),
     Timestamp(i64),
-    RuntimeData(ComputeRuntimeItem)
+    RuntimeData(ComputeRuntimeItem),
 }
 
 /// Compute RAFT runtime item; will not get stored to disk
@@ -87,7 +87,7 @@ pub enum CommittedItem {
     ResetPipeline,
     Transactions,
     Snapshot,
-    CoordinatedCmd(CoordinatedCommand)
+    CoordinatedCmd(CoordinatedCommand),
 }
 
 impl From<MiningPipelinePhaseChange> for CommittedItem {

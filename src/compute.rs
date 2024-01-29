@@ -747,6 +747,10 @@ impl ComputeNode {
                     "Block and participants ready to mine: {:?}",
                     self.get_mining_block()
                 );
+                info!(
+                    "No. of connected miners: {:?}",
+                    self.get_connected_miners().await.len()
+                );
                 self.flood_rand_and_block_to_partition().await.unwrap();
             }
             Ok(Response {
@@ -1367,11 +1371,11 @@ impl ComputeNode {
         self.node_raft
             .update_compute_miner_whitelist_addresses(compute_miner_whitelist.miner_addresses);
 
-            if let Some(unauthorized) = self.flush_unauthorized_miners().await {
-                self.node_raft
-                    .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unauthorized))
-                    .await;
-            }
+        if let Some(unauthorized) = self.flush_unauthorized_miners().await {
+            self.node_raft
+                .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unauthorized))
+                .await;
+        }
 
         self.shared_config = received_shared_config;
         self.received_shared_config = None;
