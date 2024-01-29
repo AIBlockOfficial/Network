@@ -1,5 +1,7 @@
+use crate::comms_handler::Node;
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
+use crate::db_utils;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
     ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
@@ -14,7 +16,6 @@ use crate::utils::{
     RunningTaskOrResult,
 };
 use crate::wallet::{LockedCoinbase, WalletDb, WalletDbError, DB_SPEC};
-use crate::{db_utils, Node};
 use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use a_block_chain::primitives::block::{self, BlockHeader};
 use a_block_chain::primitives::transaction::Transaction;
