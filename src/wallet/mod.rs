@@ -5,8 +5,6 @@ use crate::db_utils::{
 };
 use crate::utils::{get_payments_for_wallet, make_wallet_tx_info};
 use crate::Rs2JsMsg;
-use bincode::{deserialize, serialize};
-use hex::FromHexError;
 use a_block_chain::crypto::pbkdf2 as pwhash;
 use a_block_chain::crypto::secretbox_chacha20_poly1305 as secretbox;
 use a_block_chain::crypto::sign_ed25519 as sign;
@@ -17,6 +15,8 @@ use a_block_chain::utils::transaction_utils::{
     construct_address_for, construct_payment_tx_ins, construct_tx_hash,
     construct_tx_in_signable_hash,
 };
+use bincode::{deserialize, serialize};
+use hex::FromHexError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};

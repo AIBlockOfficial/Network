@@ -883,11 +883,11 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-            let b_num = self.last_block_notified.header.b_num;
+        let b_num = self.last_block_notified.header.b_num;
 
-            self.wallet_db
-                .store_payment_transaction(tx.clone(), b_num)
-                .await;
+        self.wallet_db
+            .store_payment_transaction(tx.clone(), b_num)
+            .await;
 
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
