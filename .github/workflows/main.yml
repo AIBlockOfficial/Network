@@ -1,9 +1,9 @@
-name: build-deploy
+name: build-scan
 on: 
-  push:
+  pull_request:
     branches: 
       - main
-      - enable_domain_resolution
+      - develop
 
 permissions:
   contents: read
