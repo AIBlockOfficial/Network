@@ -1,0 +1,47 @@
+version: '3'
+services:
+
+  a-compute-node: &node-default
+    image: network
+    environment:
+      RUST_LOG: info,debug
+    init: true
+    ports: 
+      - '12300:12300'
+      - '3003:3003'
+    volumes:  
+      - /tmp/compute:/src
+    command: compute
+  
+  a-storage-node:
+    <<: *node-default
+    ports:
+      - '12330:12330'
+      - '3001:3001'
+    volumes:  
+      - /tmp/storage:/src
+    command: storage
+
+  a-miner-node:
+    <<: *node-default
+    depends_on: 
+      - a-compute-node
+      - a-storage-node
+    ports:
+      - '12340:12340'
+      - '3004:3004'
+    volumes:  
+      - /tmp/miner:/src
+    command: miner
+
+  # a-alice-node:
+  #   <<: *node-default
+  #   ports:
+  #     - '12360:12360'
+  #   command: node user
+
+  # a-bob-node:
+  #   <<: *node-default
+  #   ports:
+  #     - '12361:12361'
+  #   command: node user
