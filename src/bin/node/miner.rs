@@ -275,6 +275,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("address_aggregation_limit")
                 .long("address_aggregation_limit")
+                .env("ADDRESS_AGGREGATION_LIMIT")
                 .help("Limit the amount of addresses that can be kept before aggregation is triggered")
                 .takes_value(true),
         )
@@ -288,6 +289,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("with_user_index")
                 .long("with_user_index")
+                .env("WITH_USER_INDEX")
                 .help("Run the specified user node index from config file")
                 .takes_value(true),
         )
@@ -300,18 +302,21 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("passphrase")
                 .long("passphrase")
+                .env("PASSPHRASE")
                 .help("Enter a password or passphase for the encryption of the Wallet.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("address")
                 .long("address")
+                .env("ADDRESS")
                 .help("Run node index at the given address")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("with_user_address")
                 .long("with_user_address")
+                .env("WITH_USER_ADDRESS")
                 .help("Run the specified user node index from config file")
                 .takes_value(true),
         )
