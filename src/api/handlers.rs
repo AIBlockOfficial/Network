@@ -64,12 +64,6 @@ struct WalletInfo {
     addresses: AddressesWithOutPoints,
 }
 
-/// Public key addresses received from client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublicKeyAddresses {
-    pub address_list: Vec<String>,
-}
-
 /// Encapsulated payment received from client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncapsulatedPayment {
@@ -596,12 +590,12 @@ pub async fn post_request_donation(
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,
-    addresses: PublicKeyAddresses,
+    addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-        address_list: UtxoFetchType::AnyOf(addresses.address_list),
+        address_list: UtxoFetchType::AnyOf(addresses),
     });
     let r = CallResponse::new(route, &call_id);
 
@@ -616,7 +610,7 @@ pub async fn post_update_running_total(
 /// Post to fetch the balance for given addresses in UTXO
 pub async fn post_fetch_utxo_balance(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    addresses: PublicKeyAddresses,
+    addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
@@ -626,7 +620,7 @@ pub async fn post_fetch_utxo_balance(
         &mut threaded_calls,
         move |c| {
             c.get_committed_utxo_tracked_set()
-                .get_balance_for_addresses(&addresses.address_list)
+                .get_balance_for_addresses(&addresses)
         },
         "Cannot fetch UTXO balance",
     )
