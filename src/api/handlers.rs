@@ -28,7 +28,6 @@ use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transactio
 use a_block_chain::script::lang::Script;
 use a_block_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::fmt::format::Json;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
@@ -379,7 +378,7 @@ pub async fn get_circulating_supply(
     // Send request to compute node
     let res = make_api_threaded_call(
         &mut threaded_calls,
-        move |c| c.get_shared_config(),
+        move |c| c.get_circulating_supply(),
         "Cannot access Compute Node",
     )
     .await

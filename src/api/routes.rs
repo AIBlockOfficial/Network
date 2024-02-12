@@ -218,6 +218,30 @@ pub fn total_supply(
         .with(get_cors())
 }
 
+// GET circulating supply of tokens
+pub fn circulating_supply(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "circulating_supply";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(threaded_calls))
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_circulating_supply(tc, route, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
 // GET UTXO set addresses
 pub fn utxo_addresses(
     dp: &mut DbgPaths,
@@ -975,6 +999,13 @@ pub fn compute_node_routes(
     ))
     .or(total_supply(
         dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(circulating_supply(
+        dp,
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

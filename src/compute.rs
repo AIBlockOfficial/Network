@@ -2352,6 +2352,10 @@ impl ComputeApi for ComputeNode {
         self.get_pending_druid_pool()
     }
 
+    fn get_circulating_supply(&self) -> TokenAmount {
+        self.node_raft.get_current_circulation().clone()
+    }
+
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         self.receive_transactions(transactions)
     }
