@@ -196,6 +196,28 @@ pub fn current_mining_block(
         .with(get_cors())
 }
 
+// GET total supply in the system. Can be pulled directly from the blockchain
+pub fn total_supply(
+    dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "total_supply";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_total_supply(route, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
 // GET UTXO set addresses
 pub fn utxo_addresses(
     dp: &mut DbgPaths,
@@ -947,6 +969,12 @@ pub fn compute_node_routes(
     .or(create_transactions(
         dp,
         threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(total_supply(
+        dp,
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
