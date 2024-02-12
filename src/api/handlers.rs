@@ -20,7 +20,7 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use a_block_chain::constants::{TOTAL_TOKENS, D_DISPLAY_PLACES};
+use a_block_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
 use a_block_chain::crypto::sign_ed25519::PublicKey;
 use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
 use a_block_chain::primitives::druid::DdeValues;
@@ -372,7 +372,7 @@ pub async fn get_shared_config_compute(
 pub async fn get_circulating_supply(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     route: &'static str,
-    call_id: String
+    call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
     // Send request to compute node
@@ -393,7 +393,7 @@ pub async fn get_circulating_supply(
 /// GET The total token supply in the system
 pub async fn get_total_supply(
     route: &'static str,
-    call_id: String
+    call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
 
