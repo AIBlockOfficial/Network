@@ -148,6 +148,10 @@ impl ComputeApi for ComputeTest {
         }
     }
 
+    fn get_circulating_supply(&self) -> TokenAmount {
+        TokenAmount(100)
+    }
+
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
         &self.utxo_set
     }
