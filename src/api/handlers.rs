@@ -11,8 +11,8 @@ use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, DebugData, DruidPool, OutPointData, StoredSerializingBlock,
-    UserApiRequest, UserRequest, UtxoFetchType,
+    BlockchainItemType, ComputeApi, DebugData, DruidPool, MineApiRequest, MineRequest, NodeType,
+    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
@@ -20,13 +20,13 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use naom::constants::D_DISPLAY_PLACES;
-use naom::crypto::sign_ed25519::PublicKey;
-use naom::primitives::asset::{Asset, ReceiptAsset, TokenAmount};
-use naom::primitives::druid::DdeValues;
-use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
-use naom::script::lang::Script;
-use naom::utils::transaction_utils::{construct_address_for, construct_tx_hash};
+use a_block_chain::constants::D_DISPLAY_PLACES;
+use a_block_chain::crypto::sign_ed25519::PublicKey;
+use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
+use a_block_chain::primitives::druid::DdeValues;
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
+use a_block_chain::script::lang::Script;
+use a_block_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -55,7 +55,12 @@ pub struct Addresses {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletInfo {
     running_total: f64,
-    receipt_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
+    running_total_tokens: u64,
+    locked_total: f64,
+    locked_total_tokens: u64,
+    available_total: f64,
+    available_total_tokens: u64,
+    item_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
     addresses: AddressesWithOutPoints,
 }
 
@@ -71,15 +76,16 @@ pub struct EncapsulatedPayment {
     pub address: String,
     pub amount: TokenAmount,
     pub passphrase: String,
+    pub locktime: Option<u64>,
 }
 
-/// Receipt asset creation structure received from client
+/// Item asset creation structure received from client
 ///
-/// This structure is used to create a receipt asset on EITHER
+/// This structure is used to create a item asset on EITHER
 /// the compute or user node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateReceiptAssetDataCompute {
-    pub receipt_amount: u64,
+pub struct CreateItemAssetDataCompute {
+    pub item_amount: u64,
     pub drs_tx_hash_spec: DrsTxHashSpec,
     pub script_public_key: String,
     pub public_key: String,
@@ -88,8 +94,8 @@ pub struct CreateReceiptAssetDataCompute {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateReceiptAssetDataUser {
-    pub receipt_amount: u64,
+pub struct CreateItemAssetDataUser {
+    pub item_amount: u64,
     pub drs_tx_hash_spec: DrsTxHashSpec,
     pub metadata: Option<String>,
 }
@@ -127,6 +133,7 @@ pub struct CreateTransaction {
     pub inputs: Vec<CreateTxIn>,
     pub outputs: Vec<TxOut>,
     pub version: usize,
+    pub fees: Option<Vec<TxOut>>,
     pub druid_info: Option<DdeValues>,
 }
 /// Struct received from client to change passphrase
@@ -171,7 +178,7 @@ pub async fn get_wallet_info(
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
 
-    let fund_store = match wallet_db.get_fund_store_err() {
+    let mut fund_store = match wallet_db.get_fund_store_err() {
         Ok(fund) => fund,
         Err(_) => return r.into_err_internal(ApiErrorType::CannotAccessWallet),
     };
@@ -196,18 +203,23 @@ pub async fn get_wallet_info(
     for (out_point, asset) in txs {
         addresses
             .entry(wallet_db.get_transaction_address(&out_point))
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(OutPointData::new(out_point.clone(), asset.clone()));
     }
-
-    let total = fund_store.running_total();
-    let (running_total, receipt_total) = (
-        total.tokens.0 as f64 / D_DISPLAY_PLACES,
-        total.receipts.clone(),
-    );
+    let locked_coinbase = wallet_db.get_locked_coinbase().await;
+    let total = fund_store.running_total().clone();
+    let available = {
+        fund_store.filter_locked_coinbase(&locked_coinbase);
+        fund_store.running_total()
+    };
     let send_val = WalletInfo {
-        running_total,
-        receipt_total,
+        running_total: total.tokens.0 as f64 / D_DISPLAY_PLACES,
+        running_total_tokens: total.tokens.0,
+        locked_total: (total.tokens.0 - available.tokens.0) as f64 / D_DISPLAY_PLACES,
+        locked_total_tokens: (total.tokens.0 - available.tokens.0),
+        available_total: available.tokens.0 as f64 / D_DISPLAY_PLACES,
+        available_total_tokens: available.tokens.0,
+        item_total: total.items,
         addresses,
     };
 
@@ -400,6 +412,7 @@ pub async fn post_block_by_num(
 
 /// Post to import new keypairs to the connected wallet
 pub async fn post_import_keypairs(
+    peer: Node,
     db: WalletDb,
     keypairs: Addresses,
     route: &'static str,
@@ -408,6 +421,7 @@ pub async fn post_import_keypairs(
     let response_keys: Vec<String> = keypairs.addresses.keys().cloned().collect();
     let response_data = json_serialize_embed(response_keys);
     let r = CallResponse::new(route, &call_id);
+    let addresses: Vec<String> = keypairs.addresses.keys().cloned().collect();
 
     let mut key_pairs_converted = BTreeMap::new();
     for (address, address_store_hex) in keypairs.addresses.into_iter() {
@@ -438,6 +452,34 @@ pub async fn post_import_keypairs(
         }
     }
 
+    match peer.get_node_type() {
+        NodeType::Miner => {
+            // Update running total from compute node
+            if let Err(e) = peer.inject_next_event(
+                peer.local_address(),
+                MineRequest::MinerApi(MineApiRequest::RequestUTXOSet(UtxoFetchType::AnyOf(
+                    addresses,
+                ))),
+            ) {
+                error!("route:update_running_total error: {:?}", e);
+                return r.into_err_internal(ApiErrorType::CannotAccessMinerNode);
+            }
+        }
+        NodeType::User => {
+            // Update running total from compute node
+            if let Err(e) = peer.inject_next_event(
+                peer.local_address(),
+                UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+                    address_list: UtxoFetchType::AnyOf(addresses),
+                }),
+            ) {
+                error!("route:update_running_total error: {:?}", e);
+                return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
+            }
+        }
+        _ => return r.into_err_internal(ApiErrorType::InternalError),
+    }
+
     r.into_ok("Key-pairs successfully imported", response_data)
 }
 
@@ -453,6 +495,7 @@ pub async fn post_make_payment(
         address,
         amount,
         passphrase,
+        locktime,
     } = encapsulated_data;
 
     let r = CallResponse::new(route, &call_id);
@@ -461,6 +504,7 @@ pub async fn post_make_payment(
         Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
             address: address.clone(),
             amount,
+            locktime,
         }),
         Err(e) => {
             return wallet_db_error(e, r);
@@ -490,6 +534,7 @@ pub async fn post_make_ip_payment(
         address,
         amount,
         passphrase,
+        locktime,
     } = encapsulated_data;
 
     let r = CallResponse::new(route, &call_id);
@@ -505,6 +550,7 @@ pub async fn post_make_ip_payment(
         Ok(_) => UserRequest::UserApi(UserApiRequest::MakeIpPayment {
             payment_peer,
             amount,
+            locktime,
         }),
         Err(e) => {
             return wallet_db_error(e, r);
@@ -622,64 +668,61 @@ pub async fn post_fetch_druid_pending(
     )
 }
 
-/// Post to create a receipt asset transaction on User node
-pub async fn post_create_receipt_asset_user(
+/// Post to create a item asset transaction on User node
+pub async fn post_create_item_asset_user(
     peer: Node,
-    receipt_data: CreateReceiptAssetDataUser,
+    item_data: CreateItemAssetDataUser,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let CreateReceiptAssetDataUser {
-        receipt_amount,
+    let CreateItemAssetDataUser {
+        item_amount,
         drs_tx_hash_spec,
         metadata,
-    } = receipt_data;
+    } = item_data;
 
-    let request = UserRequest::UserApi(UserApiRequest::SendCreateReceiptRequest {
-        receipt_amount,
+    let request = UserRequest::UserApi(UserApiRequest::SendCreateItemRequest {
+        item_amount,
         drs_tx_hash_spec,
         metadata,
     });
     let r = CallResponse::new(route, &call_id);
 
     if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
-        error!("route:create_receipt_asset error: {:?}", e);
+        error!("route:create_item_asset error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
 
-    r.into_ok(
-        "Receipt asset(s) created",
-        json_serialize_embed(receipt_amount),
-    )
+    r.into_ok("Item asset(s) created", json_serialize_embed(item_amount))
 }
 
-/// Post to create a receipt asset transaction on Compute node
-pub async fn post_create_receipt_asset(
+/// Post to create a item asset transaction on Compute node
+pub async fn post_create_item_asset(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    create_receipt_asset_data: CreateReceiptAssetDataCompute,
+    create_item_asset_data: CreateItemAssetDataCompute,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let CreateReceiptAssetDataCompute {
-        receipt_amount,
+    let CreateItemAssetDataCompute {
+        item_amount,
         drs_tx_hash_spec,
         script_public_key,
         public_key,
         signature,
         metadata,
-    } = create_receipt_asset_data;
+    } = create_item_asset_data;
 
     let r = CallResponse::new(route, &call_id);
 
-    // Create receipt asset on the Compute node
+    // Create item asset on the Compute node
     let spk = script_public_key.clone();
     let md = metadata.clone();
     let (tx_hash, compute_resp) = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
             let (tx, tx_hash) = c
-                .create_receipt_asset_tx(
-                    receipt_amount,
+                .create_item_asset_tx(
+                    item_amount,
                     spk,
                     public_key,
                     signature,
@@ -698,11 +741,11 @@ pub async fn post_create_receipt_asset(
     match compute_resp.success {
         true => {
             // Response content
-            let receipt_asset = ReceiptAsset::new(receipt_amount, Some(tx_hash.clone()), metadata);
-            let api_asset = APIAsset::new(Asset::Receipt(receipt_asset), None);
+            let item_asset = ItemAsset::new(item_amount, Some(tx_hash.clone()), metadata);
+            let api_asset = APIAsset::new(Asset::Item(item_asset), None);
             let create_info = APICreateResponseContent::new(api_asset, script_public_key, tx_hash);
             let response_data = json_serialize_embed(create_info);
-            r.into_ok("Receipt asset(s) created", response_data)
+            r.into_ok("Item asset(s) created", response_data)
         }
         false => r.into_err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -937,6 +980,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         outputs,
         version,
         druid_info,
+        fees,
     } = data;
 
     let inputs = {
@@ -977,6 +1021,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         inputs,
         outputs,
         version,
+        fees: fees.unwrap_or_default(),
         druid_info,
     })
 }

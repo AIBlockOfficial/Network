@@ -1,16 +1,17 @@
 use crate::compute::ComputeError;
+use crate::compute_raft::ComputeConsensusedRuntimeData;
 use crate::configurations::ComputeNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
 use crate::utils::rug_integer;
+use a_block_chain::primitives::asset::Asset;
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::{Block, BlockHeader};
+use a_block_chain::primitives::druid::DruidExpectation;
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, TxIn};
+use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxOut};
 use bytes::Bytes;
-use naom::primitives::asset::Asset;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::{Block, BlockHeader};
-use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::{DrsTxHashSpec, TxIn};
-use naom::primitives::transaction::{OutPoint, Transaction, TxOut};
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,7 +52,7 @@ pub enum UtxoFetchType {
     AnyOf(Vec<String>),
 }
 
-/// Struct used to keep-track of the next receipt-based payment
+/// Struct used to keep-track of the next item-based payment
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RbPaymentData {
     pub sender_asset: Asset,
@@ -60,7 +61,7 @@ pub struct RbPaymentData {
     pub tx_outs: Vec<TxOut>,
 }
 
-/// Struct used to make a request for a new receipt-based payment
+/// Struct used to make a request for a new item-based payment
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RbPaymentRequestData {
     pub sender_address: String,
@@ -70,7 +71,7 @@ pub struct RbPaymentRequestData {
     pub sender_drs_tx_expectation: Option<String>,
 }
 
-/// Struct used to make a response to a new receipt-based payment
+/// Struct used to make a response to a new item-based payment
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RbPaymentResponseData {
     pub receiver_address: String,
@@ -326,6 +327,7 @@ pub enum CommMessage {
         /// Unique message ID. Can be used for correspondence between requests and responses.
         id: Token,
     },
+    HeartBeatProbe(Token),
 }
 
 ///============ STORAGE NODE ============///
@@ -437,6 +439,8 @@ pub enum MineApiRequest {
     ConnectToCompute,
     // Disconnect from compute Node
     DisconnectFromCompute,
+    // Request UTXO set for wallet update
+    RequestUTXOSet(UtxoFetchType),
     // Set static miner address
     SetStaticMinerAddress {
         address: Option<String>,
@@ -491,6 +495,7 @@ impl fmt::Debug for MineRequest {
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
             MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
             MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::RequestUTXOSet(_)) => write!(f, "RequestUTXOSet"),
             MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
                 write!(f, "SetStaticMinerAddress")
             }
@@ -540,8 +545,8 @@ pub enum Rs2JsMsg {
 #[allow(clippy::enum_variant_names)]
 #[derive(Deserialize, Serialize, Clone)]
 pub enum ComputeApiRequest {
-    SendCreateReceiptRequest {
-        receipt_amount: u64,
+    SendCreateItemRequest {
+        item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
@@ -597,6 +602,10 @@ pub enum ComputeRequest {
     CoordinatedResume,
     Closing,
     RequestRemoveMiner,
+    RequestRuntimeData,
+    SendRuntimeData {
+        runtime_data: ComputeConsensusedRuntimeData,
+    },
     SendRaftCmd(RaftMessageWrapper),
 }
 
@@ -605,8 +614,8 @@ impl fmt::Debug for ComputeRequest {
         use ComputeRequest::*;
 
         match *self {
-            ComputeApi(ComputeApiRequest::SendCreateReceiptRequest { .. }) => {
-                write!(f, "Api::SendCreateReceiptRequest")
+            ComputeApi(ComputeApiRequest::SendCreateItemRequest { .. }) => {
+                write!(f, "Api::SendCreateItemRequest")
             }
             ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
                 write!(f, "Api::SendTransactions")
@@ -628,6 +637,8 @@ impl fmt::Debug for ComputeRequest {
             CoordinatedPause { .. } => write!(f, "CoordinatedPause"),
             CoordinatedResume => write!(f, "CoordinatedResume"),
             RequestRemoveMiner => write!(f, "RequestRemoveMiner"),
+            RequestRuntimeData => write!(f, "RequestRuntimeData"),
+            SendRuntimeData { .. } => write!(f, "SendRuntimeData"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
         }
     }
@@ -687,10 +698,10 @@ pub trait ComputeApi {
     /// * `transactions` - Transactions to be added into blocks.
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response;
 
-    /// Creates a new set of receipt assets
-    fn create_receipt_asset_tx(
+    /// Creates a new set of item assets
+    fn create_item_asset_tx(
         &mut self,
-        receipt_amount: u64,
+        item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
@@ -704,9 +715,9 @@ pub trait ComputeApi {
 /// Encapsulates user requests injected by API
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserApiRequest {
-    /// Request to generate receipt-based asset
-    SendCreateReceiptRequest {
-        receipt_amount: u64,
+    /// Request to generate item-based asset
+    SendCreateItemRequest {
+        item_amount: u64,
         drs_tx_hash_spec: DrsTxHashSpec,
         metadata: Option<String>,
     },
@@ -724,12 +735,14 @@ pub enum UserApiRequest {
     MakeIpPayment {
         payment_peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     },
 
     /// Request to make a payment to a public key address
     MakePayment {
         address: String,
         amount: TokenAmount,
+        locktime: Option<u64>,
     },
 
     /// Request to make a payment to a public key address with a given excess address
@@ -737,6 +750,7 @@ pub enum UserApiRequest {
         address: String,
         amount: TokenAmount,
         excess_address: String,
+        locktime: Option<u64>,
     },
 
     /// Request to generate a new address
@@ -767,11 +781,11 @@ pub enum UserRequest {
     /// Process an API internal request
     UserApi(UserApiRequest),
 
-    /// Request to make a receipt-based payment
+    /// Request to make a item-based payment
     SendRbPaymentRequest {
         rb_payment_request_data: RbPaymentRequestData,
     },
-    /// Provide response for receipt-based payment request
+    /// Provide response for item-based payment request
     SendRbPaymentResponse {
         rb_payment_response: Option<RbPaymentResponseData>,
     },
@@ -807,7 +821,7 @@ impl fmt::Debug for UserRequest {
             UserApi(RequestDonation { .. }) => write!(f, "RequestDonation"),
             UserApi(MakeIpPayment { .. }) => write!(f, "MakeIpPayment"),
             UserApi(MakePayment { .. }) => write!(f, "MakePayment"),
-            UserApi(SendCreateReceiptRequest { .. }) => write!(f, "SendCreateReceiptRequest"),
+            UserApi(SendCreateItemRequest { .. }) => write!(f, "SendCreateItemRequest"),
             UserApi(MakePaymentWithExcessAddress { .. }) => {
                 write!(f, "MakePaymentWithExcessAddress")
             }

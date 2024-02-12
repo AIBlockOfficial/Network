@@ -31,6 +31,7 @@ pub fn get_cors() -> warp::cors::Builder {
             "Access-Control-Allow-Origin",
             "Access-Control-Allow-Headers",
             "Content-Type",
+            "x-cache-id",
             "x-request-id",
             "x-nonce",
             "x-api-key",
@@ -260,6 +261,7 @@ pub fn post_cors() -> warp::cors::Builder {
             "Access-Control-Allow-Origin",
             "Access-Control-Allow-Headers",
             "Content-Type",
+            "x-cache-id",
             "x-request-id",
             "x-nonce",
             "x-api-key",
@@ -347,6 +349,7 @@ pub fn transactions_by_key(
 pub fn import_keypairs(
     dp: &mut DbgPaths,
     db: WalletDb,
+    node: Node,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -356,13 +359,14 @@ pub fn import_keypairs(
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
+        .and(with_node_component(node))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, db, kp, cache| {
+        .and_then(move |call_id: String, db, node, kp, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_import_keypairs(db, kp, route, call_id),
+                handlers::post_import_keypairs(node, db, kp, route, call_id),
             )
         })
         .with(post_cors())
@@ -522,15 +526,15 @@ pub fn fetch_pending(
         .with(post_cors())
 }
 
-// POST create receipt-based asset transaction
-pub fn create_receipt_asset(
+// POST create item-based asset transaction
+pub fn create_item_asset(
     dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let route = "create_receipt_asset";
+    let route = "create_item_asset";
     warp_path(dp, route)
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
@@ -541,21 +545,21 @@ pub fn create_receipt_asset(
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_create_receipt_asset(tc, info, route, call_id),
+                handlers::post_create_item_asset(tc, info, route, call_id),
             )
         })
         .with(post_cors())
 }
 
-/// POST create a receipt-based asset transaction on user
-pub fn create_receipt_asset_user(
+/// POST create a item-based asset transaction on user
+pub fn create_item_asset_user(
     dp: &mut DbgPaths,
     node: Node,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let route = "create_receipt_asset";
+    let route = "create_item_asset";
     warp_path(dp, route)
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
@@ -566,7 +570,7 @@ pub fn create_receipt_asset_user(
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_create_receipt_asset_user(node, info, route, call_id),
+                handlers::post_create_item_asset_user(node, info, route, call_id),
             )
         })
         .with(post_cors())
@@ -798,6 +802,7 @@ pub fn user_node_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -809,7 +814,7 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(create_receipt_asset_user(
+    .or(create_item_asset_user(
         dp,
         node.clone(),
         routes_pow_info.clone(),
@@ -830,12 +835,12 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -866,13 +871,13 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
-    .or(transactions_by_key(
-        dp,
-        db.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(transactions_by_key(
+    //     dp,
+    //     db.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(latest_block(
         dp,
         db.clone(),
@@ -887,19 +892,19 @@ pub fn storage_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(blocks_by_tx_hashes(
-        dp,
-        db,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(blocks_by_tx_hashes(
+    //     dp,
+    //     db,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -932,7 +937,7 @@ pub fn compute_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
-    .or(create_receipt_asset(
+    .or(create_item_asset(
         dp,
         threaded_calls.clone(),
         routes_pow_info.clone(),
@@ -946,47 +951,47 @@ pub fn compute_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(utxo_addresses(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(pause_nodes(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(resume_nodes(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(update_shared_config(
-        dp,
-        threaded_calls.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(get_shared_config(
-        dp,
-        threaded_calls,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(utxo_addresses(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(pause_nodes(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(resume_nodes(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(update_shared_config(
+    //     dp,
+    //     threaded_calls.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(get_shared_config(
+    //     dp,
+    //     threaded_calls,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1028,6 +1033,7 @@ pub fn miner_node_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1053,12 +1059,12 @@ pub fn miner_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1099,21 +1105,21 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(make_ip_payment(
-        dp,
-        db.clone(),
-        user_node.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
-    .or(request_donation(
-        dp,
-        user_node.clone(),
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(make_ip_payment(
+    //     dp,
+    //     db.clone(),
+    //     user_node.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
+    // .or(request_donation(
+    //     dp,
+    //     user_node.clone(),
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(export_keypairs(
         dp,
         db.clone(),
@@ -1124,6 +1130,7 @@ pub fn miner_node_with_user_routes(
     .or(import_keypairs(
         dp,
         db.clone(),
+        user_node.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1135,7 +1142,7 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(create_receipt_asset_user(
+    .or(create_item_asset_user(
         dp,
         user_node.clone(),
         routes_pow_info.clone(),
@@ -1163,12 +1170,12 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(address_construction(
-        dp,
-        routes_pow_info.clone(),
-        api_keys.clone(),
-        cache.clone(),
-    ))
+    // .or(address_construction(
+    //     dp,
+    //     routes_pow_info.clone(),
+    //     api_keys.clone(),
+    //     cache.clone(),
+    // ))
     .or(debug_data(
         dp_vec,
         miner_node,

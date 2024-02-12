@@ -14,8 +14,9 @@ use crate::raft::RaftCommit;
 use crate::storage_fetch::{FetchStatus, FetchedBlockChain, StorageFetch};
 use crate::storage_raft::{CommittedItem, CompleteBlock, StorageRaft};
 use crate::utils::{
-    construct_valid_block_pow_hash, get_genesis_tx_in_display, to_api_keys, to_route_pow_infos,
-    ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
+    construct_valid_block_pow_hash, create_socket_addr, get_genesis_tx_in_display, to_api_keys,
+    to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+    RoutesPoWInfo,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -151,17 +152,21 @@ impl StorageNode {
     /// * `config` - StorageNodeConfig object containing the parameters for the new StorageNode
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: StorageNodeConfig, mut extra: ExtraNodeParams) -> Result<StorageNode> {
-        let addr = config
+        let raw_addr = config
             .storage_nodes
             .get(config.storage_node_idx)
-            .ok_or(StorageError::ConfigError("Invalid storage index"))?
-            .address;
+            .ok_or(StorageError::ConfigError("Invalid storage index"))?;
+        let addr = create_socket_addr(&raw_addr.address)
+            .await
+            .map_err(|_| StorageError::ConfigError("Invalid storage address supplied"))?;
 
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.storage_node_idx)
-            .ok_or(StorageError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(StorageError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .await
+            .map_err(|_| StorageError::ConfigError("Invalid compute address supplied"))?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);
@@ -170,9 +175,16 @@ impl StorageNode {
             .then(|| tcp_tls_config.clone_private_info());
         let api_keys = to_api_keys(config.api_keys.clone());
 
-        let node = Node::new(&tcp_tls_config, config.peer_limit, NodeType::Storage, false).await?;
-        let node_raft = StorageRaft::new(&config, extra.raft_db.take());
-        let catchup_fetch = StorageFetch::new(&config, addr);
+        let node = Node::new(
+            &tcp_tls_config,
+            config.peer_limit,
+            NodeType::Storage,
+            false,
+            false,
+        )
+        .await?;
+        let node_raft = StorageRaft::new(&config, extra.raft_db.take()).await;
+        let catchup_fetch = StorageFetch::new(&config, addr).await;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
 
         if config.backup_restore.unwrap_or(false) {
@@ -886,7 +898,7 @@ impl StorageNode {
         Ok(self.shutdown_group.is_empty())
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///

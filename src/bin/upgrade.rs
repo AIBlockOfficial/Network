@@ -1,13 +1,13 @@
 //! App to run a mining node.
 
-use clap::{App, Arg};
-use std::collections::BTreeSet;
 use ablock_network::configurations::DbMode;
 use ablock_network::upgrade::{
     dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
     get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
     UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
 };
+use clap::{App, Arg};
+use std::collections::BTreeSet;
 
 const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
 
@@ -349,7 +349,7 @@ mod test {
         // Act
         //
         let app = clap_app();
-        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let matches = app.get_matches_from_safe(args).unwrap();
         let settings = load_settings(&matches);
         let config = configuration(settings, &matches);
 

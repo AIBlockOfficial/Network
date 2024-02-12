@@ -10,7 +10,7 @@ pub mod constants {
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
 
-pub mod naom {
+pub mod a_block_chain {
     use super::*;
 
     //
@@ -148,11 +148,11 @@ pub mod naom {
     pub enum Asset {
         Token(TokenAmount),
         Data(DataAsset),
-        Receipt(ReceiptAsset),
+        Item(ItemAsset),
     }
 
     #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
-    pub struct ReceiptAsset {
+    pub struct ItemAsset {
         pub amount: u64,
         pub drs_tx_hash: Option<String>,
         pub metadata: Option<String>,
@@ -171,7 +171,7 @@ pub mod naom {
 }
 
 pub mod interfaces {
-    use super::naom::{Block, Transaction};
+    use super::a_block_chain::{Block, Transaction};
     use super::*;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -218,8 +218,8 @@ pub mod compute {
 }
 
 pub mod compute_raft {
+    use super::a_block_chain::*;
     use super::block_pipeline::*;
-    use super::naom::*;
     use super::*;
 
     // Only serialize the UtxoSet
@@ -316,7 +316,7 @@ pub mod raft {
 pub mod block_pipeline {
     use std::net::SocketAddr;
 
-    use super::naom::*;
+    use super::a_block_chain::*;
     use super::unicorn::UnicornInfo;
     use super::*;
 
@@ -441,7 +441,7 @@ pub mod storage_raft {
 }
 
 pub mod wallet {
-    use super::naom::{
+    use super::a_block_chain::{
         Asset, Nonce, OutPoint, PublicKey, Salt, SecretKey, TokenAmount, Transaction,
     };
     use super::*;
@@ -486,8 +486,8 @@ pub mod wallet {
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct AssetValues {
         pub tokens: TokenAmount,
-        // Note: Receipts from create transactions will have `drs_tx_hash` = `t_hash`
-        pub receipts: BTreeMap<String, u64>, /* `drs_tx_hash` - amount */
+        // Note: Items from create transactions will have `drs_tx_hash` = `t_hash`
+        pub items: BTreeMap<String, u64>, /* `drs_tx_hash` - amount */
     }
 
     pub type KnownAddresses = Vec<String>;
@@ -511,48 +511,51 @@ pub mod convert {
     }
     use crate::unicorn::UnicornFixedParam;
     use crate::{compute_raft, interfaces, storage_raft, transaction_gen, wallet};
-    use naom::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
-    use naom::primitives::asset::{AssetValues, ReceiptAsset};
-    use naom::primitives::{
+    use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
+    use a_block_chain::primitives::asset::{AssetValues, ItemAsset};
+    use a_block_chain::primitives::{
         asset::{Asset, DataAsset, TokenAmount},
         block::{Block, BlockHeader},
         druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
-    use naom::script::{lang::Script, OpCodes, StackEntry};
+    use a_block_chain::script::{lang::Script, OpCodes, StackEntry};
     use std::collections::BTreeMap;
 
-    pub fn convert_block(old: old::naom::Block) -> Block {
+    pub fn convert_block(old: old::a_block_chain::Block) -> Block {
         Block {
             header: convert_block_header(old.header),
             transactions: old.transactions,
         }
     }
 
-    pub fn convert_block_header(old: old::naom::BlockHeader) -> BlockHeader {
+    pub fn convert_block_header(old: old::a_block_chain::BlockHeader) -> BlockHeader {
         BlockHeader {
             version: old.version,
             bits: old.bits,
             nonce_and_mining_tx_hash: old.nonce_and_mining_tx_hash,
             b_num: old.b_num,
+            timestamp: 0,
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
             txs_merkle_root_and_hash: old.txs_merkle_root_and_hash,
         }
     }
 
-    pub fn convert_transaction(old: old::naom::Transaction) -> Transaction {
+    pub fn convert_transaction(old: old::a_block_chain::Transaction) -> Transaction {
         Transaction {
             inputs: old.inputs.into_iter().map(convert_txin).collect(),
             outputs: old.outputs.into_iter().map(convert_txout).collect(),
             version: old.version,
+            fees: vec![],
             druid_info: old.druid_info.map(convert_dde_values),
         }
     }
 
-    pub fn convert_dde_values(old: old::naom::DdeValues) -> DdeValues {
+    pub fn convert_dde_values(old: old::a_block_chain::DdeValues) -> DdeValues {
         DdeValues {
             druid: old.druid,
+            drs_tx_hash: None,
             participants: old.participants,
             expectations: old
                 .expectations
@@ -562,7 +565,9 @@ pub mod convert {
         }
     }
 
-    pub fn convert_druid_expectation(old: old::naom::DruidExpectation) -> DruidExpectation {
+    pub fn convert_druid_expectation(
+        old: old::a_block_chain::DruidExpectation,
+    ) -> DruidExpectation {
         DruidExpectation {
             from: old.from,
             to: old.to,
@@ -570,50 +575,52 @@ pub mod convert {
         }
     }
 
-    pub fn convert_txin(old: old::naom::TxIn) -> TxIn {
+    pub fn convert_txin(old: old::a_block_chain::TxIn) -> TxIn {
         TxIn {
             previous_out: old.previous_out.map(convert_outpoint),
             script_signature: convert_script(old.script_signature),
         }
     }
 
-    pub fn convert_outpoint(old: old::naom::OutPoint) -> OutPoint {
+    pub fn convert_outpoint(old: old::a_block_chain::OutPoint) -> OutPoint {
         OutPoint {
             t_hash: old.t_hash,
             n: old.n,
         }
     }
 
-    pub fn convert_script(old: old::naom::Script) -> Script {
+    pub fn convert_script(old: old::a_block_chain::Script) -> Script {
         Script {
             stack: old.stack.into_iter().map(convert_stack_entry).collect(),
         }
     }
 
-    pub fn convert_stack_entry(old: old::naom::StackEntry) -> StackEntry {
+    pub fn convert_stack_entry(old: old::a_block_chain::StackEntry) -> StackEntry {
         match old {
-            old::naom::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
-            old::naom::StackEntry::Signature(v) => StackEntry::Signature(convert_signature(v)),
-            old::naom::StackEntry::PubKey(v) => StackEntry::PubKey(convert_public_key(v)),
-            old::naom::StackEntry::PubKeyHash(v) => StackEntry::PubKeyHash(v),
-            old::naom::StackEntry::Num(v) => StackEntry::Num(v),
-            old::naom::StackEntry::Bytes(v) => StackEntry::Bytes(v),
+            old::a_block_chain::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
+            old::a_block_chain::StackEntry::Signature(v) => {
+                StackEntry::Signature(convert_signature(v))
+            }
+            old::a_block_chain::StackEntry::PubKey(v) => StackEntry::PubKey(convert_public_key(v)),
+            old::a_block_chain::StackEntry::PubKeyHash(v) => StackEntry::Bytes(v),
+            old::a_block_chain::StackEntry::Num(v) => StackEntry::Num(v),
+            old::a_block_chain::StackEntry::Bytes(v) => StackEntry::Bytes(v),
         }
     }
 
-    pub fn convert_op_code(old: old::naom::OpCodes) -> OpCodes {
+    pub fn convert_op_code(old: old::a_block_chain::OpCodes) -> OpCodes {
         match old {
-            old::naom::OpCodes::OP_DUP => OpCodes::OP_DUP,
-            old::naom::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
-            old::naom::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
-            old::naom::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
-            old::naom::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
-            old::naom::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
-            old::naom::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
+            old::a_block_chain::OpCodes::OP_DUP => OpCodes::OP_DUP,
+            old::a_block_chain::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
+            old::a_block_chain::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
+            old::a_block_chain::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
+            old::a_block_chain::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
+            old::a_block_chain::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
+            old::a_block_chain::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
         }
     }
 
-    pub fn convert_txout(old: old::naom::TxOut) -> TxOut {
+    pub fn convert_txout(old: old::a_block_chain::TxOut) -> TxOut {
         TxOut {
             value: convert_asset(old.value),
             locktime: old.locktime,
@@ -622,16 +629,16 @@ pub mod convert {
         }
     }
 
-    pub fn convert_asset(old: old::naom::Asset) -> Asset {
+    pub fn convert_asset(old: old::a_block_chain::Asset) -> Asset {
         match old {
-            old::naom::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
-            old::naom::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
-            old::naom::Asset::Receipt(v) => Asset::Receipt(convert_receipt_asset(v)),
+            old::a_block_chain::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
+            old::a_block_chain::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
+            old::a_block_chain::Asset::Item(v) => Asset::Item(convert_item_asset(v)),
         }
     }
 
-    pub fn convert_receipt_asset(old: old::naom::ReceiptAsset) -> ReceiptAsset {
-        ReceiptAsset {
+    pub fn convert_item_asset(old: old::a_block_chain::ItemAsset) -> ItemAsset {
+        ItemAsset {
             amount: old.amount,
             drs_tx_hash: old.drs_tx_hash,
             metadata: old.metadata,
@@ -639,22 +646,22 @@ pub mod convert {
     }
 
     /// Keep all existing DRS transaction hash values as is
-    pub fn convert_receipt_amount(old: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
+    pub fn convert_item_amount(old: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
         old
     }
 
-    pub fn convert_data_asset(old: old::naom::DataAsset) -> DataAsset {
+    pub fn convert_data_asset(old: old::a_block_chain::DataAsset) -> DataAsset {
         DataAsset {
             data: old.data,
             amount: old.amount,
         }
     }
 
-    pub fn convert_token_amount(old: old::naom::TokenAmount) -> TokenAmount {
+    pub fn convert_token_amount(old: old::a_block_chain::TokenAmount) -> TokenAmount {
         TokenAmount(old.0)
     }
 
-    pub fn convert_token_to_asset(old: old::naom::TokenAmount) -> Asset {
+    pub fn convert_token_to_asset(old: old::a_block_chain::TokenAmount) -> Asset {
         Asset::Token(convert_token_amount(old))
     }
 
@@ -667,15 +674,15 @@ pub mod convert {
         }
     }
 
-    pub fn convert_public_key(old: old::naom::PublicKey) -> PublicKey {
+    pub fn convert_public_key(old: old::a_block_chain::PublicKey) -> PublicKey {
         PublicKey::from_slice(&old).unwrap()
     }
 
-    pub fn convert_secret_key(old: old::naom::SecretKey) -> SecretKey {
+    pub fn convert_secret_key(old: old::a_block_chain::SecretKey) -> SecretKey {
         SecretKey::from_slice(&old).unwrap()
     }
 
-    pub fn convert_signature(old: old::naom::Signature) -> Signature {
+    pub fn convert_signature(old: old::a_block_chain::Signature) -> Signature {
         Signature::from_slice(&old).unwrap()
     }
 
@@ -691,7 +698,7 @@ pub mod convert {
     pub fn convert_asset_values(old: old::wallet::AssetValues) -> AssetValues {
         AssetValues {
             tokens: convert_token_amount(old.tokens),
-            receipts: convert_receipt_amount(old.receipts),
+            items: convert_item_amount(old.items),
         }
     }
 
@@ -705,7 +712,7 @@ pub mod convert {
 
     //Creares pages from the frozen transactions
     pub fn convert_saved_wallet_transactions_pages(
-        old: Vec<BTreeMap<old::naom::OutPoint, old::naom::Asset>>,
+        old: Vec<BTreeMap<old::a_block_chain::OutPoint, old::a_block_chain::Asset>>,
     ) -> Vec<BTreeMap<OutPoint, Asset>> {
         old.iter()
             .map(|page| {
@@ -745,7 +752,7 @@ pub mod convert {
         }
     }
 
-    pub fn convert_utxoset(old: old::naom::UtxoSet) -> interfaces::UtxoSet {
+    pub fn convert_utxoset(old: old::a_block_chain::UtxoSet) -> interfaces::UtxoSet {
         old.into_iter()
             .map(|(op, out)| (convert_outpoint(op), convert_txout(out)))
             .collect()
@@ -775,14 +782,16 @@ pub mod convert {
     }
 
     pub fn convert_transactions(
-        old: BTreeMap<String, old::naom::Transaction>,
+        old: BTreeMap<String, old::a_block_chain::Transaction>,
     ) -> BTreeMap<String, Transaction> {
         old.into_iter()
             .map(|(k, v)| (k, convert_transaction(v)))
             .collect()
     }
 
-    pub fn convert_last_coinbase(old: (String, old::naom::Transaction)) -> (String, Transaction) {
+    pub fn convert_last_coinbase(
+        old: (String, old::a_block_chain::Transaction),
+    ) -> (String, Transaction) {
         (old.0, convert_transaction(old.1))
     }
 

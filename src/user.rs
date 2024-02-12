@@ -8,23 +8,23 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
 use crate::transactor::Transactor;
 use crate::utils::{
-    generate_half_druid, get_paiments_for_wallet_from_utxo, to_api_keys, to_route_pow_infos,
-    try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
-    RoutesPoWInfo,
+    create_socket_addr, generate_half_druid, get_payments_for_wallet_from_utxo, to_api_keys,
+    to_route_pow_infos, try_send_to_ui, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult, RoutesPoWInfo,
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::block::Block;
+use a_block_chain::primitives::druid::{DdeValues, DruidExpectation};
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
+use a_block_chain::utils::transaction_utils::{
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
+};
 use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
-use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::block::Block;
-use naom::primitives::druid::DruidExpectation;
-use naom::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
-use naom::utils::transaction_utils::{
-    construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_receipt_create_tx,
-    construct_tx_core, construct_tx_ins_address,
-};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -110,6 +110,7 @@ pub struct AutoGenTx {
 #[derive(Debug)]
 pub struct PendingPayment {
     amount: TokenAmount,
+    locktime: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,13 +149,17 @@ impl UserNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config.user_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.user_compute_node_idx)
-            .ok_or(UserError::ConfigError("Invalid compute index"))?
-            .address;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.user_api_port);
+            .ok_or(UserError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .await
+            .map_err(|_| UserError::ConfigError("Invalid compute address"))?;
+
+        let tls_addr = create_socket_addr(&addr).await.unwrap();
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(tls_addr.ip(), config.user_api_port);
         let api_tls_info = config
             .user_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
@@ -166,6 +171,7 @@ impl UserNode {
             config.peer_limit,
             NodeType::User,
             disable_tcp_listener,
+            false,
         )
         .await?;
 
@@ -362,7 +368,7 @@ impl UserNode {
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Receipt asset create transaction ready",
+                reason: "Item asset create transaction ready",
             }) => {
                 self.send_next_payment_to_destinations(self.compute_address())
                     .await
@@ -370,7 +376,7 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received receipt-based payment request",
+                reason: "Received item-based payment request",
             }) => {
                 self.send_rb_payment_response().await.unwrap();
                 self.send_next_rb_transaction_to_destinations(self.compute_address())
@@ -379,7 +385,7 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received receipt-based payment response",
+                reason: "Received item-based payment response",
             }) => {
                 self.send_next_rb_transaction_to_destinations(self.compute_address())
                     .await
@@ -684,31 +690,39 @@ impl UserNode {
             MakeIpPayment {
                 payment_peer,
                 amount,
+                locktime,
             } => {
-                self.request_payment_address_for_peer(payment_peer, amount)
+                self.request_payment_address_for_peer(payment_peer, amount, locktime)
                     .await
             }
-            MakePayment { address, amount } => {
-                Some(self.make_payment_transactions(None, address, amount).await)
-            }
-            SendCreateReceiptRequest {
-                receipt_amount,
+            MakePayment {
+                address,
+                amount,
+                locktime,
+            } => Some(
+                self.make_payment_transactions(None, address, amount, locktime)
+                    .await,
+            ),
+            SendCreateItemRequest {
+                item_amount,
                 drs_tx_hash_spec,
                 metadata,
             } => Some(
-                self.generate_receipt_asset_tx(receipt_amount, drs_tx_hash_spec, metadata)
+                self.generate_item_asset_tx(item_amount, drs_tx_hash_spec, metadata)
                     .await,
             ),
             MakePaymentWithExcessAddress {
                 address,
                 amount,
                 excess_address,
+                locktime,
             } => Some(
                 self.make_payment_transactions_provided_excess(
                     None,
                     address,
                     amount,
                     Some(excess_address),
+                    locktime,
                 )
                 .await,
             ),
@@ -839,7 +853,7 @@ impl UserNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -878,7 +892,12 @@ impl UserNode {
         self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
             .await?;
 
-        self.wallet_db.store_payment_transaction(tx.clone()).await;
+        let b_num = self.last_block_notified.header.b_num;
+
+        self.wallet_db
+            .store_payment_transaction(tx.clone(), b_num)
+            .await;
+
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
         }
@@ -886,7 +905,7 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends the next internal receipt-based payment transaction to be processed by the connected Compute
+    /// Sends the next internal item-based payment transaction to be processed by the connected Compute
     /// node
     ///
     /// ### Arguments
@@ -897,11 +916,12 @@ impl UserNode {
         compute_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .store_payment_transaction(transaction.clone())
+            .store_payment_transaction(transaction.clone(), b_num)
             .await;
         let _peer_span =
-            info_span!("sending receipt-based transaction to compute node for processing");
+            info_span!("sending item-based transaction to compute node for processing");
         let transactions = vec![transaction.clone()];
         self.node
             .send(
@@ -962,12 +982,16 @@ impl UserNode {
     ///
     /// * `payment_peer` - Peer to send request to
     /// * `amount`       - Amount to pay
+    /// * `locktime` - Locktime for transaction
     pub async fn request_payment_address_for_peer(
         &mut self,
         payment_peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Option<Response> {
-        self.send_address_request(payment_peer, amount).await.ok()?;
+        self.send_address_request(payment_peer, amount, locktime)
+            .await
+            .ok()?;
         Some(Response {
             success: true,
             reason: "Request Payment Address",
@@ -980,7 +1004,10 @@ impl UserNode {
     ///
     /// * `transaction` - Transaction to receive and save to wallet
     pub async fn receive_payment_transaction(&mut self, transaction: Transaction) -> Response {
-        self.wallet_db.store_payment_transaction(transaction).await;
+        let b_num = self.last_block_notified.header.b_num;
+        self.wallet_db
+            .store_payment_transaction(transaction, b_num)
+            .await;
 
         Response {
             success: true,
@@ -999,12 +1026,12 @@ impl UserNode {
         peer: SocketAddr,
         address: String,
     ) -> Option<Response> {
-        let amount = match (
+        let (amount, locktime) = match (
             self.pending_payments.0.remove(&peer),
             self.pending_payments.1,
         ) {
-            (Some(PendingPayment { amount }), _) => amount,
-            (_, AutoDonate::Enabled(amount)) => amount,
+            (Some(PendingPayment { amount, locktime }), _) => (amount, locktime),
+            (_, AutoDonate::Enabled(amount)) => (amount, None),
             _ => {
                 return Some(Response {
                     success: false,
@@ -1014,7 +1041,7 @@ impl UserNode {
         };
 
         Some(
-            self.make_payment_transactions(Some(peer), address, amount)
+            self.make_payment_transactions(Some(peer), address, amount, locktime)
                 .await,
         )
     }
@@ -1026,20 +1053,22 @@ impl UserNode {
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    /// * `amount`  - Price/amount payed
+    /// * `amount`  - Price/amount paid
     /// * `excess_address` - Address to assign the excess to
+    /// * `locktime` - Locktime for transaction
     pub async fn make_payment_transactions_provided_excess(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
         excess_address: Option<String>,
+        locktime: Option<u64>,
     ) -> Response {
-        let tx_out = vec![TxOut::new_token_amount(address, amount)];
+        let tx_out = TxOut::new_token_amount(address, amount, locktime);
         let asset_required = Asset::Token(amount);
         let (tx_ins, tx_outs) = if let Ok(value) = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, tx_out, excess_address)
+            .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, vec![tx_out], excess_address)
             .await
         {
             value
@@ -1049,7 +1078,7 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
         self.next_payment = Some((peer, payment_tx));
 
         Response {
@@ -1086,7 +1115,7 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs);
+        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
         self.next_payment = Some((None, payment_tx));
 
         Response {
@@ -1101,14 +1130,16 @@ impl UserNode {
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    /// * `amount`  - Price/amount payed
+    /// * `amount`  - Price/amount paid
+    /// * `locktime` - Locktime for transaction
     pub async fn make_payment_transactions(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Response {
-        self.make_payment_transactions_provided_excess(peer, address, amount, None)
+        self.make_payment_transactions_provided_excess(peer, address, amount, None, locktime)
             .await
     }
 
@@ -1137,18 +1168,20 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`    - Socket address of peer to request from
-    /// * `amount`    - Amount being payed
+    /// * `amount`    - Amount being paid
+    /// * `locktime` - Locktime for transaction
     pub async fn send_address_request(
         &mut self,
         peer: SocketAddr,
         amount: TokenAmount,
+        locktime: Option<u64>,
     ) -> Result<()> {
         let _peer_span = info_span!("sending payment address request");
         debug!("Sending request for payment address to peer: {:?}", peer);
 
         self.pending_payments
             .0
-            .insert(peer, PendingPayment { amount });
+            .insert(peer, PendingPayment { amount, locktime });
 
         self.node
             .send(peer, UserRequest::SendAddressRequest)
@@ -1191,6 +1224,16 @@ impl UserNode {
     pub async fn send_donation_address_to_peer(&mut self, peer: SocketAddr) -> Result<()> {
         self.trading_peer = Some(peer);
         self.send_address_to_trading_peer().await
+    }
+
+    /// Filter locked coinbase
+    ///
+    ///
+    /// ### Arguments
+    ///
+    /// * `b_num` - Block number to filter
+    pub async fn filter_locked_coinbase(&mut self, b_num: u64) {
+        self.wallet_db.filter_locked_coinbase(b_num).await;
     }
 
     /// Received a mined block notification: allow to update pending transactions
@@ -1335,7 +1378,7 @@ impl UserNode {
         }
     }
 
-    /// Sends a request for a new receipt-based payment
+    /// Sends a request for a new item-based payment
     ///
     /// ### Nomenclature
     ///
@@ -1351,7 +1394,7 @@ impl UserNode {
         &mut self,
         peer: SocketAddr,
         sender_asset: Asset,
-        drs_tx_hash: Option<String>, /* drs_tx_hash of Receipt asset to receive */
+        drs_tx_hash: Option<String>, /* drs_tx_hash of Item asset to receive */
     ) -> Result<()> {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
@@ -1381,7 +1424,7 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends a response to a new receipt-based payment request
+    /// Sends a response to a new item-based payment request
     pub async fn send_rb_payment_response(&mut self) -> Result<()> {
         let (peer, rb_payment_response) = self.next_rb_payment_response.take().unwrap();
         self.node
@@ -1395,7 +1438,7 @@ impl UserNode {
         Ok(())
     }
 
-    /// Receives a request for a new receipt-based payment
+    /// Receives a request for a new item-based payment
     /// ### Nomenclature
     ///
     /// The sender(Alice) and receiver(Bob) context stays consistent for
@@ -1405,7 +1448,7 @@ impl UserNode {
     /// ### Arguments
     ///
     /// * `peer`                         - Peer who made the request
-    /// * `rb_payment_request_data`      - Receipt-based payment request data struct
+    /// * `rb_payment_request_data`      - Item-based payment request data struct
     async fn receive_rb_payment_request(
         &mut self,
         peer: SocketAddr,
@@ -1413,7 +1456,7 @@ impl UserNode {
     ) -> Response {
         let receiver_half_druid = generate_half_druid();
         let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
-        let asset_required = Asset::receipt(
+        let asset_required = Asset::item(
             1,
             rb_payment_request_data.sender_drs_tx_expectation.clone(),
             None,
@@ -1432,7 +1475,7 @@ impl UserNode {
             };
         };
 
-        let (rb_receive_tx, rb_payment_response) = make_rb_payment_receipt_tx_and_response(
+        let (rb_receive_tx, rb_payment_response) = make_rb_payment_item_tx_and_response(
             rb_payment_request_data,
             (tx_ins, tx_outs),
             receiver_half_druid,
@@ -1444,11 +1487,11 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Received receipt-based payment request",
+            reason: "Received item-based payment request",
         }
     }
 
-    /// Receive a response for a new receipt-based payment
+    /// Receive a response for a new item-based payment
     ///
     /// ### Nomenclature
     ///
@@ -1466,21 +1509,21 @@ impl UserNode {
         rb_payment_response: Option<RbPaymentResponseData>,
     ) -> Response {
         let rb_payment_data = self.next_rb_payment_data.take().unwrap();
-        //TODO: Handle `None` value upon receipt-based payment rejection
+        //TODO: Handle `None` value upon item-based payment rejection
         if let Some(rb_payment_response) = rb_payment_response {
             let rb_send_tx = make_rb_payment_send_transaction(rb_payment_response, rb_payment_data);
             self.next_rb_payment = Some((Some(peer), rb_send_tx));
         }
         Response {
             success: true,
-            reason: "Received receipt-based payment response",
+            reason: "Received item-based payment response",
         }
     }
 
-    /// Create new receipt-asset transaction to send to compute for processing
-    pub async fn generate_receipt_asset_tx(
+    /// Create new item-asset transaction to send to compute for processing
+    pub async fn generate_item_asset_tx(
         &mut self,
-        receipt_amount: u64,
+        item_amount: u64,
         drs_tx_hash_spec: DrsTxHashSpec,
         metadata: Option<String>,
     ) -> Response {
@@ -1491,19 +1534,20 @@ impl UserNode {
         } = self.wallet_db.generate_payment_address().await.1;
 
         let block_num = self.last_block_notified.header.b_num;
-        let receipt_asset_tx = construct_receipt_create_tx(
+        let item_asset_tx = construct_item_create_tx(
             block_num,
             public_key,
             &secret_key,
-            receipt_amount,
+            item_amount,
             drs_tx_hash_spec,
+            None,
             metadata,
         );
 
-        self.next_payment = Some((None, receipt_asset_tx));
+        self.next_payment = Some((None, item_asset_tx));
 
         Response {
-            reason: "Receipt asset create transaction ready",
+            reason: "Item asset create transaction ready",
             success: true,
         }
     }
@@ -1569,16 +1613,17 @@ impl Transactor for UserNode {
     }
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let payments = get_payments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
 
+        let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments, b_num)
             .await
             .unwrap();
     }
 }
 
-/// Make the send initial request for receipt based transaction
+/// Make the send initial request for item based transaction
 ///
 /// * `send_asset`        - The asset to be sent
 /// * `(tx_ins, tx_outs)` - The send transaction infos
@@ -1611,13 +1656,13 @@ pub fn make_rb_payment_send_tx_and_request(
     (rb_payment_data, rb_payment_request_data)
 }
 
-/// Make The receipt transaction and response
+/// Make The item transaction and response
 ///
-/// * `rb_payment_request_data` - Receipt-based payment request data struct
-/// * `(tx_ins, tx_outs)`       - The receipt transaction infos
+/// * `rb_payment_request_data` - Item-based payment request data struct
+/// * `(tx_ins, tx_outs)`       - The item transaction infos
 /// * `receiver_half_druid`     - The receiver half druid part
 /// * `receiver_address`        - The receiver address
-pub fn make_rb_payment_receipt_tx_and_response(
+pub fn make_rb_payment_item_tx_and_response(
     rb_payment_request_data: RbPaymentRequestData,
     (tx_ins, tx_outs): (Vec<TxIn>, Vec<TxOut>),
     receiver_half_druid: String,
@@ -1639,7 +1684,7 @@ pub fn make_rb_payment_receipt_tx_and_response(
     let sender_druid_expectation = DruidExpectation {
         from: receiver_from_addr,
         to: sender_address.clone(),
-        asset: Asset::receipt(1, sender_drs_tx_expectation.clone(), None),
+        asset: Asset::item(1, sender_drs_tx_expectation.clone(), None),
     };
 
     // DruidExpectation for receiver(Bob)
@@ -1649,15 +1694,15 @@ pub fn make_rb_payment_receipt_tx_and_response(
         asset: sender_asset,
     };
 
-    let rb_receive_tx = construct_rb_receive_payment_tx(
-        tx_ins,
-        tx_outs,
-        sender_address,
-        0,
+    let dde_values = DdeValues {
         druid,
-        vec![receiver_druid_expectation],
-        sender_drs_tx_expectation,
-    );
+        participants: 2,
+        expectations: vec![receiver_druid_expectation],
+        drs_tx_hash: None,
+    };
+
+    let rb_receive_tx =
+        construct_rb_receive_payment_tx(tx_ins, tx_outs, None, sender_address, 0, dde_values);
 
     let rb_payment_response = RbPaymentResponseData {
         receiver_address,
@@ -1690,16 +1735,19 @@ pub fn make_rb_payment_send_transaction(
     } = rb_payment_response;
 
     let druid = sender_half_druid + &receiver_half_druid;
-
-    construct_rb_payments_send_tx(
-        tx_ins,
-        tx_outs,
-        receiver_address,
-        sender_asset.token_amount(),
-        0,
+    let druid_values = DdeValues {
         druid,
-        vec![sender_druid_expectation],
-    )
+        participants: 2,
+        expectations: vec![sender_druid_expectation],
+        drs_tx_hash: None,
+    };
+
+    let receiver = ReceiverInfo {
+        address: receiver_address,
+        asset: sender_asset,
+    };
+
+    construct_rb_payments_send_tx(tx_ins, tx_outs, None, receiver, 0, druid_values)
 }
 
 fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {

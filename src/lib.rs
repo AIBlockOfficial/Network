@@ -28,8 +28,8 @@ mod test_utils;
 mod tests;
 pub mod threaded_call;
 mod tracked_utxo;
-mod transaction_gen;
-mod transactor;
+pub mod transaction_gen;
+pub mod transactor;
 mod unicorn;
 pub mod upgrade;
 mod user;
@@ -54,7 +54,5 @@ pub use utils::{
 };
 pub use wallet::WalletDb;
 
-#[cfg(not(features = "mock"))]
-pub(crate) use comms_handler::Node;
-#[cfg(features = "mock")]
-pub(crate) use mock::{Node, RingNode};
+#[cfg(not(feature = "mock"))]
+pub use crate::comms_handler::Node;

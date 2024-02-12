@@ -32,6 +32,8 @@ sudo apt-get install llvm
 sudo apt-get install libclang-dev
 ```
 
+The above should enable you to install `librocksdb-sys` successfully, but older versions of this crate had bugs so it would be wise to ensure you've installed `rocksdb = "0.21.0"` or higher in order to avoid compilation issues.
+
 ### Repo Setup
 
 You can then set up the project on your local machine using the following steps:
@@ -48,7 +50,7 @@ You will also require a local instances of the A-Block `NAOM` and `Keccak Prime`
 is listed in the `Cargo.toml` as:
 
 ```
-naom = { path = "../naom" }
+a_block_chain = { path = "../a_block_chain" }
 keccak_prime = { path = "../keccak-prime" }
 ```
 

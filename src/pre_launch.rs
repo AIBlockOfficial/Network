@@ -1,11 +1,13 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{
-    DbMode, ExtraNodeParams, NodeSpec, PreLaunchNodeConfig, PreLaunchNodeType, TlsSpec,
+    DbMode, ExtraNodeParams, PreLaunchNodeConfig, PreLaunchNodeType, TlsSpec,
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbSpec};
 use crate::interfaces::{DbItem, NodeType, PreLaunchRequest, Response};
 use crate::raft_store::{get_presistent_committed, CommittedIndex};
-use crate::utils::{LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult};
+use crate::utils::{
+    create_socket_addr_for_list, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
+};
 use bincode::deserialize;
 use bytes::Bytes;
 use std::{collections::BTreeSet, error::Error, fmt, future::Future, net::SocketAddr};
@@ -74,7 +76,7 @@ struct PreLaunchNodeConfigSelected {
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// All nodes addresses
-    pub pre_launch_nodes: Vec<NodeSpec>,
+    pub pre_launch_nodes: Vec<SocketAddr>,
     /// Db spec
     pub db_spec: SimpleDbSpec,
     /// Raft db spec
@@ -84,13 +86,15 @@ struct PreLaunchNodeConfigSelected {
 }
 
 impl PreLaunchNodeConfigSelected {
-    fn new(config: PreLaunchNodeConfig) -> Self {
+    async fn new(config: PreLaunchNodeConfig) -> Self {
         match config.node_type {
             PreLaunchNodeType::Compute => Self {
                 pre_launch_node_idx: config.compute_node_idx,
                 pre_launch_db_mode: config.compute_db_mode,
                 tls_config: config.tls_config,
-                pre_launch_nodes: config.compute_nodes,
+                pre_launch_nodes: create_socket_addr_for_list(&config.compute_nodes)
+                    .await
+                    .unwrap_or_default(),
                 db_spec: crate::compute::DB_SPEC,
                 raft_db_spec: crate::compute_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
@@ -99,7 +103,9 @@ impl PreLaunchNodeConfigSelected {
                 pre_launch_node_idx: config.storage_node_idx,
                 pre_launch_db_mode: config.storage_db_mode,
                 tls_config: config.tls_config,
-                pre_launch_nodes: config.storage_nodes,
+                pre_launch_nodes: create_socket_addr_for_list(&config.storage_nodes)
+                    .await
+                    .unwrap_or_default(),
                 db_spec: crate::storage::DB_SPEC,
                 raft_db_spec: crate::storage_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
@@ -131,18 +137,19 @@ impl PreLaunchNode {
         config: PreLaunchNodeConfig,
         mut extra: ExtraNodeParams,
     ) -> Result<PreLaunchNode> {
-        let config = PreLaunchNodeConfigSelected::new(config);
+        let config = PreLaunchNodeConfigSelected::new(config).await;
         let addr = config
             .pre_launch_nodes
             .get(config.pre_launch_node_idx)
-            .ok_or(PreLaunchError::ConfigError("Invalid pre-launch index"))?
-            .address;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
+            .ok_or(PreLaunchError::ConfigError("Invalid pre-launch index"))?;
+
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(*addr, &config.tls_config)?;
 
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
             NodeType::PreLaunch,
+            false,
             false,
         )
         .await?;
@@ -155,9 +162,9 @@ impl PreLaunchNode {
             db_utils::new_db(config.pre_launch_db_mode, spec, extra.raft_db.take(), None)
         };
 
-        let pre_launch_nodes = config.pre_launch_nodes.iter().map(|s| s.address);
-        let shutdown_group: BTreeSet<SocketAddr> = pre_launch_nodes.clone().collect();
-        let pre_launch_nodes: Vec<_> = pre_launch_nodes.filter(|a| *a != addr).collect();
+        let pre_launch_nodes = config.pre_launch_nodes.iter();
+        let shutdown_group: BTreeSet<SocketAddr> = pre_launch_nodes.clone().copied().collect();
+        let pre_launch_nodes: Vec<_> = pre_launch_nodes.filter(|a| *a != addr).copied().collect();
 
         let raft_db_send = if config.pre_launch_node_idx == 0 {
             Some(PreLaunchRequest::SendDbItems {
@@ -422,7 +429,7 @@ impl PreLaunchNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -453,7 +460,7 @@ impl PreLaunchNode {
         })
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///

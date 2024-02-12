@@ -3,10 +3,10 @@ use crate::constants::{MINER_PARTICIPATION_UN, WINNING_MINER_UN};
 use crate::interfaces::WinningPoWInfo;
 use crate::raft_util::RaftContextKey;
 use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, UnicornInfo};
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::Block;
+use a_block_chain::primitives::transaction::Transaction;
 use keccak_prime::fortuna::Fortuna;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
@@ -36,7 +36,7 @@ pub enum MiningPipelinePhaseChange {
 pub enum MiningPipelineItem {
     MiningParticipant(SocketAddr, MiningPipelineStatus),
     CompleteParticipant,
-    WinningPoW(SocketAddr, WinningPoWInfo),
+    WinningPoW(SocketAddr, Box<WinningPoWInfo>),
     CompleteMining,
     ResetPipeline,
 }
@@ -244,7 +244,7 @@ impl MiningPipelineInfo {
                 self.append_current_phase_timeout(extra.proposer_id);
             }
             (WinningPoW(addr, info), AllItemsIntake) => {
-                self.add_to_winning_pow(extra.proposer_id, (addr, info));
+                self.add_to_winning_pow(extra.proposer_id, (addr, *info));
             }
             (CompleteMining, AllItemsIntake) => {
                 self.append_current_phase_timeout(extra.proposer_id);

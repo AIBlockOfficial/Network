@@ -8,23 +8,24 @@ use crate::interfaces::{
 };
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
-use bincode::serialize;
-use futures::future::join_all;
-use naom::constants::TOTAL_TOKENS;
-use naom::crypto::sha3_256;
-use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
-use naom::primitives::transaction::DrsTxHashSpec;
-use naom::primitives::{
+use a_block_chain::constants::TOTAL_TOKENS;
+use a_block_chain::crypto::sha3_256;
+use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use a_block_chain::primitives::transaction::DrsTxHashSpec;
+use a_block_chain::primitives::{
     asset::{Asset, TokenAmount},
     block::{build_hex_txs_hash, Block, BlockHeader},
     transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
 };
-use naom::script::{lang::Script, StackEntry};
-use naom::utils::transaction_utils::{
+use a_block_chain::script::{lang::Script, StackEntry};
+use a_block_chain::utils::transaction_utils::{
     construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
     construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
-    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
+use bincode::serialize;
+use chrono::Utc;
+use futures::future::join_all;
 use rand::{self, Rng};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -32,13 +33,16 @@ use std::fmt;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
+use trust_dns_resolver::TokioAsyncResolver;
+use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -393,9 +397,9 @@ pub async fn create_and_save_fake_to_wallet(
     );
     let tx_out_p = OutPoint::new(t_hash, 0);
     let payment_to_save = Asset::token_u64(4000);
-    let payments = vec![(tx_out_p.clone(), payment_to_save, final_address)];
+    let payments = vec![(tx_out_p.clone(), payment_to_save, final_address, 0)];
     wallet_db
-        .save_usable_payments_to_wallet(payments)
+        .save_usable_payments_to_wallet(payments, 0)
         .await
         .unwrap();
 
@@ -460,6 +464,80 @@ pub fn generate_pow_random_num() -> Vec<u8> {
 pub fn generate_random_num(len: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     (0..len).map(|_| rng.gen_range(1, 200)).collect()
+}
+
+/// Parses a URL string and performs DNS resolution for cases where the passed URL is a domain name
+///
+/// ### Arguments
+///
+/// * `url_str`    - URL string to parse
+pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+    let thread_url = url_str.to_owned();
+    let handle = tokio::task::spawn_blocking(move || {
+        if let Ok(url) = Url::parse(&thread_url.clone()) {
+            // println!("url: {:?}", url);
+            let host_str = match url.host_str() {
+                Some(v) => v,
+                None => return None,
+            };
+            // println!("host_str: {:?}", host_str);
+            let port = url.port().unwrap_or(80);
+
+            // Check if the host is an IP address
+            if let Ok(ip) = host_str.parse::<IpAddr>() {
+                // Handle as direct IP address
+                Some(SocketAddr::new(ip, port))
+            } else {
+                let io_loop = Runtime::new().unwrap();
+
+                // Handle as domain name
+                let resolver = TokioAsyncResolver::tokio_from_system_conf().unwrap();
+
+                let lookup_future = resolver.lookup_ip(host_str);
+                let response = io_loop.block_on(lookup_future).unwrap();
+                let ip = match response.iter().next() {
+                    Some(ip) => ip,
+                    None => return None,
+                };
+                Some(SocketAddr::new(ip, port))
+            }
+        } else {
+            // Handle as direct IP address with optional port
+            let parts: Vec<&str> = thread_url.split(':').collect();
+            let ip = match parts[0].parse::<IpAddr>() {
+                Ok(ip) => ip,
+                Err(_e) => return None,
+            };
+            let port = if parts.len() > 1 {
+                match parts[1].parse::<u16>() {
+                    Ok(port) => port,
+                    Err(_e) => return None,
+                }
+            } else {
+                80
+            };
+            Some(SocketAddr::new(ip, port))
+        }
+    });
+
+    match handle.await {
+        Ok(v) => match v {
+            Some(v) => Ok(v),
+            None => Err("Failed to parse URL".into()),
+        },
+        Err(_e) => Err("Failed to parse URL".into()),
+    }
+}
+
+pub async fn create_socket_addr_for_list(
+    urls: &[String],
+) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
+    let mut result = Vec::new();
+    for url in urls {
+        let socket_addr = create_socket_addr(url).await?;
+        result.push(socket_addr);
+    }
+    Ok(result)
 }
 
 /// Generates a ProofOfWork for a given address
@@ -586,11 +664,11 @@ fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
 /// ### Arguments
 ///
 /// * `txs`   - The transactions
-pub fn get_paiments_for_wallet<'a>(
+pub fn get_payments_for_wallet<'a>(
     txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
-) -> Vec<(OutPoint, Asset, String)> {
+) -> Vec<(OutPoint, Asset, String, u64)> {
     let utxo_iterator = get_tx_out_with_out_point_cloned(txs);
-    get_paiments_for_wallet_from_utxo(utxo_iterator)
+    get_payments_for_wallet_from_utxo(utxo_iterator)
 }
 
 /// Get the paiment info from the given UTXO set/subset
@@ -598,11 +676,18 @@ pub fn get_paiments_for_wallet<'a>(
 /// ### Arguments
 ///
 /// * `utxo_set`   - The UTXO set/subset
-pub fn get_paiments_for_wallet_from_utxo(
+pub fn get_payments_for_wallet_from_utxo(
     utxos: impl Iterator<Item = (OutPoint, TxOut)>,
-) -> Vec<(OutPoint, Asset, String)> {
+) -> Vec<(OutPoint, Asset, String, u64)> {
     utxos
-        .map(|(out_p, tx_out)| (out_p, tx_out.value, tx_out.script_public_key.unwrap()))
+        .map(|(out_p, tx_out)| {
+            (
+                out_p,
+                tx_out.value,
+                tx_out.script_public_key.unwrap(),
+                tx_out.locktime,
+            )
+        })
         .collect()
 }
 
@@ -630,7 +715,7 @@ pub fn create_valid_create_transaction_with_ins_outs(
     pub_key: PublicKey,
     secret_key: &SecretKey,
 ) -> (String, Transaction) {
-    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1);
+    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1, None);
     let ct_hash = construct_tx_hash(&create_tx);
 
     (ct_hash, create_tx)
@@ -677,7 +762,7 @@ pub fn create_valid_transaction_with_ins_outs(
         tx_outs
     };
 
-    let payment_tx = construct_tx_core(tx_ins, tx_outs);
+    let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
     let t_hash = construct_tx_hash(&payment_tx);
 
     (t_hash, payment_tx)
@@ -738,7 +823,7 @@ pub fn make_utxo_set_from_seed(
                                 addr
                             };
 
-                        TxOut::new_token_amount(script_public_key, out.amount)
+                        TxOut::new_token_amount(script_public_key, out.amount, None)
                     })
                     .collect(),
                 inputs: genesis_tx_in.clone().into_iter().collect(),
@@ -836,6 +921,7 @@ pub fn decode_signature(sig: &str) -> Result<Signature, StringError> {
 ///
 /// * `node_conn` - Node to use for connections
 pub async fn shutdown_connections(node_conn: &mut Node) {
+    node_conn.abort_heartbeat_handle();
     join_all(node_conn.stop_listening().await).await;
     join_all(node_conn.disconnect_all(None).await).await;
 }
@@ -1015,6 +1101,20 @@ pub fn get_pk_with_out_point<'a>(
         .filter_map(|(op, txout)| txout.script_public_key.as_ref().map(|spk| (spk, op)))
 }
 
+pub fn get_pk_with_fees<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)>,
+) -> impl Iterator<Item = (&'a String, OutPoint)> {
+    get_fees_with_out_point(txs)
+        .filter_map(|(op, fees)| fees.script_public_key.as_ref().map(|spk| (spk, op)))
+}
+
+pub fn get_pk_with_fees_cloned<'a>(
+    txs: impl Iterator<Item = (&'a String, &'a Transaction)> + 'a,
+) -> impl Iterator<Item = (String, OutPoint)> + 'a {
+    get_fees_with_out_point(txs)
+        .filter_map(|(op, fees)| fees.script_public_key.as_ref().map(|spk| (spk.clone(), op)))
+}
+
 /// Get all the script_public_key and OutPoint from the (hash,transactions)
 ///
 /// ### Arguments
@@ -1064,17 +1164,17 @@ pub fn concat_maps<K: Clone + Ord, V: Clone>(
         .collect()
 }
 
-/// Create a new receipt asset transaction (only used on Compute node)
+/// Create a new item asset transaction (only used on Compute node)
 ///
 /// ### Arguments
 ///
-/// * `receipt_amount`      - Receipt amount
+/// * `item_amount`      - Item amount
 /// * `script_public_key`   - Public address key
 /// * `public key`          - Public key
 /// * `signature`           - Signature
-pub fn create_receipt_asset_tx_from_sig(
+pub fn create_item_asset_tx_from_sig(
     b_num: u64,
-    receipt_amount: u64,
+    item_amount: u64,
     script_public_key: String,
     public_key: String,
     signature: String,
@@ -1082,9 +1182,9 @@ pub fn create_receipt_asset_tx_from_sig(
     metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
     let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let receipt = Asset::receipt(receipt_amount, drs_tx_hash_create.clone(), metadata);
-    let asset_hash = construct_tx_in_signable_asset_hash(&receipt);
-    let tx_out = TxOut::new_asset(script_public_key, receipt);
+    let item = Asset::item(item_amount, drs_tx_hash_create.clone(), metadata);
+    let asset_hash = construct_tx_in_signable_asset_hash(&item);
+    let tx_out = TxOut::new_asset(script_public_key, item, None);
     let public_key = decode_pub_key(&public_key)?;
     let signature = decode_signature(&signature)?;
 
@@ -1093,7 +1193,7 @@ pub fn create_receipt_asset_tx_from_sig(
         script_signature: Script::new_create_asset(b_num, asset_hash, signature, public_key),
     };
 
-    let tx = construct_tx_core(vec![tx_in], vec![tx_out]);
+    let tx = construct_tx_core(vec![tx_in], vec![tx_out], None);
     let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
 
     Ok((tx, tx_hash))
@@ -1117,7 +1217,7 @@ pub fn construct_coinbase_tx(b_num: u64, amount: TokenAmount, address: String) -
         ..Default::default()
     };
 
-    construct_tx_core(vec![tx_in], vec![tx_out])
+    construct_tx_core(vec![tx_in], vec![tx_out], None)
 }
 
 /// Confert to ApiKeys data structure
@@ -1145,6 +1245,12 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
         iterations: 2,
         security: 1
     }
+}
+
+/// Get the current timestamp as a string
+pub fn get_timestamp_now() -> i64 {
+    let now = Utc::now();
+    now.timestamp()
 }
 
 /// Attempt to send a message to the UI
@@ -1176,5 +1282,46 @@ pub mod rug_integer {
     {
         let value: String = Deserialize::deserialize(d)?;
         Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
+    }
+}
+
+/*---- TESTS ----*/
+
+#[cfg(test)]
+mod util_tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    /// Tests whether URL strings can be parsed successfully
+    async fn test_create_socket_addr() {
+        let ip_raw = "0.0.0.0".to_string();
+        let ip_with_port = "0.0.0.0:12300".to_string();
+        let domain = "http://localhost".to_string();
+        let domain_with_port = "http://localhost:12300".to_string();
+
+        let ip_addr = create_socket_addr(&ip_raw).await.unwrap();
+        let ip_with_port_addr = create_socket_addr(&ip_with_port).await.unwrap();
+        let domain_addr = create_socket_addr(&domain).await.unwrap();
+        let domain_with_port_addr = create_socket_addr(&domain_with_port).await.unwrap();
+
+        assert_eq!(
+            ip_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 80)
+        );
+        assert_eq!(
+            ip_with_port_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12300)
+        );
+
+        assert_eq!(
+            domain_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 80)
+        );
+
+        assert_eq!(
+            domain_with_port_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
+        );
     }
 }

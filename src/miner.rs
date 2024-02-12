@@ -1,5 +1,7 @@
+use crate::comms_handler::Node;
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
+use crate::db_utils;
 use crate::interfaces::{
     BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
     ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
@@ -7,21 +9,20 @@ use crate::interfaces::{
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
 use crate::utils::{
-    self, apply_mining_tx, construct_coinbase_tx, format_parition_pow_address,
-    generate_pow_for_block, get_paiments_for_wallet, get_paiments_for_wallet_from_utxo,
+    self, apply_mining_tx, construct_coinbase_tx, create_socket_addr, format_parition_pow_address,
+    generate_pow_for_block, get_payments_for_wallet, get_payments_for_wallet_from_utxo,
     to_api_keys, to_route_pow_infos, try_send_to_ui, ApiKeys, DeserializedBlockchainItem,
     LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo,
     RunningTaskOrResult,
 };
-use crate::wallet::{WalletDb, WalletDbError, DB_SPEC};
-use crate::{db_utils, Node};
+use crate::wallet::{LockedCoinbase, WalletDb, WalletDbError, DB_SPEC};
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::block::{self, BlockHeader};
+use a_block_chain::primitives::transaction::Transaction;
+use a_block_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::{self, BlockHeader};
-use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -44,9 +45,6 @@ pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
 
 /// Key for last pow coinbase produced
 pub const MINING_ADDRESS_KEY: &str = "MiningAddressKey";
-
-/// Maximum number of keys that can be held in the Wallet before aggregation
-pub const NO_OF_ADDRESSES_FOR_AGGREGATION_TX: usize = if cfg!(test) { 5 } else { 1000 };
 
 /// Result wrapper for miner errors
 pub type Result<T> = std::result::Result<T, MinerError>;
@@ -152,6 +150,7 @@ pub struct MinerNode {
     compute_addr: SocketAddr,
     rand_num: Vec<u8>,
     pause_node: Arc<RwLock<bool>>,
+    address_aggregation_limit: Option<usize>,
     current_block: CurrentBlockWithMutex,
     last_pow: Option<ProofOfWork>,
     current_coinbase: Option<(String, Transaction)>,
@@ -176,11 +175,13 @@ impl MinerNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config.miner_address;
-        let compute_addr = config
+        let raw_compute_addr = config
             .compute_nodes
             .get(config.miner_compute_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid compute index"))?
-            .address;
+            .ok_or(MinerError::ConfigError("Invalid compute index"))?;
+        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .await
+            .map_err(|_| MinerError::ConfigError("Invalid compute node address in config file"))?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {
@@ -194,8 +195,9 @@ impl MinerNode {
             extra.custom_wallet_spec,
         )?;
         let disable_tcp_listener = extra.disable_tcp_listener;
-        let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.miner_api_port);
+        let tls_addr = create_socket_addr(&addr).await.unwrap();
+        let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
+        let api_addr = SocketAddr::new(tls_addr.ip(), config.miner_api_port);
         let api_tls_info = config
             .miner_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
@@ -205,11 +207,13 @@ impl MinerNode {
             config.peer_limit,
             NodeType::Miner,
             disable_tcp_listener,
+            false,
         )
         .await?;
         let api_pow_info = to_route_pow_infos(config.routes_pow.clone());
         let static_miner_address = Arc::new(RwLock::new(config.static_miner_address.clone()));
         let mining_api_key = config.mining_api_key.clone();
+        let address_aggregation_limit = config.address_aggregation_limit;
 
         MinerNode {
             node,
@@ -233,6 +237,7 @@ impl MinerNode {
             blockchain_item_received: Default::default(),
             mining_api_key,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
+            address_aggregation_limit,
         }
         .load_local_db()
         .await
@@ -260,6 +265,16 @@ impl MinerNode {
             self.current_block.clone(),
             api_pow_info,
         )
+    }
+
+    /// Get mining API key
+    pub fn get_mining_api_key(&self) -> Option<String> {
+        self.mining_api_key.clone()
+    }
+
+    /// Set mining API key
+    pub fn set_mining_api_key(&mut self, api_key: Option<String>) {
+        self.mining_api_key = api_key;
     }
 
     /// Only used during initialization
@@ -457,7 +472,7 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received UTXO set for aggregating tx",
+                reason: "Received UTXO set",
             }) => {
                 self.update_running_total().await;
             }
@@ -530,6 +545,12 @@ impl MinerNode {
                 success: false,
                 reason: "Received miner removed ack from non-compute peer",
             }) => {}
+            Ok(Response {
+                success: true,
+                reason: "Sent UTXO Request",
+            }) => {
+                debug!("Sent UTXO Request for wallet update")
+            }
             Ok(Response {
                 success: false,
                 reason: "Received miner unauthorized notification from non-compute peer",
@@ -746,6 +767,14 @@ impl MinerNode {
             MineApiRequest::DisconnectFromCompute => {
                 Some(self.handle_disconnect_from_compute().await)
             }
+            MineApiRequest::RequestUTXOSet(addrs) => self
+                .send_request_utxo_set(addrs, self.compute_address(), NodeType::Miner)
+                .await
+                .ok()
+                .map(|_| Response {
+                    success: true,
+                    reason: "Sent UTXO Request",
+                }),
             MineApiRequest::SetStaticMinerAddress { address } => {
                 Some(self.handle_set_static_miner_address(address).await)
             }
@@ -997,7 +1026,7 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of closing event
+    /// Handles the item of closing event
     ///
     /// ### Arguments
     ///
@@ -1087,7 +1116,7 @@ impl MinerNode {
         }
     }
 
-    /// Handles the receipt of the random number of partitioning
+    /// Handles the item of the random number of partitioning
     ///
     /// ### Arguments
     ///
@@ -1373,37 +1402,32 @@ impl MinerNode {
         )
         .unwrap();
 
-        let payments = get_paiments_for_wallet(Some((&hash, &transaction)).into_iter());
+        let payments = get_payments_for_wallet(Some((&hash, &transaction)).into_iter());
 
-        self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+        let mut assets_won = Asset::Token(TokenAmount(0));
+
+        for (_, asset, _, _) in &payments {
+            assets_won.add_assign(asset);
+        }
+
+        let b_num = self
+            .current_block
+            .lock()
             .await
-            .unwrap();
-
-        // Add coinbase transaction to locked coinbase transactions
-        let coinbase_locktime = transaction
-            .outputs
-            .iter()
-            .map(|tx_out| tx_out.locktime)
-            .max()
+            .as_ref()
+            .map(|c| c.block.b_num)
             .unwrap_or_default();
 
-        // Add the new coinbase to the locked coinbase
-        let mut locked_coinbase = self.get_locked_coinbase().await;
-        let new_locked_coinbase = if let Some(l_coinbase) = locked_coinbase.as_mut() {
-            l_coinbase.push((hash, coinbase_locktime));
-            locked_coinbase
-        } else {
-            // Locked coinbase struct is empty, so we create it
-            Some(vec![(hash, coinbase_locktime)])
-        };
+        debug!(
+            "WON {:?} TOKENS FOR MINING ROUND {:?}",
+            assets_won,
+            b_num - 1
+        );
 
-        // Store locked coinbase transactions
-        let value = self
-            .wallet_db
-            .store_locked_coinbase(new_locked_coinbase)
-            .await;
-        self.wallet_db.set_locked_coinbase(value).await;
+        self.wallet_db
+            .save_usable_payments_to_wallet(payments, b_num)
+            .await
+            .unwrap();
 
         // Backup wallet after committing the coinbase
         self.wallet_db.backup_persistent_store().await.unwrap();
@@ -1421,100 +1445,115 @@ impl MinerNode {
     /// Checks and aggregates all the winnings into a single address if the number of addresses stored
     /// breaches the set threshold `MAX_NO_OF_WINNINGS_HELD`
     async fn check_for_threshold_and_send_aggregation_tx(&mut self) {
-        match self.aggregation_status.clone() {
-            AggregationStatus::Idle => {
-                trace!(
-                    "Checking if we are holding more than {NO_OF_ADDRESSES_FOR_AGGREGATION_TX:?} addresses to trigger aggregation tx"
+        if let Some(address_aggregation_limit) = self.address_aggregation_limit {
+            match self.aggregation_status.clone() {
+                AggregationStatus::Idle => {
+                    trace!(
+                    "Checking if we are holding more than {address_aggregation_limit:?} addresses to trigger aggregation tx"
                 );
 
-                // All last known addresses
-                let known_addresses = self.wallet_db.get_known_addresses();
+                    // All last known addresses
+                    let known_addresses = self.wallet_db.get_known_addresses();
 
-                // Check if we have a reached the threshold of addresses stored
-                if known_addresses.len() >= NO_OF_ADDRESSES_FOR_AGGREGATION_TX {
-                    trace!("Winnings aggregation triggered");
+                    // Check if we have a reached the threshold of addresses stored
+                    if known_addresses.len() >= address_aggregation_limit {
+                        trace!("Winnings aggregation triggered");
 
-                    // Slice known addresses up to NO_OF_ADDRESSES_FOR_AGGREGATION_TX
-                    let addresses_to_aggregate = known_addresses
-                        .iter()
-                        .take(NO_OF_ADDRESSES_FOR_AGGREGATION_TX)
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
+                        // Slice known addresses up to address_aggregation_limit
+                        let addresses_to_aggregate = known_addresses
+                            .iter()
+                            .take(address_aggregation_limit)
+                            .cloned()
+                            .collect::<BTreeSet<_>>();
 
-                    // Fetch the aggregating transaction inputs and outputs
-                    let (tx_ins, tx_outs) = self
-                        .wallet_db
-                        .fetch_tx_ins_and_tx_outs_merge_input_addrs(addresses_to_aggregate, None)
-                        .await
-                        .unwrap();
+                        // Fetch the aggregating transaction inputs and outputs
+                        let (tx_ins, tx_outs) = self
+                            .wallet_db
+                            .fetch_tx_ins_and_tx_outs_merge_input_addrs(
+                                addresses_to_aggregate,
+                                None,
+                            )
+                            .await
+                            .unwrap();
 
-                    // Aggregation address is last generated address,
-                    // which is generated by passing `None` as the `excess_address`
-                    // to `fetch_tx_ins_and_tx_outs_merge_input_addrs`
-                    let aggregating_addr = self.wallet_db.get_last_generated_address().unwrap(); // Should panic if `None`
+                        // Aggregation address is last generated address,
+                        // which is generated by passing `None` as the `excess_address`
+                        // to `fetch_tx_ins_and_tx_outs_merge_input_addrs`
+                        let aggregating_addr = self.wallet_db.get_last_generated_address().unwrap(); // Should panic if `None`
 
-                    trace!(
-                        "Aggregating {:?} assets to {:?}",
-                        tx_ins.len(),
-                        aggregating_addr
-                    );
+                        trace!(
+                            "Aggregating {:?} assets to {:?}",
+                            tx_ins.len(),
+                            aggregating_addr
+                        );
 
-                    // Construct aggregation transaction
-                    let aggregating_tx = construct_tx_core(tx_ins, tx_outs);
+                        // Construct aggregation transaction
+                        let aggregating_tx = construct_tx_core(tx_ins, tx_outs, None);
 
-                    trace!("Sending aggregation tx to compute node");
+                        trace!("Sending aggregation tx to compute node");
 
-                    // Send aggregating Transaction to compute node
+                        // Send aggregating Transaction to compute node
+                        if let Err(e) = self
+                            .send_transactions_to_compute(
+                                self.compute_addr,
+                                vec![aggregating_tx.clone()],
+                            )
+                            .await
+                        {
+                            let error =
+                                format!("Error sending aggregation tx to compute nodes: {e:?}");
+                            error!("{:?}", &e);
+                            try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error })
+                                .await;
+                            // Return if sending to compute has failed
+                            return;
+                        }
+
+                        // After aggregation, our wallets will hold only 2 addresses: one for the holding all the winnings
+                        // and the other for the excess amount(which will be `0` theoretically).
+
+                        // TODO: Should we update the wallet DB here, or only once we've got confirmation
+                        // from compute node through received UTXO set?
+                        let b_num = self
+                            .current_block
+                            .lock()
+                            .await
+                            .as_ref()
+                            .map(|c| c.block.b_num)
+                            .unwrap_or_default();
+
+                        self.wallet_db
+                            .store_payment_transaction(aggregating_tx, b_num)
+                            .await;
+
+                        trace!("Pruning the wallet of old keys after aggregation");
+                        self.wallet_db
+                            .destroy_spent_transactions_and_keys(None)
+                            .await;
+
+                        self.aggregation_status = AggregationStatus::UtxoUpdate(aggregating_addr);
+                    }
+                }
+                AggregationStatus::UtxoUpdate(aggregation_addr) => {
+                    // Request for UTXO set to confirm that aggregation tx
+                    // has went through the previous time.
+                    let compute_addr = self.compute_address();
+
                     if let Err(e) = self
-                        .send_transactions_to_compute(
-                            self.compute_addr,
-                            vec![aggregating_tx.clone()],
+                        .send_request_utxo_set(
+                            UtxoFetchType::AnyOf(vec![aggregation_addr.clone()]),
+                            compute_addr,
+                            NodeType::Miner,
                         )
                         .await
                     {
-                        let error = format!("Error sending aggregation tx to compute nodes: {e:?}");
-                        error!("{:?}", &e);
+                        let error = format!("Error sending UTXO request to compute nodes: {e:?}");
+                        error!("{:?}", &error);
                         try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error })
                             .await;
-                        // Return if sending to compute has failed
-                        return;
+                    } else {
+                        trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
                     }
-
-                    // After aggregation, our wallets will hold only 2 addresses: one for the holding all the winnings
-                    // and the other for the excess amount(which will be `0` theoretically).
-
-                    // TODO: Should we update the wallet DB here, or only once we've got confirmation
-                    // from compute node through received UTXO set?
-                    self.wallet_db
-                        .store_payment_transaction(aggregating_tx)
-                        .await;
-
-                    trace!("Pruning the wallet of old keys after aggregation");
-                    self.wallet_db
-                        .destroy_spent_transactions_and_keys(None)
-                        .await;
-
-                    self.aggregation_status = AggregationStatus::UtxoUpdate(aggregating_addr);
-                }
-            }
-            AggregationStatus::UtxoUpdate(aggregation_addr) => {
-                // Request for UTXO set to confirm that aggregation tx
-                // has went through the previous time.
-                let compute_addr = self.compute_address();
-
-                if let Err(e) = self
-                    .send_request_utxo_set(
-                        UtxoFetchType::AnyOf(vec![aggregation_addr.clone()]),
-                        compute_addr,
-                        NodeType::Miner,
-                    )
-                    .await
-                {
-                    let error = format!("Error sending UTXO request to compute nodes: {e:?}");
-                    error!("{:?}", &error);
-                    try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error }).await;
-                } else {
-                    trace!("Sending UTXO request from Miner node to confirm our previous aggregation of winnings");
                 }
             }
         }
@@ -1612,13 +1651,27 @@ impl MinerNode {
     }
 
     /// Get locked coinbase
-    pub async fn get_locked_coinbase(&self) -> Option<Vec<(String, u64)>> {
+    pub async fn get_locked_coinbase(&self) -> LockedCoinbase {
         self.wallet_db.get_locked_coinbase().await
     }
 
     /// Load and apply the local database to our state
     async fn load_local_db(mut self) -> Result<Self> {
-        self.wallet_db.load_locked_coinbase().await?;
+        if let Err(e) = self.wallet_db.load_locked_coinbase().await {
+            error!("load_local_db: load_locked_coinbase {:?}", e);
+            warn!("load_local_db: generating new locked coinbase from UTXO set");
+            // Existing locked coinbase failed to deserialize, so we need to
+            // generate a new one using a UTXO subset from the compute node
+            let all_known_addresses = self.wallet_db.get_known_addresses();
+            let request = ComputeRequest::SendUtxoRequest {
+                address_list: UtxoFetchType::AnyOf(all_known_addresses),
+                requester_node_type: NodeType::Miner,
+            };
+
+            if let Err(e) = self.node.send(self.compute_addr, request).await {
+                error!("load_local_db: send UtxoRequest {:?}", e);
+            }
+        }
         self.current_coinbase = if let Some(cb) = load_last_coinbase(&self.wallet_db).await? {
             debug!("load_local_db: current_coinbase {:?}", cb);
             Some(cb)
@@ -1722,16 +1775,22 @@ impl Transactor for MinerNode {
 
         Response {
             success: true,
-            reason: "Received UTXO set for aggregating tx",
+            reason: "Received UTXO set",
         }
     }
 
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
-        let payments = get_paiments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
-
+        let payments = get_payments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let b_num = self
+            .current_block
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.block.b_num)
+            .unwrap();
         self.wallet_db
-            .save_usable_payments_to_wallet(payments)
+            .save_usable_payments_to_wallet(payments, b_num)
             .await
             .unwrap();
     }

@@ -3,7 +3,7 @@ use crate::interfaces::NodeType;
 use std::net::SocketAddr;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
-use tokio_rustls::rustls::TLSError;
+use tokio_rustls::rustls::Error as TLSError;
 use tokio_rustls::webpki;
 
 #[derive(Debug)]
@@ -32,6 +32,8 @@ pub enum CommsError {
     Serialization(bincode::Error),
     /// MPSC channel error.
     ChannelSendError(mpsc::error::SendError<Event>),
+    /// Webpki error
+    WebpkiError(webpki::Error),
 }
 
 #[derive(Debug)]
@@ -55,6 +57,7 @@ impl fmt::Display for CommsError {
             Self::PeerIncompatible(info) => write!(f, "Peer incompatible: {info:?}"),
             Self::Serialization(err) => write!(f, "Serialization error: {err}"),
             Self::ChannelSendError(err) => write!(f, "MPSC channel send error: {err}"),
+            Self::WebpkiError(err) => write!(f, "Webpki error: {err}"),
         }
     }
 }
@@ -74,6 +77,7 @@ impl Error for CommsError {
             Self::PeerIncompatible(_) => None,
             Self::Serialization(err) => Some(err),
             Self::ChannelSendError(err) => Some(err),
+            Self::WebpkiError(err) => Some(err),
         }
     }
 }
@@ -104,6 +108,6 @@ impl From<TLSError> for CommsError {
 
 impl From<webpki::Error> for CommsError {
     fn from(other: webpki::Error) -> Self {
-        Self::TlsError(TLSError::WebPKIError(other))
+        Self::WebpkiError(other)
     }
 }

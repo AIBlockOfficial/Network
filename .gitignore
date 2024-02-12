@@ -24,3 +24,5 @@ src/bin/tls_data/temp.cnf
 src/bin/tls_data/*.old
 src/bin/tls_data/*.attr
 
+*.txt
+

@@ -1,15 +1,15 @@
 //! App to run a mining node.
 
-use clap::{App, Arg, ArgMatches};
-use config::{ConfigError, Value};
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use ablock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use ablock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 use ablock_network::{MinerNode, UserNode};
+use clap::{App, Arg, ArgMatches};
+use config::{ConfigError, Value};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
@@ -226,44 +226,57 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("config")
                 .long("config")
                 .short("c")
+                .env("CONFIG")
                 .help("Run the miner node using the given config file.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_config")
                 .long("tls_config")
+                .env("TLS_CONFIG")
                 .help("Use file to provide tls configuration options.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("mining_api_key")
                 .long("mining_api_key")
+                .env("MINING_API_KEY")
                 .help("Use an API key to participate in mining.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
+                .env("INITIAL_BLOCK_CONFIG")
                 .help("Run the compute node using the given initial block config file.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_config")
                 .long("api_config")
+                .env("API_CONFIG")
                 .help("Use file to provide api configuration options.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_port")
                 .long("api_port")
+                .env("API_PORT")
                 .help("The port to run the http API from")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("api_use_tls")
                 .long("api_use_tls")
-                .env("ABLOCK_API_USE_TLS")
+                .env("API_USE_TLS")
                 .help("Whether to use TLS for API: 0 to disable")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("address_aggregation_limit")
+                .long("address_aggregation_limit")
+                .env("ADDRESS_AGGREGATION_LIMIT")
+                .help("Limit the amount of addresses that can be kept before aggregation is triggered")
                 .takes_value(true),
         )
         .arg(
@@ -276,6 +289,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("with_user_index")
                 .long("with_user_index")
+                .env("WITH_USER_INDEX")
                 .help("Run the specified user node index from config file")
                 .takes_value(true),
         )
@@ -288,32 +302,35 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("passphrase")
                 .long("passphrase")
+                .env("PASSPHRASE")
                 .help("Enter a password or passphase for the encryption of the Wallet.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("address")
                 .long("address")
+                .env("ADDRESS")
                 .help("Run node index at the given address")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("with_user_address")
                 .long("with_user_address")
+                .env("WITH_USER_ADDRESS")
                 .help("Run the specified user node index from config file")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_certificate_override")
                 .long("tls_certificate_override")
-                .env("ABLOCK_TLS_CERTIFICATE")
+                .env("TLS_CERTIFICATE")
                 .help("Use PEM certificate as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("tls_private_key_override")
                 .long("tls_private_key_override")
-                .env("ABLOCK_TLS_PRIVATE_KEY")
+                .env("TLS_PRIVATE_KEY")
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
@@ -484,6 +501,12 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("mining_api_key", mining_api_key).unwrap();
     }
 
+    if let Some(address_aggregation_limit) = matches.value_of("address_aggregation_limit") {
+        settings
+            .set("address_aggregation_limit", address_aggregation_limit)
+            .unwrap();
+    }
+
     if let Some(certificate) = matches.value_of("tls_certificate_override") {
         let mut tls_config = settings.get_table("tls_config").unwrap();
         tls_config.insert(
@@ -649,7 +672,7 @@ mod test {
         // Act
         //
         let app = clap_app();
-        let matches = app.get_matches_from_safe(args.into_iter()).unwrap();
+        let matches = app.get_matches_from_safe(args).unwrap();
         let settings = load_settings(&matches);
         let config = configuration(settings);
 

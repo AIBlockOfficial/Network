@@ -1,6 +1,6 @@
 use crate::api::handlers::{
-    AddressConstructData, Addresses, ChangePassphraseData, CreateReceiptAssetDataCompute,
-    CreateReceiptAssetDataUser, CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths,
+    AddressConstructData, Addresses, ChangePassphraseData, CreateItemAssetDataCompute,
+    CreateItemAssetDataUser, CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths,
     EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
 };
 use crate::api::routes;
@@ -19,22 +19,22 @@ use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, construct_valid_block_pow_hash, create_receipt_asset_tx_from_sig,
+    apply_mining_tx, construct_valid_block_pow_hash, create_item_asset_tx_from_sig,
     decode_secret_key, generate_pow_for_block, to_api_keys, to_route_pow_infos,
     tracing_log_try_init, validate_pow_block, ApiKeys,
 };
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::ComputeRequest;
-use bincode::serialize;
-use naom::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
-use naom::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey};
-use naom::primitives::asset::{Asset, TokenAmount};
-use naom::primitives::block::{Block, BlockHeader};
-use naom::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
-use naom::script::lang::Script;
-use naom::utils::transaction_utils::{
+use a_block_chain::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
+use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey};
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::block::{Block, BlockHeader};
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
+use a_block_chain::script::lang::Script;
+use a_block_chain::utils::transaction_utils::{
     construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
 };
+use bincode::serialize;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -74,7 +74,7 @@ struct ComputeTest {
 impl ComputeTest {
     fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
         let druid =
-            if let Some(druid_info) = tx_vals.get(0).and_then(|(_, tx)| tx.druid_info.as_ref()) {
+            if let Some(druid_info) = tx_vals.first().and_then(|(_, tx)| tx.druid_info.as_ref()) {
                 druid_info.druid.clone()
             } else {
                 "Druid1".to_owned()
@@ -165,9 +165,9 @@ impl ComputeApi for ComputeTest {
         }
     }
 
-    fn create_receipt_asset_tx(
+    fn create_item_asset_tx(
         &mut self,
-        receipt_amount: u64,
+        item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
@@ -175,9 +175,9 @@ impl ComputeApi for ComputeTest {
         metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
-        Ok(create_receipt_asset_tx_from_sig(
+        Ok(create_item_asset_tx_from_sig(
             b_num,
-            receipt_amount,
+            item_amount,
             script_public_key,
             public_key,
             signature,
@@ -282,7 +282,7 @@ fn generate_transaction(tx_hash: &str, script_public_key: &str) -> (String, Tran
     let mut tx = Transaction::new();
 
     let tx_in = TxIn::new_from_input(OutPoint::new(tx_hash.to_string(), 0), Script::new());
-    let tx_out = TxOut::new_token_amount(script_public_key.to_string(), asset);
+    let tx_out = TxOut::new_token_amount(script_public_key.to_string(), asset, None);
     tx.inputs = vec![tx_in];
     tx.outputs = vec![tx_out];
 
@@ -291,7 +291,7 @@ fn generate_transaction(tx_hash: &str, script_public_key: &str) -> (String, Tran
     (t_hash, tx)
 }
 
-// Util function to create receipt base transactions.
+// Util function to create item base transactions.
 // Returns the hash of the tx and the tx itself
 fn get_rb_transactions() -> Vec<(String, Transaction)> {
     let rb_sender_data = RbSenderData {
@@ -357,7 +357,7 @@ async fn new_self_node_with_port(node_type: NodeType, port: u16) -> (Node, Socke
     bind_address.set_port(port);
 
     let tcp_tls_config = TcpTlsConfig::new_no_tls(bind_address);
-    let self_node = Node::new(&tcp_tls_config, 20, node_type, false)
+    let self_node = Node::new(&tcp_tls_config, 20, node_type, false, false)
         .await
         .unwrap();
     socket_address.set_port(self_node.local_address().port());
@@ -378,7 +378,7 @@ async fn test_get_latest_block() {
     let db = get_db_with_block().await;
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/latest_block");
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
@@ -415,7 +415,7 @@ async fn test_get_export_keypairs() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/export_keypairs");
     //
     // Act
@@ -455,7 +455,7 @@ async fn test_get_user_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -471,7 +471,7 @@ async fn test_get_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -503,7 +503,7 @@ async fn test_get_storage_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -551,7 +551,7 @@ async fn test_get_compute_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -576,7 +576,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_receipt_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_item_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -609,7 +609,7 @@ async fn test_get_miner_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -662,7 +662,7 @@ async fn test_get_miner_with_user_debug_data() {
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .path("/debug_data")
     };
     let request_x_api = || request().header("x-api-key", COMMON_VALID_API_KEY);
@@ -685,7 +685,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_receipt_asset\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -799,7 +799,7 @@ async fn auth_request_common(
     let request = || {
         warp::test::request()
             .method("GET")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .header("x-api-key", api_key)
             .header("x-nonce", nonce)
             .path("/debug_data")
@@ -858,13 +858,13 @@ async fn test_get_wallet_info() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info");
 
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/spent");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -881,10 +881,10 @@ async fn test_get_wallet_info() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
-    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 /// Test GET shared config for compute node
@@ -900,7 +900,7 @@ async fn test_get_shared_config() {
         .method("GET")
         .path("/get_shared_config")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID);
+        .header("x-cache-id", COMMON_REQ_ID);
 
     //
     // Act
@@ -949,7 +949,7 @@ async fn test_pagination() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/1");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -965,7 +965,7 @@ async fn test_pagination() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"running_total_tokens\":1100,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.04365079365079365,\"available_total_tokens\":1100,\"item_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -993,13 +993,13 @@ async fn test_pagination_zero_or_terminal() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/-10");
 
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_terminal = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/999");
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
@@ -1016,10 +1016,10 @@ async fn test_pagination_zero_or_terminal() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash0\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash1\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash10\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash11\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash12\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash13\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash14\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash15\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash16\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash17\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash18\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash19\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash2\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash20\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash21\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash22\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash23\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash24\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash3\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash4\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash5\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash50\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash51\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash52\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash53\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash54\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash55\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash56\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash57\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash58\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash59\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash6\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash60\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash61\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash62\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash63\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash64\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash65\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash66\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash67\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash68\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash69\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash7\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash70\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash71\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash72\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash73\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash74\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash8\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash9\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"running_total_tokens\":1100,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.04365079365079365,\"available_total_tokens\":1100,\"item_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash0\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash1\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash10\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash11\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash12\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash13\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash14\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash15\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash16\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash17\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash18\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash19\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash2\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash20\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash21\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash22\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash23\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash24\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash25\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash26\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash27\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash28\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash29\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash3\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash30\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash31\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash32\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash33\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash34\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash35\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash36\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash37\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash38\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash39\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash4\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash40\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash41\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash42\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash43\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash44\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash45\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash46\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash47\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash48\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash49\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash5\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash50\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash51\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash52\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash53\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash54\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash55\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash56\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash57\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash58\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash59\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash6\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash60\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash61\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash62\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash63\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash64\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash65\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash66\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash67\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash68\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash69\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash7\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash70\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash71\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash72\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash73\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash74\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash8\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash9\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
-    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.04365079365079365,\"running_total_tokens\":1100,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.04365079365079365,\"available_total_tokens\":1100,\"item_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash75\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash76\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash77\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash78\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash79\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash80\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash81\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash82\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash83\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash84\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash85\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash86\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash87\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash88\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash89\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash90\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash91\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash92\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash93\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash94\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash95\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash96\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash97\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash98\",\"n\":0},\"value\":{\"Token\":11}},{\"out_point\":{\"t_hash\":\"tx_hash99\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 /// Test cache
@@ -1051,16 +1051,16 @@ async fn test_cache() {
 
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info");
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/spent");
     let com_req_id_plus_1 = "2ae7bc9cba924e3cb73c0249893078d8";
     let request_spent_diff_id = warp::test::request()
         .method("GET")
-        .header("x-request-id", com_req_id_plus_1)
+        .header("x-cache-id", com_req_id_plus_1)
         .path("/wallet_info/spent");
 
     let cache = create_new_cache(1);
@@ -1079,7 +1079,7 @@ async fn test_cache() {
     //
     // Assert
     //
-    let expected_cached_response = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}";
+    let expected_cached_response = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":11}}]}}}";
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(res.body(), expected_cached_response);
 
@@ -1092,17 +1092,17 @@ async fn test_cache() {
         (r_s_diff_id.status(), r_s_diff_id.headers().clone()),
         success_json()
     );
-    assert_eq!(r_s_diff_id.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(r_s_diff_id.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 
     thread::sleep(two_sec);
     //repeat with same id after value expires
     let request_spent = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/wallet_info/spent");
     let r_s = request_spent.reply(&filter).await;
     assert_eq!((r_s.status(), r_s.headers().clone()), success_json());
-    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"receipt_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
+    assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
 /// Test GET new payment address
@@ -1116,7 +1116,7 @@ async fn test_get_payment_address() {
     let db = get_wallet_db("").await;
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/payment_address");
     //
     // Act
@@ -1155,7 +1155,7 @@ async fn test_get_utxo_set_addresses() {
     let compute = ComputeTest::new(tx_vals);
     let request = warp::test::request()
         .method("GET")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .path("/utxo_addresses");
 
     //
@@ -1274,7 +1274,7 @@ async fn test_post_blockchain_entry_by_key(
         .method("POST")
         .path("/blockchain_entry")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&key)
         .reply(&filter)
         .await;
@@ -1297,7 +1297,7 @@ async fn test_post_block_info_by_nums() {
         .method("POST")
         .path("/block_by_num")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec![0_u64, 10, 0])
         .reply(&filter)
         .await;
@@ -1326,7 +1326,7 @@ async fn test_post_transactions_by_key() {
         .method("POST")
         .path("/transactions_by_key")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec!["g98d0ab9304ca82f098a86ad6251803b".to_string()])
         .reply(&filter)
         .await;
@@ -1354,6 +1354,7 @@ async fn test_post_make_payment() {
         address: COMMON_PUB_ADDR.to_string(),
         amount: TokenAmount(25),
         passphrase: String::new(),
+        locktime: None,
     };
 
     let db = get_wallet_db(&encapsulated_data.passphrase).await;
@@ -1362,7 +1363,7 @@ async fn test_post_make_payment() {
         .path("/make_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&encapsulated_data);
 
     //
@@ -1388,8 +1389,16 @@ async fn test_post_make_payment() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Payment processing\",\"route\":\"make_payment\",\"content\":{\"13bd3351b78beb2d0dadf2058dcc926c\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
-    let (address, amount) = (encapsulated_data.address, encapsulated_data.amount);
-    let expected_frame = user_api_request_as_frame(UserApiRequest::MakePayment { address, amount });
+    let (address, amount, locktime) = (
+        encapsulated_data.address,
+        encapsulated_data.amount,
+        encapsulated_data.locktime,
+    );
+    let expected_frame = user_api_request_as_frame(UserApiRequest::MakePayment {
+        address,
+        amount,
+        locktime,
+    });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
 }
@@ -1408,6 +1417,7 @@ async fn test_post_make_ip_payment() {
         address: "127.0.0.1:12345".to_owned(),
         amount: TokenAmount(25),
         passphrase: String::new(),
+        locktime: None,
     };
     let db = get_wallet_db(&encapsulated_data.passphrase).await;
     let request = warp::test::request()
@@ -1415,7 +1425,7 @@ async fn test_post_make_ip_payment() {
         .path("/make_ip_payment")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&encapsulated_data);
     //
     // Act
@@ -1441,13 +1451,15 @@ async fn test_post_make_ip_payment() {
     assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"IP payment processing\",\"route\":\"make_ip_payment\",\"content\":{\"127.0.0.1:12345\":{\"asset\":{\"Token\":25},\"extra_info\":null}}}");
 
     // Frame expected
-    let (payment_peer, amount) = (
+    let (payment_peer, amount, locktime) = (
         encapsulated_data.address.parse::<SocketAddr>().unwrap(),
         encapsulated_data.amount,
+        encapsulated_data.locktime,
     );
     let expected_frame = user_api_request_as_frame(UserApiRequest::MakeIpPayment {
         payment_peer,
         amount,
+        locktime,
     });
     let actual_frame = next_event_frame(&mut self_node).await;
     assert_eq!(expected_frame, actual_frame);
@@ -1488,7 +1500,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", COMMON_REQ_ID)
+            .header("x-cache-id", COMMON_REQ_ID)
             .header("Content-Type", "application/json")
     };
 
@@ -1497,7 +1509,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", com_req_id_plus_1)
+            .header("x-cache-id", com_req_id_plus_1)
             .header("Content-Type", "application/json")
     };
 
@@ -1506,7 +1518,7 @@ async fn test_address_construction() {
         warp::test::request()
             .method("POST")
             .path("/address_construction")
-            .header("x-request-id", com_req_id_plus_2)
+            .header("x-cache-id", com_req_id_plus_2)
             .header("Content-Type", "application/json")
     };
     //
@@ -1553,7 +1565,7 @@ async fn test_post_request_donation() {
         .method("POST")
         .path("/request_donation")
         .remote_addr(self_socket)
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .header("Content-Type", "application/json")
         .json(&address);
     //
@@ -1583,7 +1595,7 @@ async fn test_post_request_donation() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_import_keypairs_success() {
     let _ = tracing_log_try_init();
-
+    let (self_node, _self_socket) = new_self_node(NodeType::User).await;
     let db = get_wallet_db("").await;
     let mut addresses: BTreeMap<String, AddressStoreHex> = BTreeMap::new();
     addresses.insert(
@@ -1598,15 +1610,22 @@ async fn test_post_import_keypairs_success() {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::import_keypairs(&mut dp(), db.clone(), Default::default(), ks, cache)
-        .recover(handle_rejection);
+    let filter = routes::import_keypairs(
+        &mut dp(),
+        db.clone(),
+        self_node,
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let wallet_addresses_before = db.get_known_addresses();
 
     let res = warp::test::request()
         .method("POST")
         .path("/import_keypairs")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&imported_addresses)
         .reply(&filter)
         .await;
@@ -1641,7 +1660,7 @@ async fn test_post_fetch_balance() {
         .method("POST")
         .path("/fetch_balance")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&addresses);
     //
     // Act
@@ -1667,7 +1686,7 @@ async fn test_post_fetch_balance() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Balance successfully fetched\",\"route\":\"fetch_balance\",\"content\":{\"total\":{\"tokens\":25200,\"receipts\":{}},\"address_list\":{\"13bd3351b78beb2d0dadf2058dcc926c\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}}"
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Balance successfully fetched\",\"route\":\"fetch_balance\",\"content\":{\"total\":{\"tokens\":25200,\"items\":{}},\"address_list\":{\"13bd3351b78beb2d0dadf2058dcc926c\":[{\"out_point\":{\"t_hash\":\"tx_hash\",\"n\":0},\"value\":{\"Token\":25200}}]}}}"
     );
 }
 
@@ -1688,7 +1707,7 @@ async fn test_post_fetch_pending() {
         .method("POST")
         .path("/fetch_pending")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&druids);
     //
     // Act
@@ -1714,7 +1733,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g490b4fc3b3953a8a006ec17ae4a6055\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g8118c848762693bda7be3f804601ad0\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}}}}}}");
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g490b4fc3b3953a8a006ec17ae4a6055\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g8118c848762693bda7be3f804601ad0\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1736,7 +1755,7 @@ async fn test_post_update_running_total() {
         .method("POST")
         .path("/update_running_total")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&addresses);
     //
     // Act
@@ -1762,19 +1781,19 @@ async fn test_post_update_running_total() {
     assert_eq!(expected_frame, actual_frame);
 }
 
-/// Test POST create receipt asset on compute node successfully
+/// Test POST create item asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions() {
     test_post_create_transactions_common(None).await;
 }
 
-/// Test POST create receipt asset on compute node successfully
+/// Test POST create item asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions_v0() {
     test_post_create_transactions_common(Some(NETWORK_VERSION_V0)).await;
 }
 
-/// Test POST create receipt asset on compute node successfully
+/// Test POST create item asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions_temp() {
     test_post_create_transactions_common(Some(NETWORK_VERSION_TEMP)).await;
@@ -1811,6 +1830,12 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
             drs_block_hash: None,
             locktime: 0,
         }],
+        fees: Some(vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            drs_block_hash: None,
+            locktime: 0,
+        }]),
         version: 1,
         druid_info: None,
     }];
@@ -1819,7 +1844,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         .method("POST")
         .path("/create_transactions")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -1854,9 +1879,9 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     );
 }
 
-/// Test POST create receipt asset on compute node successfully
+/// Test POST create item asset on compute node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_create_receipt_asset_tx_compute() {
+async fn test_post_create_item_asset_tx_compute() {
     let _ = tracing_log_try_init();
 
     //
@@ -1864,12 +1889,12 @@ async fn test_post_create_receipt_asset_tx_compute() {
     //
     let compute = ComputeTest::new(Vec::new());
 
-    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::receipt(1, None, None));
+    let asset_hash = construct_tx_in_signable_asset_hash(&Asset::item(1, None, None));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
-    let json_body = CreateReceiptAssetDataCompute {
-        receipt_amount: 1,
+    let json_body = CreateItemAssetDataCompute {
+        item_amount: 1,
         script_public_key: COMMON_PUB_ADDR.to_owned(),
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
@@ -1879,9 +1904,9 @@ async fn test_post_create_receipt_asset_tx_compute() {
 
     let request = warp::test::request()
         .method("POST")
-        .path("/create_receipt_asset")
+        .path("/create_item_asset")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -1889,7 +1914,7 @@ async fn test_post_create_receipt_asset_tx_compute() {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::create_receipt_asset(
+    let filter = routes::create_item_asset(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
@@ -1905,12 +1930,12 @@ async fn test_post_create_receipt_asset_tx_compute() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":{\"asset\":{\"asset\":{\"Receipt\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Item asset(s) created\",\"route\":\"create_item_asset\",\"content\":{\"asset\":{\"asset\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
 }
 
-/// Test POST create receipt asset on user node successfully
+/// Test POST create item asset on user node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_create_receipt_asset_tx_user() {
+async fn test_post_create_item_asset_tx_user() {
     let _ = tracing_log_try_init();
 
     //
@@ -1918,43 +1943,38 @@ async fn test_post_create_receipt_asset_tx_user() {
     //
     let (mut self_node, self_socket) = new_self_node(NodeType::User).await;
 
-    let json_body = CreateReceiptAssetDataUser {
-        receipt_amount: 1,
+    let json_body = CreateItemAssetDataUser {
+        item_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
         metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
         .method("POST")
-        .path("/create_receipt_asset")
+        .path("/create_item_asset")
         .remote_addr(self_socket)
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
     //
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
-    let filter = routes::create_receipt_asset_user(
-        &mut dp(),
-        self_node.clone(),
-        Default::default(),
-        ks,
-        cache,
-    )
-    .recover(handle_rejection);
+    let filter =
+        routes::create_item_asset_user(&mut dp(), self_node.clone(), Default::default(), ks, cache)
+            .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Receipt asset(s) created\",\"route\":\"create_receipt_asset\",\"content\":1}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Item asset(s) created\",\"route\":\"create_item_asset\",\"content\":1}");
 
     // Expected Frame
-    let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateReceiptRequest {
-        receipt_amount: json_body.receipt_amount,
+    let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateItemRequest {
+        item_amount: json_body.item_amount,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
         metadata: json_body.metadata,
     });
@@ -1963,9 +1983,9 @@ async fn test_post_create_receipt_asset_tx_user() {
     assert_eq!(expected_frame, actual_frame);
 }
 
-/// Test POST create receipt asset on compute node failure
+/// Test POST create item asset on compute node failure
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_create_receipt_asset_tx_compute_failure() {
+async fn test_post_create_item_asset_tx_compute_failure() {
     let _ = tracing_log_try_init();
 
     //
@@ -1973,24 +1993,24 @@ async fn test_post_create_receipt_asset_tx_compute_failure() {
     //
     let compute = ComputeTest::new(Vec::new());
 
-    let json_body = CreateReceiptAssetDataUser {
-        receipt_amount: 1,
+    let json_body = CreateItemAssetDataUser {
+        item_amount: 1,
         drs_tx_hash_spec: DrsTxHashSpec::Default,
         metadata: Some("metadata".to_owned()),
     };
 
     let request = warp::test::request()
         .method("POST")
-        .path("/create_receipt_asset")
+        .path("/create_item_asset")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
     //
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
-    let filter = routes::create_receipt_asset(
+    let filter = routes::create_item_asset(
         &mut dp(),
         compute.threaded_calls.tx.clone(),
         Default::default(),
@@ -2030,7 +2050,7 @@ async fn test_post_change_passphrase() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2075,7 +2095,7 @@ async fn test_post_change_passphrase_failure() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2120,7 +2140,7 @@ async fn test_post_change_blank_passphrase_failure() {
         .method("POST")
         .path("/change_passphrase")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&json_body.clone());
     //
     // Act
@@ -2161,7 +2181,7 @@ async fn test_post_block_nums_by_tx_hashes() {
         .method("POST")
         .path("/check_transaction_presence")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&vec!["g393e26d47ede87b84808c1a5664ea41"]);
     //
     // Act
@@ -2192,7 +2212,7 @@ async fn test_post_pause_nodes() {
         .method("POST")
         .path("/pause_nodes")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&1_u64);
 
     //
@@ -2230,7 +2250,7 @@ async fn test_post_resume_nodes() {
         .method("POST")
         .path("/resume_nodes")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID);
+        .header("x-cache-id", COMMON_REQ_ID);
 
     //
     // Act
@@ -2272,7 +2292,7 @@ async fn test_post_update_shared_config() {
         .method("POST")
         .path("/update_shared_config")
         .header("Content-Type", "application/json")
-        .header("x-request-id", COMMON_REQ_ID)
+        .header("x-cache-id", COMMON_REQ_ID)
         .json(&shared_config_body);
 
     //

@@ -50,7 +50,7 @@ pub fn map_api_res_and_cache(
 }
 
 // Authorizes a request based on API keys as well as PoW requirements for the route
-// Successfull authorization will extract the x-request-id header value
+// Successfull authorization will extract the x-cache-id header value
 pub fn auth_request(
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
@@ -65,7 +65,7 @@ pub fn auth_request(
             async move {
                 // Extract headers
                 let id = headers
-                    .get("x-request-id")
+                    .get("x-cache-id")
                     .and_then(|n| n.to_str().ok())
                     .unwrap_or_default();
 
@@ -88,13 +88,15 @@ pub fn auth_request(
                 )));
 
                 // All requests require a unique ID of 32 characters
-                if id.chars().count() != 32 {
-                    return err_unauthorized;
-                }
+                // if id.chars().count() != 32 {
+                //     println!("Unauthorized - need 32 char string");
+                //     return err_unauthorized;
+                // }
 
                 // API key is needed
                 if let Some(needed_api_keys) = needed_keys {
                     if !needed_api_keys.contains(&api_key.to_string()) {
+                        println!("Unauthorized - API Key needed");
                         return err_unauthorized;
                     }
                 }
@@ -104,6 +106,7 @@ pub fn auth_request(
                 // This route requires PoW
                 if let Some(difficulty) = route_difficulty {
                     if validate_pow_for_diff(difficulty, hash_content.as_bytes()).is_none() {
+                        println!("Unauthorized - Route difficulty");
                         return err_unauthorized;
                     }
                 }

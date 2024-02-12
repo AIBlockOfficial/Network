@@ -17,7 +17,7 @@ use crate::test_utils::{
 use crate::tests::compute_committed_tx_pool;
 use crate::utils::{get_test_common_unicorn, tracing_log_try_init};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
-use naom::primitives::asset::{Asset, TokenAmount};
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -724,6 +724,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         mining_api_key: Default::default(),
         compute_miner_whitelist: Default::default(),
         peer_limit: 1000,
+        address_aggregation_limit: Some(5),
     }
     .with_groups(1, 1)
 }
@@ -751,8 +752,8 @@ fn cfg_upgrade() -> UpgradeCfg {
 }
 
 fn get_expected_last_block_stored() -> BlockStoredInfo {
-    use naom::primitives::transaction::{Transaction, TxIn, TxOut};
-    use naom::script::{lang::Script, StackEntry};
+    use a_block_chain::primitives::transaction::{Transaction, TxIn, TxOut};
+    use a_block_chain::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
@@ -778,6 +779,7 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                             .to_owned(),
                     ),
                 }],
+                fees: vec![],
                 version: old::constants::NETWORK_VERSION as usize,
                 druid_info: None,
             },
@@ -863,7 +865,8 @@ async fn user_make_payment_transaction(
 ) {
     let mut user = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    user.make_payment_transactions(None, to_addr, amount).await;
+    user.make_payment_transactions(None, to_addr, amount, None)
+        .await;
     user.send_next_payment_to_destinations(compute_addr)
         .await
         .unwrap();

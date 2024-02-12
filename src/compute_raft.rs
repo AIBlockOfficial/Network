@@ -12,15 +12,15 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck,
-    UtxoReAlignCheck,
+    calculate_reward, create_socket_addr_for_list, get_timestamp_now, get_total_coinbase_tokens,
+    make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
+use a_block_chain::crypto::sha3_256;
+use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::block::Block;
+use a_block_chain::primitives::transaction::Transaction;
+use a_block_chain::utils::transaction_utils::get_inputs_previous_out_point;
 use bincode::{deserialize, serialize};
-use naom::crypto::sha3_256;
-use naom::primitives::asset::TokenAmount;
-use naom::primitives::block::Block;
-use naom::primitives::transaction::Transaction;
-use naom::utils::transaction_utils::get_inputs_previous_out_point;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
@@ -64,10 +64,20 @@ pub enum ComputeRaftItem {
     DruidTransactions(Vec<BTreeMap<String, Transaction>>),
     PipelineItem(MiningPipelineItem, u64),
     CoordinatedCmd(CoordinatedCommand),
+    Timestamp(i64),
+    RuntimeData(ComputeRuntimeItem),
+}
+
+/// Compute RAFT runtime item; will not get stored to disk
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComputeRuntimeItem {
+    AddMiningApiKeys(Vec<(SocketAddr, String)>),
+    RemoveMiningApiKeys(Vec<SocketAddr>),
 }
 
 /// Commited item to process.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum CommittedItem {
     FirstBlock,
     Block,
@@ -122,6 +132,12 @@ pub enum InitialProposal {
     },
 }
 
+/// Runtime data that is shared amongst compute peers, but will not persist to disk
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ComputeConsensusedRuntimeData {
+    pub mining_api_keys: BTreeMap<SocketAddr, String>,
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -161,6 +177,11 @@ pub struct ComputeConsensused {
     special_handling: Option<SpecialHandling>,
     /// Whitelisted miner nodes.
     miner_whitelist: MinerWhitelist,
+    /// Timestamp for the current block
+    timestamp: i64,
+    /// Runtime data that does not get stored to disk
+    #[serde(skip)]
+    runtime_data: ComputeConsensusedRuntimeData,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -218,6 +239,8 @@ pub struct ComputeRaft {
     backup_check: BackupCheck,
     /// Check UTXO set alignment if needed
     utxo_re_align_check: UtxoReAlignCheck,
+    /// Timestamp of the current block
+    timestamp: i64,
 }
 
 impl fmt::Debug for ComputeRaft {
@@ -235,13 +258,22 @@ impl ComputeRaft {
     /// * `raft_db` - Override raft db to use.
     pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
         let use_raft = config.compute_raft != 0;
+        let timestamp = get_timestamp_now();
 
         if config.backup_restore.unwrap_or(false) {
             db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
         }
+        let raw_node_ips = config
+            .compute_nodes
+            .clone()
+            .into_iter()
+            .map(|v| v.address.clone())
+            .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
             config.compute_node_idx,
-            &config.compute_nodes,
+            &create_socket_addr_for_list(&raw_node_ips)
+                .await
+                .unwrap_or_default(),
             use_raft,
             Duration::from_millis(config.compute_raft_tick_timeout as u64),
             db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
@@ -293,7 +325,28 @@ impl ComputeRaft {
             shutdown_no_commit_process: false,
             backup_check,
             utxo_re_align_check,
+            timestamp,
         }
+    }
+
+    /// Get runtime data
+    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+        self.consensused.get_runtime_data()
+    }
+
+    /// Set runtime data
+    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+        self.consensused.set_runtime_data(runtime_data);
+    }
+
+    /// Get mining API keys from runtime data
+    pub fn get_mining_api_keys(&self) -> BTreeMap<SocketAddr, String> {
+        self.consensused.get_mining_api_keys()
+    }
+
+    /// Get a mining API key entry if it exists
+    pub fn get_mining_api_key_entry(&self, address: SocketAddr) -> Option<String> {
+        self.consensused.get_mining_api_key_entry(address)
     }
 
     /// Determine whether the compute node has whitelisting active.
@@ -511,6 +564,9 @@ impl ComputeRaft {
                 self.consensused.tx_druid_pool.append(&mut txs);
                 return Some(CommittedItem::Transactions);
             }
+            ComputeRaftItem::Timestamp(timestamp) => {
+                self.consensused.timestamp = timestamp;
+            }
             ComputeRaftItem::Block(info) => {
                 let b_num = info.block_num;
                 if !self.consensused.is_current_block(info.block_num) {
@@ -583,6 +639,9 @@ impl ComputeRaft {
                     let coordinated_command = self.consensused.take_ready_coordinated_raft_cmd();
                     return Some(CommittedItem::CoordinatedCmd(coordinated_command));
                 }
+            }
+            ComputeRaftItem::RuntimeData(runtime_item) => {
+                self.consensused.handle_runtime_item(runtime_item);
             }
         }
         None
@@ -707,6 +766,11 @@ impl ComputeRaft {
         }
     }
 
+    /// Propose a new runtime item
+    pub async fn propose_runtime_item(&mut self, item: ComputeRuntimeItem) {
+        self.propose_item(&ComputeRaftItem::RuntimeData(item)).await;
+    }
+
     /// Clear block pipeline proposed keys
     pub fn clear_block_pipeline_proposed_keys(&mut self) {
         self.consensused.block_pipeline.clear_proposed_keys();
@@ -775,6 +839,15 @@ impl ComputeRaft {
         let txs = std::mem::take(&mut self.local_tx_druid_pool);
         if !txs.is_empty() {
             self.propose_item(&ComputeRaftItem::DruidTransactions(txs))
+                .await;
+        }
+    }
+
+    /// Proposes a timestamp to the raft if this is the first peer.
+    pub async fn propose_timestamp(&mut self) {
+        if self.first_raft_peer {
+            println!("Proposing timestamp as first peer");
+            self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp))
                 .await;
         }
     }
@@ -926,7 +999,8 @@ impl ComputeRaft {
     #[cfg(test)]
     pub fn get_committed_utxo_tracked_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<naom::primitives::transaction::OutPoint>> {
+    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    {
         self.consensused.utxo_set.get_pk_cache()
     }
 
@@ -1044,6 +1118,16 @@ impl ComputeRaft {
 }
 
 impl ComputeConsensused {
+    /// Get runtime data
+    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+        self.runtime_data.clone()
+    }
+
+    /// Set runtime data
+    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+        self.runtime_data = runtime_data;
+    }
+
     /// Re-align tracked UTXO set with base UTXO set
     pub fn re_align_utxo_set(&mut self) {
         self.utxo_set.re_align();
@@ -1126,6 +1210,7 @@ impl ComputeConsensused {
             current_block_num: tx_current_block_num,
             current_block,
         };
+        let timestamp = get_timestamp_now();
 
         Self {
             unanimous_majority,
@@ -1142,8 +1227,10 @@ impl ComputeConsensused {
             current_circulation,
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
+            runtime_data: Default::default(),
             special_handling,
             miner_whitelist,
+            timestamp,
         }
     }
 
@@ -1187,6 +1274,16 @@ impl ComputeConsensused {
         self.utxo_set.extend_tracked_utxo_set(&block_tx);
         self.block_pipeline
             .set_committed_mining_block(block, block_tx);
+    }
+
+    /// Get mining API keys from runtime data
+    pub fn get_mining_api_keys(&self) -> BTreeMap<SocketAddr, String> {
+        self.runtime_data.mining_api_keys.clone()
+    }
+
+    /// Get mining API key entry from runtime data; if it exists
+    pub fn get_mining_api_key_entry(&self, address: SocketAddr) -> Option<String> {
+        self.runtime_data.mining_api_keys.get(&address).cloned()
     }
 
     /// Get the participating miners for the current mining round
@@ -1234,6 +1331,8 @@ impl ComputeConsensused {
         let next_block_tx = self.initial_utxo_txs.take().unwrap();
 
         let mut next_block = Block::new();
+
+        println!("next block: {:?}", next_block);
         next_block.transactions = next_block_tx.keys().cloned().collect();
         next_block.set_txs_merkle_root_and_hash().await;
 
@@ -1308,6 +1407,7 @@ impl ComputeConsensused {
         let b_num = self.block_pipeline.current_block_num().unwrap();
 
         block.header.previous_hash = Some(previous_hash);
+        block.header.timestamp = self.timestamp;
         block.header.b_num = b_num;
         block.set_txs_merkle_root_and_hash().await;
     }
@@ -1421,6 +1521,43 @@ impl ComputeConsensused {
             .map(|v| v.1.len())
             .max()
             .unwrap_or(0)
+    }
+
+    /// Handle compute runtime data item
+    pub fn handle_runtime_item(&mut self, runtime_item: ComputeRuntimeItem) {
+        match runtime_item {
+            ComputeRuntimeItem::AddMiningApiKeys(keys) => {
+                for (address, mining_api_key) in keys {
+                    if !self
+                        .runtime_data
+                        .mining_api_keys
+                        .values()
+                        .any(|k| k == &mining_api_key)
+                    {
+                        trace!(
+                            "Add mining api key {} for address: {}",
+                            &mining_api_key,
+                            address
+                        );
+                        self.runtime_data
+                            .mining_api_keys
+                            .insert(address, mining_api_key);
+                    } else {
+                        trace!(
+                            "Ignore duplicate mining api key {} from address: {}",
+                            &mining_api_key,
+                            address
+                        );
+                    }
+                }
+            }
+            ComputeRuntimeItem::RemoveMiningApiKeys(addresses) => {
+                trace!("Removing mining api key for addresses: {:?}", addresses);
+                for address in addresses {
+                    self.runtime_data.mining_api_keys.remove(&address);
+                }
+            }
+        }
     }
 
     /// Append a vote for first block info
@@ -1592,9 +1729,9 @@ fn take_first_n<K: Clone + Ord, V>(n: usize, from: &mut BTreeMap<K, V>) -> BTree
 mod test {
     use super::*;
     use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
-    use crate::utils::{create_valid_transaction, get_test_common_unicorn};
-    use naom::crypto::sign_ed25519 as sign;
-    use naom::primitives::asset::TokenAmount;
+    use crate::utils::{create_socket_addr, create_valid_transaction, get_test_common_unicorn};
+    use a_block_chain::crypto::sign_ed25519 as sign;
+    use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
     use std::collections::BTreeSet;
 
@@ -1880,9 +2017,7 @@ mod test {
     }
 
     async fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
-        let compute_node = NodeSpec {
-            address: "0.0.0.0:0".parse().unwrap(),
-        };
+        let compute_node = create_socket_addr("0.0.0.0").await.unwrap();
         let tx_out = TxOutSpec {
             public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
                 .to_owned(),
@@ -1894,7 +2029,9 @@ mod test {
             tls_config: Default::default(),
             api_keys: Default::default(),
             compute_unicorn_fixed_param: get_test_common_unicorn(),
-            compute_nodes: vec![compute_node],
+            compute_nodes: vec![NodeSpec {
+                address: compute_node.to_string(),
+            }],
             storage_nodes: vec![],
             user_nodes: vec![],
             compute_raft: 0,
