@@ -848,7 +848,7 @@ impl ComputeRaft {
         if self.first_raft_peer {
             println!("Proposing timestamp as first peer");
             self.timestamp = get_timestamp_now();
-            
+
             self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp))
                 .await;
         }
