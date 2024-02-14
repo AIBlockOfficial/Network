@@ -20,7 +20,7 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use a_block_chain::constants::D_DISPLAY_PLACES;
+use a_block_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
 use a_block_chain::crypto::sign_ed25519::PublicKey;
 use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
 use a_block_chain::primitives::druid::DdeValues;
@@ -365,6 +365,41 @@ pub async fn get_shared_config_compute(
     r.into_ok(
         "Successfully fetched shared config",
         json_serialize_embed(res),
+    )
+}
+
+/// GET The current circulating supply of the token
+pub async fn get_circulating_supply(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_circulating_supply(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok(
+        "Successfully fetched shared config",
+        json_serialize_embed(res),
+    )
+}
+
+/// GET The total token supply in the system
+pub async fn get_total_supply(
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    r.into_ok(
+        "Successfully fetched total supply",
+        json_serialize_embed(TOTAL_TOKENS),
     )
 }
 
