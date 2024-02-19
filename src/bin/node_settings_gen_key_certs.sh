@@ -6,6 +6,8 @@ echo "Generate keys in src/bin/tls_data"
 echo "//-----------------------------//"
 echo " "
 
+cp cnf/ca_root.cnf src/bin/tls_data
+cp cnf/node.cnf src/bin/tls_data
 cd src/bin/tls_data
 
 if [ "$1" = "re_gen_root" ]
@@ -13,6 +15,7 @@ then
     echo "initial files"
     echo 01 > ca_serial
     echo 01 > ca_crlnumber
+
     rm ca_index.txt ; touch ca_index.txt
 
     echo "Generating CA Root cert"
@@ -39,7 +42,10 @@ then
     port_v1=$(($port_v1+10))
     port_v2=$(($port_v1+1))
     port_v3=$(($port_v1+2))
+    echo ""
     echo "Generating ... n is set to $n ($port_v1, $port_v2, $port_v3)"
+    echo ""
+
     if [ "$1" = "re_gen_leaf_certs_and_keys" ]
     then
       echo "Generating ... key & csr is set to $n"
