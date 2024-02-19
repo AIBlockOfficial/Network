@@ -1,0 +1,25 @@
+[ req ]
+default_md              = sha256
+distinguished_name      = req_distinguished_name
+x509_extensions = v3_ca # The extentions to add to the self signed cert
+req_extensions  = v3_req
+x509_extensions = usr_cert
+days                   = 999
+prompt = no
+
+[ usr_cert ]
+basicConstraints=CA:FALSE
+nsCertType                      = client, server, email
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection
+nsComment                       = "OpenSSL Generated Certificate"
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+
+[ v3_req ]
+extendedKeyUsage = serverAuth, clientAuth, codeSigning, emailProtection
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+
+[req_distinguished_name]
+CN = node.a-block.net
