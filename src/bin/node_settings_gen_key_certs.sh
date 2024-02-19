@@ -22,7 +22,7 @@ then
 
     echo "Generating CA Intermediate cert"
     openssl genpkey -algorithm Ed25519 -out ca_intermediate.key
-    openssl req -config ca_root.cnf -new -key ca_intermediate.key -nodes -out ca_intermediate.csr -extensions v3_intermediate_ca -subj "/CN=Zenotta Intermediate CA"
+    openssl req -config ca_root.cnf -new -key ca_intermediate.key -nodes -out ca_intermediate.csr -extensions v3_intermediate_ca -subj "/CN=ABlock Intermediate CA"
     openssl ca -config ca_root.cnf -extensions v3_intermediate_ca -days 999 -notext -batch -in ca_intermediate.csr -out ca_intermediate.pem
     cat ca_intermediate.pem ca_root.pem > ca_intermediate.bundle.pem
 
