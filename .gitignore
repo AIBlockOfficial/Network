@@ -20,9 +20,8 @@ build-tests/
 src/db/db/
 src/wallet/wallet/
 /*.log
-src/bin/tls_data/temp.cnf
-src/bin/tls_data/*.old
-src/bin/tls_data/*.attr
+src/bin/tls_data/
+src/bin/tls_certificates.json
 
 *.txt
 
