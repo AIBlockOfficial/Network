@@ -1,5 +1,5 @@
-V	240609080459Z		02	unknown	/CN=node101.a-block.net
-V	240609080459Z		03	unknown	/CN=miner101.a-block.net
-V	240609080459Z		04	unknown	/CN=miner102.a-block.net
-V	240609080459Z		05	unknown	/CN=user101.a-block.net
-V	240609080459Z		06	unknown	/CN=user102.a-block.net
+V	261114110145Z		02	unknown	/CN=node101.zenotta.xyz
+V	261114110145Z		03	unknown	/CN=miner101.zenotta.xyz
+V	261114110145Z		04	unknown	/CN=miner102.zenotta.xyz
+V	261114110145Z		05	unknown	/CN=user101.zenotta.xyz
+V	261114110145Z		06	unknown	/CN=user102.zenotta.xyz
