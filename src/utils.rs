@@ -1,7 +1,8 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL,
+    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
+    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
 };
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
@@ -421,7 +422,14 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 ///
 /// * `current_circulation` - Current circulation of all tokens
 pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
-    TokenAmount((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+    if current_circulation.0 >= TOTAL_TOKENS {
+        return TokenAmount(D_DISPLAY_PLACES_U64 * REWARD_SMOOTHING_VAL as u64);
+    }
+
+    TokenAmount(
+        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+            + REWARD_SMOOTHING_VAL as u64,
+    )
 }
 
 /// Gets the total amount of tokens for all present coinbase transactions,
