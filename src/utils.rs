@@ -20,9 +20,9 @@ use a_block_chain::primitives::{
 };
 use a_block_chain::script::{lang::Script, StackEntry};
 use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
-    get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use bincode::serialize;
 use chrono::Utc;

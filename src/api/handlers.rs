@@ -385,7 +385,7 @@ pub async fn get_circulating_supply(
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     r.into_ok(
-        "Successfully fetched shared config",
+        "Successfully fetched circulating supply",
         json_serialize_embed(res),
     )
 }
