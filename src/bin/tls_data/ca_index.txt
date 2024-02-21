@@ -1,5 +1,0 @@
-V	240609080459Z		02	unknown	/CN=node101.a-block.net
-V	240609080459Z		03	unknown	/CN=miner101.a-block.net
-V	240609080459Z		04	unknown	/CN=miner102.a-block.net
-V	240609080459Z		05	unknown	/CN=user101.a-block.net
-V	240609080459Z		06	unknown	/CN=user102.a-block.net
