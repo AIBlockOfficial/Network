@@ -161,7 +161,6 @@ pub mod a_block_chain {
         Deserialize, Serialize, Default, Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord,
     )]
     pub struct TokenAmount(pub u64);
-
 }
 
 pub mod interfaces {
