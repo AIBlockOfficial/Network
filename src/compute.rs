@@ -2353,7 +2353,7 @@ impl ComputeApi for ComputeNode {
     }
 
     fn get_circulating_supply(&self) -> TokenAmount {
-        self.node_raft.get_current_circulation().clone()
+        *self.node_raft.get_current_circulation()
     }
 
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
