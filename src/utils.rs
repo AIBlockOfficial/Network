@@ -20,7 +20,7 @@ use a_block_chain::primitives::{
 };
 use a_block_chain::script::{lang::Script, StackEntry};
 use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
+    construct_address, construct_payment_tx_ins, construct_tx_core,
     construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
     get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
@@ -715,18 +715,6 @@ pub fn create_valid_transaction(
         TokenAmount(1),
         None,
     )
-}
-
-/// Creates a valid DDE transaction from given info
-pub fn create_valid_create_transaction_with_ins_outs(
-    drs: Vec<u8>,
-    pub_key: PublicKey,
-    secret_key: &SecretKey,
-) -> (String, Transaction) {
-    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1, None);
-    let ct_hash = construct_tx_hash(&create_tx);
-
-    (ct_hash, create_tx)
 }
 
 /// Create a valid transaction from given info
