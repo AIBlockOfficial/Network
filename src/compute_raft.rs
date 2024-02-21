@@ -1349,6 +1349,7 @@ impl ComputeConsensused {
         let mut next_block = Block::new();
         let mut next_block_tx = BTreeMap::new();
 
+        // TODO: add update_mempool_storage_rewards(&mut next_block, &mut next_block_tx)
         self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
         self.update_current_block_tx(&mut next_block, &mut next_block_tx);
         self.update_block_header(&mut next_block).await;
