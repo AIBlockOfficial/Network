@@ -6,6 +6,7 @@ echo "Generate keys in src/bin/tls_data"
 echo "//-----------------------------//"
 echo " "
 
+mkdir src/bin/tls_data
 cp cnf/ca_root.cnf src/bin/tls_data
 cp cnf/node.cnf src/bin/tls_data
 cd src/bin/tls_data
