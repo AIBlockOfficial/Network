@@ -6,8 +6,8 @@ use crate::constants::{
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, ComputeRequest, Contract, MineRequest,
-    MinedBlock, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, ComputeRequest, Contract, DruidTxInfo,
+    MineRequest, MinedBlock, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
     StoredSerializingBlock,
 };
 use crate::raft::RaftCommit;
@@ -21,7 +21,7 @@ use crate::utils::{
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -715,6 +715,10 @@ impl StorageNode {
             &stored_block.block.transactions,
             std::iter::once(&stored_block.block.header.nonce_and_mining_tx_hash),
         );
+
+        let mut druid_store: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        // Transaction store
         let mut tx_len = 0;
         for (tx_num, tx_hash) in all_txs {
             tx_len = tx_num + 1;
@@ -722,6 +726,16 @@ impl StorageNode {
                 let tx_input = serialize(tx_value).unwrap();
                 let tx_json = serde_json::to_vec(tx_value).unwrap();
                 let t = BlockchainItemMeta::Tx { block_num, tx_num };
+
+                // Add to DRUID store if relevant
+                if let Some(druid_info) = &tx_value.druid_info {
+                    let druid = druid_info.druid.clone();
+                    druid_store
+                        .entry(druid)
+                        .and_modify(|v| v.push(tx_hash.clone()))
+                        .or_insert(vec![tx_hash.clone()]);
+                }
+
                 put_to_block_chain(&mut batch, &t, tx_hash, &tx_input, &tx_json);
             } else {
                 error!(
@@ -731,6 +745,7 @@ impl StorageNode {
             }
         }
 
+        // Block store
         {
             let t = BlockchainItemMeta::Block { block_num, tx_len };
             let pointer =
@@ -740,6 +755,18 @@ impl StorageNode {
             if FetchStatus::Contiguous(block_num) == status {
                 put_contiguous_block_num(&mut batch, block_num);
             }
+        }
+
+        // Druid store
+        for (druid, tx_hashes) in druid_store {
+            let druid_entry = DruidTxInfo { tx_hashes };
+            let druid_input = serialize(&druid_entry).unwrap();
+            let druid_json = serde_json::to_vec(&druid_entry).unwrap();
+            let t = BlockchainItemMeta::Tx {
+                block_num,
+                tx_num: 0,
+            };
+            put_to_block_chain(&mut batch, &t, &druid, &druid_input, &druid_json);
         }
 
         let batch = batch.done();
