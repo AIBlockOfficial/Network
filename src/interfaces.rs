@@ -135,6 +135,12 @@ pub struct PowInfo {
     pub b_num: u64,
 }
 
+/// Transaction hashes that have been mined with DRUID info
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct DruidTxInfo {
+    pub tx_hashes: Vec<String>,
+}
+
 /// PoW structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfWork {
