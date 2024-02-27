@@ -11,7 +11,7 @@ use crate::configurations::{
     WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
-use crate::interfaces::Response;
+use crate::interfaces::{InitialIssuance, Response};
 use crate::miner::MinerNode;
 use crate::pre_launch::PreLaunchNode;
 use crate::storage::StorageNode;
@@ -100,6 +100,7 @@ pub struct NetworkConfig {
     pub compute_miner_whitelist: MinerWhitelist,
     pub peer_limit: usize,
     pub address_aggregation_limit: Option<usize>,
+    pub initial_issuances: Vec<InitialIssuance>,
 }
 
 /// Node info to create node
@@ -1188,6 +1189,7 @@ async fn init_compute(
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
         compute_miner_whitelist: config.compute_miner_whitelist.clone(),
         peer_limit: config.peer_limit,
+        initial_issuances: config.initial_issuances.clone(),
     };
     let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Compute {}", info);

@@ -4,22 +4,22 @@ use crate::block_pipeline::{
     MiningPipelineStatus, Participants, PipelineEventInfo,
 };
 use crate::configurations::{ComputeNodeConfig, UnicornFixedInfo};
-use crate::constants::{BLOCK_SIZE_IN_TX, DB_PATH, TX_POOL_LIMIT};
+use crate::constants::{BLOCK_SIZE_IN_TX, COINBASE_MATURITY, DB_PATH, TX_POOL_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
-use crate::interfaces::{BlockStoredInfo, UtxoSet, WinningPoWInfo};
+use crate::interfaces::{BlockStoredInfo, UtxoSet, WinningPoWInfo, InitialIssuance};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, create_socket_addr_for_list, get_timestamp_now, get_total_coinbase_tokens,
-    make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
+    calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now,
+    get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
 use a_block_chain::crypto::sha3_256;
 use a_block_chain::primitives::asset::TokenAmount;
 use a_block_chain::primitives::block::Block;
 use a_block_chain::primitives::transaction::Transaction;
-use a_block_chain::utils::transaction_utils::get_inputs_previous_out_point;
+use a_block_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -182,6 +182,8 @@ pub struct ComputeConsensused {
     /// Runtime data that does not get stored to disk
     #[serde(skip)]
     runtime_data: ComputeConsensusedRuntimeData,
+    /// Initial issuances
+    init_issuances: Vec<InitialIssuance>,
 }
 
 /// Consensused info to apply on start up after upgrade.
@@ -197,6 +199,7 @@ pub struct ComputeConsensusedImport {
     pub current_circulation: TokenAmount,
     pub special_handling: Option<SpecialHandling>,
     pub miner_whitelist: MinerWhitelist,
+    pub init_issuances: Vec<InitialIssuance>,
 }
 
 /// Consensused Compute fields and consensus management.
@@ -297,6 +300,7 @@ impl ComputeRaft {
             .with_peers_len(peers_len)
             .with_partition_full_size(config.compute_partition_full_size)
             .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone())
+            .with_initial_issuances(config.initial_issuances.clone())
             .init_block_pipeline_status();
         let local_initial_proposal = Some(InitialProposal::PendingItem {
             item: ComputeRaftItem::FirstBlock(utxo_set),
@@ -1165,6 +1169,12 @@ impl ComputeConsensused {
         self
     }
 
+    /// Specify the initial issuances with lock ups
+    pub fn with_initial_issuances(mut self, initial_issuances: Vec<InitialIssuance>) -> Self {
+        self.init_issuances = initial_issuances;
+        self
+    }
+
     /// Specify the partition_full_size
     pub fn with_partition_full_size(mut self, partition_full_size: usize) -> Self {
         self.partition_full_size = partition_full_size;
@@ -1205,6 +1215,7 @@ impl ComputeConsensused {
             current_circulation,
             special_handling,
             miner_whitelist,
+            init_issuances,
         } = consensused;
 
         let block_pipeline = MiningPipelineInfoImport {
@@ -1233,6 +1244,7 @@ impl ComputeConsensused {
             special_handling,
             miner_whitelist,
             timestamp,
+            init_issuances,
         }
     }
 
@@ -1255,6 +1267,7 @@ impl ComputeConsensused {
             current_circulation: self.current_circulation,
             miner_whitelist: self.miner_whitelist,
             special_handling,
+            init_issuances: self.init_issuances,
         }
     }
 
@@ -1333,8 +1346,7 @@ impl ComputeConsensused {
         let next_block_tx = self.initial_utxo_txs.take().unwrap();
 
         let mut next_block = Block::new();
-
-        println!("next block: {:?}", next_block);
+        
         next_block.transactions = next_block_tx.keys().cloned().collect();
         next_block.set_txs_merkle_root_and_hash().await;
 
@@ -1352,9 +1364,48 @@ impl ComputeConsensused {
         // TODO: add update_mempool_storage_rewards(&mut next_block, &mut next_block_tx)
         self.update_committed_dde_tx(&mut next_block, &mut next_block_tx);
         self.update_current_block_tx(&mut next_block, &mut next_block_tx);
+        self.update_issuance_unlocks(
+            &mut next_block,
+            &self.init_issuances.clone(),
+            &mut next_block_tx,
+        );
         self.update_block_header(&mut next_block).await;
 
         self.set_committed_mining_block(next_block, next_block_tx)
+    }
+
+    /// Adds transactions for initial issuances if their lock up period has expired
+    ///
+    /// ### Arguments
+    ///
+    /// * `block`   - Block to be set to be updated
+    /// * `init_issuances`   - The initial issuance information
+    /// * `block_tx`   - BTreeMap associated with Block to be set to be updated.
+    fn update_issuance_unlocks(
+        &mut self,
+        block: &mut Block,
+        init_issuances: &[InitialIssuance],
+        block_tx: &mut BTreeMap<String, Transaction>,
+    ) {
+        let mut txs = BTreeMap::new();
+        let current_bnum = self.block_pipeline.current_block_num().unwrap();
+
+        for issuance in init_issuances {
+            if issuance.block_height == current_bnum {
+                let tx = construct_coinbase_tx(
+                    current_bnum - COINBASE_MATURITY,
+                    issuance.amount,
+                    issuance.address.clone(),
+                );
+                let tx_hash = construct_tx_hash(&tx);
+
+                block.transactions.push(tx_hash.clone());
+                txs.insert(tx_hash, tx);
+            }
+        }
+
+        self.utxo_set.extend_tracked_utxo_set(&txs);
+        block_tx.append(&mut txs);
     }
 
     /// Apply all consensused transactions to the block
@@ -2059,6 +2110,7 @@ mod test {
             enable_trigger_messages_pipeline_reset: Default::default(),
             compute_miner_whitelist: Default::default(),
             peer_limit: 1000,
+            initial_issuances: Default::default(),
         };
         let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
         node.set_key_run(0);
