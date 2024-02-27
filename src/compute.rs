@@ -13,7 +13,7 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
     ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet, WinningPoWInfo,
+    UtxoFetchType, UtxoSet, WinningPoWInfo, InitialIssuance,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -170,6 +170,7 @@ pub struct ComputeNode {
         RoutesPoWInfo,
         Node,
     ),
+    init_issuances: Vec<InitialIssuance>,
 }
 
 impl ComputeNode {
@@ -186,6 +187,7 @@ impl ComputeNode {
             ComputeError::ConfigError("Invalid compute node address in config file")
         })?;
 
+        let init_issuances = config.initial_issuances.clone();
         let raw_storage_addr = config
             .storage_nodes
             .get(config.compute_node_idx)
@@ -266,6 +268,7 @@ impl ComputeNode {
             shutdown_group,
             api_info,
             fetched_utxo_set: None,
+            init_issuances,
         }
         .load_local_db()
     }
