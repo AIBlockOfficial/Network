@@ -11,9 +11,9 @@ use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, InitialIssuance, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet, WinningPoWInfo, InitialIssuance,
+    UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};

@@ -6,7 +6,7 @@ use crate::block_pipeline::{
 use crate::configurations::{ComputeNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, COINBASE_MATURITY, DB_PATH, TX_POOL_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
-use crate::interfaces::{BlockStoredInfo, UtxoSet, WinningPoWInfo, InitialIssuance};
+use crate::interfaces::{BlockStoredInfo, InitialIssuance, UtxoSet, WinningPoWInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
@@ -1346,7 +1346,7 @@ impl ComputeConsensused {
         let next_block_tx = self.initial_utxo_txs.take().unwrap();
 
         let mut next_block = Block::new();
-        
+
         next_block.transactions = next_block_tx.keys().cloned().collect();
         next_block.set_txs_merkle_root_and_hash().await;
 
@@ -1399,6 +1399,8 @@ impl ComputeConsensused {
                 );
                 let tx_hash = construct_tx_hash(&tx);
 
+                // State updates
+                self.current_circulation += issuance.amount;
                 block.transactions.push(tx_hash.clone());
                 txs.insert(tx_hash, tx);
             }
