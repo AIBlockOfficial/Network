@@ -725,6 +725,7 @@ pub mod convert {
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
+            init_issuances: Default::default(),  // Will require sensible conversion on next upgrade
             special_handling,
         }
     }

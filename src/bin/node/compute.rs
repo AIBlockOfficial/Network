@@ -212,6 +212,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     let miner_white_list_file = matches
         .value_of("compute_miner_whitelist")
         .unwrap_or("src/bin/compute_miner_whitelist.json");
+    let initial_issuances = matches
+        .value_of("initial_issuances")
+        .unwrap_or("src/bin/initial_issuance.json");
 
     settings
         .set_default("sanction_list", Vec::<String>::new())
@@ -245,6 +248,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     settings
         .merge(config::File::with_name(intial_block_setting_file))
+        .unwrap();
+    settings
+        .merge(config::File::with_name(initial_issuances))
         .unwrap();
     settings
         .merge(config::File::with_name(tls_setting_file))
