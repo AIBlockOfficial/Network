@@ -562,7 +562,7 @@ impl ComputeNode {
             .node_raft
             .get_committed_current_block_num()
             .unwrap_or_default();
-        let sanction_list = &self.sanction_list;
+        //let sanction_list = &self.sanction_list;
         let b_num = self
             .node_raft
             .get_committed_current_block_num()
@@ -580,7 +580,7 @@ impl ComputeNode {
                 && tx_is_valid(tx, b_num, |v| {
                     utxo_set
                         .get(v)
-                        .filter(|_| !sanction_list.contains(&v.t_hash))
+                        // .filter(|_| !sanction_list.contains(&v.t_hash))
                         .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
         }
