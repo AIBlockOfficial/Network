@@ -429,7 +429,8 @@ pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
     }
 
     TokenAmount(
-        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL) + smoothing_value_as_token_amount
+        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+            + smoothing_value_as_token_amount,
     )
 }
 
