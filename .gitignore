@@ -25,3 +25,5 @@ src/bin/tls_certificates.json
 
 *.txt
 
+mempool_*
+

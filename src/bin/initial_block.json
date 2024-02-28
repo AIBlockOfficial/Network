@@ -9,8 +9,64 @@
     "compute_seed_utxo": {
         "000000": [
             {
-                "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
-                "amount": 90090000000000000
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 0
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 1
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 2
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 3
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 4
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 5
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 6
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 7
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 8
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 9
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 10
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 11
             }
         ]
     },
