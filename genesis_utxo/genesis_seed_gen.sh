@@ -7,8 +7,8 @@ genesis_pools=$(cat genesis_pools.json)
 y_structures=$(echo $genesis_pools | jq '[.[] | . as $x | range(.total_intervals) | 
     { 
         public_key: $x.address, 
-        amount: $x.interval_amount, 
-        locktime: ($x.initial_locktime + .)
+        amount: ($x.interval_amount * 72072000), 
+        locktime: ($x.initial_locktime + (86400 * .))
     }]')
 
 # Create a new JSON structure with "compute_seed_utxo" as the key and the Y_structures array as its value

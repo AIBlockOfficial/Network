@@ -4852,6 +4852,7 @@ fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -
                     .map(|(pk, amount)| TxOutSpec {
                         public_key: pk.to_string(),
                         amount: *amount,
+                        locktime: 0,
                     })
                     .collect(),
             )

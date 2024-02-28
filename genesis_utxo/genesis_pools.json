@@ -1,0 +1,44 @@
+[
+    {
+        "pool": "Seed",
+        "address": "0x",
+        "interval_amount": 8333333,
+        "total_intervals": 12,
+        "initial_locktime": 1036800
+    },
+    {
+        "pool": "Private",
+        "address": "0x",
+        "interval_amount": 4166667,
+        "total_intervals": 24,
+        "initial_locktime": 1036800
+    },
+    {
+        "pool": "Public",
+        "address": "0x",
+        "interval_amount": 12500000,
+        "total_intervals": 6,
+        "initial_locktime": 0
+    },
+    {
+        "pool": "Community",
+        "address": "0x",
+        "interval_amount": 8333333,
+        "total_intervals": 12,
+        "initial_locktime": 0
+    },
+    {
+        "pool": "Treasury",
+        "address": "0x",
+        "interval_amount": 23611111,
+        "total_intervals": 18,
+        "initial_locktime": 0
+    },
+    {
+        "pool": "Ecosystem",
+        "address": "ecosystem",
+        "interval_amount": 100000000,
+        "total_intervals": 1,
+        "initial_locktime": 0
+    }
+]
