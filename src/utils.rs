@@ -821,7 +821,7 @@ pub fn make_utxo_set_from_seed(
                                 addr
                             };
 
-                        TxOut::new_token_amount(script_public_key, out.amount, None)
+                        TxOut::new_token_amount(script_public_key, out.amount, Some(out.locktime))
                     })
                     .collect(),
                 inputs: genesis_tx_in.clone().into_iter().collect(),

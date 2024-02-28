@@ -2078,6 +2078,7 @@ mod test {
             public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
                 .to_owned(),
             amount: TokenAmount(1),
+            locktime: 0,
         };
         let compute_config = ComputeNodeConfig {
             compute_node_idx: 0,

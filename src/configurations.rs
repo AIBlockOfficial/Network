@@ -65,6 +65,8 @@ pub struct TxOutSpec {
     /// Amount that this TxOut can spend
     #[serde(deserialize_with = "deserialize_token_amount")]
     pub amount: TokenAmount,
+    /// Locktime for the TxOut
+    pub locktime: u64,
 }
 
 /// Configuration info for a TxOut
