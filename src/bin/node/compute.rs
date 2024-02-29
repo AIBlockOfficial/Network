@@ -1,8 +1,8 @@
 //! App to run a compute node.
 
-use ablock_network::configurations::ComputeNodeConfig;
-use ablock_network::ComputeNode;
-use ablock_network::{
+use aiblock_network::configurations::ComputeNodeConfig;
+use aiblock_network::ComputeNode;
+use aiblock_network::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
@@ -309,7 +309,7 @@ fn configuration(settings: config::Config) -> ComputeNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

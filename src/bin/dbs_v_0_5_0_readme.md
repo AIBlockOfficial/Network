@@ -6,7 +6,7 @@
 ## In a separate clone of znp and noam:
  * checkout ZNP at tag v1.1.1 tag | commit ID e411dcc3
  * checkout NAOM at commit ID 7dfc1c5a
- * Make sure znp cargo.toml point to corresponding a_block_chain
+ * Make sure znp cargo.toml point to corresponding tw_chain
 
 ## Generate database and snapshots in v0.4.0 clone
 

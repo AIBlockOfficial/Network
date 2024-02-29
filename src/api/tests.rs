@@ -25,15 +25,6 @@ use crate::utils::{
 };
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::ComputeRequest;
-use a_block_chain::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
-use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey};
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::block::{Block, BlockHeader};
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
-use a_block_chain::script::lang::Script;
-use a_block_chain::utils::transaction_utils::{
-    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
-};
 use bincode::serialize;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -41,6 +32,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tracing::error;
+use tw_chain::constants::{NETWORK_VERSION_TEMP, NETWORK_VERSION_V0};
+use tw_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey};
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::block::{Block, BlockHeader};
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
+use tw_chain::script::lang::Script;
+use tw_chain::utils::transaction_utils::{
+    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
+};
 use warp::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::Filter;
 
@@ -175,7 +175,7 @@ impl ComputeApi for ComputeTest {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError> {
         let b_num = 0;
@@ -185,7 +185,7 @@ impl ComputeApi for ComputeTest {
             script_public_key,
             public_key,
             signature,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             metadata,
         )?)
     }
@@ -305,7 +305,7 @@ fn get_rb_transactions() -> Vec<(String, Transaction)> {
         sender_prev_out: OutPoint::new("000000".to_owned(), 0),
         sender_amount: TokenAmount(25_200),
         sender_half_druid: "full_".to_owned(),
-        sender_expected_drs: Some("drs_tx_hash".to_owned()),
+        sender_expected_drs: Some("genesis_hash".to_owned()),
     };
 
     let rb_receiver_data = RbReceiverData {
@@ -1735,7 +1735,7 @@ async fn test_post_fetch_pending() {
     assert_eq!((res.status(), res.headers().clone()), success_json());
     assert_eq!(
         res.body(),
-        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g490b4fc3b3953a8a006ec17ae4a6055\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g8118c848762693bda7be3f804601ad0\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"drs_tx_hash\",\"metadata\":null}}}]}}}}}}");
+        "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Pending transactions successfully fetched\",\"route\":\"fetch_pending\",\"content\":{\"full_druid\":{\"participants\":2,\"txs\":{\"g490b4fc3b3953a8a006ec17ae4a6055\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000001\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"754dc248d1c847e8a10c6f8ded6ccad96381551ebb162583aea2a86b9bb78dfa\"},{\"Signature\":[21,103,185,228,19,36,74,158,249,211,229,41,187,113,248,98,27,55,85,97,36,94,216,242,20,156,39,245,55,212,95,22,52,161,77,8,211,241,24,217,126,208,39,154,87,136,126,31,154,177,219,197,151,174,148,122,67,147,4,59,177,191,172,8]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Item\":{\"amount\":1,\"genesis_hash\":\"genesis_hash\",\"metadata\":null}},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"sender_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"6efcefb27d1e1149b243ce319c5e5352bb100dc328a59f630ee7a9fd5ebe9da9\",\"to\":\"receiver_address\",\"asset\":{\"Token\":25200}}]}},\"g8118c848762693bda7be3f804601ad0\":{\"inputs\":[{\"previous_out\":{\"t_hash\":\"000000\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"927b3411743452e5e0d73e9e40a4fa3c842b3d00dabde7f9af7e44661ce02c88\"},{\"Signature\":[35,226,158,202,184,227,77,178,40,234,140,161,109,206,131,187,171,159,103,146,89,201,220,227,212,184,216,166,69,26,92,67,221,248,253,165,17,176,190,4,48,76,146,12,179,195,90,227,170,17,196,234,76,57,254,242,83,89,237,117,68,193,105,10]},{\"PubKey\":[83,113,131,33,34,168,232,4,250,53,32,236,104,97,195,250,85,74,127,111,182,23,230,240,118,132,82,9,2,7,224,124]},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"PubKeyHash\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":0},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":null},{\"value\":{\"Token\":25200},\"locktime\":0,\"drs_block_hash\":null,\"script_public_key\":\"receiver_address\"}],\"version\":5,\"druid_info\":{\"druid\":\"full_druid\",\"participants\":2,\"expectations\":[{\"from\":\"b519b3fd271bb33a7ea949a918cc45b00b32095a04f2a9172797f7441f7298e6\",\"to\":\"sender_address\",\"asset\":{\"Item\":{\"amount\":1,\"genesis_hash\":\"genesis_hash\",\"metadata\":null}}}]}}}}}}");
 }
 
 /// Test POST update running total successful
@@ -1828,13 +1828,11 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         outputs: vec![TxOut {
             value: Asset::Token(TokenAmount(1)),
             script_public_key: Some(COMMON_ADDRS[0].to_owned()),
-            drs_block_hash: None,
             locktime: 0,
         }],
         fees: Some(vec![TxOut {
             value: Asset::Token(TokenAmount(1)),
             script_public_key: Some(COMMON_ADDRS[0].to_owned()),
-            drs_block_hash: None,
             locktime: 0,
         }]),
         version: 1,
@@ -1899,7 +1897,7 @@ async fn test_post_create_item_asset_tx_compute() {
         script_public_key: COMMON_PUB_ADDR.to_owned(),
         public_key: COMMON_PUB_KEY.to_owned(),
         signature,
-        drs_tx_hash_spec: DrsTxHashSpec::Default,
+        genesis_hash_spec: GenesisTxHashSpec::Default,
         metadata: None,
     };
 
@@ -1931,7 +1929,7 @@ async fn test_post_create_item_asset_tx_compute() {
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Item asset(s) created\",\"route\":\"create_item_asset\",\"content\":{\"asset\":{\"asset\":{\"Item\":{\"amount\":1,\"drs_tx_hash\":\"default_drs_tx_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_drs_tx_hash\"}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Item asset(s) created\",\"route\":\"create_item_asset\",\"content\":{\"asset\":{\"asset\":{\"Item\":{\"amount\":1,\"genesis_hash\":\"default_genesis_hash\",\"metadata\":null}},\"extra_info\":null},\"to_address\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"tx_hash\":\"default_genesis_hash\"}}");
 }
 
 /// Test POST create item asset on user node successfully
@@ -1946,7 +1944,7 @@ async fn test_post_create_item_asset_tx_user() {
 
     let json_body = CreateItemAssetDataUser {
         item_amount: 1,
-        drs_tx_hash_spec: DrsTxHashSpec::Default,
+        genesis_hash_spec: GenesisTxHashSpec::Default,
         metadata: Some("metadata".to_owned()),
     };
 
@@ -1976,7 +1974,7 @@ async fn test_post_create_item_asset_tx_user() {
     // Expected Frame
     let expected_frame = user_api_request_as_frame(UserApiRequest::SendCreateItemRequest {
         item_amount: json_body.item_amount,
-        drs_tx_hash_spec: DrsTxHashSpec::Default,
+        genesis_hash_spec: GenesisTxHashSpec::Default,
         metadata: json_body.metadata,
     });
 
@@ -1996,7 +1994,7 @@ async fn test_post_create_item_asset_tx_compute_failure() {
 
     let json_body = CreateItemAssetDataUser {
         item_amount: 1,
-        drs_tx_hash_spec: DrsTxHashSpec::Default,
+        genesis_hash_spec: GenesisTxHashSpec::Default,
         metadata: Some("metadata".to_owned()),
     };
 

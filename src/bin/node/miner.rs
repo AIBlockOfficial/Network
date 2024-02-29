@@ -1,11 +1,11 @@
 //! App to run a mining node.
 
-use ablock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
-use ablock_network::{
+use aiblock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
-use ablock_network::{MinerNode, UserNode};
+use aiblock_network::{MinerNode, UserNode};
 use clap::{App, Arg, ArgMatches};
 use config::{ConfigError, Value};
 use std::collections::HashMap;
@@ -574,7 +574,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
     type UserExpected = Option<(DbMode, Option<String>)>;

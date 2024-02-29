@@ -1,15 +1,15 @@
 use crate::configurations::WalletTxSpec;
 use crate::constants::NETWORK_VERSION;
 use crate::utils::{create_valid_transaction_with_ins_outs, make_wallet_tx_info};
-use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::transaction::{OutPoint, Transaction};
-use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_address_for, get_tx_out_with_out_point,
-};
 use bincode::{deserialize, serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
+use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::transaction::{OutPoint, Transaction};
+use tw_chain::utils::transaction_utils::{
+    construct_address, construct_address_for, get_tx_out_with_out_point,
+};
 
 pub type PendingMap = BTreeMap<String, (Transaction, Vec<(String, OutPoint, TokenAmount)>)>;
 pub type ReadyMap = BTreeMap<String, Vec<(OutPoint, TokenAmount)>>;

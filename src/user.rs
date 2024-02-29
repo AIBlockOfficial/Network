@@ -14,19 +14,19 @@ use crate::utils::{
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::druid::{DdeValues, DruidExpectation};
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
-use a_block_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
-    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
-};
 use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
 use serde::Serialize;
 use std::collections::BTreeSet;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
+use tw_chain::utils::transaction_utils::{
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
+};
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::sync::mpsc;
@@ -705,10 +705,10 @@ impl UserNode {
             ),
             SendCreateItemRequest {
                 item_amount,
-                drs_tx_hash_spec,
+                genesis_hash_spec,
                 metadata,
             } => Some(
-                self.generate_item_asset_tx(item_amount, drs_tx_hash_spec, metadata)
+                self.generate_item_asset_tx(item_amount, genesis_hash_spec, metadata)
                     .await,
             ),
             MakePaymentWithExcessAddress {
@@ -1394,7 +1394,7 @@ impl UserNode {
         &mut self,
         peer: SocketAddr,
         sender_asset: Asset,
-        drs_tx_hash: Option<String>, /* drs_tx_hash of Item asset to receive */
+        genesis_hash: Option<String>, /* genesis_hash of Item asset to receive */
     ) -> Result<()> {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
@@ -1409,7 +1409,7 @@ impl UserNode {
             (tx_ins, tx_outs),
             sender_half_druid,
             sender_address,
-            drs_tx_hash,
+            genesis_hash,
         );
 
         self.next_rb_payment_data = Some(rb_payment_data);
@@ -1524,7 +1524,7 @@ impl UserNode {
     pub async fn generate_item_asset_tx(
         &mut self,
         item_amount: u64,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Response {
         let AddressStore {
@@ -1539,7 +1539,7 @@ impl UserNode {
             public_key,
             &secret_key,
             item_amount,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             None,
             metadata,
         );
@@ -1698,7 +1698,7 @@ pub fn make_rb_payment_item_tx_and_response(
         druid,
         participants: 2,
         expectations: vec![receiver_druid_expectation],
-        drs_tx_hash: None,
+        genesis_hash: None,
     };
 
     let rb_receive_tx =
@@ -1739,7 +1739,7 @@ pub fn make_rb_payment_send_transaction(
         druid,
         participants: 2,
         expectations: vec![sender_druid_expectation],
-        drs_tx_hash: None,
+        genesis_hash: None,
     };
 
     let receiver = ReceiverInfo {

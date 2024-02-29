@@ -1,4 +1,4 @@
-pub use a_block_chain::constants::*;
+pub use tw_chain::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 

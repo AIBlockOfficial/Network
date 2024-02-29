@@ -5,18 +5,18 @@ use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
 use crate::utils::rug_integer;
-use a_block_chain::primitives::asset::Asset;
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::{Block, BlockHeader};
-use a_block_chain::primitives::druid::DruidExpectation;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, TxIn};
-use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxOut};
 use bytes::Bytes;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
+use tw_chain::primitives::asset::Asset;
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::{Block, BlockHeader};
+use tw_chain::primitives::druid::DruidExpectation;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, TxIn};
+use tw_chain::primitives::transaction::{OutPoint, Transaction, TxOut};
 
 //*======== INITIAL ISSUANCES =========*//
 
@@ -577,7 +577,7 @@ pub enum ComputeApiRequest {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     },
     SendTransactions {
@@ -735,7 +735,7 @@ pub trait ComputeApi {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Result<(Transaction, String), ComputeError>;
 }
@@ -748,7 +748,7 @@ pub enum UserApiRequest {
     /// Request to generate item-based asset
     SendCreateItemRequest {
         item_amount: u64,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     },
 

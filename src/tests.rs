@@ -27,18 +27,6 @@ use crate::utils::{
     create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
     generate_pow_for_block, get_sanction_addresses, tracing_log_try_init, LocalEvent, StringError,
 };
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::crypto::sign_ed25519 as sign;
-use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
-use a_block_chain::primitives::asset::{Asset, AssetValues, TokenAmount};
-use a_block_chain::primitives::block::{Block, BlockHeader};
-use a_block_chain::primitives::druid::DruidExpectation;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxOut};
-use a_block_chain::script::StackEntry;
-use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_item_create_tx, construct_tx_hash,
-    construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
-};
 use bincode::{deserialize, deserialize_from};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
@@ -51,6 +39,18 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tracing::{debug, error, error_span, info};
 use tracing_futures::Instrument;
+use tw_chain::crypto::sha3_256;
+use tw_chain::crypto::sign_ed25519 as sign;
+use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
+use tw_chain::primitives::asset::{Asset, AssetValues, TokenAmount};
+use tw_chain::primitives::block::{Block, BlockHeader};
+use tw_chain::primitives::druid::DruidExpectation;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxOut};
+use tw_chain::script::StackEntry;
+use tw_chain::utils::transaction_utils::{
+    construct_address, construct_item_create_tx, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
+};
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
@@ -3045,7 +3045,7 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
         Vec<(AssetValues, AssetValues)>,
     > = BTreeMap::new();
 
-    for (payment_amount, from, to, drs_tx_hash, b_num) in amounts_to_pay {
+    for (payment_amount, from, to, genesis_hash, b_num) in amounts_to_pay {
         create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
         let initial_info = vec![user_get_wallet_asset_totals_for_tx(&mut network, from, to).await];
         let infos = all_gathered_wallet_asset_info
@@ -3058,7 +3058,7 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
             to,
             "compute1",
             Asset::Token(payment_amount),
-            Some(drs_tx_hash.clone()),
+            Some(genesis_hash.clone()),
         )
         .await;
 
@@ -3174,14 +3174,14 @@ async fn compute_create_item_asset_tx(
     item_metadata: Option<String>,
 ) {
     let mut c = network.compute(compute).unwrap().lock().await;
-    let drs_tx_hash_spec = DrsTxHashSpec::Create; /* Generate unique DRS tx hash */
+    let genesis_hash_spec = GenesisTxHashSpec::Create; /* Generate unique DRS tx hash */
     let (tx, _) = c
         .create_item_asset_tx(
             item_amount,
             script_public_key,
             public_key,
             signature,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             item_metadata,
         )
         .unwrap();
@@ -3194,9 +3194,9 @@ async fn make_item_based_payment_act(
     to: &str,
     compute: &str,
     send_asset: Asset,
-    drs_tx_hash: Option<String>, /* Expected `drs_tx_hash` of `Item` asset to receive */
+    genesis_hash: Option<String>, /* Expected `genesis_hash` of `Item` asset to receive */
 ) {
-    user_send_item_based_payment_request(network, from, to, send_asset, drs_tx_hash).await;
+    user_send_item_based_payment_request(network, from, to, send_asset, genesis_hash).await;
     user_handle_event(network, to, "Received item-based payment request").await;
     user_send_item_based_payment_response(network, to).await;
     user_handle_event(network, from, "Received item-based payment response").await;
@@ -3260,7 +3260,7 @@ async fn reject_item_based_payment() {
         decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
         &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
         1,
-        DrsTxHashSpec::Create,
+        GenesisTxHashSpec::Create,
         None,
         None,
     );
@@ -4620,11 +4620,11 @@ async fn user_send_item_based_payment_request(
     from: &str,
     to: &str,
     send_asset: Asset,
-    drs_tx_hash: Option<String>, /* Expected DRS tx hash from recipient */
+    genesis_hash: Option<String>, /* Expected DRS tx hash from recipient */
 ) {
     let mut u = network.user(from).unwrap().lock().await;
     let to_addr = network.get_address(to).await.unwrap();
-    u.send_rb_payment_request(to_addr, send_asset, drs_tx_hash)
+    u.send_rb_payment_request(to_addr, send_asset, genesis_hash)
         .await
         .unwrap();
 }
@@ -4656,7 +4656,7 @@ async fn user_send_item_asset(
     // Returns transactio hash
     let mut u = network.user(user).unwrap().lock().await;
     let compute_addr = network.get_address(compute).await.unwrap();
-    u.generate_item_asset_tx(item_amount, DrsTxHashSpec::Create, item_metadata)
+    u.generate_item_asset_tx(item_amount, GenesisTxHashSpec::Create, item_metadata)
         .await;
     let tx_hash = construct_tx_hash(&u.get_next_payment_transaction().unwrap().1);
     u.send_next_payment_to_destinations(compute_addr)

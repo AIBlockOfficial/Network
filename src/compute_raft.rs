@@ -15,11 +15,6 @@ use crate::utils::{
     calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now,
     get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::transaction::Transaction;
-use a_block_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -29,6 +24,11 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, error, trace, warn};
+use tw_chain::crypto::sha3_256;
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::transaction::Transaction;
+use tw_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
@@ -1005,7 +1005,7 @@ impl ComputeRaft {
     #[cfg(test)]
     pub fn get_committed_utxo_tracked_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    ) -> std::collections::HashMap<String, BTreeSet<tw_chain::primitives::transaction::OutPoint>>
     {
         self.consensused.utxo_set.get_pk_cache()
     }
@@ -1786,10 +1786,10 @@ mod test {
     use super::*;
     use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::{create_socket_addr, create_valid_transaction, get_test_common_unicorn};
-    use a_block_chain::crypto::sign_ed25519 as sign;
-    use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
     use std::collections::BTreeSet;
+    use tw_chain::crypto::sign_ed25519 as sign;
+    use tw_chain::primitives::asset::TokenAmount;
 
     #[tokio::test]
     async fn generate_first_block_no_raft() {

@@ -18,7 +18,6 @@
 
 use crate::constants::MR_PRIME_ITERS;
 use crate::utils::rug_integer;
-use a_block_chain::crypto::sha3_256;
 use bincode::serialize;
 use rug::integer::{IsPrime, Order};
 use rug::Integer;
@@ -26,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use tracing::error;
+use tw_chain::crypto::sha3_256;
 
 /// Constructs the seed for a new, ZNP-specific Unicorn
 ///

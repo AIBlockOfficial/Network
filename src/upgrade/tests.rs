@@ -17,11 +17,11 @@ use crate::test_utils::{
 use crate::tests::compute_committed_tx_pool;
 use crate::utils::{get_test_common_unicorn, tracing_log_try_init};
 use crate::{compute, compute_raft, storage, storage_raft, wallet};
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 use tracing::info;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
 
 type ExtraNodeParamsFilterMap = BTreeMap<String, ExtraNodeParamsFilter>;
 
@@ -753,8 +753,8 @@ fn cfg_upgrade() -> UpgradeCfg {
 }
 
 fn get_expected_last_block_stored() -> BlockStoredInfo {
-    use a_block_chain::primitives::transaction::{Transaction, TxIn, TxOut};
-    use a_block_chain::script::{lang::Script, StackEntry};
+    use tw_chain::primitives::transaction::{Transaction, TxIn, TxOut};
+    use tw_chain::script::{lang::Script, StackEntry};
 
     BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
@@ -774,7 +774,6 @@ fn get_expected_last_block_stored() -> BlockStoredInfo {
                 outputs: vec![TxOut {
                     value: Asset::Token(TokenAmount(7510180)),
                     locktime: 0,
-                    drs_block_hash: None,
                     script_public_key: Some(
                         "80f25a8547d4fab5454e98c3d855150336302fee4d20591ae14abcd7f938aa5c"
                             .to_owned(),

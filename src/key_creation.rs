@@ -1,8 +1,5 @@
 #![allow(non_snake_case, unused)]
 
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::crypto::sign_ed25519 as sign;
-use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
 use hex::encode;
 use rug::integer::Order;
 use rug::ops::Pow;
@@ -10,6 +7,9 @@ use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
+use tw_chain::crypto::sha3_256;
+use tw_chain::crypto::sign_ed25519 as sign;
+use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
 
 /// Number of participants in a partition
 const PARTICIPANTS: usize = 2;

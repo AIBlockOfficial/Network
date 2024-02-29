@@ -3,11 +3,11 @@ use crate::compute_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::interfaces::InitialIssuance;
 use crate::wallet::WalletDb;
-use a_block_chain::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
+use tw_chain::primitives::asset::TokenAmount;
 
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
 

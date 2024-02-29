@@ -20,19 +20,19 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use a_block_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
-use a_block_chain::crypto::sign_ed25519::PublicKey;
-use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
-use a_block_chain::primitives::druid::DdeValues;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
-use a_block_chain::script::lang::Script;
-use a_block_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error};
+use tw_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
+use tw_chain::crypto::sign_ed25519::PublicKey;
+use tw_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
+use tw_chain::primitives::druid::DdeValues;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
+use tw_chain::script::lang::Script;
+use tw_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use warp::hyper::StatusCode;
 
 pub type DbgPaths = Vec<&'static str>;
@@ -80,7 +80,7 @@ pub struct EncapsulatedPayment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateItemAssetDataCompute {
     pub item_amount: u64,
-    pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub genesis_hash_spec: GenesisTxHashSpec,
     pub script_public_key: String,
     pub public_key: String,
     pub signature: String,
@@ -90,7 +90,7 @@ pub struct CreateItemAssetDataCompute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateItemAssetDataUser {
     pub item_amount: u64,
-    pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub genesis_hash_spec: GenesisTxHashSpec,
     pub metadata: Option<String>,
 }
 
@@ -706,13 +706,13 @@ pub async fn post_create_item_asset_user(
 ) -> Result<JsonReply, JsonReply> {
     let CreateItemAssetDataUser {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         metadata,
     } = item_data;
 
     let request = UserRequest::UserApi(UserApiRequest::SendCreateItemRequest {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         metadata,
     });
     let r = CallResponse::new(route, &call_id);
@@ -734,7 +734,7 @@ pub async fn post_create_item_asset(
 ) -> Result<JsonReply, JsonReply> {
     let CreateItemAssetDataCompute {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         script_public_key,
         public_key,
         signature,
@@ -755,7 +755,7 @@ pub async fn post_create_item_asset(
                     spk,
                     public_key,
                     signature,
-                    drs_tx_hash_spec,
+                    genesis_hash_spec,
                     md
                 )?;
             let compute_resp = c.receive_transactions(vec![tx]);

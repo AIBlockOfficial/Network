@@ -24,12 +24,6 @@ use crate::utils::{
     validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
     LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction};
-use a_block_chain::utils::druid_utils::druid_expectations_are_met;
-use a_block_chain::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
-use a_block_chain::utils::transaction_utils::construct_tx_hash;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use serde::Serialize;
@@ -45,6 +39,12 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction};
+use tw_chain::utils::druid_utils::druid_expectations_are_met;
+use tw_chain::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
+use tw_chain::utils::transaction_utils::construct_tx_hash;
 
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
@@ -420,7 +420,7 @@ impl ComputeNode {
     #[cfg(test)]
     pub fn get_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    ) -> std::collections::HashMap<String, BTreeSet<tw_chain::primitives::transaction::OutPoint>>
     {
         self.node_raft.get_committed_utxo_tracked_pk_cache()
     }
@@ -1300,14 +1300,14 @@ impl ComputeNode {
                 script_public_key,
                 public_key,
                 signature,
-                drs_tx_hash_spec,
+                genesis_hash_spec,
                 metadata,
             } => match self.create_item_asset_tx(
                 item_amount,
                 script_public_key,
                 public_key,
                 signature,
-                drs_tx_hash_spec,
+                genesis_hash_spec,
                 metadata,
             ) {
                 Ok((tx, _)) => Some(self.receive_transactions(vec![tx])),
@@ -2157,7 +2157,7 @@ impl ComputeNode {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
         let b_num = self.node_raft.get_current_block_num();
@@ -2167,7 +2167,7 @@ impl ComputeNode {
             script_public_key,
             public_key,
             signature,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             metadata,
         )?)
     }
@@ -2369,7 +2369,7 @@ impl ComputeApi for ComputeNode {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Result<(Transaction, String)> {
         self.create_item_asset_tx(
@@ -2377,7 +2377,7 @@ impl ComputeApi for ComputeNode {
             script_public_key,
             public_key,
             signature,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             metadata,
         )
     }

@@ -28,11 +28,6 @@ use crate::utils::{
     loop_connnect_to_peers_async, loop_wait_connnect_to_peers_async, make_utxo_set_from_seed,
     LocalEventSender, ResponseResult, StringError,
 };
-use a_block_chain::crypto::sign_ed25519 as sign;
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
-use a_block_chain::script::lang::Script;
-use a_block_chain::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 use futures::future::join_all;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -44,6 +39,11 @@ use tokio::task::JoinHandle;
 use tracing::error_span;
 use tracing::info;
 use tracing_futures::Instrument;
+use tw_chain::crypto::sign_ed25519 as sign;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use tw_chain::script::lang::Script;
+use tw_chain::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
 pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
@@ -1552,11 +1552,11 @@ pub fn generate_rb_transactions(
     vec![(t_r_hash, rb_receive_tx), (t_s_hash, rb_send_tx)]
 }
 
-/// Create a `BTreeMap` struct from a vector of (drs_tx_hash, `Item` amount)
+/// Create a `BTreeMap` struct from a vector of (genesis_hash, `Item` amount)
 ///
 /// ### Arguments
 ///
-/// * `items` - A vector of (drs_tx_hash, `Item` amount)
+/// * `items` - A vector of (genesis_hash, `Item` amount)
 pub fn map_items(details: Vec<(String, u64)>) -> BTreeMap<String, u64> {
     details.into_iter().collect()
 }

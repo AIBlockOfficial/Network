@@ -34,28 +34,6 @@ sudo apt-get install libclang-dev
 
 The above should enable you to install `librocksdb-sys` successfully, but older versions of this crate had bugs so it would be wise to ensure you've installed `rocksdb = "0.21.0"` or higher in order to avoid compilation issues.
 
-### Repo Setup
-
-You can then set up the project on your local machine using the following steps:
-
-- Clone this repo using one of the options in Gitlab
-- From your terminal, move into the cloned folder on your local machine
-- Run the following:
-
-```
-make
-```
-
-You will also require a local instances of the A-Block `NAOM` and `Keccak Prime` repo, which is a crate dependency. The dependency 
-is listed in the `Cargo.toml` as:
-
-```
-a_block_chain = { path = "../a_block_chain" }
-keccak_prime = { path = "../keccak-prime" }
-```
-
-The path can be changed as needed. Once done you can build the project using `cargo build` and run it using `cargo run`, as per usual.
-
 ..
 
 ## Running Nodes Locally

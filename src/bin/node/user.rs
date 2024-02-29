@@ -1,7 +1,7 @@
 //! App to run a user node.
 
-use ablock_network::configurations::UserNodeConfig;
-use ablock_network::{
+use aiblock_network::configurations::UserNodeConfig;
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult, UserNode,
 };
@@ -348,7 +348,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

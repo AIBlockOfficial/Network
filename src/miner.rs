@@ -16,10 +16,6 @@ use crate::utils::{
     RunningTaskOrResult,
 };
 use crate::wallet::{LockedCoinbase, WalletDb, WalletDbError, DB_SPEC};
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::block::{self, BlockHeader};
-use a_block_chain::primitives::transaction::Transaction;
-use a_block_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -39,6 +35,10 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::block::{self, BlockHeader};
+use tw_chain::primitives::transaction::Transaction;
+use tw_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";

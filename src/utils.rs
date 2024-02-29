@@ -9,21 +9,6 @@ use crate::interfaces::{
 };
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
-use a_block_chain::constants::TOTAL_TOKENS;
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
-use a_block_chain::primitives::transaction::DrsTxHashSpec;
-use a_block_chain::primitives::{
-    asset::{Asset, TokenAmount},
-    block::{build_hex_txs_hash, Block, BlockHeader},
-    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
-};
-use a_block_chain::script::{lang::Script, StackEntry};
-use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
-    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
-    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
-};
 use bincode::serialize;
 use chrono::Utc;
 use futures::future::join_all;
@@ -43,6 +28,21 @@ use tokio::task;
 use tokio::time::Instant;
 use tracing::{trace, warn};
 use trust_dns_resolver::TokioAsyncResolver;
+use tw_chain::constants::TOTAL_TOKENS;
+use tw_chain::crypto::sha3_256;
+use tw_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use tw_chain::primitives::transaction::GenesisTxHashSpec;
+use tw_chain::primitives::{
+    asset::{Asset, TokenAmount},
+    block::{build_hex_txs_hash, Block, BlockHeader},
+    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
+};
+use tw_chain::script::{lang::Script, StackEntry};
+use tw_chain::utils::transaction_utils::{
+    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+};
 use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
@@ -754,7 +754,6 @@ pub fn create_valid_transaction_with_ins_outs(
                 value: Asset::Token(amount),
                 locktime: 0,
                 script_public_key: Some(addr.to_string()),
-                drs_block_hash: None,
             });
         }
         tx_outs
@@ -1176,11 +1175,11 @@ pub fn create_item_asset_tx_from_sig(
     script_public_key: String,
     public_key: String,
     signature: String,
-    drs_tx_hash_spec: DrsTxHashSpec,
+    genesis_hash_spec: GenesisTxHashSpec,
     metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
-    let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let item = Asset::item(item_amount, drs_tx_hash_create.clone(), metadata);
+    let genesis_hash_create = genesis_hash_spec.get_genesis_hash();
+    let item = Asset::item(item_amount, genesis_hash_create.clone(), metadata);
     let asset_hash = construct_tx_in_signable_asset_hash(&item);
     let tx_out = TxOut::new_asset(script_public_key, item, None);
     let public_key = decode_pub_key(&public_key)?;
@@ -1192,7 +1191,7 @@ pub fn create_item_asset_tx_from_sig(
     };
 
     let tx = construct_tx_core(vec![tx_in], vec![tx_out], None);
-    let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
+    let tx_hash = genesis_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
 
     Ok((tx, tx_hash))
 }

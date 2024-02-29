@@ -1,8 +1,8 @@
 //! App to run a storage node.
 
-use ablock_network::configurations::StorageNodeConfig;
-use ablock_network::StorageNode;
-use ablock_network::{
+use aiblock_network::configurations::StorageNodeConfig;
+use aiblock_network::StorageNode;
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
@@ -247,7 +247,7 @@ fn configuration(settings: config::Config) -> StorageNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 
