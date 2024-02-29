@@ -147,7 +147,6 @@ pub mod a_block_chain {
     #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
     pub enum Asset {
         Token(TokenAmount),
-        Data(DataAsset),
         Item(ItemAsset),
     }
 
@@ -162,12 +161,6 @@ pub mod a_block_chain {
         Deserialize, Serialize, Default, Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord,
     )]
     pub struct TokenAmount(pub u64);
-
-    #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-    pub struct DataAsset {
-        pub data: Vec<u8>,
-        pub amount: u64,
-    }
 }
 
 pub mod interfaces {
@@ -514,7 +507,7 @@ pub mod convert {
     use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use a_block_chain::primitives::asset::{AssetValues, ItemAsset};
     use a_block_chain::primitives::{
-        asset::{Asset, DataAsset, TokenAmount},
+        asset::{Asset, TokenAmount},
         block::{Block, BlockHeader},
         druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
@@ -632,7 +625,6 @@ pub mod convert {
     pub fn convert_asset(old: old::a_block_chain::Asset) -> Asset {
         match old {
             old::a_block_chain::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
-            old::a_block_chain::Asset::Data(v) => Asset::Data(convert_data_asset(v)),
             old::a_block_chain::Asset::Item(v) => Asset::Item(convert_item_asset(v)),
         }
     }
@@ -648,13 +640,6 @@ pub mod convert {
     /// Keep all existing DRS transaction hash values as is
     pub fn convert_item_amount(old: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
         old
-    }
-
-    pub fn convert_data_asset(old: old::a_block_chain::DataAsset) -> DataAsset {
-        DataAsset {
-            data: old.data,
-            amount: old.amount,
-        }
     }
 
     pub fn convert_token_amount(old: old::a_block_chain::TokenAmount) -> TokenAmount {
@@ -740,6 +725,7 @@ pub mod convert {
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
             current_circulation: convert_token_amount(old.current_circulation),
             miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
+            init_issuances: Default::default(),  // Will require sensible conversion on next upgrade
             special_handling,
         }
     }

@@ -3,7 +3,12 @@ pub use a_block_chain::constants::*;
 /*------- BLOCK CONSTANTS --------*/
 
 /// Bit shifting value for reward issuance
-pub const REWARD_ISSUANCE_VAL: u8 = 25;
+pub const REWARD_ISSUANCE_VAL: u8 = 27;
+pub const REWARD_SMOOTHING_VAL: u8 = 8;
+
+/*------- ISSUANCE CONSTANTS --------*/
+
+pub const ISSUANCE_INTERVALS: usize = 48;
 
 /*------- CSPRNG USAGE NUMS -------*/
 

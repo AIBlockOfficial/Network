@@ -11,7 +11,7 @@ use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, DruidDroplet, DruidPool, MineRequest, MinedBlock,
+    ComputeRequest, Contract, DruidDroplet, DruidPool, InitialIssuance, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
@@ -170,6 +170,7 @@ pub struct ComputeNode {
         RoutesPoWInfo,
         Node,
     ),
+    init_issuances: Vec<InitialIssuance>,
 }
 
 impl ComputeNode {
@@ -186,6 +187,7 @@ impl ComputeNode {
             ComputeError::ConfigError("Invalid compute node address in config file")
         })?;
 
+        let init_issuances = config.initial_issuances.clone();
         let raw_storage_addr = config
             .storage_nodes
             .get(config.compute_node_idx)
@@ -266,6 +268,7 @@ impl ComputeNode {
             shutdown_group,
             api_info,
             fetched_utxo_set: None,
+            init_issuances,
         }
         .load_local_db()
     }
@@ -562,7 +565,7 @@ impl ComputeNode {
             .node_raft
             .get_committed_current_block_num()
             .unwrap_or_default();
-        let sanction_list = &self.sanction_list;
+        //let sanction_list = &self.sanction_list;
         let b_num = self
             .node_raft
             .get_committed_current_block_num()
@@ -580,7 +583,7 @@ impl ComputeNode {
                 && tx_is_valid(tx, b_num, |v| {
                     utxo_set
                         .get(v)
-                        .filter(|_| !sanction_list.contains(&v.t_hash))
+                        // .filter(|_| !sanction_list.contains(&v.t_hash))
                         .filter(|tx_out| lock_expired >= tx_out.locktime)
                 })
         }
@@ -2350,6 +2353,10 @@ impl ComputeApi for ComputeNode {
 
     fn get_pending_druid_pool(&self) -> &DruidPool {
         self.get_pending_druid_pool()
+    }
+
+    fn get_circulating_supply(&self) -> TokenAmount {
+        *self.node_raft.get_current_circulation()
     }
 
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {

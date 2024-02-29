@@ -18,6 +18,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 
+//*======== INITIAL ISSUANCES =========*//
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitialIssuance {
+    pub amount: TokenAmount,
+    pub address: String,
+    pub block_height: u64,
+}
+
+impl InitialIssuance {
+    pub fn new(amount: TokenAmount, address: String, block_height: u64) -> Self {
+        InitialIssuance {
+            amount,
+            address,
+            block_height,
+        }
+    }
+}
+
+//*======== BLOCKCHAIN ITEM =========*//
+
 /// Struct used for simplifying JSON deserialization on the client
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutPointData {
@@ -133,6 +154,12 @@ pub struct BlockStoredInfo {
 pub struct PowInfo {
     pub participant_only: bool,
     pub b_num: u64,
+}
+
+/// Transaction hashes that have been mined with DRUID info
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct DruidTxInfo {
+    pub tx_hashes: Vec<String>,
 }
 
 /// PoW structure
@@ -687,6 +714,9 @@ pub trait ComputeApi {
 
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
+
+    /// Get the current circulating supply
+    fn get_circulating_supply(&self) -> TokenAmount;
 
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;

@@ -1,7 +1,7 @@
 use crate::api::handlers::{
     AddressConstructData, Addresses, ChangePassphraseData, CreateItemAssetDataCompute,
     CreateItemAssetDataUser, CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths,
-    EncapsulatedPayment, FetchPendingData, PublicKeyAddresses,
+    EncapsulatedPayment, FetchPendingData,
 };
 use crate::api::routes;
 use crate::api::utils::{auth_request, create_new_cache, handle_rejection, CACHE_LIVE_TIME};
@@ -146,6 +146,10 @@ impl ComputeApi for ComputeTest {
             success: true,
             reason,
         }
+    }
+
+    fn get_circulating_supply(&self) -> TokenAmount {
+        TokenAmount(100)
     }
 
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
@@ -1652,9 +1656,7 @@ async fn test_post_fetch_balance() {
     //
     let tx_vals = vec![get_transaction()];
     let compute = ComputeTest::new(tx_vals);
-    let addresses = PublicKeyAddresses {
-        address_list: vec![COMMON_PUB_ADDR.to_string()],
-    };
+    let addresses = vec![COMMON_PUB_ADDR.to_string()];
 
     let request = warp::test::request()
         .method("POST")
@@ -1746,10 +1748,9 @@ async fn test_post_update_running_total() {
     //
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
 
-    let addresses = PublicKeyAddresses {
-        address_list: vec![COMMON_PUB_ADDR.to_string()],
-    };
-    let address_list = UtxoFetchType::AnyOf(addresses.address_list.clone());
+    let addresses = vec![COMMON_PUB_ADDR.to_string()];
+
+    let address_list = UtxoFetchType::AnyOf(addresses.clone());
 
     let request = warp::test::request()
         .method("POST")

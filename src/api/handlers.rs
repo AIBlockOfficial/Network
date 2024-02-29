@@ -20,7 +20,7 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use a_block_chain::constants::D_DISPLAY_PLACES;
+use a_block_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
 use a_block_chain::crypto::sign_ed25519::PublicKey;
 use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
 use a_block_chain::primitives::druid::DdeValues;
@@ -62,12 +62,6 @@ struct WalletInfo {
     available_total_tokens: u64,
     item_total: BTreeMap<String, u64>, /* DRS tx hash - amount */
     addresses: AddressesWithOutPoints,
-}
-
-/// Public key addresses received from client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublicKeyAddresses {
-    pub address_list: Vec<String>,
 }
 
 /// Encapsulated payment received from client
@@ -374,16 +368,51 @@ pub async fn get_shared_config_compute(
     )
 }
 
-//======= POST HANDLERS =======//
-
-/// Post to retrieve an item from the blockchain db by hash key
-pub async fn post_blockchain_entry_by_key(
-    db: Arc<Mutex<SimpleDb>>,
-    key: String,
+/// GET The current circulating supply of the token
+pub async fn get_circulating_supply(
+    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    get_json_reply_stored_value_from_db(db, &key, true, call_id, route)
+    let r = CallResponse::new(route, &call_id);
+    // Send request to compute node
+    let res = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_circulating_supply(),
+        "Cannot access Compute Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok(
+        "Successfully fetched circulating supply",
+        json_serialize_embed(res),
+    )
+}
+
+/// GET The total token supply in the system
+pub async fn get_total_supply(
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    r.into_ok(
+        "Successfully fetched total supply",
+        json_serialize_embed(TOTAL_TOKENS),
+    )
+}
+
+//======= POST HANDLERS =======//
+
+/// Post to retrieve items from the blockchain db by hash key
+pub async fn post_blockchain_entry_by_key(
+    db: Arc<Mutex<SimpleDb>>,
+    keys: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    get_json_reply_items_from_db(db, keys, route, call_id)
 }
 
 /// Post to batch retrieve multiple transactions from the blockchain db by hash keys
@@ -596,12 +625,12 @@ pub async fn post_request_donation(
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,
-    addresses: PublicKeyAddresses,
+    addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-        address_list: UtxoFetchType::AnyOf(addresses.address_list),
+        address_list: UtxoFetchType::AnyOf(addresses),
     });
     let r = CallResponse::new(route, &call_id);
 
@@ -616,7 +645,7 @@ pub async fn post_update_running_total(
 /// Post to fetch the balance for given addresses in UTXO
 pub async fn post_fetch_utxo_balance(
     mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    addresses: PublicKeyAddresses,
+    addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
@@ -626,7 +655,7 @@ pub async fn post_fetch_utxo_balance(
         &mut threaded_calls,
         move |c| {
             c.get_committed_utxo_tracked_set()
-                .get_balance_for_addresses(&addresses.address_list)
+                .get_balance_for_addresses(&addresses)
         },
         "Cannot fetch UTXO balance",
     )

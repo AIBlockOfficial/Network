@@ -6,6 +6,9 @@ echo "Generate keys in src/bin/tls_data"
 echo "//-----------------------------//"
 echo " "
 
+mkdir src/bin/tls_data
+cp cnf/ca_root.cnf src/bin/tls_data
+cp cnf/node.cnf src/bin/tls_data
 cd src/bin/tls_data
 
 if [ "$1" = "re_gen_root" ]
@@ -13,6 +16,7 @@ then
     echo "initial files"
     echo 01 > ca_serial
     echo 01 > ca_crlnumber
+
     rm ca_index.txt ; touch ca_index.txt
 
     echo "Generating CA Root cert"
@@ -22,7 +26,7 @@ then
 
     echo "Generating CA Intermediate cert"
     openssl genpkey -algorithm Ed25519 -out ca_intermediate.key
-    openssl req -config ca_root.cnf -new -key ca_intermediate.key -nodes -out ca_intermediate.csr -extensions v3_intermediate_ca -subj "/CN=Zenotta Intermediate CA"
+    openssl req -config ca_root.cnf -new -key ca_intermediate.key -nodes -out ca_intermediate.csr -extensions v3_intermediate_ca -subj "/CN=ABlock Intermediate CA"
     openssl ca -config ca_root.cnf -extensions v3_intermediate_ca -days 999 -notext -batch -in ca_intermediate.csr -out ca_intermediate.pem
     cat ca_intermediate.pem ca_root.pem > ca_intermediate.bundle.pem
 
@@ -39,7 +43,10 @@ then
     port_v1=$(($port_v1+10))
     port_v2=$(($port_v1+1))
     port_v3=$(($port_v1+2))
+    echo ""
     echo "Generating ... n is set to $n ($port_v1, $port_v2, $port_v3)"
+    echo ""
+
     if [ "$1" = "re_gen_leaf_certs_and_keys" ]
     then
       echo "Generating ... key & csr is set to $n"

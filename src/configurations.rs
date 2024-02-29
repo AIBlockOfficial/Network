@@ -1,6 +1,7 @@
 // use crate::comms_handler::Node;
 use crate::compute_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
+use crate::interfaces::InitialIssuance;
 use crate::wallet::WalletDb;
 use a_block_chain::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
@@ -64,6 +65,8 @@ pub struct TxOutSpec {
     /// Amount that this TxOut can spend
     #[serde(deserialize_with = "deserialize_token_amount")]
     pub amount: TokenAmount,
+    /// Locktime for the TxOut
+    pub locktime: u64,
 }
 
 /// Configuration info for a TxOut
@@ -153,6 +156,8 @@ pub struct ComputeNodeConfig {
     pub compute_miner_whitelist: MinerWhitelist,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Initial issuances
+    pub initial_issuances: Vec<InitialIssuance>,
 }
 
 /// Configuration option for a compute node that can be shared across peers

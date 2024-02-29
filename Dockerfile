@@ -17,7 +17,7 @@ COPY . .
 RUN cargo build --release
 
 # Use distroless
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:112c81208f12acaa8568222edd3083cf16fa50392afce7e2f71737e42ed3dddc
+FROM cgr.dev/chainguard/glibc-dynamic:latest
 
 USER nonroot
 

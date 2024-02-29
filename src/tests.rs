@@ -24,9 +24,8 @@ use crate::transactor::Transactor;
 use crate::user::UserNode;
 use crate::utils::{
     apply_mining_tx, calculate_reward, construct_coinbase_tx, construct_valid_block_pow_hash,
-    create_valid_create_transaction_with_ins_outs, create_valid_transaction_with_ins_outs,
-    decode_pub_key, decode_secret_key, generate_pow_for_block, get_sanction_addresses,
-    tracing_log_try_init, LocalEvent, StringError,
+    create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
+    generate_pow_for_block, get_sanction_addresses, tracing_log_try_init, LocalEvent, StringError,
 };
 use a_block_chain::crypto::sha3_256;
 use a_block_chain::crypto::sign_ed25519 as sign;
@@ -4807,7 +4806,7 @@ fn valid_transactions(fixed: bool) -> BTreeMap<String, Transaction> {
 fn valid_transactions_with(
     fixed: bool,
     amount: TokenAmount,
-    with_create: bool,
+    _with_create: bool,
 ) -> BTreeMap<String, Transaction> {
     let (pk, sk) = if !fixed {
         let (pk, sk) = sign::gen_keypair();
@@ -4832,13 +4831,6 @@ fn valid_transactions_with(
         transactions.insert(t_hash, payment_tx);
     }
 
-    // Add one create tx
-    if with_create {
-        let drs = vec![0, 1, 2, 3, 4, 5];
-        let (create_hash, create_tx) = create_valid_create_transaction_with_ins_outs(drs, pk, &sk);
-        transactions.insert(create_hash, create_tx);
-    }
-
     transactions
 }
 
@@ -4860,6 +4852,7 @@ fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -
                     .map(|(pk, amount)| TxOutSpec {
                         public_key: pk.to_string(),
                         amount: *amount,
+                        locktime: 0,
                     })
                     .collect(),
             )
@@ -5127,6 +5120,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         mining_api_key: Default::default(),
         peer_limit: 1000,
         address_aggregation_limit: Some(5),
+        initial_issuances: Default::default(),
     }
 }
 

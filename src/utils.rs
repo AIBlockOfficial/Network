@@ -1,7 +1,8 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, MINING_DIFFICULTY, NETWORK_VERSION, REWARD_ISSUANCE_VAL,
+    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
+    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
 };
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
@@ -19,9 +20,9 @@ use a_block_chain::primitives::{
 };
 use a_block_chain::script::{lang::Script, StackEntry};
 use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_create_tx, construct_payment_tx_ins, construct_tx_core,
-    construct_tx_hash, construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash,
-    get_fees_with_out_point, get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use bincode::serialize;
 use chrono::Utc;
@@ -421,7 +422,16 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 ///
 /// * `current_circulation` - Current circulation of all tokens
 pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
-    TokenAmount((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+    let smoothing_value_as_token_amount = D_DISPLAY_PLACES_U64 * REWARD_SMOOTHING_VAL as u64;
+
+    if current_circulation.0 >= TOTAL_TOKENS {
+        return TokenAmount(smoothing_value_as_token_amount);
+    }
+
+    TokenAmount(
+        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+            + smoothing_value_as_token_amount,
+    )
 }
 
 /// Gets the total amount of tokens for all present coinbase transactions,
@@ -709,18 +719,6 @@ pub fn create_valid_transaction(
     )
 }
 
-/// Creates a valid DDE transaction from given info
-pub fn create_valid_create_transaction_with_ins_outs(
-    drs: Vec<u8>,
-    pub_key: PublicKey,
-    secret_key: &SecretKey,
-) -> (String, Transaction) {
-    let create_tx = construct_create_tx(0, drs, pub_key, secret_key, 1, None);
-    let ct_hash = construct_tx_hash(&create_tx);
-
-    (ct_hash, create_tx)
-}
-
 /// Create a valid transaction from given info
 pub fn create_valid_transaction_with_ins_outs(
     tx_in: &[(i32, &str)],
@@ -823,7 +821,7 @@ pub fn make_utxo_set_from_seed(
                                 addr
                             };
 
-                        TxOut::new_token_amount(script_public_key, out.amount, None)
+                        TxOut::new_token_amount(script_public_key, out.amount, Some(out.locktime))
                     })
                     .collect(),
                 inputs: genesis_tx_in.clone().into_iter().collect(),
