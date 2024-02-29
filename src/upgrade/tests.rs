@@ -1,7 +1,7 @@
 use super::tests_last_version_db::{self, DbEntryType};
 use super::{
-    dump_db, get_upgrade_compute_db, get_upgrade_storage_db, get_upgrade_wallet_db, old,
-    upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, UpgradeCfg, UpgradeError,
+    dump_db, get_upgrade_mempool_db, get_upgrade_storage_db, get_upgrade_wallet_db, old,
+    upgrade_mempool_db, upgrade_storage_db, upgrade_wallet_db, UpgradeCfg, UpgradeError,
     UpgradeStatus,
 };
 use crate::configurations::{DbMode, ExtraNodeParams, UserAutoGenTxSetup, WalletTxSpec};
@@ -14,9 +14,9 @@ use crate::test_utils::{
     get_test_tls_spec, node_join_all_checked, remove_all_node_dbs, Network, NetworkConfig,
     NetworkNodeInfo, NodeType,
 };
-use crate::tests::compute_committed_tx_pool;
+use crate::tests::mempool_committed_tx_pool;
 use crate::utils::{get_test_common_unicorn, tracing_log_try_init};
-use crate::{compute, compute_raft, storage, storage_raft, wallet};
+use crate::{mempool, mempool_raft, storage, storage_raft, wallet};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -136,16 +136,16 @@ pub struct ExtraNodeParamsFilter {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_compute_real_db() {
+async fn upgrade_mempool_real_db() {
     let config = real_db(complete_network_config(20000));
     remove_all_node_dbs(&config);
-    upgrade_common(config, "compute1", cfg_upgrade()).await;
+    upgrade_common(config, "mempool1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn upgrade_compute_in_memory() {
+async fn upgrade_mempool_in_memory() {
     let config = complete_network_config(20010);
-    upgrade_common(config, "compute1", cfg_upgrade()).await;
+    upgrade_common(config, "mempool1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -191,20 +191,20 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     // Assert
     //
     match n_info.node_type {
-        NodeType::Compute => {
+        NodeType::Mempool => {
             let (expected_mining_b_num, expected_b_num) = (None, Some(LAST_BLOCK_STORED_NUM));
 
-            let compute = network.compute(name).unwrap().lock().await;
+            let mempool = network.mempool(name).unwrap().lock().await;
 
-            let block = compute.get_mining_block();
+            let block = mempool.get_mining_block();
             assert_eq!(
                 block.as_ref().map(|bs| bs.header.b_num),
                 expected_mining_b_num
             );
 
-            let b_num = compute.get_committed_current_block_num();
+            let b_num = mempool.get_committed_current_block_num();
             assert_eq!(b_num, expected_b_num);
-            assert_eq!(compute.get_request_list(), &Default::default());
+            assert_eq!(mempool.get_request_list(), &Default::default());
             assert_eq!(status.last_block_num, None);
             assert_eq!(status.last_raft_block_num, expected_b_num);
         }
@@ -274,37 +274,37 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn open_upgrade_started_compute_real_db() {
+async fn open_upgrade_started_mempool_real_db() {
     let config = real_db(complete_network_config(20100));
     remove_all_node_dbs(&config);
-    open_upgrade_started_compute_common(config, "compute1", cfg_upgrade()).await;
+    open_upgrade_started_mempool_common(config, "mempool1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn open_upgrade_started_compute_in_memory() {
+async fn open_upgrade_started_mempool_in_memory() {
     let config = complete_network_config(20110);
-    open_upgrade_started_compute_common(config, "compute1", cfg_upgrade()).await;
+    open_upgrade_started_mempool_common(config, "mempool1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_storage_in_memory() {
     let config = complete_network_config(20120);
-    open_upgrade_started_compute_common(config, "storage1", cfg_upgrade()).await;
+    open_upgrade_started_mempool_common(config, "storage1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_miner_in_memory() {
     let config = complete_network_config(20130);
-    open_upgrade_started_compute_common(config, "miner1", cfg_upgrade()).await;
+    open_upgrade_started_mempool_common(config, "miner1", cfg_upgrade()).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn open_upgrade_started_user_in_memory() {
     let config = complete_network_config(20140);
-    open_upgrade_started_compute_common(config, "user1", cfg_upgrade()).await;
+    open_upgrade_started_mempool_common(config, "user1", cfg_upgrade()).await;
 }
 
-async fn open_upgrade_started_compute_common(
+async fn open_upgrade_started_mempool_common(
     config: NetworkConfig,
     name: &str,
     _upgrade_cfg: UpgradeCfg,
@@ -376,8 +376,8 @@ async fn upgrade_restart_network_raft_3_raft_db_only_in_memory() {
     let params_filters = vec![
         ("storage1".to_owned(), filter),
         ("storage2".to_owned(), filter),
-        ("compute1".to_owned(), filter),
-        ("compute2".to_owned(), filter),
+        ("mempool1".to_owned(), filter),
+        ("mempool2".to_owned(), filter),
     ]
     .into_iter()
     .collect();
@@ -400,8 +400,8 @@ async fn upgrade_restart_network_raft_3_pre_launch_only_in_memory() {
     let params_filters = vec![
         ("storage2".to_owned(), filter),
         ("storage3".to_owned(), filter),
-        ("compute2".to_owned(), filter),
-        ("compute3".to_owned(), filter),
+        ("mempool2".to_owned(), filter),
+        ("mempool3".to_owned(), filter),
     ]
     .into_iter()
     .collect();
@@ -425,9 +425,9 @@ async fn upgrade_restart_network_common(
     //
     config.user_test_auto_gen_setup = get_test_auto_gen_setup(Some(0));
     let mut network = Network::create_stopped_from_config(&config);
-    let compute_nodes = &config.nodes[&NodeType::Compute];
+    let mempool_nodes = &config.nodes[&NodeType::Mempool];
     let storage_nodes = &config.nodes[&NodeType::Storage];
-    let raft_nodes: Vec<String> = compute_nodes.iter().chain(storage_nodes).cloned().collect();
+    let raft_nodes: Vec<String> = mempool_nodes.iter().chain(storage_nodes).cloned().collect();
     let extra_blocks = 2usize;
     let expected_block_num = LAST_BLOCK_STORED_NUM + extra_blocks as u64;
 
@@ -453,7 +453,7 @@ async fn upgrade_restart_network_common(
     }
 
     network.re_spawn_dead_nodes().await;
-    for node_name in compute_nodes {
+    for node_name in mempool_nodes {
         node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
     }
 
@@ -466,8 +466,8 @@ async fn upgrade_restart_network_common(
     // Assert
     //
     {
-        let compute = network.compute("compute1").unwrap().lock().await;
-        let b_num = compute.get_committed_current_block_num();
+        let mempool = network.mempool("mempool1").unwrap().lock().await;
+        let b_num = mempool.get_committed_current_block_num();
         assert_eq!(b_num, Some(expected_block_num));
     }
     {
@@ -512,7 +512,7 @@ async fn upgrade_spend_old_tx() {
     let config = complete_network_config(20260);
     let mut network = Network::create_stopped_from_config(&config);
 
-    for name in ["user1", "compute1"] {
+    for name in ["user1", "mempool1"] {
         let node_info = network.get_node_info(name).unwrap().clone();
         let db = create_old_node_db(&node_info);
         let db = get_upgrade_node_db(&node_info, in_memory(db)).unwrap();
@@ -526,20 +526,20 @@ async fn upgrade_spend_old_tx() {
     //
     network.re_spawn_dead_nodes().await;
     raft_node_handle_event(&mut network, "user1", "Snapshot applied").await;
-    raft_node_handle_event(&mut network, "compute1", "Snapshot applied").await;
+    raft_node_handle_event(&mut network, "mempool1", "Snapshot applied").await;
 
     user_make_payment_transaction(
         &mut network,
         "user1",
-        "compute1",
+        "mempool1",
         TokenAmount(123),
         "payment_address00000000000000000".to_owned(),
     )
     .await;
 
-    raft_node_handle_event(&mut network, "compute1", "Transactions added to tx pool").await;
-    raft_node_handle_event(&mut network, "compute1", "Transactions committed").await;
-    let actual_tx_pool = compute_committed_tx_pool(&mut network, "compute1").await;
+    raft_node_handle_event(&mut network, "mempool1", "Transactions added to tx pool").await;
+    raft_node_handle_event(&mut network, "mempool1", "Transactions committed").await;
+    let actual_tx_pool = mempool_committed_tx_pool(&mut network, "mempool1").await;
 
     //
     // Assert
@@ -553,14 +553,14 @@ async fn upgrade_spend_old_tx() {
 
 fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
     match info.node_type {
-        NodeType::Compute => ExtraNodeParams {
+        NodeType::Mempool => ExtraNodeParams {
             db: Some(create_old_db(
-                &old::compute::DB_SPEC,
+                &old::mempool::DB_SPEC,
                 info.db_mode,
                 tests_last_version_db::COMPUTE_DB_V0_6_0,
             )),
             raft_db: Some(create_old_db(
-                &old::compute_raft::DB_SPEC,
+                &old::mempool_raft::DB_SPEC,
                 info.db_mode,
                 tests_last_version_db::COMPUTE_RAFT_DB_V0_6_0,
             )),
@@ -620,7 +620,7 @@ fn open_as_old_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
     let specs = match info.node_type {
-        NodeType::Compute => Specs::Db(old::compute::DB_SPEC, old::compute_raft::DB_SPEC),
+        NodeType::Mempool => Specs::Db(old::mempool::DB_SPEC, old::mempool_raft::DB_SPEC),
         NodeType::Storage => Specs::Db(old::storage::DB_SPEC, old::storage_raft::DB_SPEC),
         NodeType::User => Specs::Wallet(old::wallet::DB_SPEC),
         NodeType::Miner => Specs::Wallet(old::wallet::DB_SPEC),
@@ -634,7 +634,7 @@ fn open_as_new_node_db(
 ) -> Result<ExtraNodeParams, SimpleDbError> {
     let version = Some(NETWORK_VERSION_SERIALIZED);
     let specs = match info.node_type {
-        NodeType::Compute => Specs::Db(compute::DB_SPEC, compute_raft::DB_SPEC),
+        NodeType::Mempool => Specs::Db(mempool::DB_SPEC, mempool_raft::DB_SPEC),
         NodeType::Storage => Specs::Db(storage::DB_SPEC, storage_raft::DB_SPEC),
         NodeType::User => Specs::Wallet(wallet::DB_SPEC),
         NodeType::Miner => Specs::Wallet(wallet::DB_SPEC),
@@ -675,7 +675,7 @@ pub fn get_upgrade_node_db(
     old_dbs: ExtraNodeParams,
 ) -> Result<ExtraNodeParams, UpgradeError> {
     match info.node_type {
-        NodeType::Compute => get_upgrade_compute_db(info.db_mode, old_dbs),
+        NodeType::Mempool => get_upgrade_mempool_db(info.db_mode, old_dbs),
         NodeType::Storage => get_upgrade_storage_db(info.db_mode, old_dbs),
         NodeType::User => get_upgrade_wallet_db(info.db_mode, old_dbs),
         NodeType::Miner => get_upgrade_wallet_db(info.db_mode, old_dbs),
@@ -688,7 +688,7 @@ pub fn upgrade_node_db(
     upgrade_cfg: &UpgradeCfg,
 ) -> Result<(ExtraNodeParams, UpgradeStatus), UpgradeError> {
     match info.node_type {
-        NodeType::Compute => upgrade_compute_db(dbs, upgrade_cfg),
+        NodeType::Mempool => upgrade_mempool_db(dbs, upgrade_cfg),
         NodeType::Storage => upgrade_storage_db(dbs, upgrade_cfg),
         NodeType::User => upgrade_wallet_db(dbs, upgrade_cfg),
         NodeType::Miner => upgrade_wallet_db(dbs, upgrade_cfg),
@@ -698,18 +698,18 @@ pub fn upgrade_node_db(
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
-        compute_raft: true,
+        mempool_raft: true,
         storage_raft: true,
         in_memory_db: true,
-        compute_partition_full_size: 1,
-        compute_minimum_miner_pool_len: 1,
+        mempool_partition_full_size: 1,
+        mempool_minimum_miner_pool_len: 1,
         nodes: vec![(NodeType::User, vec!["user1".to_string()])]
             .into_iter()
             .collect(),
-        compute_seed_utxo: Default::default(),
-        compute_genesis_tx_in: None,
+        mempool_seed_utxo: Default::default(),
+        mempool_genesis_tx_in: None,
         user_wallet_seeds: Default::default(),
-        compute_to_miner_mapping: Default::default(),
+        mempool_to_miner_mapping: Default::default(),
         test_duration_divider: 1,
         passphrase: Some(WALLET_PASSWORD.to_owned()),
         user_auto_donate: 0,
@@ -722,7 +722,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         enable_pipeline_reset: Default::default(),
         static_miner_address: Default::default(),
         mining_api_key: Default::default(),
-        compute_miner_whitelist: Default::default(),
+        mempool_miner_whitelist: Default::default(),
         peer_limit: 1000,
         address_aggregation_limit: Some(5),
         initial_issuances: Default::default(),
@@ -746,8 +746,8 @@ fn get_static_column(spec: SimpleDbSpec, name: &str) -> &'static str {
 fn cfg_upgrade() -> UpgradeCfg {
     UpgradeCfg {
         raft_len: 1,
-        compute_partition_full_size: 1,
-        compute_unicorn_fixed_param: get_test_common_unicorn(),
+        mempool_partition_full_size: 1,
+        mempool_unicorn_fixed_param: get_test_common_unicorn(),
         passphrase: WALLET_PASSWORD.to_owned(),
     }
 }
@@ -859,21 +859,21 @@ fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
 async fn user_make_payment_transaction(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
     amount: TokenAmount,
     to_addr: String,
 ) {
     let mut user = network.user(user).unwrap().lock().await;
-    let compute_addr = network.get_address(compute).await.unwrap();
+    let mempool_addr = network.get_address(mempool).await.unwrap();
     user.make_payment_transactions(None, to_addr, amount, None)
         .await;
-    user.send_next_payment_to_destinations(compute_addr)
+    user.send_next_payment_to_destinations(mempool_addr)
         .await
         .unwrap();
 }
 
 async fn raft_node_handle_event(network: &mut Network, node: &str, reason_val: &str) {
-    if let Some(n) = network.compute(node) {
+    if let Some(n) = network.mempool(node) {
         let mut n = n.lock().await;
         match n.handle_next_event(&mut test_timeout()).await {
             Some(Ok(Response { success, reason })) if success && reason == reason_val => {}

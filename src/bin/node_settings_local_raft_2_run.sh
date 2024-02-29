@@ -28,7 +28,7 @@ echo " "
 
 if [ "$1" = "set_log" ]
 then
-    echo set log storage: $2, compute: $3, miner: $4, user: $5.
+    echo set log storage: $2, mempool: $3, miner: $4, user: $5.
     STORAGE_LOG=$2
     COMPUTE_LOG=$3
     MINER_LOG=$4
@@ -44,19 +44,19 @@ RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/n
 s1=$!
 RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_local_raft_2.toml --api_port=3002 > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3003 > compute_1.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node mempool --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3003 > mempool_1.log 2>&1 &
 c1=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_local_raft_2.toml --api_port=3004 > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node mempool --config=src/bin/node_settings_local_raft_2.toml --api_port=3004 > mempool_0.log 2>&1 &
 c0=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=5 --api_port=3005 --compute_index=1 > miner_5.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=5 --api_port=3005 --mempool_index=1 > miner_5.log 2>&1 &
 m5=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=4 --api_port=3006 --compute_index=0 > miner_4.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=4 --api_port=3006 --mempool_index=0 > miner_4.log 2>&1 &
 m4=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=3 --api_port=3007 --compute_index=1 > miner_3.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=3 --api_port=3007 --mempool_index=1 > miner_3.log 2>&1 &
 m3=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=2 --api_port=3008 --compute_index=0 > miner_2.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=2 --api_port=3008 --mempool_index=0 > miner_2.log 2>&1 &
 m2=$!
-RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3009 --compute_index=1 > miner_1.log 2>&1 &
+RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --index=1 --api_port=3009 --mempool_index=1 > miner_1.log 2>&1 &
 m1=$!
 RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_local_raft_2.toml --with_user_index=1 --api_port=3010 > miner_0.log 2>&1 &
 m0=$!

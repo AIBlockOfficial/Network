@@ -11,31 +11,31 @@ use tw_chain::primitives::transaction::Transaction;
 pub trait Transactor {
     type Error;
 
-    /// Sends the next internal payment transaction to be processed by the connected Compute
+    /// Sends the next internal payment transaction to be processed by the connected Mempool
     /// node
     ///
     /// ### Arguments
     ///
-    /// * `compute_peer` - Compute peer to send the payment tx to
+    /// * `mempool_peer` - Mempool peer to send the payment tx to
     /// * `transactions` - Transactions to send
-    async fn send_transactions_to_compute(
+    async fn send_transactions_to_mempool(
         &mut self,
-        compute_peer: SocketAddr,
+        mempool_peer: SocketAddr,
         transactions: Vec<Transaction>,
     ) -> Result<(), Self::Error>;
 
-    /// Send a request to the compute nodes to receive latest UTXO set
+    /// Send a request to the mempool nodes to receive latest UTXO set
     ///
     /// ### Arguments
     /// * `address_list` - List of addresses for which UTXOs are requested
     async fn send_request_utxo_set(
         &mut self,
         address_list: UtxoFetchType,
-        compute_addr: SocketAddr,
+        mempool_addr: SocketAddr,
         requester_node_type: NodeType,
     ) -> Result<(), Self::Error>;
 
-    /// Receive the requested UTXO set/subset from Compute
+    /// Receive the requested UTXO set/subset from Mempool
     ///
     /// ### Arguments
     ///

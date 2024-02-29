@@ -67,7 +67,7 @@ fi
 
 if [ "$1" = "re_gen_trusted_certs" ]
 then
-  for n in node compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
+  for n in node mempool1 mempool2 mempool3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
   do
     openssl genpkey -algorithm Ed25519 -out $n.key
     openssl req -config node.cnf -new -key $n.key -nodes -out $n.csr -subj "/CN=$n.a-block.net" -addext "subjectAltName = DNS:$n.a-block.net"
@@ -97,7 +97,7 @@ echo "" >> test_tls_certificates.rs
 echo "/// PEM certificates for node DNS names" >> test_tls_certificates.rs
 echo "pub const TEST_PEM_CERTIFICATES: &[(&str, &str)] = &[" >> test_tls_certificates.rs
 
-for n in ca_root compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
+for n in ca_root mempool1 mempool2 mempool3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs cert ... n is set to $n"
   printf "            \"$n.a-block.net\": %s,\n" "$(jq -Rs . <$n.pem)" >> tls_certificates.json
@@ -114,7 +114,7 @@ echo "" >> test_tls_certificates.rs
 echo "/// PKCS8 Keys for node DNS names" >> test_tls_certificates.rs
 echo "pub const TEST_PKCS8_KEYS: &[(&str, &str)] = &[" >> test_tls_certificates.rs
 
-for n in compute1 compute2 compute3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
+for n in mempool1 mempool2 mempool3 storage1 storage2 storage3 miner1 miner2 miner3 miner4 miner5 miner6 miner7 miner8 miner9 miner10 user1 user2 user3
 do
   echo "Generating test json and rs keys ... n is set to $n"
   printf "            \"$n.a-block.net\": %s,\n" "$(jq -Rs . <$n.key)" >> tls_certificates.json
@@ -124,9 +124,9 @@ done
 printf "            \"node.a-block.net\": %s\n" "$(jq -Rs . <node.key)" >> tls_certificates.json
 echo "        }," >> tls_certificates.json
 echo "        \"socket_name_mapping\": {" >> tls_certificates.json
-echo "            \"127.0.0.1:12300\": \"compute1.a-block.net\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12301\": \"compute2.a-block.net\"," >> tls_certificates.json
-echo "            \"127.0.0.1:12302\": \"compute3.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12300\": \"mempool1.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12301\": \"mempool2.a-block.net\"," >> tls_certificates.json
+echo "            \"127.0.0.1:12302\": \"mempool3.a-block.net\"," >> tls_certificates.json
 echo "            \"127.0.0.1:12330\": \"storage1.a-block.net\"," >> tls_certificates.json
 echo "            \"127.0.0.1:12331\": \"storage2.a-block.net\"," >> tls_certificates.json
 echo "            \"127.0.0.1:12332\": \"storage3.a-block.net\"," >> tls_certificates.json

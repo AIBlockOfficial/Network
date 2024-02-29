@@ -1,7 +1,7 @@
 version: '3'
 services:
 
-  a-compute-node: &node-default
+  a-mempool-node: &node-default
     image: network
     environment:
       RUST_LOG: info,debug
@@ -10,8 +10,8 @@ services:
       - '12300:12300'
       - '3003:3003'
     volumes:  
-      - /tmp/compute:/src
-    command: compute
+      - /tmp/mempool:/src
+    command: mempool
   
   a-storage-node:
     <<: *node-default
@@ -25,7 +25,7 @@ services:
   a-miner-node:
     <<: *node-default
     depends_on: 
-      - a-compute-node
+      - a-mempool-node
       - a-storage-node
     ports:
       - '12340:12340'

@@ -5,7 +5,7 @@ use crate::api::utils::{
 };
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::ComputeApi;
+use crate::interfaces::MempoolApi;
 use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
@@ -221,7 +221,7 @@ pub fn total_supply(
 // GET circulating supply of tokens
 pub fn circulating_supply(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -245,7 +245,7 @@ pub fn circulating_supply(
 // GET UTXO set addresses
 pub fn utxo_addresses(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -269,7 +269,7 @@ pub fn utxo_addresses(
 // GET current config for node
 pub fn get_shared_config(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -284,7 +284,7 @@ pub fn get_shared_config(
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::get_shared_config_compute(tc, route, call_id),
+                handlers::get_shared_config_mempool(tc, route, call_id),
             )
         })
         .with(get_cors())
@@ -525,7 +525,7 @@ pub fn update_running_total(
 // POST fetch balance for addresses
 pub fn fetch_balance(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -550,7 +550,7 @@ pub fn fetch_balance(
 // POST fetch balance for addresses
 pub fn fetch_pending(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -575,7 +575,7 @@ pub fn fetch_pending(
 // POST create item-based asset transaction
 pub fn create_item_asset(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -650,7 +650,7 @@ pub fn change_passphrase(
 // POST create transactions
 pub fn create_transactions(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -723,7 +723,7 @@ pub fn address_construction(
 // POST pause nodes
 pub fn pause_nodes(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -748,7 +748,7 @@ pub fn pause_nodes(
 // POST resume nodes
 pub fn resume_nodes(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -772,7 +772,7 @@ pub fn resume_nodes(
 // POST update config in a coordinated manner, sharing it to peers
 pub fn update_shared_config(
     dp: &mut DbgPaths,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -963,13 +963,13 @@ pub fn storage_node_routes(
     routes.recover(handle_rejection)
 }
 
-// API routes for Compute nodes
+// API routes for Mempool nodes
 // TODO: 1. `fetch_pending` should not return `Transaction` as it contains sensitive information (`Script`)
 // TODO: 2. `fetch_pending` should return sensible data once a proper use-case has been found
-pub fn compute_node_routes(
+pub fn mempool_node_routes(
     api_keys: ApiKeys,
     routes_pow_info: RoutesPoWInfo,
-    threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     node: Node,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();

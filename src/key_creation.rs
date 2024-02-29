@@ -118,9 +118,9 @@ impl KeyAgreement {
         unicorn: &mut Vec<u8>,
         nonce: &mut Vec<u8>,
     ) {
-        self.compute_k_i(address, unicorn, nonce);
-        self.compute_y_i();
-        self.compute_hashes();
+        self.mempool_k_i(address, unicorn, nonce);
+        self.mempool_y_i();
+        self.mempool_hashes();
     }
 
     /// Convenience method to run the second key agreement round of computation
@@ -130,17 +130,17 @@ impl KeyAgreement {
     /// * `peer_value_left` - Vec<u8> value held by peer to the left
     /// * `peer_value_right` - Vec<u8> value held by peer to the right
     pub fn second_round(&mut self, peer_value_left: Vec<u8>, peer_value_right: Vec<u8>) {
-        self.compute_t_values(peer_value_left, peer_value_right);
+        self.mempool_t_values(peer_value_left, peer_value_right);
         self.build_concatenation();
-        self.compute_ek_i();
-        self.compute_M_iII();
-        self.compute_sigma_iII();
-        self.compute_M_iIIsigma();
+        self.mempool_ek_i();
+        self.mempool_M_iII();
+        self.mempool_sigma_iII();
+        self.mempool_M_iIIsigma();
     }
 
     /// Convenience method to run the third key agreement round of computation
     pub fn third_round(&mut self) {
-        self.compute_k_j();
+        self.mempool_k_j();
     }
 
     /// Creates the K_i for the key creation protocol
@@ -150,20 +150,20 @@ impl KeyAgreement {
     /// * `address` - Payment address
     /// * `unicorn` - Unicorn value
     /// * `nonce`   - Nonce value  
-    fn compute_k_i(&mut self, address: &mut Vec<u8>, unicorn: &mut Vec<u8>, nonce: &mut Vec<u8>) {
+    fn mempool_k_i(&mut self, address: &mut Vec<u8>, unicorn: &mut Vec<u8>, nonce: &mut Vec<u8>) {
         address.append(unicorn);
         address.append(nonce);
 
         self.k_i = address.to_vec();
     }
 
-    /// Computes Y_i for the key creation protocol
-    fn compute_y_i(&mut self) {
+    /// Mempools Y_i for the key creation protocol
+    fn mempool_y_i(&mut self) {
         self.y_i = self.g.pow(self.x_i).to_be_bytes().to_vec();
     }
 
-    /// Computes M_iI, M_iIU, sigma_iI as the required hash values
-    fn compute_hashes(&mut self) {
+    /// Mempools M_iI, M_iIU, sigma_iI as the required hash values
+    fn mempool_hashes(&mut self) {
         let mut mi_handler = sha3_256::digest(&self.k_i).to_vec();
 
         // Set M_i^I = H(k_i) || y_i
@@ -183,13 +183,13 @@ impl KeyAgreement {
         self.broadcast_1 = M_iI_clone;
     }
 
-    /// Compute t_i^L = H(y_{i-1}^x_i) and t_i^R = H(y_{i+1}^x_i)
+    /// Mempool t_i^L = H(y_{i-1}^x_i) and t_i^R = H(y_{i+1}^x_i)
     ///
     /// ### Arguments
     ///
     /// * `peer_value_left`     - Y_i value from the peer to the "left"
     /// * `peer_value_right`    - Y_i value from the peer to the "right"
-    fn compute_t_values(&mut self, peer_value_left: Vec<u8>, peer_value_right: Vec<u8>) {
+    fn mempool_t_values(&mut self, peer_value_left: Vec<u8>, peer_value_right: Vec<u8>) {
         // LEFT SIDE
         let hexed_peer_left = encode(peer_value_left);
         let big_peer_left = Integer::from_str_radix(&hexed_peer_left, 16).unwrap();
@@ -208,7 +208,7 @@ impl KeyAgreement {
 
         self.t_iR = sha3_256::digest(&r_as_digits).to_vec();
 
-        // Compute Ti
+        // Mempool Ti
         self.T_i = self
             .t_iL
             .iter()
@@ -217,7 +217,7 @@ impl KeyAgreement {
             .collect();
     }
 
-    /// Receives all necessary peer information for validation and key compute
+    /// Receives all necessary peer information for validation and key mempool
     ///
     /// ### Arguments
     ///
@@ -312,8 +312,8 @@ impl KeyAgreement {
         self.sid_i = sha3_256::digest(&concatenation).to_vec();
     }
 
-    /// Computes k_j
-    pub fn compute_k_j(&mut self) {
+    /// Mempools k_j
+    pub fn mempool_k_j(&mut self) {
         // First add own PID info
         let own_peer_info = self.get_peer_info();
         self.pid_table.insert(self.id.clone(), own_peer_info);
@@ -331,7 +331,7 @@ impl KeyAgreement {
         backend.append(&mut sorted_pid_table);
         let _removal_of_self = backend.pop();
 
-        // Actually compute k_j finally
+        // Actually mempool k_j finally
         self.k_j = self.ek_i.clone();
 
         // xor T_{i+1}..
@@ -357,8 +357,8 @@ impl KeyAgreement {
         }
     }
 
-    /// Computes the key, assuming that all validation checks and computations have been performed
-    pub fn compute_key(&mut self) {
+    /// Mempools the key, assuming that all validation checks and computations have been performed
+    pub fn mempool_key(&mut self) {
         // First add own Kj to PID table
         self.receive_k_j(self.id.clone(), self.k_j.clone());
 
@@ -381,8 +381,8 @@ impl KeyAgreement {
         self.shared_key = Some(encode(sha3_256::digest(&key)));
     }
 
-    /// Compute ek_i
-    fn compute_ek_i(&mut self) {
+    /// Mempool ek_i
+    fn mempool_ek_i(&mut self) {
         self.ek_i = self
             .k_i
             .iter()
@@ -391,21 +391,21 @@ impl KeyAgreement {
             .collect();
     }
 
-    /// Compute M_iII as ek_i || T_i || sid_i
-    fn compute_M_iII(&mut self) {
+    /// Mempool M_iII as ek_i || T_i || sid_i
+    fn mempool_M_iII(&mut self) {
         self.M_iII.append(&mut self.ek_i.clone());
         self.M_iII.append(&mut self.T_i.clone());
         self.M_iII.append(&mut self.sid_i.clone());
     }
 
-    /// Computes sigma_iII
-    fn compute_sigma_iII(&mut self) {
+    /// Mempools sigma_iII
+    fn mempool_sigma_iII(&mut self) {
         let hashed_M_iII = sha3_256::digest(&self.M_iII).to_vec();
         self.sigma_iII = sign::sign_append(&hashed_M_iII, &self.s_key);
     }
 
-    /// Computes M_iIIsigma as M_iII || sigma_iII
-    fn compute_M_iIIsigma(&mut self) {
+    /// Mempools M_iIIsigma as M_iII || sigma_iII
+    fn mempool_M_iIIsigma(&mut self) {
         self.M_iIIsigma.append(&mut self.M_iII.clone());
         self.M_iIIsigma.append(&mut self.sigma_iII.clone());
     }

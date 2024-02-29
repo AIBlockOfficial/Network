@@ -121,7 +121,7 @@ pub struct MiningPipelineInfo {
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
-    /// The current reward for a given compute node
+    /// The current reward for a given mempool node
     current_reward: TokenAmount,
     /// Proposed keys for current mining pipeline cycle
     proposed_keys: BTreeSet<RaftContextKey>,
@@ -551,7 +551,7 @@ impl MiningPipelineInfo {
         }
     }
 
-    /// Create ComputeConsensused from imported data in upgrade
+    /// Create MempoolConsensused from imported data in upgrade
     pub fn from_import(value: MiningPipelineInfoImport) -> Self {
         let MiningPipelineInfoImport {
             unicorn_fixed_param,

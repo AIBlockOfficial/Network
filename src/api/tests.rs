@@ -1,17 +1,17 @@
 use crate::api::handlers::{
-    AddressConstructData, Addresses, ChangePassphraseData, CreateItemAssetDataCompute,
+    AddressConstructData, Addresses, ChangePassphraseData, CreateItemAssetDataMempool,
     CreateItemAssetDataUser, CreateTransaction, CreateTxIn, CreateTxInScript, DbgPaths,
     EncapsulatedPayment, FetchPendingData,
 };
 use crate::api::routes;
 use crate::api::utils::{auth_request, create_new_cache, handle_rejection, CACHE_LIVE_TIME};
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
-use crate::compute::ComputeError;
-use crate::configurations::{ComputeNodeSharedConfig, DbMode};
+use crate::mempool::MempoolError;
+use crate::configurations::{MempoolNodeSharedConfig, DbMode};
 use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, ComputeApi, ComputeApiRequest, DruidDroplet, DruidPool, NodeType, Response,
+    BlockchainItemMeta, MempoolApi, MempoolApiRequest, DruidDroplet, DruidPool, NodeType, Response,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
@@ -24,7 +24,7 @@ use crate::utils::{
     tracing_log_try_init, validate_pow_block, ApiKeys,
 };
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
-use crate::ComputeRequest;
+use crate::MempoolRequest;
 use bincode::serialize;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -65,13 +65,13 @@ const BLOCK_NONCE: &str = "780c05806a3b70b15c9673396171674f";
 /*------- UTILS--------*/
 
 #[derive(Default)]
-struct ComputeTest {
+struct MempoolTest {
     pub utxo_set: TrackedUtxoSet,
     pub druid_pool: DruidPool,
-    pub threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
+    pub threaded_calls: ThreadedCallChannel<dyn MempoolApi>,
 }
 
-impl ComputeTest {
+impl MempoolTest {
     fn new(tx_vals: Vec<(String, Transaction)>) -> Self {
         let druid =
             if let Some(druid_info) = tx_vals.first().and_then(|(_, tx)| tx.druid_info.as_ref()) {
@@ -116,8 +116,8 @@ impl ComputeTest {
     }
 }
 
-impl ComputeApi for ComputeTest {
-    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
+impl MempoolApi for MempoolTest {
+    fn get_shared_config(&self) -> MempoolNodeSharedConfig {
         Default::default()
     }
 
@@ -139,7 +139,7 @@ impl ComputeApi for ComputeTest {
         }
     }
 
-    fn send_shared_config(&mut self, _shared_config: ComputeNodeSharedConfig) -> Response {
+    fn send_shared_config(&mut self, _shared_config: MempoolNodeSharedConfig) -> Response {
         let reason: &'static str = "";
 
         Response {
@@ -177,7 +177,7 @@ impl ComputeApi for ComputeTest {
         signature: String,
         genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
-    ) -> Result<(Transaction, String), ComputeError> {
+    ) -> Result<(Transaction, String), MempoolError> {
         let b_num = 0;
         Ok(create_item_asset_tx_from_sig(
             b_num,
@@ -341,8 +341,8 @@ fn user_api_request_as_frame(request: UserApiRequest) -> Option<Vec<u8>> {
     Some(serialize(&sent_request).unwrap())
 }
 
-fn compute_api_request_as_frame(request: ComputeApiRequest) -> Option<Vec<u8>> {
-    let sent_request = ComputeRequest::ComputeApi(request);
+fn mempool_api_request_as_frame(request: MempoolApiRequest) -> Option<Vec<u8>> {
+    let sent_request = MempoolRequest::MempoolApi(request);
     Some(serialize(&sent_request).unwrap())
 }
 
@@ -453,7 +453,7 @@ async fn test_get_user_debug_data() {
         vec![COMMON_VALID_API_KEYS[1].to_string()],
     );
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
-    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13000).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Mempool, 13000).await;
     self_node.connect_to(c_socket).await.unwrap();
 
     let request = || {
@@ -475,7 +475,7 @@ async fn test_get_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13000\",\"127.0.0.1:13000\",\"Mempool\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -501,7 +501,7 @@ async fn test_get_storage_debug_data() {
         vec![COMMON_VALID_API_KEYS[1].to_string()],
     );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Storage).await;
-    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13010).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Mempool, 13010).await;
     self_node.connect_to(c_socket).await.unwrap();
 
     let request = || {
@@ -523,7 +523,7 @@ async fn test_get_storage_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"transactions_by_key\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Storage\",\"node_api\":[\"block_by_num\",\"transactions_by_key\",\"latest_block\",\"blockchain_entry\",\"check_transaction_presence\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13010\",\"127.0.0.1:13010\",\"Mempool\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -534,22 +534,22 @@ async fn test_get_storage_debug_data() {
     assert_eq!(res_m.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Error\",\"reason\":\"Unauthorized\",\"route\":\"debug_data\",\"content\":\"null\"}");
 }
 
-/// Test get compute debug data
+/// Test get mempool debug data
 #[tokio::test(flavor = "current_thread")]
-async fn test_get_compute_debug_data() {
+async fn test_get_mempool_debug_data() {
     let _ = tracing_log_try_init();
 
     //
     // Arrange
     //
-    let compute = ComputeTest::new(vec![]);
+    let mempool = MempoolTest::new(vec![]);
     let ks: ApiKeys = Arc::new(Mutex::new(BTreeMap::new()));
     ks.lock().unwrap().insert(
         COMMON_VALID_API_KEYS[0].to_string(),
         vec![COMMON_VALID_API_KEYS[1].to_string()],
     );
-    let (mut self_node, _self_socket) = new_self_node(NodeType::Compute).await;
-    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13020).await;
+    let (mut self_node, _self_socket) = new_self_node(NodeType::Mempool).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Mempool, 13020).await;
     self_node.connect_to(c_socket).await.unwrap();
 
     let request = || {
@@ -563,7 +563,7 @@ async fn test_get_compute_debug_data() {
     //
     // Act
     //
-    let tx = compute.threaded_calls.tx.clone();
+    let tx = mempool.threaded_calls.tx.clone();
     let routes_pow = to_route_pow_infos(
         vec![(
             "create_transactions".to_owned(),
@@ -572,7 +572,7 @@ async fn test_get_compute_debug_data() {
         .into_iter()
         .collect(),
     );
-    let filter = routes::compute_node_routes(ks, routes_pow, tx, self_node.clone())
+    let filter = routes::mempool_node_routes(ks, routes_pow, tx, self_node.clone())
         .recover(handle_rejection);
     let res_a = request_x_api().reply(&filter).await;
     let res_m = request().reply(&filter).await;
@@ -580,7 +580,7 @@ async fn test_get_compute_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Compute\",\"node_api\":[\"fetch_balance\",\"create_item_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Compute\"]],\"routes_pow\":{\"create_transactions\":2}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Mempool\",\"node_api\":[\"fetch_balance\",\"create_item_asset\",\"create_transactions\",\"utxo_addresses\",\"address_construction\",\"pause_nodes\",\"resume_nodes\",\"update_shared_config\",\"get_shared_config\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13020\",\"127.0.0.1:13020\",\"Mempool\"]],\"routes_pow\":{\"create_transactions\":2}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -607,7 +607,7 @@ async fn test_get_miner_debug_data() {
         vec![COMMON_VALID_API_KEYS[1].to_string()],
     );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
-    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13030).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Mempool, 13030).await;
     self_node.connect_to(c_socket).await.unwrap();
 
     let request = || {
@@ -630,7 +630,7 @@ async fn test_get_miner_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Compute\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner\",\"node_api\":[\"wallet_info\",\"export_keypairs\",\"import_keypairs\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13030\",\"127.0.0.1:13030\",\"Mempool\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -658,7 +658,7 @@ async fn test_get_miner_with_user_debug_data() {
     );
     let (mut self_node, _self_socket) = new_self_node(NodeType::Miner).await;
     let (mut self_node_u, _self_socket_u) = new_self_node(NodeType::User).await;
-    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Compute, 13040).await;
+    let (_c_node, c_socket) = new_self_node_with_port(NodeType::Mempool, 13040).await;
     let (_s_node, s_socket) = new_self_node_with_port(NodeType::Storage, 13041).await;
     self_node.connect_to(c_socket).await.unwrap();
     self_node_u.connect_to(s_socket).await.unwrap();
@@ -689,7 +689,7 @@ async fn test_get_miner_with_user_debug_data() {
     //
     // Assert
     //
-    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Compute\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]],\"routes_pow\":{}}}";
+    let expected_string = "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Debug data successfully retrieved\",\"route\":\"debug_data\",\"content\":{\"node_type\":\"Miner/User\",\"node_api\":[\"wallet_info\",\"make_payment\",\"make_ip_payment\",\"request_donation\",\"export_keypairs\",\"import_keypairs\",\"update_running_total\",\"create_item_asset\",\"payment_address\",\"change_passphrase\",\"current_mining_block\",\"address_construction\",\"debug_data\"],\"node_peers\":[[\"127.0.0.1:13040\",\"127.0.0.1:13040\",\"Mempool\"],[\"127.0.0.1:13041\",\"127.0.0.1:13041\",\"Storage\"]],\"routes_pow\":{}}}";
     assert_eq!((res_a.status(), res_a.headers().clone()), success_json());
     assert_eq!(res_a.body(), expected_string);
 
@@ -891,7 +891,7 @@ async fn test_get_wallet_info() {
     assert_eq!(r_s.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d8\",\"status\":\"Success\",\"reason\":\"Wallet info successfully fetched\",\"route\":\"wallet_info\",\"content\":{\"running_total\":0.0004365079365079365,\"running_total_tokens\":11,\"locked_total\":0.0,\"locked_total_tokens\":0,\"available_total\":0.0004365079365079365,\"available_total_tokens\":11,\"item_total\":{},\"addresses\":{\"public_address_spent\":[{\"out_point\":{\"t_hash\":\"tx_hash_spent\",\"n\":0},\"value\":{\"Token\":11}}]}}}");
 }
 
-/// Test GET shared config for compute node
+/// Test GET shared config for mempool node
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_shared_config() {
     let _ = tracing_log_try_init();
@@ -899,7 +899,7 @@ async fn test_get_shared_config() {
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Default::default());
+    let mempool = MempoolTest::new(Default::default());
     let request = warp::test::request()
         .method("GET")
         .path("/get_shared_config")
@@ -911,20 +911,20 @@ async fn test_get_shared_config() {
     //
     let filter = routes::get_shared_config(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         Default::default(),
         create_new_cache(CACHE_LIVE_TIME),
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
     let _ = handle.await;
     //
     // Assert
     //
     assert_eq!((res.status(), res.headers().clone()), success_json());
-    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"compute_mining_event_timeout\":0,\"compute_partition_full_size\":0,\"compute_miner_whitelist\":{\"active\":false,\"miner_api_keys\":null,\"miner_addresses\":null}}}");
+    assert_eq!(res.body(), "{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Successfully fetched shared config\",\"route\":\"get_shared_config\",\"content\":{\"mempool_mining_event_timeout\":0,\"mempool_partition_full_size\":0,\"mempool_miner_whitelist\":{\"active\":false,\"miner_api_keys\":null,\"miner_addresses\":null}}}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1156,7 +1156,7 @@ async fn test_get_utxo_set_addresses() {
         generate_transaction("tx_hash_3", "public_address_3"),
     ];
 
-    let compute = ComputeTest::new(tx_vals);
+    let mempool = MempoolTest::new(tx_vals);
     let request = warp::test::request()
         .method("GET")
         .header("x-cache-id", COMMON_REQ_ID)
@@ -1170,15 +1170,15 @@ async fn test_get_utxo_set_addresses() {
 
     let filter = routes::utxo_addresses(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
-    let _compute = handle.await.unwrap();
+    let _mempool = handle.await.unwrap();
 
     //
     // Assert
@@ -1655,7 +1655,7 @@ async fn test_post_fetch_balance() {
     // Arrange
     //
     let tx_vals = vec![get_transaction()];
-    let compute = ComputeTest::new(tx_vals);
+    let mempool = MempoolTest::new(tx_vals);
     let addresses = vec![COMMON_PUB_ADDR.to_string()];
 
     let request = warp::test::request()
@@ -1672,15 +1672,15 @@ async fn test_post_fetch_balance() {
 
     let filter = routes::fetch_balance(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
-    let _compute = handle.await.unwrap();
+    let _mempool = handle.await.unwrap();
 
     //
     // Assert
@@ -1700,7 +1700,7 @@ async fn test_post_fetch_pending() {
     // Arrange
     //
     let tx_vals = get_rb_transactions();
-    let compute = ComputeTest::new(tx_vals);
+    let mempool = MempoolTest::new(tx_vals);
     let druids = FetchPendingData {
         druid_list: vec!["full_druid".to_owned(), "non_existing_druid".to_owned()],
     };
@@ -1719,15 +1719,15 @@ async fn test_post_fetch_pending() {
 
     let filter = routes::fetch_pending(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
-    let _compute = handle.await.unwrap();
+    let _mempool = handle.await.unwrap();
 
     //
     // Assert
@@ -1782,19 +1782,19 @@ async fn test_post_update_running_total() {
     assert_eq!(expected_frame, actual_frame);
 }
 
-/// Test POST create item asset on compute node successfully
+/// Test POST create item asset on mempool node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions() {
     test_post_create_transactions_common(None).await;
 }
 
-/// Test POST create item asset on compute node successfully
+/// Test POST create item asset on mempool node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions_v0() {
     test_post_create_transactions_common(Some(NETWORK_VERSION_V0)).await;
 }
 
-/// Test POST create item asset on compute node successfully
+/// Test POST create item asset on mempool node successfully
 #[tokio::test(flavor = "current_thread")]
 async fn test_post_create_transactions_temp() {
     test_post_create_transactions_common(Some(NETWORK_VERSION_TEMP)).await;
@@ -1806,7 +1806,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Vec::new());
+    let mempool = MempoolTest::new(Vec::new());
 
     let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
     let signable_data = construct_tx_in_signable_hash(&previous_out);
@@ -1853,15 +1853,15 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
 
     let filter = routes::create_transactions(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
-    let _compute = handle.await.unwrap();
+    let _mempool = handle.await.unwrap();
 
     //
     // Assert
@@ -1878,21 +1878,21 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     );
 }
 
-/// Test POST create item asset on compute node successfully
+/// Test POST create item asset on mempool node successfully
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_create_item_asset_tx_compute() {
+async fn test_post_create_item_asset_tx_mempool() {
     let _ = tracing_log_try_init();
 
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Vec::new());
+    let mempool = MempoolTest::new(Vec::new());
 
     let asset_hash = construct_tx_in_signable_asset_hash(&Asset::item(1, None, None));
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
-    let json_body = CreateItemAssetDataCompute {
+    let json_body = CreateItemAssetDataMempool {
         item_amount: 1,
         script_public_key: COMMON_PUB_ADDR.to_owned(),
         public_key: COMMON_PUB_KEY.to_owned(),
@@ -1915,15 +1915,15 @@ async fn test_post_create_item_asset_tx_compute() {
 
     let filter = routes::create_item_asset(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
-    let _compute = handle.await.unwrap();
+    let _mempool = handle.await.unwrap();
 
     //
     // Assert
@@ -1982,15 +1982,15 @@ async fn test_post_create_item_asset_tx_user() {
     assert_eq!(expected_frame, actual_frame);
 }
 
-/// Test POST create item asset on compute node failure
+/// Test POST create item asset on mempool node failure
 #[tokio::test(flavor = "current_thread")]
-async fn test_post_create_item_asset_tx_compute_failure() {
+async fn test_post_create_item_asset_tx_mempool_failure() {
     let _ = tracing_log_try_init();
 
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Vec::new());
+    let mempool = MempoolTest::new(Vec::new());
 
     let json_body = CreateItemAssetDataUser {
         item_amount: 1,
@@ -2011,7 +2011,7 @@ async fn test_post_create_item_asset_tx_compute_failure() {
     let cache = create_new_cache(CACHE_LIVE_TIME);
     let filter = routes::create_item_asset(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
         cache,
@@ -2206,7 +2206,7 @@ async fn test_post_pause_nodes() {
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Default::default());
+    let mempool = MempoolTest::new(Default::default());
     let request = warp::test::request()
         .method("POST")
         .path("/pause_nodes")
@@ -2219,13 +2219,13 @@ async fn test_post_pause_nodes() {
     //
     let filter = routes::pause_nodes(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         Default::default(),
         create_new_cache(CACHE_LIVE_TIME),
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
     let _ = handle.await;
 
@@ -2244,7 +2244,7 @@ async fn test_post_resume_nodes() {
     //
     // Arrange
     //
-    let compute = ComputeTest::new(Default::default());
+    let mempool = MempoolTest::new(Default::default());
     let request = warp::test::request()
         .method("POST")
         .path("/resume_nodes")
@@ -2256,13 +2256,13 @@ async fn test_post_resume_nodes() {
     //
     let filter = routes::resume_nodes(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         Default::default(),
         create_new_cache(CACHE_LIVE_TIME),
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
     let _ = handle.await;
 
@@ -2281,12 +2281,12 @@ async fn test_post_update_shared_config() {
     //
     // Arrange
     //
-    let shared_config_body = ComputeNodeSharedConfig {
-        compute_mining_event_timeout: 10000,
-        compute_partition_full_size: 5,
-        compute_miner_whitelist: Default::default(),
+    let shared_config_body = MempoolNodeSharedConfig {
+        mempool_mining_event_timeout: 10000,
+        mempool_partition_full_size: 5,
+        mempool_miner_whitelist: Default::default(),
     };
-    let compute = ComputeTest::new(Default::default());
+    let mempool = MempoolTest::new(Default::default());
     let request = warp::test::request()
         .method("POST")
         .path("/update_shared_config")
@@ -2299,13 +2299,13 @@ async fn test_post_update_shared_config() {
     //
     let filter = routes::update_shared_config(
         &mut dp(),
-        compute.threaded_calls.tx.clone(),
+        mempool.threaded_calls.tx.clone(),
         Default::default(),
         Default::default(),
         create_new_cache(CACHE_LIVE_TIME),
     )
     .recover(handle_rejection);
-    let handle = compute.spawn();
+    let handle = mempool.spawn();
     let res = request.reply(&filter).await;
     let _ = handle.await;
 

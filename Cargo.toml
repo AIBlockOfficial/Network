@@ -1,10 +1,10 @@
 [package]
 name = "aiblock_network"
-version = "0.3.0"
+version = "1.1.0"
 authors = ["Byron Houwens <zhion360@gmail.com>"]
 edition = "2018"
 readme = "README.md"
-description = "The A-Block Network, the network that supports the A-Block chain"
+description = "The AIBlock Network"
 
 [dependencies]
 async-std = "1.7.0"

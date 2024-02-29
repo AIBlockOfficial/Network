@@ -1,7 +1,0 @@
-{
-  "compute_miner_whitelist" : {
-      "active": false,
-      "miner_api_keys": null,
-      "miner_addresses": null
-      }
-}

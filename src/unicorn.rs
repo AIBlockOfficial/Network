@@ -6,7 +6,7 @@
 //! The goal of a UNICORN is to provide an uncontestable randomly generated number. The source
 //! of the uncontestability is the seed, which is meant to be generated from multiple, random
 //! oracle sources (eg. tweets). In the sloth implementation the seed is then run through a
-//! function which is slow to compute but quick to verify (VDF, or Verifiable Delay Function)
+//! function which is slow to mempool but quick to verify (VDF, or Verifiable Delay Function)
 //! and produces a witness value (for trapdoor verification) and the hash of the witness `g`.
 //!
 //! Although sloths have the extra ability to be slowed by a specific time length (through setting

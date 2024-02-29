@@ -91,7 +91,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("type")
                 .long("type")
-                .help("Run the upgrade for type (compute, storage)")
+                .help("Run the upgrade for type (mempool, storage)")
                 .takes_value(true)
                 .required(true),
         )
@@ -114,7 +114,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap_or("src/bin/tls_certificates.json");
 
     settings.set_default("storage_node_idx", 0).unwrap();
-    settings.set_default("compute_node_idx", 0).unwrap();
+    settings.set_default("mempool_node_idx", 0).unwrap();
 
     settings
         .merge(config::File::with_name(setting_file))
@@ -128,11 +128,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
 
     if let Some(index) = matches.value_of("index") {
-        settings.set("compute_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("compute_db_mode").unwrap();
+        settings.set("mempool_node_idx", index).unwrap();
+        let mut db_mode = settings.get_table("mempool_db_mode").unwrap();
         if let Some(test_idx) = db_mode.get_mut("Test") {
             *test_idx = config::Value::new(None, index);
-            settings.set("compute_db_mode", db_mode).unwrap();
+            settings.set("mempool_db_mode", db_mode).unwrap();
         }
 
         settings.set("storage_node_idx", index).unwrap();
@@ -154,9 +154,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 
     {
         let node_type = match matches.value_of("type").unwrap() {
-            "compute" => "Compute",
+            "mempool" => "Mempool",
             "storage" => "Storage",
-            v => panic!("expect type compute or storage: {}", v),
+            v => panic!("expect type mempool or storage: {}", v),
         };
         settings.set("node_type", node_type).unwrap();
     }
@@ -176,9 +176,9 @@ mod test {
     type Expected = (DbMode, Option<String>, PreLaunchNodeType);
 
     #[test]
-    fn validate_startup_compute() {
-        let args = vec!["bin_name", "--type=compute"];
-        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Compute);
+    fn validate_startup_mempool() {
+        let args = vec!["bin_name", "--type=mempool"];
+        let expected = (DbMode::Test(0), None, PreLaunchNodeType::Mempool);
 
         validate_startup_common(args, expected);
     }
@@ -209,14 +209,14 @@ mod test {
     }
 
     #[test]
-    fn validate_startup_compute_index_1() {
+    fn validate_startup_mempool_index_1() {
         let args = vec![
             "bin_name",
             "--config=src/bin/node_settings_local_raft_2.toml",
-            "--type=compute",
+            "--type=mempool",
             "--index=1",
         ];
-        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Compute);
+        let expected = (DbMode::Test(1), None, PreLaunchNodeType::Mempool);
 
         validate_startup_common(args, expected);
     }
@@ -248,7 +248,7 @@ mod test {
         //
         let (expected_mode, expected_key, expected_type) = expected;
         assert_eq!(config.storage_db_mode, expected_mode);
-        assert_eq!(config.compute_db_mode, expected_mode);
+        assert_eq!(config.mempool_db_mode, expected_mode);
         assert_eq!(
             config.tls_config.pem_pkcs8_private_key_override,
             expected_key

@@ -1,17 +1,17 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
-use crate::compute_raft::{
-    CommittedItem, ComputeConsensusedRuntimeData, ComputeRaft, ComputeRuntimeItem,
+use crate::mempool_raft::{
+    CommittedItem, MempoolConsensusedRuntimeData, MempoolRaft, MempoolRuntimeItem,
     CoordinatedCommand,
 };
 use crate::configurations::{
-    ComputeNodeConfig, ComputeNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
+    MempoolNodeConfig, MempoolNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
 };
 use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, ComputeApi, ComputeApiRequest, ComputeInterface,
-    ComputeRequest, Contract, DruidDroplet, DruidPool, InitialIssuance, MineRequest, MinedBlock,
+    BlockStoredInfo, CommonBlockInfo, MempoolApi, MempoolApiRequest, MempoolInterface,
+    MempoolRequest, Contract, DruidDroplet, DruidPool, InitialIssuance, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
@@ -59,15 +59,15 @@ pub const DB_COL_LOCAL_TXS: &str = "local_transactions";
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
-    suffix: ".compute",
+    suffix: ".mempool",
     columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
 };
 
-/// Result wrapper for compute errors
-pub type Result<T> = std::result::Result<T, ComputeError>;
+/// Result wrapper for mempool errors
+pub type Result<T> = std::result::Result<T, MempoolError>;
 
 #[derive(Debug)]
-pub enum ComputeError {
+pub enum MempoolError {
     ConfigError(&'static str),
     Network(CommsError),
     DbError(SimpleDbError),
@@ -76,7 +76,7 @@ pub enum ComputeError {
     GenericError(StringError),
 }
 
-impl fmt::Display for ComputeError {
+impl fmt::Display for MempoolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConfigError(err) => write!(f, "Config error: {err}"),
@@ -89,7 +89,7 @@ impl fmt::Display for ComputeError {
     }
 }
 
-impl Error for ComputeError {
+impl Error for MempoolError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ConfigError(_) => None,
@@ -102,49 +102,49 @@ impl Error for ComputeError {
     }
 }
 
-impl From<CommsError> for ComputeError {
+impl From<CommsError> for MempoolError {
     fn from(other: CommsError) -> Self {
         Self::Network(other)
     }
 }
 
-impl From<SimpleDbError> for ComputeError {
+impl From<SimpleDbError> for MempoolError {
     fn from(other: SimpleDbError) -> Self {
         Self::DbError(other)
     }
 }
 
-impl From<bincode::Error> for ComputeError {
+impl From<bincode::Error> for MempoolError {
     fn from(other: bincode::Error) -> Self {
         Self::Serialization(other)
     }
 }
 
-impl From<task::JoinError> for ComputeError {
+impl From<task::JoinError> for MempoolError {
     fn from(other: task::JoinError) -> Self {
         Self::AsyncTask(other)
     }
 }
 
-impl From<StringError> for ComputeError {
+impl From<StringError> for MempoolError {
     fn from(other: StringError) -> Self {
         Self::GenericError(other)
     }
 }
 
 #[derive(Debug)]
-pub struct ComputeNode {
-    shared_config: ComputeNodeSharedConfig,
-    received_shared_config: Option<ComputeNodeSharedConfig>,
-    received_runtime_data: Option<ComputeConsensusedRuntimeData>,
+pub struct MempoolNode {
+    shared_config: MempoolNodeSharedConfig,
+    received_shared_config: Option<MempoolNodeSharedConfig>,
+    received_runtime_data: Option<MempoolConsensusedRuntimeData>,
     node: Node,
-    node_raft: ComputeRaft,
+    node_raft: MempoolRaft,
     db: SimpleDb,
     local_events: LocalEventChannel,
     b_num_to_pause: Option<u64>,
     pause_node: Arc<RwLock<bool>>,
     disable_trigger_messages: Arc<RwLock<bool>>,
-    threaded_calls: ThreadedCallChannel<dyn ComputeApi>,
+    threaded_calls: ThreadedCallChannel<dyn MempoolApi>,
     jurisdiction: String,
     current_mined_block: Option<MinedBlock>,
     druid_pool: DruidPool,
@@ -173,51 +173,51 @@ pub struct ComputeNode {
     init_issuances: Vec<InitialIssuance>,
 }
 
-impl ComputeNode {
-    /// Generates a new compute node instance
+impl MempoolNode {
+    /// Generates a new mempool node instance
     /// ### Arguments
-    /// * `config` - ComputeNodeConfig for the current compute node containing compute nodes and storage nodes
+    /// * `config` - MempoolNodeConfig for the current mempool node containing mempool nodes and storage nodes
     /// * `extra`  - additional parameter for construction
-    pub async fn new(config: ComputeNodeConfig, mut extra: ExtraNodeParams) -> Result<Self> {
+    pub async fn new(config: MempoolNodeConfig, mut extra: ExtraNodeParams) -> Result<Self> {
         let raw_addr = config
-            .compute_nodes
-            .get(config.compute_node_idx)
-            .ok_or(ComputeError::ConfigError("Invalid compute index"))?;
+            .mempool_nodes
+            .get(config.mempool_node_idx)
+            .ok_or(MempoolError::ConfigError("Invalid mempool index"))?;
         let addr = create_socket_addr(&raw_addr.address).await.map_err(|_| {
-            ComputeError::ConfigError("Invalid compute node address in config file")
+            MempoolError::ConfigError("Invalid mempool node address in config file")
         })?;
 
         let init_issuances = config.initial_issuances.clone();
         let raw_storage_addr = config
             .storage_nodes
-            .get(config.compute_node_idx)
-            .ok_or(ComputeError::ConfigError("Invalid storage index"))?;
+            .get(config.mempool_node_idx)
+            .ok_or(MempoolError::ConfigError("Invalid storage index"))?;
         let storage_addr = create_socket_addr(&raw_storage_addr.address)
             .await
             .map_err(|_| {
-                ComputeError::ConfigError("Invalid storage node address in config file")
+                MempoolError::ConfigError("Invalid storage node address in config file")
             })?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
-        let api_addr = SocketAddr::new(addr.ip(), config.compute_api_port);
+        let api_addr = SocketAddr::new(addr.ip(), config.mempool_api_port);
         let api_tls_info = config
-            .compute_api_use_tls
+            .mempool_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
-            NodeType::Compute,
+            NodeType::Mempool,
             false,
             true,
         )
         .await?;
-        let node_raft = ComputeRaft::new(&config, extra.raft_db.take()).await;
+        let node_raft = MempoolRaft::new(&config, extra.raft_db.take()).await;
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
+            db_utils::restore_file_backup(config.mempool_db_mode, &DB_SPEC, None).unwrap();
         }
-        let db = db_utils::new_db(config.compute_db_mode, &DB_SPEC, extra.db.take(), None);
+        let db = db_utils::new_db(config.mempool_db_mode, &DB_SPEC, extra.db.take(), None);
         let shutdown_group = {
             let storage = std::iter::once(storage_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -231,13 +231,13 @@ impl ComputeNode {
             .unwrap_or(false);
         let api_info = (api_addr, api_tls_info, api_keys, api_pow_info, node.clone());
 
-        let shared_config = ComputeNodeSharedConfig {
-            compute_mining_event_timeout: config.compute_mining_event_timeout,
-            compute_partition_full_size: config.compute_partition_full_size,
-            compute_miner_whitelist: config.compute_miner_whitelist,
+        let shared_config = MempoolNodeSharedConfig {
+            mempool_mining_event_timeout: config.mempool_mining_event_timeout,
+            mempool_partition_full_size: config.mempool_partition_full_size,
+            mempool_miner_whitelist: config.mempool_miner_whitelist,
         };
 
-        ComputeNode {
+        MempoolNode {
             node,
             node_raft,
             db,
@@ -260,8 +260,8 @@ impl ComputeNode {
             request_list: Default::default(),
             sanction_list: config.sanction_list,
             jurisdiction: config.jurisdiction,
-            request_list_first_flood: Some(config.compute_minimum_miner_pool_len),
-            partition_full_size: config.compute_partition_full_size,
+            request_list_first_flood: Some(config.mempool_minimum_miner_pool_len),
+            partition_full_size: config.mempool_partition_full_size,
             storage_addr,
             user_notification_list: Default::default(),
             coordinated_shutdown: u64::MAX,
@@ -289,37 +289,37 @@ impl ComputeNode {
             .collect()
     }
 
-    /// Determine whether or not this compute node's trigger messages are disabled
+    /// Determine whether or not this mempool node's trigger messages are disabled
     pub async fn trigger_messages_disabled(&self) -> bool {
         *self.disable_trigger_messages.read().await
     }
 
-    /// Determine whether or not this compute node is paused
+    /// Determine whether or not this mempool node is paused
     pub async fn is_paused(&self) -> bool {
         *self.pause_node.read().await
     }
 
-    /// Propose a coordinated pause of all compute nodes
+    /// Propose a coordinated pause of all mempool nodes
     pub async fn propose_pause_nodes(&mut self, b_num: u64) {
         self.node_raft.propose_pause_nodes(b_num).await;
     }
 
-    /// Propose a coordinated resume of all compute nodes
+    /// Propose a coordinated resume of all mempool nodes
     pub async fn propose_resume_nodes(&mut self) {
         self.node_raft.propose_resume_nodes().await;
     }
 
-    /// Propose a coordinated pause/resume of all compute nodes
+    /// Propose a coordinated pause/resume of all mempool nodes
     pub async fn propose_apply_shared_config(&mut self) {
         self.node_raft.propose_apply_shared_config().await;
     }
 
-    /// Returns the compute node's local endpoint.
+    /// Returns the mempool node's local endpoint.
     pub fn local_address(&self) -> SocketAddr {
         self.node.local_address()
     }
 
-    /// Returns the compute node's public endpoint.
+    /// Returns the mempool node's public endpoint.
     pub async fn public_address(&self) -> Option<SocketAddr> {
         self.node.public_address().await
     }
@@ -329,7 +329,7 @@ impl ComputeNode {
         &self.current_mined_block
     }
 
-    /// Injects a new event into compute node
+    /// Injects a new event into mempool node
     pub fn inject_next_event(
         &self,
         from_peer_addr: SocketAddr,
@@ -353,13 +353,13 @@ impl ComputeNode {
     /// Send initial requests:
     /// - Fetch runtime data from peers
     pub async fn send_startup_requests(&mut self) -> Result<()> {
-        let compute_peers = self.node_raft.raft_peer_addrs().copied();
+        let mempool_peers = self.node_raft.raft_peer_addrs().copied();
         if let Err(e) = self
             .node
-            .send_to_all(compute_peers, ComputeRequest::RequestRuntimeData)
+            .send_to_all(mempool_peers, MempoolRequest::RequestRuntimeData)
             .await
         {
-            error!("Failed to send RequestRuntimeData to compute peers: {}", e);
+            error!("Failed to send RequestRuntimeData to mempool peers: {}", e);
         }
         Ok(())
     }
@@ -370,7 +370,7 @@ impl ComputeNode {
     }
 
     /// Threaded call channel.
-    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<dyn ComputeApi> {
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<dyn MempoolApi> {
         &self.threaded_calls.tx
     }
 
@@ -640,7 +640,7 @@ impl ComputeNode {
                         .await?
                 }
                 _ => {
-                    return Err(ComputeError::GenericError(StringError(
+                    return Err(MempoolError::GenericError(StringError(
                         "Invalid UTXO requester".to_string(),
                     )))
                 }
@@ -793,7 +793,7 @@ impl ComputeNode {
                 if let Some(runtime_data) = self.received_runtime_data.take() {
                     let mining_api_keys = runtime_data.mining_api_keys.into_iter().collect();
                     self.node_raft
-                        .propose_runtime_item(ComputeRuntimeItem::AddMiningApiKeys(mining_api_keys))
+                        .propose_runtime_item(MempoolRuntimeItem::AddMiningApiKeys(mining_api_keys))
                         .await;
                 } else {
                     warn!("Runtime data received from peer is empty");
@@ -942,7 +942,7 @@ impl ComputeNode {
                     trace!("handle_next_event msg {:?}: {:?}", addr, msg);
                     match self.node.send(
                         addr,
-                        ComputeRequest::SendRaftCmd(msg)).await {
+                        MempoolRequest::SendRaftCmd(msg)).await {
                             Err(e) => info!("Msg not sent to {}, from {}: {:?}", addr, self.local_address(), e),
                             Ok(()) => trace!("Msg sent to {}, from {}", addr, self.local_address()),
                         };
@@ -1111,7 +1111,7 @@ impl ComputeNode {
         peer: SocketAddr,
         frame: Bytes,
     ) -> Result<Option<Response>> {
-        let req = deserialize::<ComputeRequest>(&frame).map_err(|error| {
+        let req = deserialize::<MempoolRequest>(&frame).map_err(|error| {
             warn!(?error, "frame-deserialize");
             error
         })?;
@@ -1123,17 +1123,17 @@ impl ComputeNode {
         Ok(response)
     }
 
-    /// Handles a compute request.
+    /// Handles a mempool request.
     /// ### Arguments
     ///
     /// * `peer` - Sending peer's socket address
-    /// * 'req' - ComputeRequest object holding the request
-    async fn handle_request(&mut self, peer: SocketAddr, req: ComputeRequest) -> Option<Response> {
-        use ComputeRequest::*;
+    /// * 'req' - MempoolRequest object holding the request
+    async fn handle_request(&mut self, peer: SocketAddr, req: MempoolRequest) -> Option<Response> {
+        use MempoolRequest::*;
         trace!("handle_request");
 
         match req {
-            ComputeApi(req) => self.handle_api_request(peer, req).await,
+            MempoolApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoRequest {
                 address_list,
                 requester_node_type,
@@ -1179,7 +1179,7 @@ impl ComputeNode {
     async fn handle_receive_runtime_data(
         &mut self,
         peer: SocketAddr,
-        runtime_data: ComputeConsensusedRuntimeData,
+        runtime_data: MempoolConsensusedRuntimeData,
     ) -> Option<Response> {
         if !self
             .node_raft
@@ -1203,7 +1203,7 @@ impl ComputeNode {
     /// Handles a request to send current runtime data
     async fn handle_receive_request_runtime_data(&mut self, peer: SocketAddr) -> Option<Response> {
         let runtime_data = self.node_raft.get_runtime_data();
-        let response = ComputeRequest::SendRuntimeData { runtime_data };
+        let response = MempoolRequest::SendRuntimeData { runtime_data };
         if let Err(e) = self.node.send(peer, response).await {
             error!("Failed to send runtime data to peer: {}", e);
             return Some(Response {
@@ -1285,9 +1285,9 @@ impl ComputeNode {
     async fn handle_api_request(
         &mut self,
         peer: SocketAddr,
-        req: ComputeApiRequest,
+        req: MempoolApiRequest,
     ) -> Option<Response> {
-        use ComputeApiRequest::*;
+        use MempoolApiRequest::*;
 
         if peer != self.local_address() {
             // Do not process if not internal request
@@ -1355,30 +1355,30 @@ impl ComputeNode {
     }
 
     /// Apply a received config to the node
-    pub async fn apply_shared_config(&mut self, received_shared_config: ComputeNodeSharedConfig) {
+    pub async fn apply_shared_config(&mut self, received_shared_config: MempoolNodeSharedConfig) {
         warn!("Applying shared config: {:?}", received_shared_config);
 
-        let ComputeNodeSharedConfig {
-            compute_mining_event_timeout,
-            compute_partition_full_size,
-            compute_miner_whitelist,
+        let MempoolNodeSharedConfig {
+            mempool_mining_event_timeout,
+            mempool_partition_full_size,
+            mempool_miner_whitelist,
         } = received_shared_config.clone();
 
         self.node_raft
-            .update_mining_event_timeout_duration(compute_mining_event_timeout);
+            .update_mining_event_timeout_duration(mempool_mining_event_timeout);
         self.node_raft
-            .update_partition_full_size(compute_partition_full_size);
+            .update_partition_full_size(mempool_partition_full_size);
         self.node_raft
-            .update_compute_miner_whitelist_active(compute_miner_whitelist.active);
-        self.node_raft.update_compute_miner_whitelist_api_keys(
-            compute_miner_whitelist.miner_api_keys.clone(),
+            .update_mempool_miner_whitelist_active(mempool_miner_whitelist.active);
+        self.node_raft.update_mempool_miner_whitelist_api_keys(
+            mempool_miner_whitelist.miner_api_keys.clone(),
         );
         self.node_raft
-            .update_compute_miner_whitelist_addresses(compute_miner_whitelist.miner_addresses);
+            .update_mempool_miner_whitelist_addresses(mempool_miner_whitelist.miner_addresses);
 
         if let Some(unauthorized) = self.flush_unauthorized_miners().await {
             self.node_raft
-                .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unauthorized))
+                .propose_runtime_item(MempoolRuntimeItem::RemoveMiningApiKeys(unauthorized))
                 .await;
         }
 
@@ -1439,7 +1439,7 @@ impl ComputeNode {
     async fn handle_shared_config(
         &mut self,
         peer: SocketAddr,
-        shared_config: ComputeNodeSharedConfig,
+        shared_config: MempoolNodeSharedConfig,
     ) -> Option<Response> {
         self.propose_apply_shared_config().await;
         // We are initiating the shared config sending process
@@ -1489,17 +1489,17 @@ impl ComputeNode {
         miner_address: SocketAddr,
         miner_api_key: Option<String>,
     ) -> bool {
-        if !self.node_raft.get_compute_whitelisting_active() {
+        if !self.node_raft.get_mempool_whitelisting_active() {
             // No whitelisting active, all miners are allowed
             return true;
         }
         self.node_raft
-            .get_compute_miner_whitelist_api_keys()
+            .get_mempool_miner_whitelist_api_keys()
             .unwrap_or_default()
             .contains(&miner_api_key.unwrap_or_default())
             || self
                 .node_raft
-                .get_compute_miner_whitelist_addresses()
+                .get_mempool_miner_whitelist_addresses()
                 .unwrap_or_default()
                 .iter()
                 // Only check IP address, since we do not know ephemeral port beforehand
@@ -1507,7 +1507,7 @@ impl ComputeNode {
     }
 
     /// Receive a partition request from a miner node
-    /// TODO: This may need to be part of the ComputeInterface depending on key agreement
+    /// TODO: This may need to be part of the MempoolInterface depending on key agreement
     /// ### Arguments
     ///
     /// * `peer`            - Sending peer's socket address
@@ -1523,7 +1523,7 @@ impl ComputeNode {
         self.miners_changed = true;
 
         // TODO: Change structure to be more efficient
-        let white_listing_active = self.node_raft.get_compute_whitelisting_active();
+        let white_listing_active = self.node_raft.get_mempool_whitelisting_active();
         // Only check whitelist if activated
         if white_listing_active && !self.check_miner_whitelisted(peer, mining_api_key.clone()) {
             debug!("Removing unauthorized miner: {peer:?}");
@@ -1545,7 +1545,7 @@ impl ComputeNode {
         // If the miner node provided an API key, store in memory
         if let Some(api_key) = mining_api_key.clone() {
             self.node_raft
-                .propose_runtime_item(ComputeRuntimeItem::AddMiningApiKeys(vec![(peer, api_key)]))
+                .propose_runtime_item(MempoolRuntimeItem::AddMiningApiKeys(vec![(peer, api_key)]))
                 .await;
         }
 
@@ -1637,7 +1637,7 @@ impl ComputeNode {
             .node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
-                ComputeRequest::Closing,
+                MempoolRequest::Closing,
             )
             .await
             .unwrap();
@@ -1749,7 +1749,7 @@ impl ComputeNode {
             self.flush_stale_miners(unsent_miners.clone());
             self.miner_removal_list.write().await.clear();
             self.node_raft
-                .propose_runtime_item(ComputeRuntimeItem::RemoveMiningApiKeys(unsent_miners))
+                .propose_runtime_item(MempoolRuntimeItem::RemoveMiningApiKeys(unsent_miners))
                 .await;
         }
 
@@ -1767,7 +1767,7 @@ impl ComputeNode {
     /// If whitelisting is active, this function will remove all miners that are not whitelisted
     pub async fn flush_unauthorized_miners(&mut self) -> Option<Vec<SocketAddr>> {
         // Determine if whitelisting is active
-        let whitelisting_active = self.node_raft.get_compute_whitelisting_active();
+        let whitelisting_active = self.node_raft.get_mempool_whitelisting_active();
 
         if !whitelisting_active {
             // Return empty array
@@ -2187,7 +2187,7 @@ impl ComputeNode {
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
             return Response {
                 success: false,
-                reason: "Transaction pool for this compute node is full",
+                reason: "Transaction pool for this mempool node is full",
             };
         }
 
@@ -2248,7 +2248,7 @@ impl ComputeNode {
         self.node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
-                ComputeRequest::CoordinatedPause { b_num },
+                MempoolRequest::CoordinatedPause { b_num },
             )
             .await?;
         Ok(())
@@ -2259,7 +2259,7 @@ impl ComputeNode {
         self.node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
-                ComputeRequest::CoordinatedResume,
+                MempoolRequest::CoordinatedResume,
             )
             .await?;
         Ok(())
@@ -2269,19 +2269,19 @@ impl ComputeNode {
     /// by sending the shared config to peers
     pub async fn initiate_send_shared_config(
         &mut self,
-        shared_config: ComputeNodeSharedConfig,
+        shared_config: MempoolNodeSharedConfig,
     ) -> Result<()> {
         self.node
             .send_to_all(
                 self.node_raft.raft_peer_addrs().copied(),
-                ComputeRequest::SendSharedConfig { shared_config },
+                MempoolRequest::SendSharedConfig { shared_config },
             )
             .await?;
         Ok(())
     }
 }
 
-impl ComputeInterface for ComputeNode {
+impl MempoolInterface for MempoolNode {
     fn fetch_utxo_set(
         &mut self,
         peer: SocketAddr,
@@ -2338,12 +2338,12 @@ impl ComputeInterface for ComputeNode {
     }
 }
 
-impl ComputeApi for ComputeNode {
-    fn get_shared_config(&self) -> ComputeNodeSharedConfig {
-        ComputeNodeSharedConfig {
-            compute_mining_event_timeout: self.node_raft.get_compute_mining_event_timeout(),
-            compute_partition_full_size: self.node_raft.get_compute_partition_full_size(),
-            compute_miner_whitelist: self.node_raft.get_compute_miner_whitelist(),
+impl MempoolApi for MempoolNode {
+    fn get_shared_config(&self) -> MempoolNodeSharedConfig {
+        MempoolNodeSharedConfig {
+            mempool_mining_event_timeout: self.node_raft.get_mempool_mining_event_timeout(),
+            mempool_partition_full_size: self.node_raft.get_mempool_partition_full_size(),
+            mempool_miner_whitelist: self.node_raft.get_mempool_miner_whitelist(),
         }
     }
 
@@ -2386,7 +2386,7 @@ impl ComputeApi for ComputeNode {
         if self
             .inject_next_event(
                 self.local_address(),
-                ComputeRequest::CoordinatedPause { b_num },
+                MempoolRequest::CoordinatedPause { b_num },
             )
             .is_err()
         {
@@ -2403,7 +2403,7 @@ impl ComputeApi for ComputeNode {
 
     fn resume_nodes(&mut self) -> Response {
         if self
-            .inject_next_event(self.local_address(), ComputeRequest::CoordinatedResume)
+            .inject_next_event(self.local_address(), MempoolRequest::CoordinatedResume)
             .is_err()
         {
             return Response {
@@ -2419,12 +2419,12 @@ impl ComputeApi for ComputeNode {
 
     fn send_shared_config(
         &mut self,
-        shared_config: crate::configurations::ComputeNodeSharedConfig,
+        shared_config: crate::configurations::MempoolNodeSharedConfig,
     ) -> Response {
         if self
             .inject_next_event(
                 self.local_address(),
-                ComputeRequest::SendSharedConfig { shared_config },
+                MempoolRequest::SendSharedConfig { shared_config },
             )
             .is_err()
         {

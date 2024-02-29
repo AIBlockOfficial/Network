@@ -1,12 +1,12 @@
 //! This module provides a variety of utility functions to setup a test network,
 //! to send a receive requests & responses, and generally to test the behavior and
-//! correctness of the compute, miner, & storage modules.
+//! correctness of the mempool, miner, & storage modules.
 
 use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsListner};
-use crate::compute::ComputeNode;
-use crate::compute_raft::MinerWhitelist;
+use crate::mempool::MempoolNode;
+use crate::mempool_raft::MinerWhitelist;
 use crate::configurations::{
-    ComputeNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
+    MempoolNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
     PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
     WalletTxSpec,
 };
@@ -16,7 +16,7 @@ use crate::miner::MinerNode;
 use crate::pre_launch::PreLaunchNode;
 use crate::storage::StorageNode;
 use crate::upgrade::{
-    upgrade_same_version_compute_db, upgrade_same_version_storage_db,
+    upgrade_same_version_mempool_db, upgrade_same_version_storage_db,
     upgrade_same_version_wallet_db,
 };
 use crate::user::{
@@ -46,12 +46,12 @@ use tw_chain::script::lang::Script;
 use tw_chain::utils::transaction_utils::{construct_tx_hash, construct_tx_in_signable_hash};
 
 pub type ArcMinerNode = Arc<Mutex<MinerNode>>;
-pub type ArcComputeNode = Arc<Mutex<ComputeNode>>;
+pub type ArcMempoolNode = Arc<Mutex<MempoolNode>>;
 pub type ArcStorageNode = Arc<Mutex<StorageNode>>;
 pub type ArcUserNode = Arc<Mutex<UserNode>>;
 pub type ArcPreLaunchNode = Arc<Mutex<PreLaunchNode>>;
 
-/// Represents a virtual configurable A-Block network.
+/// Represents a virtual configurable AIBlock network.
 pub struct Network {
     config: NetworkConfig,
     /// The info needed to create network nodes
@@ -62,8 +62,8 @@ pub struct Network {
     raft_loop_handles: BTreeMap<String, JoinHandle<()>>,
     /// Currently active miner nodes
     active_nodes: BTreeMap<NodeType, Vec<String>>,
-    /// compute to miner mapping of only active nodes
-    active_compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
+    /// mempool to miner mapping of only active nodes
+    active_mempool_to_miner_mapping: BTreeMap<String, Vec<String>>,
     /// Currently dead nodes
     dead_nodes: BTreeSet<String>,
     /// Extra params to use for node construction
@@ -75,16 +75,16 @@ pub struct Network {
 #[derive(Clone)]
 pub struct NetworkConfig {
     pub initial_port: u16,
-    pub compute_raft: bool,
+    pub mempool_raft: bool,
     pub storage_raft: bool,
     pub in_memory_db: bool,
-    pub compute_partition_full_size: usize,
-    pub compute_minimum_miner_pool_len: usize,
-    pub compute_seed_utxo: UtxoSetSpec,
-    pub compute_genesis_tx_in: Option<String>,
+    pub mempool_partition_full_size: usize,
+    pub mempool_minimum_miner_pool_len: usize,
+    pub mempool_seed_utxo: UtxoSetSpec,
+    pub mempool_genesis_tx_in: Option<String>,
     pub user_wallet_seeds: Vec<Vec<WalletTxSpec>>,
     pub nodes: BTreeMap<NodeType, Vec<String>>,
-    pub compute_to_miner_mapping: BTreeMap<String, Vec<String>>,
+    pub mempool_to_miner_mapping: BTreeMap<String, Vec<String>>,
     pub test_duration_divider: usize,
     pub passphrase: Option<String>,
     pub user_auto_donate: u64,
@@ -97,7 +97,7 @@ pub struct NetworkConfig {
     pub enable_pipeline_reset: Option<bool>,
     pub static_miner_address: Option<String>,
     pub mining_api_key: Option<String>,
-    pub compute_miner_whitelist: MinerWhitelist,
+    pub mempool_miner_whitelist: MinerWhitelist,
     pub peer_limit: usize,
     pub address_aggregation_limit: Option<usize>,
     pub initial_issuances: Vec<InitialIssuance>,
@@ -117,7 +117,7 @@ pub struct NetworkInstanceInfo {
     pub node_infos: BTreeMap<String, NetworkNodeInfo>,
     pub socket_name_mapping: BTreeMap<SocketAddr, String>,
     pub miner_nodes: Vec<SocketAddr>,
-    pub compute_nodes: Vec<SocketAddr>,
+    pub mempool_nodes: Vec<SocketAddr>,
     pub storage_nodes: Vec<SocketAddr>,
     pub user_nodes: Vec<SocketAddr>,
 }
@@ -150,7 +150,7 @@ impl TestTlsSpec {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NodeType {
     Miner,
-    Compute,
+    Mempool,
     Storage,
     User,
 }
@@ -179,7 +179,7 @@ impl Network {
         Self {
             config: config.clone(),
             active_nodes: config.nodes.clone(),
-            active_compute_to_miner_mapping: config.compute_to_miner_mapping.clone(),
+            active_mempool_to_miner_mapping: config.mempool_to_miner_mapping.clone(),
             instance_info: info,
             arc_nodes: Default::default(),
             raft_loop_handles: Default::default(),
@@ -343,7 +343,7 @@ impl Network {
 
         let mut active_map: BTreeMap<_, _> = self
             .config
-            .compute_to_miner_mapping
+            .mempool_to_miner_mapping
             .clone()
             .into_iter()
             .filter(|(c, _)| !self.dead_nodes.contains(c))
@@ -353,7 +353,7 @@ impl Network {
             miners.retain(|m| !self.dead_nodes.contains(m));
         }
 
-        self.active_compute_to_miner_mapping = active_map;
+        self.active_mempool_to_miner_mapping = active_map;
         self.active_nodes = active_nodes;
     }
 
@@ -376,13 +376,13 @@ impl Network {
         self.arc_nodes.get(name).and_then(|v| v.miner())
     }
 
-    ///returns a mutable reference to the compute node with the matching name.
+    ///returns a mutable reference to the mempool node with the matching name.
     ///
     /// ### Arguments
     ///
-    /// * `name` - &str of the compute node's name to be found.
-    pub fn compute(&self, name: &str) -> Option<&ArcComputeNode> {
-        self.arc_nodes.get(name).and_then(|v| v.compute())
+    /// * `name` - &str of the mempool node's name to be found.
+    pub fn mempool(&self, name: &str) -> Option<&ArcMempoolNode> {
+        self.arc_nodes.get(name).and_then(|v| v.mempool())
     }
 
     ///returns a mutable reference to the storage node with the matching name.
@@ -450,8 +450,8 @@ impl Network {
     ///Returns a list of initial transactions
     pub fn collect_initial_uxto_txs(&self) -> BTreeMap<String, Transaction> {
         make_utxo_set_from_seed(
-            &self.config.compute_seed_utxo,
-            &self.config.compute_genesis_tx_in,
+            &self.config.mempool_seed_utxo,
+            &self.config.mempool_genesis_tx_in,
         )
     }
 
@@ -479,9 +479,9 @@ impl Network {
             .collect()
     }
 
-    ///Active Compute miner mapping
-    pub fn active_compute_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
-        &self.active_compute_to_miner_mapping
+    ///Active Mempool miner mapping
+    pub fn active_mempool_to_miner_mapping(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.active_mempool_to_miner_mapping
     }
 
     ///Config that launched the network
@@ -501,7 +501,7 @@ impl Network {
 
     ///Mining Reward
     pub fn mining_reward(&self) -> TokenAmount {
-        let c_len = self.config.nodes[&NodeType::Compute].len();
+        let c_len = self.config.nodes[&NodeType::Mempool].len();
         TokenAmount(7510185) / c_len as u64
     }
 
@@ -522,7 +522,7 @@ impl NetworkConfig {
     }
 
     pub fn with_raft(mut self, use_raft: bool) -> Self {
-        self.compute_raft = use_raft;
+        self.mempool_raft = use_raft;
         self.storage_raft = use_raft;
         self
     }
@@ -530,8 +530,8 @@ impl NetworkConfig {
     pub fn with_groups(mut self, raft_count: usize, miner_count: usize) -> Self {
         let (rc, mc) = (raft_count, miner_count);
         self.nodes.insert(
-            NodeType::Compute,
-            (0..rc).map(|idx| format!("compute{}", idx + 1)).collect(),
+            NodeType::Mempool,
+            (0..rc).map(|idx| format!("mempool{}", idx + 1)).collect(),
         );
         self.nodes.insert(
             NodeType::Storage,
@@ -541,14 +541,14 @@ impl NetworkConfig {
             NodeType::Miner,
             (0..mc).map(|idx| format!("miner{}", idx + 1)).collect(),
         );
-        self.compute_to_miner_mapping = {
+        self.mempool_to_miner_mapping = {
             let miner_nodes = &self.nodes[&NodeType::Miner];
-            let compute_nodes = &self.nodes[&NodeType::Compute];
+            let mempool_nodes = &self.nodes[&NodeType::Mempool];
             let miners = miner_nodes.iter().cloned();
-            let computes = compute_nodes.iter().cloned().cycle();
+            let mempools = mempool_nodes.iter().cloned().cycle();
             let mut mapping = BTreeMap::new();
-            for (miner, compute) in miners.zip(computes) {
-                mapping.entry(compute).or_insert_with(Vec::new).push(miner);
+            for (miner, mempool) in miners.zip(mempools) {
+                mapping.entry(mempool).or_insert_with(Vec::new).push(miner);
             }
             mapping
         };
@@ -560,7 +560,7 @@ impl NetworkConfig {
 #[derive(Clone)]
 pub enum ArcNode {
     Miner(ArcMinerNode),
-    Compute(ArcComputeNode),
+    Mempool(ArcMempoolNode),
     Storage(ArcStorageNode),
     User(ArcUserNode),
     PreLaunch(ArcPreLaunchNode),
@@ -576,9 +576,9 @@ impl ArcNode {
         }
     }
 
-    /// Get compute from node
-    pub fn compute(&self) -> Option<&ArcComputeNode> {
-        if let Self::Compute(v) = self {
+    /// Get mempool from node
+    pub fn mempool(&self) -> Option<&ArcMempoolNode> {
+        if let Self::Mempool(v) = self {
             Some(v)
         } else {
             None
@@ -605,7 +605,7 @@ impl ArcNode {
 
     pub async fn get_local_event_tx(&self) -> LocalEventSender {
         match self {
-            ArcNode::Compute(c) => c.lock().await.local_event_tx().clone(),
+            ArcNode::Mempool(c) => c.lock().await.local_event_tx().clone(),
             ArcNode::Miner(m) => m.lock().await.local_event_tx().clone(),
             ArcNode::Storage(s) => s.lock().await.local_event_tx().clone(),
             ArcNode::User(u) => u.lock().await.local_event_tx().clone(),
@@ -618,7 +618,7 @@ impl ArcNode {
 async fn address(node: &ArcNode) -> SocketAddr {
     match node {
         ArcNode::Miner(v) => v.lock().await.local_address(),
-        ArcNode::Compute(v) => v.lock().await.local_address(),
+        ArcNode::Mempool(v) => v.lock().await.local_address(),
         ArcNode::Storage(v) => v.lock().await.local_address(),
         ArcNode::User(v) => v.lock().await.local_address(),
         ArcNode::PreLaunch(v) => v.lock().await.local_address(),
@@ -629,7 +629,7 @@ async fn address(node: &ArcNode) -> SocketAddr {
 async fn send_startup_requests(node: &ArcNode) {
     match node {
         ArcNode::Miner(v) => v.lock().await.send_startup_requests().await.unwrap(),
-        ArcNode::Compute(v) => v.lock().await.send_startup_requests().await.unwrap(),
+        ArcNode::Mempool(v) => v.lock().await.send_startup_requests().await.unwrap(),
         ArcNode::Storage(v) => v.lock().await.send_startup_requests().await.unwrap(),
         ArcNode::User(v) => v.lock().await.send_startup_requests().await.unwrap(),
         ArcNode::PreLaunch(v) => v.lock().await.send_startup_requests().await.unwrap(),
@@ -640,7 +640,7 @@ async fn send_startup_requests(node: &ArcNode) {
 async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
     match node {
         ArcNode::Miner(v) => v.lock().await.local_event_tx().clone(),
-        ArcNode::Compute(v) => v.lock().await.local_event_tx().clone(),
+        ArcNode::Mempool(v) => v.lock().await.local_event_tx().clone(),
         ArcNode::Storage(v) => v.lock().await.local_event_tx().clone(),
         ArcNode::User(v) => v.lock().await.local_event_tx().clone(),
         ArcNode::PreLaunch(v) => v.lock().await.local_event_tx().clone(),
@@ -651,7 +651,7 @@ async fn local_event_tx(node: &ArcNode) -> LocalEventSender {
 async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
     match node {
         ArcNode::Miner(n) => n.lock().await.connect_info_peers(),
-        ArcNode::Compute(n) => n.lock().await.connect_info_peers(),
+        ArcNode::Mempool(n) => n.lock().await.connect_info_peers(),
         ArcNode::Storage(n) => n.lock().await.connect_info_peers(),
         ArcNode::User(n) => n.lock().await.connect_info_peers(),
         ArcNode::PreLaunch(n) => n.lock().await.connect_info_peers(),
@@ -661,7 +661,7 @@ async fn connect_info_peers(node: &ArcNode) -> (Node, Vec<SocketAddr>, Vec<Socke
 ///Dispatch to close_raft_loop
 async fn close_raft_loop(node: &ArcNode) {
     match node {
-        ArcNode::Compute(n) => n.lock().await.close_raft_loop().await,
+        ArcNode::Mempool(n) => n.lock().await.close_raft_loop().await,
         ArcNode::Storage(n) => n.lock().await.close_raft_loop().await,
         ArcNode::Miner(_) | ArcNode::User(_) | ArcNode::PreLaunch(_) => (),
     }
@@ -671,10 +671,10 @@ async fn close_raft_loop(node: &ArcNode) {
 async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Output = ()>)> {
     use futures::future::FutureExt;
     match node {
-        ArcNode::Compute(n) => {
+        ArcNode::Mempool(n) => {
             let node = n.lock().await;
             Some((
-                "compute_node".to_owned(),
+                "mempool_node".to_owned(),
                 node.local_address(),
                 node.raft_loop().left_future(),
             ))
@@ -694,7 +694,7 @@ async fn raft_loop(node: &ArcNode) -> Option<(String, SocketAddr, impl Future<Ou
 ///Dispatch to take_closed_extra_params
 async fn take_closed_extra_params(node: &ArcNode) -> ExtraNodeParams {
     match node {
-        ArcNode::Compute(n) => n.lock().await.take_closed_extra_params().await,
+        ArcNode::Mempool(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::Storage(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::Miner(n) => n.lock().await.take_closed_extra_params().await,
         ArcNode::User(n) => n.lock().await.take_closed_extra_params().await,
@@ -710,7 +710,7 @@ async fn handle_next_event_and_response(
     let mut test_timeout = test_timeout(timeout);
 
     match node {
-        ArcNode::Compute(n) => {
+        ArcNode::Mempool(n) => {
             let mut n = n.lock().await;
             if let Some(response) = check_timeout(n.handle_next_event(&mut test_timeout).await)? {
                 return Ok(n.handle_next_event_response(response).await);
@@ -780,7 +780,7 @@ pub fn init_instance_info(config: &NetworkConfig) -> NetworkInstanceInfo {
         node_infos,
         socket_name_mapping,
         miner_nodes: nodes.remove(&NodeType::Miner).unwrap_or_default(),
-        compute_nodes: nodes.remove(&NodeType::Compute).unwrap_or_default(),
+        mempool_nodes: nodes.remove(&NodeType::Mempool).unwrap_or_default(),
         storage_nodes: nodes.remove(&NodeType::Storage).unwrap_or_default(),
         user_nodes: nodes.remove(&NodeType::User).unwrap_or_default(),
     }
@@ -984,7 +984,7 @@ pub async fn upgrade_same_version_db(
     info!("upgrade_same_version_db: {}", name);
     match node_info.node_type {
         NodeType::Miner => upgrade_same_version_wallet_db(extra).unwrap(),
-        NodeType::Compute => upgrade_same_version_compute_db(extra).unwrap(),
+        NodeType::Mempool => upgrade_same_version_mempool_db(extra).unwrap(),
         NodeType::Storage => upgrade_same_version_storage_db(extra).unwrap(),
         NodeType::User => upgrade_same_version_wallet_db(extra).unwrap(),
     }
@@ -1007,7 +1007,7 @@ pub async fn init_arc_node(
     let node_info = &info.node_infos[name];
     match node_info.node_type {
         NodeType::Miner => ArcNode::Miner(init_miner(name, config, info, extra).await),
-        NodeType::Compute => ArcNode::Compute(init_compute(name, config, info, extra).await),
+        NodeType::Mempool => ArcNode::Mempool(init_mempool(name, config, info, extra).await),
         NodeType::Storage => ArcNode::Storage(init_storage(name, config, info, extra).await),
         NodeType::User => ArcNode::User(init_user(name, config, info, extra).await),
     }
@@ -1027,9 +1027,9 @@ async fn init_miner(
     info: &NetworkInstanceInfo,
     extra: ExtraNodeParams,
 ) -> ArcMinerNode {
-    let miner_compute_node_idx = {
+    let miner_mempool_node_idx = {
         let name = name.to_owned();
-        let mut mapping = config.compute_to_miner_mapping.iter();
+        let mut mapping = config.mempool_to_miner_mapping.iter();
         let (c, _) = mapping.find(|(_, ms)| ms.contains(&name)).unwrap();
         info.node_infos[c].index
     };
@@ -1041,9 +1041,9 @@ async fn init_miner(
         miner_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        miner_compute_node_idx,
-        compute_nodes: info
-            .compute_nodes
+        miner_mempool_node_idx,
+        mempool_nodes: info
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| NodeSpec {
@@ -1090,8 +1090,8 @@ async fn init_storage(
         storage_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        compute_nodes: info
-            .compute_nodes
+        mempool_nodes: info
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| NodeSpec {
@@ -1123,7 +1123,7 @@ async fn init_storage(
     ))
 }
 
-///Initialize Compute node of given name based on network info.
+///Initialize Mempool node of given name based on network info.
 ///
 /// ### Arguments
 ///
@@ -1131,23 +1131,23 @@ async fn init_storage(
 /// * `config` - &NetworkConfig holding configuration Infomation.
 /// * `info`   - &NetworkInstanceInfo holding nodes to be cloned.
 /// * `extra`  - additional parameter for construction
-async fn init_compute(
+async fn init_mempool(
     name: &str,
     config: &NetworkConfig,
     info: &NetworkInstanceInfo,
     extra: ExtraNodeParams,
-) -> ArcComputeNode {
+) -> ArcMempoolNode {
     let node_info = &info.node_infos[name];
-    let compute_raft = usize::from(config.compute_raft);
+    let mempool_raft = usize::from(config.mempool_raft);
 
-    let config = ComputeNodeConfig {
-        compute_db_mode: node_info.db_mode,
-        compute_node_idx: node_info.index,
+    let config = MempoolNodeConfig {
+        mempool_db_mode: node_info.db_mode,
+        mempool_node_idx: node_info.index,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        compute_unicorn_fixed_param: get_test_common_unicorn(),
-        compute_nodes: info
-            .compute_nodes
+        mempool_unicorn_fixed_param: get_test_common_unicorn(),
+        mempool_nodes: info
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| NodeSpec {
@@ -1170,31 +1170,31 @@ async fn init_compute(
                 address: v.to_string(),
             })
             .collect::<Vec<NodeSpec>>(),
-        compute_raft,
-        compute_raft_tick_timeout: 200 / config.test_duration_divider,
-        compute_mining_event_timeout: 500 / config.test_duration_divider,
-        compute_transaction_timeout: 100 / config.test_duration_divider,
-        compute_seed_utxo: config.compute_seed_utxo.clone(),
-        compute_genesis_tx_in: config.compute_genesis_tx_in.clone(),
-        compute_partition_full_size: config.compute_partition_full_size,
-        compute_minimum_miner_pool_len: config.compute_minimum_miner_pool_len,
+        mempool_raft,
+        mempool_raft_tick_timeout: 200 / config.test_duration_divider,
+        mempool_mining_event_timeout: 500 / config.test_duration_divider,
+        mempool_transaction_timeout: 100 / config.test_duration_divider,
+        mempool_seed_utxo: config.mempool_seed_utxo.clone(),
+        mempool_genesis_tx_in: config.mempool_genesis_tx_in.clone(),
+        mempool_partition_full_size: config.mempool_partition_full_size,
+        mempool_minimum_miner_pool_len: config.mempool_minimum_miner_pool_len,
         jurisdiction: "US".to_string(),
         sanction_list: Vec::new(),
-        compute_api_port: 3002,
-        compute_api_use_tls: true,
+        mempool_api_port: 3002,
+        mempool_api_use_tls: true,
         routes_pow: Default::default(),
         backup_block_modulo: config.backup_block_modulo,
         utxo_re_align_block_modulo: config.utxo_re_align_block_modulo,
         backup_restore: config.backup_restore,
         enable_trigger_messages_pipeline_reset: config.enable_pipeline_reset,
-        compute_miner_whitelist: config.compute_miner_whitelist.clone(),
+        mempool_miner_whitelist: config.mempool_miner_whitelist.clone(),
         peer_limit: config.peer_limit,
         initial_issuances: config.initial_issuances.clone(),
     };
     let info = format!("{} -> {}", name, node_info.node_spec);
-    info!("New Compute {}", info);
+    info!("New Mempool {}", info);
     Arc::new(Mutex::new(
-        ComputeNode::new(config, extra).await.expect(&info),
+        MempoolNode::new(config, extra).await.expect(&info),
     ))
 }
 
@@ -1227,9 +1227,9 @@ async fn init_user(
         user_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         api_keys: Default::default(),
-        user_compute_node_idx: 0,
-        compute_nodes: info
-            .compute_nodes
+        user_mempool_node_idx: 0,
+        mempool_nodes: info
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| NodeSpec {
@@ -1268,20 +1268,20 @@ async fn init_pre_launch(
 ) -> ArcPreLaunchNode {
     let node_info = &info.node_infos[name];
     let node_type = match node_info.node_type {
-        NodeType::Compute => PreLaunchNodeType::Compute,
+        NodeType::Mempool => PreLaunchNodeType::Mempool,
         NodeType::Storage => PreLaunchNodeType::Storage,
         NodeType::Miner | NodeType::User => panic!("No pre launch fot this type"),
     };
 
     let config = PreLaunchNodeConfig {
         node_type,
-        compute_node_idx: node_info.index,
-        compute_db_mode: node_info.db_mode,
+        mempool_node_idx: node_info.index,
+        mempool_db_mode: node_info.db_mode,
         tls_config: config.tls_config.make_tls_spec(&info.socket_name_mapping),
         storage_node_idx: node_info.index,
         storage_db_mode: node_info.db_mode,
-        compute_nodes: info
-            .compute_nodes
+        mempool_nodes: info
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| v.to_string())
@@ -1318,9 +1318,9 @@ pub fn remove_all_node_dbs_in_info(info: &NetworkInstanceInfo) {
                 let v = format!("{WALLET_PATH}/{DB_PATH_TEST}.{port}");
                 vec![v]
             }
-            Compute => {
-                let v1 = format!("{DB_PATH}/{DB_PATH_TEST}.compute.{port}");
-                let v2 = format!("{DB_PATH}/{DB_PATH_TEST}.compute_raft.{port}");
+            Mempool => {
+                let v1 = format!("{DB_PATH}/{DB_PATH_TEST}.mempool.{port}");
+                let v2 = format!("{DB_PATH}/{DB_PATH_TEST}.mempool_raft.{port}");
                 let v3 = format!("{v1}_backup");
                 let v4 = format!("{v2}_backup");
                 vec![v1, v2, v3, v4]

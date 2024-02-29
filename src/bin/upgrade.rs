@@ -2,14 +2,14 @@
 
 use aiblock_network::configurations::DbMode;
 use aiblock_network::upgrade::{
-    dump_db, get_db_to_dump_no_checks, get_upgrade_compute_db, get_upgrade_storage_db,
-    get_upgrade_wallet_db, upgrade_compute_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
+    dump_db, get_db_to_dump_no_checks, get_upgrade_mempool_db, get_upgrade_storage_db,
+    get_upgrade_wallet_db, upgrade_mempool_db, upgrade_storage_db, upgrade_wallet_db, DbSpecInfo,
     UpgradeCfg, UpgradeError, DB_SPEC_INFOS,
 };
 use clap::{App, Arg};
 use std::collections::BTreeSet;
 
-const NODE_TYPES: &[&str] = &["compute", "storage", "user", "miner"];
+const NODE_TYPES: &[&str] = &["mempool", "storage", "user", "miner"];
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Processing {
@@ -48,7 +48,7 @@ fn process_read(db_modes: Vec<(String, DbMode)>) -> Result<(), UpgradeError> {
     println!("/// Generated with: `path_to_upgrade_bin/upgrade --type all --processing read > path_to_file.rs`");
     println!("///");
     println!("/// Upgrade with config {db_modes:?}");
-    println!("/// Preserved hard coded compute database");
+    println!("/// Preserved hard coded mempool database");
     println!("pub type DbEntryType = (&'static str, &'static [u8], &'static [u8]);");
     println!();
     for (node_type, mode) in db_modes {
@@ -79,7 +79,7 @@ fn process_upgrade(
         println!("Upgrade Database {node_type}, {mode:?}");
         let extra = Default::default();
         let (_, status) = match node_type.as_str() {
-            "compute" => upgrade_compute_db(get_upgrade_compute_db(mode, extra)?, &upgrade_cfg)?,
+            "mempool" => upgrade_mempool_db(get_upgrade_mempool_db(mode, extra)?, &upgrade_cfg)?,
             "storage" => upgrade_storage_db(get_upgrade_storage_db(mode, extra)?, &upgrade_cfg)?,
             "user" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
             "miner" => upgrade_wallet_db(get_upgrade_wallet_db(mode, extra)?, &upgrade_cfg)?,
@@ -132,7 +132,7 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("type")
                 .long("type")
-                .help("Run the upgrade for type (all or compute, storage, user, miner)")
+                .help("Run the upgrade for type (all or mempool, storage, user, miner)")
                 .takes_value(true)
                 .required(true),
         )
@@ -152,7 +152,7 @@ fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("ignore")
                 .long("ignore")
-                .help("Ignore some toml nodes: ignore=compute.0,storage.0,user.1,miner.1")
+                .help("Ignore some toml nodes: ignore=mempool.0,storage.0,user.1,miner.1")
                 .takes_value(true),
         )
 }
@@ -185,12 +185,12 @@ fn configuration(
         v => panic!("expect processing to be read or upgrade: {}", v),
     };
     let raft_len = settings.get_array("storage_nodes").unwrap().len();
-    let compute_partition_full_size = settings.get("compute_partition_full_size").unwrap();
-    let compute_unicorn_fixed_param = settings.get("compute_unicorn_fixed_param").unwrap();
+    let mempool_partition_full_size = settings.get("mempool_partition_full_size").unwrap();
+    let mempool_unicorn_fixed_param = settings.get("mempool_unicorn_fixed_param").unwrap();
     let upgrade_cfg = UpgradeCfg {
         raft_len,
-        compute_partition_full_size,
-        compute_unicorn_fixed_param,
+        mempool_partition_full_size,
+        mempool_unicorn_fixed_param,
         passphrase,
     };
 
@@ -248,7 +248,7 @@ mod test {
         let expected = (
             Processing::Read,
             vec![
-                ("compute".to_owned(), DbMode::Test(0)),
+                ("mempool".to_owned(), DbMode::Test(0)),
                 ("storage".to_owned(), DbMode::Test(0)),
                 ("user".to_owned(), DbMode::Test(1000)),
                 ("user".to_owned(), DbMode::Test(1001)),
@@ -256,8 +256,8 @@ mod test {
             ],
             UpgradeCfg {
                 raft_len: 1,
-                compute_partition_full_size: 1,
-                compute_unicorn_fixed_param: get_test_common_unicorn(),
+                mempool_partition_full_size: 1,
+                mempool_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
             },
         );
@@ -280,8 +280,8 @@ mod test {
             vec![("user".to_owned(), DbMode::Test(1001))],
             UpgradeCfg {
                 raft_len: 1,
-                compute_partition_full_size: 1,
-                compute_unicorn_fixed_param: get_test_common_unicorn(),
+                mempool_partition_full_size: 1,
+                mempool_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: "TestPassPhrase".to_owned(),
             },
         );
@@ -295,15 +295,15 @@ mod test {
             "bin_name",
             "--config=src/bin/node_settings_local_raft_3.toml",
             "--processing=read",
-            "--type=compute",
+            "--type=mempool",
         ];
         let expected = (
             Processing::Read,
-            vec![("compute".to_owned(), DbMode::Test(0))],
+            vec![("mempool".to_owned(), DbMode::Test(0))],
             UpgradeCfg {
                 raft_len: 3,
-                compute_partition_full_size: 2,
-                compute_unicorn_fixed_param: get_test_common_unicorn(),
+                mempool_partition_full_size: 2,
+                mempool_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
             },
         );
@@ -323,8 +323,8 @@ mod test {
         let expected = (
             Processing::Read,
             vec![
-                ("compute".to_owned(), DbMode::Test(0)),
-                ("compute".to_owned(), DbMode::Test(1)),
+                ("mempool".to_owned(), DbMode::Test(0)),
+                ("mempool".to_owned(), DbMode::Test(1)),
                 ("storage".to_owned(), DbMode::Test(0)),
                 ("storage".to_owned(), DbMode::Test(1)),
                 ("user".to_owned(), DbMode::Test(1000)),
@@ -332,8 +332,8 @@ mod test {
             ],
             UpgradeCfg {
                 raft_len: 2,
-                compute_partition_full_size: 2,
-                compute_unicorn_fixed_param: get_test_common_unicorn(),
+                mempool_partition_full_size: 2,
+                mempool_unicorn_fixed_param: get_test_common_unicorn(),
                 passphrase: String::new(),
             },
         );

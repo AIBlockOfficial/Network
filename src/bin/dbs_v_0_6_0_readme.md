@@ -36,4 +36,4 @@ target/release/upgrade --config=src/bin/node_settings_upgraded.toml --type all -
 
 ## Notes for next DB upgrade
 * `LOCKED_COINBASE_KEY` column will need deserialization and conversion if structure changes with next DB upgrade.
-* `new_create_asset` will result in a different `Script` value because of `OP_DROP` opcode being added. Although, this type of script might not form part of any transactions on current block on compute consensused, so conversion might not be necessary.
+* `new_create_asset` will result in a different `Script` value because of `OP_DROP` opcode being added. Although, this type of script might not form part of any transactions on current block on mempool consensused, so conversion might not be necessary.

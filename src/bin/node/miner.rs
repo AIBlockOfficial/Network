@@ -248,7 +248,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .env("INITIAL_BLOCK_CONFIG")
-                .help("Run the compute node using the given initial block config file.")
+                .help("Run the mempool node using the given initial block config file.")
                 .takes_value(true),
         )
         .arg(
@@ -294,9 +294,9 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("compute_index")
-                .long("compute_index")
-                .help("Endpoint index of a compute node that the miner should connect to")
+            Arg::with_name("mempool_index")
+                .long("mempool_index")
+                .help("Endpoint index of a mempool node that the miner should connect to")
                 .takes_value(true),
         )
         .arg(
@@ -357,14 +357,14 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("miner_compute_node_idx", 0).unwrap();
+    settings.set_default("miner_mempool_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("miner_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("miner_api_use_tls", true).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
-    settings.set_default("user_compute_node_idx", 0).unwrap();
+    settings.set_default("user_mempool_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
 
@@ -524,9 +524,9 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("tls_config", tls_config).unwrap();
     }
 
-    if let Some(index) = matches.value_of("compute_index") {
-        settings.set("miner_compute_node_idx", index).unwrap();
-        settings.set("user_compute_node_idx", index).unwrap();
+    if let Some(index) = matches.value_of("mempool_index") {
+        settings.set("miner_mempool_node_idx", index).unwrap();
+        settings.set("user_mempool_node_idx", index).unwrap();
     }
 
     if let Some(index) = matches.value_of("passphrase") {

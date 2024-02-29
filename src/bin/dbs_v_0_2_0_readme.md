@@ -9,51 +9,51 @@
  * checkout NAOM at tag v0.2.0
  * Make sure znp cargo.toml point to corresponding tw_chain
 
-In `src/bin/node_settings.toml`, remove all nodes not used in the network. There should only remain first of each compute/storage/miner/user.
+In `src/bin/node_settings.toml`, remove all nodes not used in the network. There should only remain first of each mempool/storage/miner/user.
 
 Also update as follow, to use raft and leave 45 second to execute instructions:
 ```toml
-compute_raft = 1
+mempool_raft = 1
 storage_raft = 1
 storage_block_timeout = 45000
 ```
 
-In `src/bin/node_settings_run.sh`, comment out the line launching compute, miner and user.
+In `src/bin/node_settings_run.sh`, comment out the line launching mempool, miner and user.
 
 ## Generate database and snapshots in v0.2.0 clone
 
 These instructions will be easier to follow with 5 tabs ready to run the following:
  * `rm -rf src/db/db src/wallet/wallet; src/bin/node_settings_run.sh set_log info`
- * `RUST_LOG="info" target/release/node compute`
+ * `RUST_LOG="info" target/release/node mempool`
  * `RUST_LOG="info" target/release/node user`
  * `RUST_LOG="info" target/release/node miner`
- * `tar -czf db_compute_before_block.tar src/db/db/test.compute*`
+ * `tar -czf db_mempool_before_block.tar src/db/db/test.mempool*`
 
 The execution than proceed:
  * Start all network nodes in the same order described above.
     * Initial block -> block 0 created -> user tx generated
     * Block 0 send to storage
     * -----
-    * 45 sec => Blockstored 0 send to compute -> block 1 created -> user tx generated
+    * 45 sec => Blockstored 0 send to mempool -> block 1 created -> user tx generated
     * Block 1 send to storage (with tx)
  * Kill `user` to prevent user tx on last block
     * (After generating transaction for block 0 and 1: kill user (see user output: kill after 2 "New Generated txs sent")
     * -----
-    * 30 sec => Blockstored 1 send to compute -> block 2 created -> !!NO user TXs!!
+    * 30 sec => Blockstored 1 send to mempool -> block 2 created -> !!NO user TXs!!
     * Block 2 send to storage (with tx)
- * `tar -czf db_compute_before_block.tar src/db/db/test.compute*`
+ * `tar -czf db_mempool_before_block.tar src/db/db/test.mempool*`
  * Kill `miner` to prevent more block stored
-    * (Generate db snapshot as if we killed compute node then (see compute ouptput: tar/kill miner after 3 "Send Block to storage"  (0,1,2))
+    * (Generate db snapshot as if we killed mempool node then (see mempool ouptput: tar/kill miner after 3 "Send Block to storage"  (0,1,2))
     * -----
-    * 30 sec => Blockstored 2 send to compute -> block 3 created !!!NO TXs!!!
-* Kill `compute` & `storage` node in stalled network
+    * 30 sec => Blockstored 2 send to mempool -> block 3 created !!!NO TXs!!!
+* Kill `mempool` & `storage` node in stalled network
 
 Build the databases snapshoot:
 * `tar -czf dbs_v_0_2_0_new_block.tar.gz src/db/db src/wallet/wallet`
-    * Build tar.gz with block stored in storage and next block created in compute
-* `rm -rf src/db/db/test.compute*; tar -xzf db_compute_before_block.tar`
+    * Build tar.gz with block stored in storage and next block created in mempool
+* `rm -rf src/db/db/test.mempool*; tar -xzf db_mempool_before_block.tar`
 * `tar -czf dbs_v_0_2_0_no_new_block.tar.gz src/db/db src/wallet/wallet`
-    * Build tar.gz with block stored in storage and next block not created in compute.
+    * Build tar.gz with block stored in storage and next block not created in mempool.
 
 ## Add snapshot to repo
 
@@ -68,5 +68,5 @@ rm -rf src/db/db/test.* src/wallet/wallet/test.*; tar -xzf src/bin/dbs_v_0_2_0_n
 target/debug/upgrade --config=src/bin/node_settings_local_raft_1.toml --type all --processing read > src/upgrade/tests_last_version_db.rs
 
 rm -rf src/db/db/test.* src/wallet/wallet/test.*; tar -xzf src/bin/dbs_v_0_2_0_no_new_block.tar.gz
-target/debug/upgrade  --config=src/bin/node_settings_local_raft_1.toml --type compute --processing read > src/upgrade/tests_last_version_db_no_block.rs
+target/debug/upgrade  --config=src/bin/node_settings_local_raft_1.toml --type mempool --processing read > src/upgrade/tests_last_version_db_no_block.rs
 ```

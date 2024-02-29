@@ -190,7 +190,7 @@ pub mod raft_store {
     pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
 }
 
-pub mod compute {
+pub mod mempool {
     use super::*;
 
     /// Key for local miner list
@@ -205,12 +205,12 @@ pub mod compute {
     // New but compatible with 1.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
-        suffix: ".compute",
+        suffix: ".mempool",
         columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
     };
 }
 
-pub mod compute_raft {
+pub mod mempool_raft {
     use super::block_pipeline::*;
     use super::tw_chain::*;
     use super::*;
@@ -221,7 +221,7 @@ pub mod compute_raft {
     // New but compatible with 0.2.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
-        suffix: ".compute_raft",
+        suffix: ".mempool_raft",
         columns: &[],
     };
 
@@ -245,7 +245,7 @@ pub mod compute_raft {
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct ComputeConsensused {
+    pub struct MempoolConsensused {
         pub unanimous_majority: usize,
         pub sufficient_majority: usize,
         pub partition_full_size: usize,
@@ -503,7 +503,7 @@ pub mod convert {
         pub use super::super::*;
     }
     use crate::unicorn::UnicornFixedParam;
-    use crate::{compute_raft, interfaces, storage_raft, transaction_gen, wallet};
+    use crate::{mempool_raft, interfaces, storage_raft, transaction_gen, wallet};
     use std::collections::BTreeMap;
     use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use tw_chain::primitives::asset::{AssetValues, ItemAsset};
@@ -703,11 +703,11 @@ pub mod convert {
             .collect()
     }
 
-    pub fn convert_compute_consensused_to_import(
-        old: old::compute_raft::ComputeConsensused,
-        special_handling: Option<compute_raft::SpecialHandling>,
-    ) -> compute_raft::ComputeConsensusedImport {
-        compute_raft::ComputeConsensusedImport {
+    pub fn convert_mempool_consensused_to_import(
+        old: old::mempool_raft::MempoolConsensused,
+        special_handling: Option<mempool_raft::SpecialHandling>,
+    ) -> mempool_raft::MempoolConsensusedImport {
+        mempool_raft::MempoolConsensusedImport {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
             partition_full_size: old.partition_full_size,

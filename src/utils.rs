@@ -306,7 +306,7 @@ pub async fn loop_connnect_to_peers_async(
             } else {
                 trace!(?peer, "Try to connect to succeeded");
                 if !is_initial_conn {
-                    trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
+                    trace!("Sending PartitionRequest to Mempool node: {peer:?} after reconnection");
                     local_events_tx
                         .send(LocalEvent::ReconnectionComplete, "Reconnect Complete")
                         .await
@@ -1161,7 +1161,7 @@ pub fn concat_maps<K: Clone + Ord, V: Clone>(
         .collect()
 }
 
-/// Create a new item asset transaction (only used on Compute node)
+/// Create a new item asset transaction (only used on Mempool node)
 ///
 /// ### Arguments
 ///
@@ -1197,7 +1197,7 @@ pub fn create_item_asset_tx_from_sig(
 }
 
 /// Constructs a coinbase transaction
-/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Compute
+/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Mempool
 /// construction or mining later
 ///
 /// ### Arguments
