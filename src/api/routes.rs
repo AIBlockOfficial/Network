@@ -218,15 +218,15 @@ pub fn total_supply(
         .with(get_cors())
 }
 
-// GET circulating supply of tokens
-pub fn circulating_supply(
+// GET issued supply of tokens
+pub fn issued_supply(
     dp: &mut DbgPaths,
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let route = "circulating_supply";
+    let route = "issued_supply";
     warp_path(dp, route)
         .and(warp::get())
         .and(auth_request(routes_pow, api_keys))
@@ -236,7 +236,7 @@ pub fn circulating_supply(
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::get_circulating_supply(tc, route, call_id),
+                handlers::get_issued_supply(tc, route, call_id),
             )
         })
         .with(get_cors())
@@ -1003,7 +1003,7 @@ pub fn mempool_node_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(circulating_supply(
+    .or(issued_supply(
         dp,
         threaded_calls.clone(),
         routes_pow_info.clone(),

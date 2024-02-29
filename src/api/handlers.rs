@@ -368,8 +368,8 @@ pub async fn get_shared_config_mempool(
     )
 }
 
-/// GET The current circulating supply of the token
-pub async fn get_circulating_supply(
+/// GET The current issued supply of the token
+pub async fn get_issued_supply(
     mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
@@ -378,14 +378,14 @@ pub async fn get_circulating_supply(
     // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
-        move |c| c.get_circulating_supply(),
+        move |c| c.get_issued_supply(),
         "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     r.into_ok(
-        "Successfully fetched circulating supply",
+        "Successfully fetched issued supply",
         json_serialize_embed(res),
     )
 }

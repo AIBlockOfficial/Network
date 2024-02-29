@@ -420,16 +420,16 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 ///
 /// ### Arguments
 ///
-/// * `current_circulation` - Current circulation of all tokens
-pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
+/// * `current_issuance` - Current issuance of all tokens
+pub fn calculate_reward(current_issuance: TokenAmount) -> TokenAmount {
     let smoothing_value_as_token_amount = D_DISPLAY_PLACES_U64 * REWARD_SMOOTHING_VAL as u64;
 
-    if current_circulation.0 >= TOTAL_TOKENS {
+    if current_issuance.0 >= TOTAL_TOKENS {
         return TokenAmount(smoothing_value_as_token_amount);
     }
 
     TokenAmount(
-        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+        ((TOTAL_TOKENS - current_issuance.0) >> REWARD_ISSUANCE_VAL)
             + smoothing_value_as_token_amount,
     )
 }

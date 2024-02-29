@@ -2355,8 +2355,8 @@ impl MempoolApi for MempoolNode {
         self.get_pending_druid_pool()
     }
 
-    fn get_circulating_supply(&self) -> TokenAmount {
-        *self.node_raft.get_current_circulation()
+    fn get_issued_supply(&self) -> TokenAmount {
+        *self.node_raft.get_current_issuance()
     }
 
     fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {

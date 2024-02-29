@@ -148,7 +148,7 @@ impl MempoolApi for MempoolTest {
         }
     }
 
-    fn get_circulating_supply(&self) -> TokenAmount {
+    fn get_issued_supply(&self) -> TokenAmount {
         TokenAmount(100)
     }
 

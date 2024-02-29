@@ -715,8 +715,8 @@ pub trait MempoolApi {
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
 
-    /// Get the current circulating supply
-    fn get_circulating_supply(&self) -> TokenAmount;
+    /// Get the current issued supply
+    fn get_issued_supply(&self) -> TokenAmount;
 
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;

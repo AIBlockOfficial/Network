@@ -258,7 +258,7 @@ pub mod mempool_raft {
             BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
         pub current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
         pub last_committed_raft_idx_and_term: (u64, u64),
-        pub current_circulation: TokenAmount,
+        pub current_issuance: TokenAmount,
         pub block_pipeline: MiningPipelineInfo,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
@@ -718,7 +718,7 @@ pub mod convert {
             current_block: old.block_pipeline.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
-            current_circulation: convert_token_amount(old.current_circulation),
+            current_issuance: convert_token_amount(old.current_issuance),
             miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
             init_issuances: Default::default(),  // Will require sensible conversion on next upgrade
             special_handling,
