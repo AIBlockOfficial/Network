@@ -405,14 +405,14 @@ pub async fn get_total_supply(
 
 //======= POST HANDLERS =======//
 
-/// Post to retrieve an item from the blockchain db by hash key
+/// Post to retrieve items from the blockchain db by hash key
 pub async fn post_blockchain_entry_by_key(
     db: Arc<Mutex<SimpleDb>>,
-    key: String,
+    keys: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    get_json_reply_stored_value_from_db(db, &key, true, call_id, route)
+    get_json_reply_items_from_db(db, keys, route, call_id)
 }
 
 /// Post to batch retrieve multiple transactions from the blockchain db by hash keys
