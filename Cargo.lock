@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "ablock_network"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "a_block_chain",
  "async-std",
