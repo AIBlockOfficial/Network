@@ -12,12 +12,12 @@ permissions:
 
 jobs:
   build: 
-    uses: ablockofficial/workflows/.github/workflows/build.yml@main
+    uses: aiblockofficial/workflows/.github/workflows/build.yml@main
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
   scan-image:
-    uses: ablockofficial/workflows/.github/workflows/scan-image.yml@main
+    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
     needs: build
     with:
