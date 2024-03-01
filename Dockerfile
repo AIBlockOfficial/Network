@@ -2,8 +2,8 @@ FROM rust:1.73.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl
 RUN cargo install cargo-chef 
-WORKDIR /a-block
-ENV CARGO_TARGET_DIR=/a-block
+WORKDIR /aiblock
+ENV CARGO_TARGET_DIR=/aiblock
 
 FROM chef AS planner
 
@@ -11,8 +11,8 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-COPY --from=planner /a-block/recipe.json /a-block/recipe.json 
-RUN cargo chef cook --release --recipe-path /a-block/recipe.json
+COPY --from=planner /aiblock/recipe.json /aiblock/recipe.json 
+RUN cargo chef cook --release --recipe-path /aiblock/recipe.json
 COPY . .
 RUN cargo build --release
 
@@ -32,7 +32,7 @@ ENV COMPUTE_MINER_WHITELIST="/etc/mempool_miner_whitelist.json"
 ENV RUST_LOG=info,debug
 
 # Copy node bin
-COPY --from=builder /a-block/release/node ./node
+COPY --from=builder /aiblock/release/node ./node
 
 # Default config for the node
 COPY .docker/conf/* /etc/.
