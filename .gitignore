@@ -25,5 +25,5 @@ src/bin/tls_certificates.json
 
 *.txt
 
-mempool_*.json
+mempool_seed.json
 
