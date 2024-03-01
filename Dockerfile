@@ -1,4 +1,4 @@
-FROM rust:1.73.0-slim-bullseye AS chef
+FROM rust:1.76.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl
 RUN cargo install cargo-chef 
