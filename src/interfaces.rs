@@ -39,6 +39,27 @@ impl InitialIssuance {
 
 //*======== BLOCKCHAIN ITEM =========*//
 
+//*======== INITIAL ISSUANCES =========*//
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitialIssuance {
+    pub amount: TokenAmount,
+    pub address: String,
+    pub block_height: u64,
+}
+
+impl InitialIssuance {
+    pub fn new(amount: TokenAmount, address: String, block_height: u64) -> Self {
+        InitialIssuance {
+            amount,
+            address,
+            block_height,
+        }
+    }
+}
+
+//*======== BLOCKCHAIN ITEM =========*//
+
 /// Struct used for simplifying JSON deserialization on the client
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutPointData {
