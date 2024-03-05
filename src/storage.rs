@@ -600,16 +600,16 @@ impl StorageNode {
         Ok(response)
     }
 
-    /// Handles a compute request.
+    /// Handles a storage request.
     ///
     /// ### Arguments
     ///
-    /// * `peer` - Socket address for the peer that the compute request came from.
-    /// * `req` - StorageRequest object holding the compute request.
+    /// * `peer` - Socket address for the peer that the storage request came from.
+    /// * `req` - StorageRequest object holding the storage request.
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
 
-        // Do not process a compute request if it hasn't been received from a known compute peer or self
+        // Do not process a storage request if it hasn't been received from a known storage peer or self
         if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
             return None;
         }
