@@ -608,6 +608,12 @@ impl StorageNode {
     /// * `req` - StorageRequest object holding the compute request.
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
+
+        // Do not process a compute request if it hasn't been received from a known compute peer or self
+        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+            return None;
+        }
+        
         match req {
             GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, key)),
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),

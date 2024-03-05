@@ -1132,6 +1132,11 @@ impl ComputeNode {
         use ComputeRequest::*;
         trace!("handle_request");
 
+        // Do not process a compute request if it hasn't been received from a known compute peer or self
+        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+            return None;
+        }
+
         match req {
             ComputeApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoRequest {
