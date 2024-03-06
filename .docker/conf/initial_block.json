@@ -4,50 +4,69 @@
         "/// A marketing request: A quote from the the Magna Carta document, the 39th claim.",
         "/// This version was updated to be more inclusive."
     ],
+    "treasury_supply": 90090000000000000,
     "mempool_genesis_tx_in": "+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.",
     "mempool_seed_utxo": {
         "000000": [
             {
-                "public_key": "f4f0c1a951959e88fe343de5a2ebe7efbcb15422090b3549577f424db6851ca5",
-                "amount": 2
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 0
             },
-            {
-                "public_key": "4580540cfe5569cc7e9262ac9b555815c8e955f9f8ae659f1091e6dd9d68731a",
-                "amount": 1
-            },
-            {
-                "public_key": "a557309adf55ad3c1eee7fad684cffa30eef2bffcd6ae0a6736fe4cddd95cd51",
-                "amount": 1
-            },
-            {
-                "public_key": "951134d50fc2a0de62702108c035e0f1c3146aa722f5425ae92d49a68e3b23c5",
-                "amount": 1
-            },
-            {
-                "public_key": "5eafe054031eb556b8164f556d0ba1f3b4a149366794257697e6a4608dd13ada",
-                "amount": 1
-            }
-        ],
-        "000001": [
-            {
-                "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43",
-                "amount": 5
-            }
-        ],
-        "000010": [
             {
                 "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
-                "amount": 123
-            }
-        ],
-        "000011": [
-            {
-                "public_key": "9caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
-                "amount": 1234
+                "amount": 72072000000,
+                "locktime": 1
             },
             {
-                "public_key": "25564a3a9c22ce3300cbbbcacd030fde8ccc4b6fa38b4481bf4f76b01d537d4f",
-                "amount": 1235
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 2
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 3
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 4
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 5
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 6
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 7
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 8
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 9
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 10
+            },
+            {
+                "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
+                "amount": 72072000000,
+                "locktime": 11
             }
         ]
     },

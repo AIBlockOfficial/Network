@@ -144,6 +144,13 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("initial_issuance")
+                .long("initial_issuance")
+                .env("INITIAL_ISSUANCE")
+                .help("Use file to provide initial issuance options.")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("api_port")
                 .long("api_port")
                 .env("API_PORT")
@@ -213,7 +220,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .value_of("mempool_miner_whitelist")
         .unwrap_or("src/bin/mempool_miner_whitelist.json");
     let initial_issuances = matches
-        .value_of("initial_issuances")
+        .value_of("initial_issuance")
         .unwrap_or("src/bin/initial_issuance.json");
 
     settings

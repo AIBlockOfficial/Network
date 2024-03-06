@@ -1,4 +1,4 @@
-FROM rust:1.73.0-slim-bullseye AS chef
+FROM rust:1.76.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl
 RUN cargo install cargo-chef 
@@ -27,6 +27,7 @@ ENV CONFIG="/etc/node_settings.toml"
 ENV TLS_CONFIG="/etc/tls_certificates.json"
 ENV INITIAL_BLOCK_CONFIG="/etc/initial_block.json"
 ENV API_CONFIG="/etc/api_config.json"
+ENV INITIAL_ISSUANCE="/etc/initial_issuance.json"
 ENV API_USE_TLS="0"
 ENV COMPUTE_MINER_WHITELIST="/etc/mempool_miner_whitelist.json"
 ENV RUST_LOG=info,debug
