@@ -353,6 +353,11 @@ impl MempoolRaft {
         self.consensused.get_mining_api_key_entry(address)
     }
 
+    /// Gets all peers from the raft.
+    pub fn get_peers(&self) -> Vec<SocketAddr> {
+        self.raft_active.raft_peer_addrs().cloned().collect()
+    }
+
     /// Determine whether the mempool node has whitelisting active.
     pub fn get_mempool_whitelisting_active(&self) -> bool {
         self.consensused.miner_whitelist.active

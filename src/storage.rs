@@ -600,14 +600,20 @@ impl StorageNode {
         Ok(response)
     }
 
-    /// Handles a mempool request.
+    /// Handles a storage request.
     ///
     /// ### Arguments
     ///
-    /// * `peer` - Socket address for the peer that the mempool request came from.
-    /// * `req` - StorageRequest object holding the mempool request.
+    /// * `peer` - Socket address for the peer that the storage request came from.
+    /// * `req` - StorageRequest object holding the storage request.
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
+
+        // Do not process a storage request if it hasn't been received from a known storage peer or self
+        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+            return None;
+        }
+
         match req {
             GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, key)),
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),

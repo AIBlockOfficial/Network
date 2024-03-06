@@ -365,7 +365,12 @@ impl StorageRaft {
         self.consensused.generate_complete_block()
     }
 
-    /// Get the last block stored info to send to the mempool nodes
+    /// Gets the current RAFT peers
+    pub fn get_peers(&self) -> Vec<SocketAddr> {
+        self.raft_active.raft_peer_addrs().cloned().collect()
+    }
+
+    /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.consensused.get_last_block_stored()
     }
