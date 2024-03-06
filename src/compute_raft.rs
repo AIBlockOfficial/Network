@@ -353,6 +353,10 @@ impl ComputeRaft {
         self.consensused.get_mining_api_key_entry(address)
     }
 
+    pub fn get_peers(&self) -> Vec<SocketAddr> {
+        self.raft_active.raft_peer_addrs().cloned().collect()
+    }
+
     /// Determine whether the compute node has whitelisting active.
     pub fn get_compute_whitelisting_active(&self) -> bool {
         self.consensused.miner_whitelist.active

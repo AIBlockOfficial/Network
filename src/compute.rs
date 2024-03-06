@@ -1132,6 +1132,11 @@ impl ComputeNode {
         use ComputeRequest::*;
         trace!("handle_request");
 
+        // Do not process a compute request if it hasn't been received from a known compute peer or self
+        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+            return None;
+        }
+
         match req {
             ComputeApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoRequest {
@@ -1399,7 +1404,7 @@ impl ComputeNode {
             info!("Initiating coordinated pause for b_num {}", b_num_to_pause);
             self.propose_pause_nodes(b_num_to_pause).await;
             self.initiate_pause_nodes(b_num_to_pause).await.unwrap();
-        } else {
+        } else if self.node_raft.get_peers().contains(&peer) {
             // We are receiving the coordinated pause so we just need b_num here
             // - the original coordinator of the pause event has already added current b_num
             //
