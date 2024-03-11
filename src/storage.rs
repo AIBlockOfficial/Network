@@ -609,11 +609,6 @@ impl StorageNode {
     async fn handle_request(&mut self, peer: SocketAddr, req: StorageRequest) -> Option<Response> {
         use StorageRequest::*;
 
-        // Do not process a storage request if it hasn't been received from a known storage peer or self
-        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
-            return None;
-        }
-
         match req {
             GetBlockchainItem { key } => Some(self.get_blockchain_item(peer, key)),
             SendBlockchainItem { key, item } => Some(self.receive_blockchain_item(peer, key, item)),
@@ -627,8 +622,13 @@ impl StorageNode {
             Store { incoming_contract } => Some(self.receive_contracts(incoming_contract)),
             Closing => self.receive_closing(peer),
             SendRaftCmd(msg) => {
-                self.node_raft.received_message(msg).await;
-                None
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => {
+                        self.node_raft.received_message(msg).await;
+                        None
+                    }
+                }
             }
         }
     }

@@ -1132,11 +1132,6 @@ impl MempoolNode {
         use MempoolRequest::*;
         trace!("handle_request");
 
-        // Do not process a compute request if it hasn't been received from a known compute peer or self
-        if peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
-            return None;
-        }
-
         match req {
             MempoolApi(req) => self.handle_api_request(peer, req).await,
             SendUtxoRequest {
@@ -1164,19 +1159,44 @@ impl MempoolNode {
                 Some(self.receive_partition_request(peer, mining_api_key).await)
             }
             SendSharedConfig { shared_config } => {
-                self.handle_shared_config(peer, shared_config).await
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => self.handle_shared_config(peer, shared_config).await
+                }
             }
             Closing => self.receive_closing(peer),
-            CoordinatedPause { b_num } => self.handle_coordinated_pause(peer, b_num).await,
-            CoordinatedResume => self.handle_coordinated_resume(peer).await,
-            RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
-            RequestRuntimeData => self.handle_receive_request_runtime_data(peer).await,
+            CoordinatedPause { b_num } => {
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => self.handle_coordinated_pause(peer, b_num).await
+                }
+            }
+            CoordinatedResume => {
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => self.handle_coordinated_resume(peer).await
+                }
+            }
+            RequestRemoveMiner => {
+                self.handle_request_remove_miner(peer).await
+            }
+            RequestRuntimeData => {
+                self.handle_receive_request_runtime_data(peer).await
+            }
             SendRuntimeData { runtime_data } => {
-                self.handle_receive_runtime_data(peer, runtime_data).await
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => self.handle_receive_runtime_data(peer, runtime_data).await
+                }
             }
             SendRaftCmd(msg) => {
-                self.node_raft.received_message(msg).await;
-                None
+                match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
+                    true => None,
+                    false => {
+                        self.node_raft.received_message(msg).await;
+                        None
+                    }
+                }
             }
         }
     }
