@@ -1,47 +1,53 @@
 version: '3'
 services:
 
-  a-compute-node: &node-default
+  mempool-node: &node-default
     image: network
     environment:
       RUST_LOG: info,debug
+    privileged: false
+    user: "${UID}:${GID}"
     init: true
     ports: 
       - '12300:12300'
       - '3003:3003'
     volumes:  
-      - /tmp/compute:/src
+      - /tmp/mempool:/src
     command: compute
+    networks:
+      aiblock:
+        ipv4_address: 172.28.0.3
   
-  a-storage-node:
+  storage-node:
     <<: *node-default
     ports:
       - '12330:12330'
       - '3001:3001'
-    volumes:  
+    volumes:
       - /tmp/storage:/src
     command: storage
+    networks:
+      aiblock:
+        ipv4_address: 172.28.0.2
 
-  a-miner-node:
+  miner-node:
     <<: *node-default
-    depends_on: 
-      - a-compute-node
-      - a-storage-node
+    depends_on:
+      - mempool-node
+      - storage-node
     ports:
       - '12340:12340'
       - '3004:3004'
     volumes:  
       - /tmp/miner:/src
     command: miner
+    networks:
+      aiblock:
+        ipv4_address: 172.28.0.4
 
-  # a-alice-node:
-  #   <<: *node-default
-  #   ports:
-  #     - '12360:12360'
-  #   command: node user
-
-  # a-bob-node:
-  #   <<: *node-default
-  #   ports:
-  #     - '12361:12361'
-  #   command: node user
+networks:
+  aiblock:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
