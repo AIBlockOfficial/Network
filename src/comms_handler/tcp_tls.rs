@@ -26,6 +26,7 @@ pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
 pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 pub type TlsCertificate = Certificate;
 
+#[derive(Debug)]
 pub struct TcpTlsConfig {
     address: SocketAddr,
     socket_name_mapping: BTreeMap<SocketAddr, String>,
