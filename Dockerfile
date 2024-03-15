@@ -32,6 +32,8 @@ ENV API_USE_TLS="0"
 ENV MEMPOOL_MINER_WHITELIST="/etc/mempool_miner_whitelist.json"
 ENV RUST_LOG=info,debug
 
+RUN echo "Node type is $NODE_TYPE"
+
 # Copy node bin
 COPY --from=builder /aiblock/release/node ./node
 
