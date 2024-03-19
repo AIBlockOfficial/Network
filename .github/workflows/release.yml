@@ -2,6 +2,7 @@ name: build-and-push-miner
 on:
 #   release:
 #     types: [published]
+# leaving this in for testing purposes
   push:
     branches: 
       - chore_build-and-push-miner-node-on-release
