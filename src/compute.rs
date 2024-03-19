@@ -19,14 +19,14 @@ use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
-    apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig, create_socket_addr,
-    format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
+    apply_mining_tx, calculate_fee, check_druid_participants, create_item_asset_tx_from_sig,
+    create_socket_addr, format_parition_pow_address, generate_pow_random_num, to_api_keys,
+    to_route_pow_infos, validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent,
+    LocalEventChannel, LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
 };
-use a_block_chain::primitives::asset::TokenAmount;
+use a_block_chain::primitives::asset::{Asset, TokenAmount};
 use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction};
+use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction, TxOut};
 use a_block_chain::utils::druid_utils::druid_expectations_are_met;
 use a_block_chain::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use a_block_chain::utils::transaction_utils::construct_tx_hash;
@@ -565,7 +565,7 @@ impl ComputeNode {
             .node_raft
             .get_committed_current_block_num()
             .unwrap_or_default();
-        //let sanction_list = &self.sanction_list;
+
         let b_num = self
             .node_raft
             .get_committed_current_block_num()
@@ -573,13 +573,15 @@ impl ComputeNode {
 
         move |tx| {
             if tx.is_create_tx() {
-                return tx_has_valid_create_script(
-                    &tx.inputs[0].script_signature,
-                    &tx.outputs[0].value,
-                );
+                return self.tx_has_minimum_fee(&tx.fees)
+                    && tx_has_valid_create_script(
+                        &tx.inputs[0].script_signature,
+                        &tx.outputs[0].value,
+                    );
             }
 
             !tx.is_coinbase()
+                && self.tx_has_minimum_fee(&tx.fees)
                 && tx_is_valid(tx, b_num, |v| {
                     utxo_set
                         .get(v)
@@ -1161,32 +1163,28 @@ impl ComputeNode {
             SendSharedConfig { shared_config } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_shared_config(peer, shared_config).await
+                    false => self.handle_shared_config(peer, shared_config).await,
                 }
             }
             Closing => self.receive_closing(peer),
             CoordinatedPause { b_num } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_coordinated_pause(peer, b_num).await
+                    false => self.handle_coordinated_pause(peer, b_num).await,
                 }
             }
             CoordinatedResume => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_coordinated_resume(peer).await
+                    false => self.handle_coordinated_resume(peer).await,
                 }
             }
-            RequestRemoveMiner => {
-                self.handle_request_remove_miner(peer).await
-            }
-            RequestRuntimeData => {
-                self.handle_receive_request_runtime_data(peer).await
-            }
+            RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
+            RequestRuntimeData => self.handle_receive_request_runtime_data(peer).await,
             SendRuntimeData { runtime_data } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_receive_runtime_data(peer, runtime_data).await
+                    false => self.handle_receive_runtime_data(peer, runtime_data).await,
                 }
             }
             SendRaftCmd(msg) => {
@@ -1501,6 +1499,23 @@ impl ComputeNode {
             success: true,
             reason: "Received block notification",
         }
+    }
+
+    /// Checks whether a transaction has paid the minimum fee in order to have the
+    /// transaction processed
+    ///
+    /// ### Arguments
+    ///
+    /// * `fees` - Vector of TxOuts representing the fees paid
+    fn tx_has_minimum_fee(&self, fees: &Vec<TxOut>) -> bool {
+        let fees_paid = fees
+            .iter()
+            .fold(TokenAmount(0), |acc, fee| match fee.value {
+                Asset::Token(v) => acc + v,
+                _ => acc,
+            });
+
+        fees_paid >= calculate_fee()
     }
 
     /// Check if a miner is whitelisted
