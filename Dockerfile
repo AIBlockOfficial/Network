@@ -19,10 +19,13 @@ RUN cargo build --release
 # Use distroless
 FROM cgr.dev/chainguard/glibc-dynamic:latest
 
+# COPY --from=busybox:1.35.0-uclibc /bin/sh /bin/sh
+
 USER nonroot
 
 # Set these in the environment to override [use once we have env vars available]
-ENV NODE_TYPE="compute"
+ARG NODE_TYPE_ARG="compute"
+ENV NODE_TYPE=$NODE_TYPE_ARG
 ENV CONFIG="/etc/node_settings.toml"
 ENV TLS_CONFIG="/etc/tls_certificates.json"
 ENV INITIAL_BLOCK_CONFIG="/etc/initial_block.json"
@@ -32,6 +35,8 @@ ENV API_USE_TLS="0"
 ENV COMPUTE_MINER_WHITELIST="/etc/compute_miner_whitelist.json"
 ENV RUST_LOG=info,debug
 
+# RUN echo "Node type is $NODE_TYPE"
+
 # Copy node bin
 COPY --from=builder /a-block/release/node ./node
 
@@ -39,5 +44,5 @@ COPY --from=builder /a-block/release/node ./node
 COPY .docker/conf/* /etc/.
 
 ENTRYPOINT ["./node"]
-CMD ["compute"]
+CMD [$NODE_TYPE]
 
