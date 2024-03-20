@@ -22,4 +22,4 @@ basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 
 [req_distinguished_name]
-CN = node.a-block.net
+CN = node.aiblock.ch

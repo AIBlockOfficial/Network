@@ -11,8 +11,8 @@ y_structures=$(echo $genesis_pools | jq '[.[] | . as $x | range(.total_intervals
         locktime: ($x.initial_locktime + (86400 * .))
     }]')
 
-# Create a new JSON structure with "compute_seed_utxo" as the key and the Y_structures array as its value
-new_block=$(echo '{}' | jq --argjson ys "$y_structures" '.compute_seed_utxo = $ys')
+# Create a new JSON structure with "mempool_seed_utxo" as the key and the Y_structures array as its value
+new_block=$(echo '{}' | jq --argjson ys "$y_structures" '.mempool_seed_utxo = $ys')
 
 # Save the new JSON structure to "mempool_seed.json"
 echo $new_block > mempool_seed.json

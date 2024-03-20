@@ -18,7 +18,7 @@ echo " "
 
 if [ "$1" = "set_log" ]
 then
-    echo set log storage: $2, compute: $3, miner: $4, user: $5.
+    echo set log storage: $2, mempool: $3, miner: $4, user: $5.
     STORAGE_LOG=$2
     COMPUTE_LOG=$3
     MINER_LOG=$4
@@ -32,7 +32,7 @@ fi
 
 RUST_LOG="$STORAGE_LOG,raft=warn" target/release/node storage --config=src/bin/node_settings_upgraded.toml > storage_0.log 2>&1 &
 s0=$!
-RUST_LOG="$COMPUTE_LOG" target/release/node compute --config=src/bin/node_settings_upgraded.toml > compute_0.log 2>&1 &
+RUST_LOG="$COMPUTE_LOG" target/release/node mempool --config=src/bin/node_settings_upgraded.toml > mempool_0.log 2>&1 &
 c0=$!
 RUST_LOG="$MINER_LOG" target/release/node miner --config=src/bin/node_settings_upgraded.toml --api_port=3010 --passphrase=TestPassword > miner_0.log 2>&1 &
 m0=$!

@@ -21,7 +21,7 @@ const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 async fn direct_messages() {
     let _ = tracing_log_try_init();
 
-    let mut nodes = create_compute_nodes(2, 2).await;
+    let mut nodes = create_mempool_nodes(2, 2).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, _) = tail.split_first_mut().unwrap();
 
@@ -38,7 +38,7 @@ async fn direct_messages() {
         assert_eq!(recv_frame, "Hello2");
     }
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check that 2 prelaunch nodes can exchange arbitrary messages in both direction,
@@ -47,7 +47,7 @@ async fn direct_messages() {
 async fn direct_prelaunch_messages() {
     let _ = tracing_log_try_init();
 
-    let mut nodes = create_compute_nodes(0, 2).await;
+    let mut nodes = create_mempool_nodes(0, 2).await;
     nodes.push(create_node_type_version(2, NodeType::PreLaunch, NETWORK_VERSION).await);
     nodes.push(create_node_type_version(2, NodeType::PreLaunch, NETWORK_VERSION).await);
     let (n1, tail) = nodes.split_first_mut().unwrap();
@@ -66,7 +66,7 @@ async fn direct_prelaunch_messages() {
         assert_eq!(recv_frame, "Hello2");
     }
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// In this test, we
@@ -79,7 +79,7 @@ async fn multicast() {
     let _ = tracing_log_try_init();
 
     // Initialize nodes.
-    let mut nodes = create_compute_nodes(16, 16).await;
+    let mut nodes = create_mempool_nodes(16, 16).await;
     nodes
         .iter_mut()
         .for_each(|n| n.set_connect_to_handshake_contacts(true));
@@ -120,7 +120,7 @@ async fn multicast() {
         }
     }
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check that 2 nodes connected node are disconnected once one of them disconnect.
@@ -141,7 +141,7 @@ async fn disconnect_connection(subset: bool) {
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(3, 2).await;
+    let mut nodes = create_mempool_nodes(3, 2).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -194,7 +194,7 @@ async fn disconnect_connection(subset: bool) {
     );
     assert!(success2 && success3, "{:?}", (actual2, actual3));
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check a node cannot connect to a node that stopped listening.
@@ -205,7 +205,7 @@ async fn listen_paused_resumed_stopped() {
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(3, 3).await;
+    let mut nodes = create_mempool_nodes(3, 3).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -245,7 +245,7 @@ async fn listen_paused_resumed_stopped() {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -265,7 +265,7 @@ async fn connect_full(from_full: bool) {
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(3, 1).await;
+    let mut nodes = create_mempool_nodes(3, 1).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -310,7 +310,7 @@ async fn connect_full(from_full: bool) {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check incompatible nodes who cannot establish connections.
@@ -321,8 +321,8 @@ async fn nodes_incompatible() {
     //
     // Arrange
     //
-    let mut nodes = create_compute_nodes(1, 4).await;
-    nodes.push(create_compute_node_version(4, NETWORK_VERSION + 1).await);
+    let mut nodes = create_mempool_nodes(1, 4).await;
+    nodes.push(create_mempool_node_version(4, NETWORK_VERSION + 1).await);
     nodes.push(create_node_type_version(4, NodeType::PreLaunch, NETWORK_VERSION).await);
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
@@ -369,7 +369,7 @@ async fn nodes_incompatible() {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check nodes who cannot establish connections because of unexpected certificates.
@@ -381,17 +381,17 @@ async fn nodes_tls_mismatch() {
     // Arrange
     //
     let configs =
-        get_bound_common_tls_configs(&["compute1", "compute2", "compute3"], |name, mut s| {
-            if name == "compute1.a-block.net" {
+        get_bound_common_tls_configs(&["mempool1", "mempool2", "mempool3"], |name, mut s| {
+            if name == "mempool1.aiblock.ch" {
                 let mapping = &mut s.socket_name_mapping;
-                let key1 = find_key_with_value(mapping, "compute2.a-block.net").unwrap();
-                let key2 = find_key_with_value(mapping, "compute3.a-block.net").unwrap();
+                let key1 = find_key_with_value(mapping, "mempool2.aiblock.ch").unwrap();
+                let key2 = find_key_with_value(mapping, "mempool3.aiblock.ch").unwrap();
                 swap_map_values(mapping, &key1, &key2);
             }
             s
         })
         .await;
-    let mut nodes = create_config_compute_nodes(configs, 4).await;
+    let mut nodes = create_config_mempool_nodes(configs, 4).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -430,7 +430,7 @@ async fn nodes_tls_mismatch() {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check nodes who cannot establish connections because of unexpected root certificates.
@@ -442,24 +442,24 @@ async fn nodes_tls_ca_mismatch() {
     // Arrange
     //
     let configs =
-        get_bound_common_tls_configs(&["compute1", "compute2", "miner101"], |name, mut s| {
+        get_bound_common_tls_configs(&["mempool1", "mempool2", "miner101"], |name, mut s| {
             match name {
-                "compute1.a-block.net" => {
+                "mempool1.aiblock.ch" => {
                     debug!("Socket Mapping: {:?}", &s.socket_name_mapping);
                     let untrusted_names = s.untrusted_names.as_mut().unwrap();
-                    untrusted_names.insert("ca_root.a-block.net".to_owned());
+                    untrusted_names.insert("ca_root.aiblock.ch".to_owned());
                 }
-                "compute2.a-block.net" => {
+                "mempool2.aiblock.ch" => {
                     let untrusted_names = s.untrusted_names.as_mut().unwrap();
-                    untrusted_names.remove("miner101.a-block.net");
-                    s.pem_certificates.remove("miner101.a-block.net");
+                    untrusted_names.remove("miner101.aiblock.ch");
+                    s.pem_certificates.remove("miner101.aiblock.ch");
                 }
                 _ => (),
             }
             s
         })
         .await;
-    let mut nodes = create_config_compute_nodes(configs, 4).await;
+    let mut nodes = create_config_mempool_nodes(configs, 4).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -500,7 +500,7 @@ async fn nodes_tls_ca_mismatch() {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
 /// Check nodes who cannot establish connections because of unexpected root certificates.
@@ -515,9 +515,9 @@ async fn nodes_tls_ca_unmapped_mismatch() {
         let mut configs = Vec::new();
         let tls_spec = get_test_tls_spec();
         for (address, name) in [
-            ("127.0.0.1:12515", "node101.a-block.net"),
-            ("127.0.0.1:12520", "miner101.a-block.net"),
-            ("127.0.0.1:12530", "miner102.a-block.net"),
+            ("127.0.0.1:12515", "node101.aiblock.ch"),
+            ("127.0.0.1:12520", "miner101.aiblock.ch"),
+            ("127.0.0.1:12530", "miner102.aiblock.ch"),
         ]
         .iter()
         {
@@ -531,7 +531,7 @@ async fn nodes_tls_ca_unmapped_mismatch() {
         }
         configs
     };
-    let mut nodes = create_config_compute_nodes(configs, 4).await;
+    let mut nodes = create_config_mempool_nodes(configs, 4).await;
     let (n1, tail) = nodes.split_first_mut().unwrap();
     let (n2, tail) = tail.split_first_mut().unwrap();
     let (n3, _) = tail.split_first_mut().unwrap();
@@ -572,21 +572,21 @@ async fn nodes_tls_ca_unmapped_mismatch() {
         "{actual:?}"
     );
 
-    complete_compute_nodes(nodes).await;
+    complete_mempool_nodes(nodes).await;
 }
 
-async fn create_compute_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
+async fn create_mempool_nodes(num_nodes: usize, peer_limit: usize) -> Vec<Node> {
     let configs = std::iter::repeat_with(get_common_tls_config)
         .take(num_nodes)
         .collect();
-    create_config_compute_nodes(configs, peer_limit).await
+    create_config_mempool_nodes(configs, peer_limit).await
 }
 
-async fn create_config_compute_nodes(configs: Vec<TcpTlsConfig>, peer_limit: usize) -> Vec<Node> {
+async fn create_config_mempool_nodes(configs: Vec<TcpTlsConfig>, peer_limit: usize) -> Vec<Node> {
     let mut nodes = Vec::new();
     for tcp_tls_config in configs {
         nodes.push(
-            Node::new(&tcp_tls_config, peer_limit, NodeType::Compute, false, false)
+            Node::new(&tcp_tls_config, peer_limit, NodeType::Mempool, false, false)
                 .await
                 .unwrap(),
         );
@@ -594,8 +594,8 @@ async fn create_config_compute_nodes(configs: Vec<TcpTlsConfig>, peer_limit: usi
     nodes
 }
 
-async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
-    create_node_type_version(peer_limit, NodeType::Compute, network_version).await
+async fn create_mempool_node_version(peer_limit: usize, network_version: u32) -> Node {
+    create_node_type_version(peer_limit, NodeType::Mempool, network_version).await
 }
 
 async fn create_node_type_version(
@@ -616,7 +616,7 @@ async fn create_node_type_version(
     .unwrap()
 }
 
-async fn complete_compute_nodes(nodes: Vec<Node>) {
+async fn complete_mempool_nodes(nodes: Vec<Node>) {
     for mut node in nodes.into_iter() {
         join_all(node.stop_listening().await).await;
     }

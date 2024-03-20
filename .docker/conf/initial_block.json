@@ -1,12 +1,12 @@
 {
-    "compute_genesis_tx_in_comment": [
+    "mempool_genesis_tx_in_comment": [
         "/// The TxIn content for genesis block.",
         "/// A marketing request: A quote from the the Magna Carta document, the 39th claim.",
         "/// This version was updated to be more inclusive."
     ],
     "treasury_supply": 90090000000000000,
-    "compute_genesis_tx_in": "+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.",
-    "compute_seed_utxo": {
+    "mempool_genesis_tx_in": "+ (39) No person shall be seized or imprisoned, or stripped of their rights or possessions, or outlawed or exiled, or deprived of their standing in any way, nor will we proceed with force against them, or send others to do so, except by the lawful judgment of their equals or by the law of the land.",
+    "mempool_seed_utxo": {
         "000000": [
             {
                 "public_key": "c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",

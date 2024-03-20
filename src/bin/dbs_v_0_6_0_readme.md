@@ -6,7 +6,7 @@
 ## In a separate clone of znp and noam:
  * checkout ZNP at tag v1.1.2 tag | commit ID 20f7df91
  * checkout NAOM at commit ID 33a41339
- * Make sure znp cargo.toml point to corresponding a_block_chain
+ * Make sure znp cargo.toml point to corresponding tw_chain
 
 ## Generate database and snapshots in v0.5.0 clone
 
@@ -36,4 +36,4 @@ target/release/upgrade --config=src/bin/node_settings_upgraded.toml --type all -
 
 ## Notes for next DB upgrade
 * `LOCKED_COINBASE_KEY` column will need deserialization and conversion if structure changes with next DB upgrade.
-* `new_create_asset` will result in a different `Script` value because of `OP_DROP` opcode being added. Although, this type of script might not form part of any transactions on current block on compute consensused, so conversion might not be necessary.
+* `new_create_asset` will result in a different `Script` value because of `OP_DROP` opcode being added. Although, this type of script might not form part of any transactions on current block on mempool consensused, so conversion might not be necessary.

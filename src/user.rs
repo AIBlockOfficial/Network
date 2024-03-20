@@ -1,7 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::interfaces::{
-    ComputeRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
+    MempoolRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
     UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -14,19 +14,19 @@ use crate::utils::{
 };
 use crate::wallet::{AddressStore, WalletDb, WalletDbError};
 use crate::Rs2JsMsg;
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::druid::{DdeValues, DruidExpectation};
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, Transaction, TxIn, TxOut};
-use a_block_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
-    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
-};
 use async_trait::async_trait;
 use bincode::deserialize;
 use bytes::Bytes;
 use serde::Serialize;
 use std::collections::BTreeSet;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
+use tw_chain::utils::transaction_utils::{
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
+};
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::sync::mpsc;
@@ -127,7 +127,7 @@ pub struct UserNode {
     local_events: LocalEventChannel,
     threaded_calls: ThreadedCallChannel<UserNode>,
     ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
-    compute_addr: SocketAddr,
+    mempool_addr: SocketAddr,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
     trading_peer: Option<SocketAddr>,
     next_payment: Option<(Option<SocketAddr>, Transaction)>,
@@ -149,13 +149,13 @@ impl UserNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: UserNodeConfig, mut extra: ExtraNodeParams) -> Result<UserNode> {
         let addr = config.user_address;
-        let raw_compute_addr = config
-            .compute_nodes
-            .get(config.user_compute_node_idx)
-            .ok_or(UserError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+        let raw_mempool_addr = config
+            .mempool_nodes
+            .get(config.user_mempool_node_idx)
+            .ok_or(UserError::ConfigError("Invalid mempool index"))?;
+        let mempool_addr = create_socket_addr(&raw_mempool_addr.address)
             .await
-            .map_err(|_| UserError::ConfigError("Invalid compute address"))?;
+            .map_err(|_| UserError::ConfigError("Invalid mempool address"))?;
 
         let tls_addr = create_socket_addr(&addr).await.unwrap();
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
@@ -199,7 +199,7 @@ impl UserNode {
             local_events: Default::default(),
             threaded_calls: Default::default(),
             ui_feedback_tx: Default::default(),
-            compute_addr,
+            mempool_addr,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             trading_peer: None,
             next_payment: None,
@@ -232,16 +232,16 @@ impl UserNode {
         self.node.public_address().await
     }
 
-    /// Returns the node's compute endpoint.
-    pub fn compute_address(&self) -> SocketAddr {
-        self.compute_addr
+    /// Returns the node's mempool endpoint.
+    pub fn mempool_address(&self) -> SocketAddr {
+        self.mempool_addr
     }
 
-    /// Returns whether the node is connected to its Compute peer
+    /// Returns whether the node is connected to its Mempool peer
     pub async fn is_disconnected(&self) -> bool {
         !self
             .node
-            .unconnected_peers(&[self.compute_address()])
+            .unconnected_peers(&[self.mempool_address()])
             .await
             .is_empty()
     }
@@ -268,9 +268,9 @@ impl UserNode {
 
     /// Connect info for peers on the network.
     pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
-        let compute = Some(self.compute_addr);
-        let to_connect = compute.iter();
-        let expect_connect = compute.iter();
+        let mempool = Some(self.mempool_addr);
+        let to_connect = mempool.iter();
+        let expect_connect = mempool.iter();
         (
             self.node.clone(),
             to_connect.copied().collect(),
@@ -370,7 +370,7 @@ impl UserNode {
                 success: true,
                 reason: "Item asset create transaction ready",
             }) => {
-                self.send_next_payment_to_destinations(self.compute_address())
+                self.send_next_payment_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
@@ -379,7 +379,7 @@ impl UserNode {
                 reason: "Received item-based payment request",
             }) => {
                 self.send_rb_payment_response().await.unwrap();
-                self.send_next_rb_transaction_to_destinations(self.compute_address())
+                self.send_next_rb_transaction_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
@@ -387,7 +387,7 @@ impl UserNode {
                 success: true,
                 reason: "Received item-based payment response",
             }) => {
-                self.send_next_rb_transaction_to_destinations(self.compute_address())
+                self.send_next_rb_transaction_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
@@ -414,7 +414,7 @@ impl UserNode {
                 success: true,
                 reason: "Next payment transaction ready",
             }) => {
-                self.send_next_payment_to_destinations(self.compute_address())
+                self.send_next_payment_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
@@ -456,23 +456,23 @@ impl UserNode {
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Connected to compute",
+                reason: "Connected to mempool",
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Disconnected from compute",
+                reason: "Disconnected from mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Failed to connect to compute",
+                reason: "Failed to connect to mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Failed to disconnect from compute",
+                reason: "Failed to disconnect from mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Already disconnected from compute",
+                reason: "Already disconnected from mempool",
             }) => {}
             Ok(Response {
                 success: true,
@@ -705,10 +705,10 @@ impl UserNode {
             ),
             SendCreateItemRequest {
                 item_amount,
-                drs_tx_hash_spec,
+                genesis_hash_spec,
                 metadata,
             } => Some(
-                self.generate_item_asset_tx(item_amount, drs_tx_hash_spec, metadata)
+                self.generate_item_asset_tx(item_amount, genesis_hash_spec, metadata)
                     .await,
             ),
             MakePaymentWithExcessAddress {
@@ -728,8 +728,8 @@ impl UserNode {
             ),
             GenerateNewAddress => Some(self.generate_new_address().await),
             GetConnectionStatus => Some(self.receive_connection_status_request().await),
-            ConnectToCompute => Some(self.handle_connect_to_compute().await),
-            DisconnectFromCompute => Some(self.handle_disconnect_from_compute().await),
+            ConnectToMempool => Some(self.handle_connect_to_mempool().await),
+            DisconnectFromMempool => Some(self.handle_disconnect_from_mempool().await),
             DeleteAddresses { addresses } => {
                 Some(self.delete_addresses_from_wallet(peer, addresses).await)
             }
@@ -763,22 +763,22 @@ impl UserNode {
         }
     }
 
-    /// Handle connect to compute node
-    pub async fn handle_disconnect_from_compute(&mut self) -> Response {
-        let compute_addr = self.compute_address();
-        let join_handles = self.node.disconnect_all(Some(&[compute_addr])).await;
+    /// Handle connect to mempool node
+    pub async fn handle_disconnect_from_mempool(&mut self) -> Response {
+        let mempool_addr = self.mempool_address();
+        let join_handles = self.node.disconnect_all(Some(&[mempool_addr])).await;
         if join_handles.is_empty() {
             return Response {
                 success: false,
-                reason: "Already disconnected from compute",
+                reason: "Already disconnected from mempool",
             };
         }
         for join_handle in join_handles {
             if let Err(err) = join_handle.await {
-                error!("Failed to disconnect from compute: {}", err);
+                error!("Failed to disconnect from mempool: {}", err);
                 return Response {
                     success: false,
-                    reason: "Failed to disconnect from compute",
+                    reason: "Failed to disconnect from mempool",
                 };
             }
         }
@@ -791,22 +791,22 @@ impl UserNode {
         .await;
         Response {
             success: true,
-            reason: "Disconnected from compute",
+            reason: "Disconnected from mempool",
         }
     }
 
-    /// Handle connect to compute node
-    pub async fn handle_connect_to_compute(&mut self) -> Response {
-        let compute_addr = self.compute_address();
-        if let Err(e) = self.node.connect_to(compute_addr).await {
-            error!("Failed to connect to compute: {e:?}");
+    /// Handle connect to mempool node
+    pub async fn handle_connect_to_mempool(&mut self) -> Response {
+        let mempool_addr = self.mempool_address();
+        if let Err(e) = self.node.connect_to(mempool_addr).await {
+            error!("Failed to connect to mempool: {e:?}");
             return Response {
                 success: false,
-                reason: "Failed to connect to compute",
+                reason: "Failed to connect to mempool",
             };
         }
         if let Err(e) = self.send_block_notification_request().await {
-            error!("Failed to send startup requests to compute: {e:?}");
+            error!("Failed to send startup requests to mempool: {e:?}");
             return Response {
                 success: false,
                 reason: "Failed to send startup requests on reconnection",
@@ -821,7 +821,7 @@ impl UserNode {
         .await;
         Response {
             success: true,
-            reason: "Connected to compute",
+            reason: "Connected to mempool",
         }
     }
 
@@ -859,7 +859,7 @@ impl UserNode {
     ///
     /// * `peer`     - Sending peer's socket address
     fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
-        if peer != self.compute_address() {
+        if peer != self.mempool_address() {
             return None;
         }
 
@@ -876,20 +876,20 @@ impl UserNode {
         self.received_utxo_set.clone()
     }
 
-    /// Sends the next internal payment transaction to be processed by the connected Compute
+    /// Sends the next internal payment transaction to be processed by the connected Mempool
     /// node
     ///
     /// ### Arguments
     ///
-    /// * `compute_peer`    - Compute peer to send the payment tx to
+    /// * `mempool_peer`    - Mempool peer to send the payment tx to
     /// * `payment_tx`      - Transaction to send
     pub async fn send_next_payment_to_destinations(
         &mut self,
-        compute_peer: SocketAddr,
+        mempool_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, tx) = self.next_payment.take().unwrap();
 
-        self.send_transactions_to_compute(compute_peer, vec![tx.clone()])
+        self.send_transactions_to_mempool(mempool_peer, vec![tx.clone()])
             .await?;
 
         let b_num = self.last_block_notified.header.b_num;
@@ -905,15 +905,15 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends the next internal item-based payment transaction to be processed by the connected Compute
+    /// Sends the next internal item-based payment transaction to be processed by the connected Mempool
     /// node
     ///
     /// ### Arguments
     ///
-    /// * `compute_peer` - Compute peer to send the payment tx to
+    /// * `mempool_peer` - Mempool peer to send the payment tx to
     pub async fn send_next_rb_transaction_to_destinations(
         &mut self,
-        compute_peer: SocketAddr,
+        mempool_peer: SocketAddr,
     ) -> Result<()> {
         let (peer, transaction) = self.next_rb_payment.take().unwrap();
         let b_num = self.last_block_notified.header.b_num;
@@ -921,12 +921,12 @@ impl UserNode {
             .store_payment_transaction(transaction.clone(), b_num)
             .await;
         let _peer_span =
-            info_span!("sending item-based transaction to compute node for processing");
+            info_span!("sending item-based transaction to mempool node for processing");
         let transactions = vec![transaction.clone()];
         self.node
             .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
+                mempool_peer,
+                MempoolRequest::SendTransactions { transactions },
             )
             .await?;
 
@@ -937,7 +937,7 @@ impl UserNode {
         Ok(())
     }
 
-    /// Request a UTXO set/subset from Compute for updating the running total
+    /// Request a UTXO set/subset from Mempool for updating the running total
     ///
     /// ### Arguments
     ///
@@ -946,8 +946,8 @@ impl UserNode {
         &mut self,
         address_list: UtxoFetchType,
     ) -> Option<Response> {
-        let compute_addr = self.compute_address();
-        self.send_request_utxo_set(address_list, compute_addr, NodeType::User)
+        let mempool_addr = self.mempool_address();
+        self.send_request_utxo_set(address_list, mempool_addr, NodeType::User)
             .await
             .ok()?;
 
@@ -957,7 +957,7 @@ impl UserNode {
         })
     }
 
-    /// Request a UTXO set/subset from Compute for updating the running total
+    /// Request a UTXO set/subset from Mempool for updating the running total
     ///
     /// ### Arguments
     ///
@@ -976,7 +976,7 @@ impl UserNode {
         })
     }
 
-    /// Request a UTXO set/subset from Compute for updating the running total
+    /// Request a UTXO set/subset from Mempool for updating the running total
     ///
     /// ### Arguments
     ///
@@ -1190,14 +1190,14 @@ impl UserNode {
         Ok(())
     }
 
-    /// Sends a block notification request to a Compute node
+    /// Sends a block notification request to a Mempool node
     pub async fn send_block_notification_request(&mut self) -> Result<()> {
         let _peer_span = info_span!("sending block notification request");
 
         self.node
             .send(
-                self.compute_addr,
-                ComputeRequest::SendUserBlockNotificationRequest,
+                self.mempool_addr,
+                MempoolRequest::SendUserBlockNotificationRequest,
             )
             .await?;
 
@@ -1243,7 +1243,7 @@ impl UserNode {
     /// * `peer` -  SocketAdress of the peer notifying.
     /// * `block` - Block that is being mined and will be stored.
     pub async fn notified_block_mining(&mut self, peer: SocketAddr, block: Block) -> Response {
-        if peer == self.compute_addr {
+        if peer == self.mempool_addr {
             self.wallet_db
                 .filter_locked_coinbase(block.header.b_num)
                 .await;
@@ -1312,7 +1312,7 @@ impl UserNode {
             total_txs += txs_chunk.len();
             debug!("New Generated txs:{:?}", txs_chunk);
             if let Err(e) = self
-                .send_transactions_to_compute(self.compute_address(), txs_chunk)
+                .send_transactions_to_mempool(self.mempool_address(), txs_chunk)
                 .await
             {
                 let error = format!("Autogenerated tx not sent to {:?}", e);
@@ -1394,7 +1394,7 @@ impl UserNode {
         &mut self,
         peer: SocketAddr,
         sender_asset: Asset,
-        drs_tx_hash: Option<String>, /* drs_tx_hash of Item asset to receive */
+        genesis_hash: Option<String>, /* genesis_hash of Item asset to receive */
     ) -> Result<()> {
         let (sender_address, _) = self.wallet_db.generate_payment_address().await;
         let sender_half_druid = generate_half_druid();
@@ -1409,7 +1409,7 @@ impl UserNode {
             (tx_ins, tx_outs),
             sender_half_druid,
             sender_address,
-            drs_tx_hash,
+            genesis_hash,
         );
 
         self.next_rb_payment_data = Some(rb_payment_data);
@@ -1520,11 +1520,11 @@ impl UserNode {
         }
     }
 
-    /// Create new item-asset transaction to send to compute for processing
+    /// Create new item-asset transaction to send to mempool for processing
     pub async fn generate_item_asset_tx(
         &mut self,
         item_amount: u64,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     ) -> Response {
         let AddressStore {
@@ -1539,7 +1539,7 @@ impl UserNode {
             public_key,
             &secret_key,
             item_amount,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             None,
             metadata,
         );
@@ -1567,16 +1567,16 @@ impl UserNode {
 impl Transactor for UserNode {
     type Error = UserError;
 
-    async fn send_transactions_to_compute(
+    async fn send_transactions_to_mempool(
         &mut self,
-        compute_peer: SocketAddr,
+        mempool_peer: SocketAddr,
         transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let _peer_span = info_span!("Sending transactions to compute node for processing");
+        let _peer_span = info_span!("Sending transactions to mempool node for processing");
         self.node
             .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
+                mempool_peer,
+                MempoolRequest::SendTransactions { transactions },
             )
             .await?;
 
@@ -1586,14 +1586,14 @@ impl Transactor for UserNode {
     async fn send_request_utxo_set(
         &mut self,
         address_list: UtxoFetchType,
-        compute_addr: SocketAddr,
+        mempool_addr: SocketAddr,
         requester_node_type: NodeType,
     ) -> Result<()> {
-        let _peer_span = info_span!("Sending UXTO request to compute node");
+        let _peer_span = info_span!("Sending UXTO request to mempool node");
         self.node
             .send(
-                compute_addr,
-                ComputeRequest::SendUtxoRequest {
+                mempool_addr,
+                MempoolRequest::SendUtxoRequest {
                     address_list,
                     requester_node_type,
                 },
@@ -1698,7 +1698,7 @@ pub fn make_rb_payment_item_tx_and_response(
         druid,
         participants: 2,
         expectations: vec![receiver_druid_expectation],
-        drs_tx_hash: None,
+        genesis_hash: None,
     };
 
     let rb_receive_tx =
@@ -1739,7 +1739,7 @@ pub fn make_rb_payment_send_transaction(
         druid,
         participants: 2,
         expectations: vec![sender_druid_expectation],
-        drs_tx_hash: None,
+        genesis_hash: None,
     };
 
     let receiver = ReceiverInfo {

@@ -6,7 +6,7 @@
 //! The goal of a UNICORN is to provide an uncontestable randomly generated number. The source
 //! of the uncontestability is the seed, which is meant to be generated from multiple, random
 //! oracle sources (eg. tweets). In the sloth implementation the seed is then run through a
-//! function which is slow to compute but quick to verify (VDF, or Verifiable Delay Function)
+//! function which is slow to mempool but quick to verify (VDF, or Verifiable Delay Function)
 //! and produces a witness value (for trapdoor verification) and the hash of the witness `g`.
 //!
 //! Although sloths have the extra ability to be slowed by a specific time length (through setting
@@ -18,7 +18,6 @@
 
 use crate::constants::MR_PRIME_ITERS;
 use crate::utils::rug_integer;
-use a_block_chain::crypto::sha3_256;
 use bincode::serialize;
 use rug::integer::{IsPrime, Order};
 use rug::Integer;
@@ -26,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use tracing::error;
+use tw_chain::crypto::sha3_256;
 
 /// Constructs the seed for a new, ZNP-specific Unicorn
 ///

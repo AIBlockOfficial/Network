@@ -3,7 +3,7 @@ use crate::block_pipeline::{
     MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineItem, MiningPipelinePhaseChange,
     MiningPipelineStatus, Participants, PipelineEventInfo,
 };
-use crate::configurations::{ComputeNodeConfig, UnicornFixedInfo};
+use crate::configurations::{MempoolNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, COINBASE_MATURITY, DB_PATH, TX_POOL_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{BlockStoredInfo, InitialIssuance, UtxoSet, WinningPoWInfo};
@@ -15,11 +15,6 @@ use crate::utils::{
     calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now,
     get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
 };
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::transaction::Transaction;
-use a_block_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -29,10 +24,15 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
 use tracing::{debug, error, trace, warn};
+use tw_chain::crypto::sha3_256;
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::transaction::Transaction;
+use tw_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
-    suffix: ".compute_raft",
+    suffix: ".mempool_raft",
     columns: &[],
 };
 
@@ -57,7 +57,7 @@ pub struct MinerWhitelist {
 /// Item serialized into RaftData and process by Raft.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
-pub enum ComputeRaftItem {
+pub enum MempoolRaftItem {
     FirstBlock(BTreeMap<String, Transaction>),
     Block(BlockStoredInfo),
     Transactions(BTreeMap<String, Transaction>),
@@ -65,12 +65,12 @@ pub enum ComputeRaftItem {
     PipelineItem(MiningPipelineItem, u64),
     CoordinatedCmd(CoordinatedCommand),
     Timestamp(i64),
-    RuntimeData(ComputeRuntimeItem),
+    RuntimeData(MempoolRuntimeItem),
 }
 
-/// Compute RAFT runtime item; will not get stored to disk
+/// Mempool RAFT runtime item; will not get stored to disk
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ComputeRuntimeItem {
+pub enum MempoolRuntimeItem {
     AddMiningApiKeys(Vec<(SocketAddr, String)>),
     RemoveMiningApiKeys(Vec<SocketAddr>),
 }
@@ -127,21 +127,21 @@ pub enum InitialProposal {
     PendingAll,
     PendingAuthorized,
     PendingItem {
-        item: ComputeRaftItem,
+        item: MempoolRaftItem,
         dedup_b_num: Option<u64>,
     },
 }
 
-/// Runtime data that is shared amongst compute peers, but will not persist to disk
+/// Runtime data that is shared amongst mempool peers, but will not persist to disk
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ComputeConsensusedRuntimeData {
+pub struct MempoolConsensusedRuntimeData {
     pub mining_api_keys: BTreeMap<SocketAddr, String>,
 }
 
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ComputeConsensused {
+pub struct MempoolConsensused {
     /// Sufficient majority
     unanimous_majority: usize,
     /// Sufficient majority
@@ -159,7 +159,7 @@ pub struct ComputeConsensused {
     /// UTXO set containing the valid transaction to use as previous input hashes.
     utxo_set: TrackedUtxoSet,
     /// Accumulating block:
-    /// Requires majority of compute node votes for normal blocks.
+    /// Requires majority of mempool node votes for normal blocks.
     /// Requires unanimous vote for first block.
     current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
     /// Coordinated commands sent through RAFT
@@ -168,7 +168,7 @@ pub struct ComputeConsensused {
     /// The last commited raft index.
     last_committed_raft_idx_and_term: (u64, u64),
     /// The current circulation of tokens
-    current_circulation: TokenAmount,
+    current_issuance: TokenAmount,
     /// The block pipeline
     block_pipeline: MiningPipelineInfo,
     /// The last mining rewards.
@@ -181,13 +181,13 @@ pub struct ComputeConsensused {
     timestamp: i64,
     /// Runtime data that does not get stored to disk
     #[serde(skip)]
-    runtime_data: ComputeConsensusedRuntimeData,
+    runtime_data: MempoolConsensusedRuntimeData,
     /// Initial issuances
     init_issuances: Vec<InitialIssuance>,
 }
 
 /// Consensused info to apply on start up after upgrade.
-pub struct ComputeConsensusedImport {
+pub struct MempoolConsensusedImport {
     pub unanimous_majority: usize,
     pub sufficient_majority: usize,
     pub partition_full_size: usize,
@@ -196,20 +196,20 @@ pub struct ComputeConsensusedImport {
     pub current_block: Option<Block>,
     pub utxo_set: UtxoSet,
     pub last_committed_raft_idx_and_term: (u64, u64),
-    pub current_circulation: TokenAmount,
+    pub current_issuance: TokenAmount,
     pub special_handling: Option<SpecialHandling>,
     pub miner_whitelist: MinerWhitelist,
     pub init_issuances: Vec<InitialIssuance>,
 }
 
-/// Consensused Compute fields and consensus management.
-pub struct ComputeRaft {
+/// Consensused Mempool fields and consensus management.
+pub struct MempoolRaft {
     /// True if first peer (leader).
     first_raft_peer: bool,
     /// The raft instance to interact with.
     raft_active: ActiveRaft,
     /// Consensused fields.
-    consensused: ComputeConsensused,
+    consensused: MempoolConsensused,
     /// Whether consensused received initial snapshot
     consensused_snapshot_applied: bool,
     /// Initial item to propose when ready.
@@ -246,64 +246,64 @@ pub struct ComputeRaft {
     timestamp: i64,
 }
 
-impl fmt::Debug for ComputeRaft {
+impl fmt::Debug for MempoolRaft {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ComputeRaft()")
+        write!(f, "MempoolRaft()")
     }
 }
 
-impl ComputeRaft {
-    /// Create a ComputeRaft, need to spawn the raft loop to use raft.
+impl MempoolRaft {
+    /// Create a MempoolRaft, need to spawn the raft loop to use raft.
     ///
     /// ### Arguments
     ///
-    /// * `config`  - Configuration option for a computer node.
+    /// * `config`  - Configuration option for a mempoolr node.
     /// * `raft_db` - Override raft db to use.
-    pub async fn new(config: &ComputeNodeConfig, raft_db: Option<SimpleDb>) -> Self {
-        let use_raft = config.compute_raft != 0;
+    pub async fn new(config: &MempoolNodeConfig, raft_db: Option<SimpleDb>) -> Self {
+        let use_raft = config.mempool_raft != 0;
         let timestamp = get_timestamp_now();
 
         if config.backup_restore.unwrap_or(false) {
-            db_utils::restore_file_backup(config.compute_db_mode, &DB_SPEC, None).unwrap();
+            db_utils::restore_file_backup(config.mempool_db_mode, &DB_SPEC, None).unwrap();
         }
         let raw_node_ips = config
-            .compute_nodes
+            .mempool_nodes
             .clone()
             .into_iter()
             .map(|v| v.address.clone())
             .collect::<Vec<String>>();
         let raft_active = ActiveRaft::new(
-            config.compute_node_idx,
+            config.mempool_node_idx,
             &create_socket_addr_for_list(&raw_node_ips)
                 .await
                 .unwrap_or_default(),
             use_raft,
-            Duration::from_millis(config.compute_raft_tick_timeout as u64),
-            db_utils::new_db(config.compute_db_mode, &DB_SPEC, raft_db, None),
+            Duration::from_millis(config.mempool_raft_tick_timeout as u64),
+            db_utils::new_db(config.mempool_db_mode, &DB_SPEC, raft_db, None),
         );
 
         let propose_transactions_timeout_duration =
-            Duration::from_millis(config.compute_transaction_timeout as u64);
+            Duration::from_millis(config.mempool_transaction_timeout as u64);
         let propose_transactions_timeout_at = Instant::now();
 
         let propose_mining_event_timeout_duration =
-            Duration::from_millis(config.compute_mining_event_timeout as u64);
+            Duration::from_millis(config.mempool_mining_event_timeout as u64);
         let propose_mining_event_timeout_at = Instant::now();
 
         let utxo_set =
-            make_utxo_set_from_seed(&config.compute_seed_utxo, &config.compute_genesis_tx_in);
+            make_utxo_set_from_seed(&config.mempool_seed_utxo, &config.mempool_genesis_tx_in);
 
-        let first_raft_peer = config.compute_node_idx == 0 || !raft_active.use_raft();
+        let first_raft_peer = config.mempool_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
-        let consensused = ComputeConsensused::default()
+        let consensused = MempoolConsensused::default()
             .with_peers_len(peers_len)
-            .with_partition_full_size(config.compute_partition_full_size)
-            .with_unicorn_fixed_param(config.compute_unicorn_fixed_param.clone())
+            .with_partition_full_size(config.mempool_partition_full_size)
+            .with_unicorn_fixed_param(config.mempool_unicorn_fixed_param.clone())
             .with_initial_issuances(config.initial_issuances.clone())
             .init_block_pipeline_status();
         let local_initial_proposal = Some(InitialProposal::PendingItem {
-            item: ComputeRaftItem::FirstBlock(utxo_set),
+            item: MempoolRaftItem::FirstBlock(utxo_set),
             dedup_b_num: None,
         });
         let backup_check = BackupCheck::new(config.backup_block_modulo);
@@ -334,12 +334,12 @@ impl ComputeRaft {
     }
 
     /// Get runtime data
-    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+    pub fn get_runtime_data(&self) -> MempoolConsensusedRuntimeData {
         self.consensused.get_runtime_data()
     }
 
     /// Set runtime data
-    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+    pub fn set_runtime_data(&mut self, runtime_data: MempoolConsensusedRuntimeData) {
         self.consensused.set_runtime_data(runtime_data);
     }
 
@@ -353,37 +353,38 @@ impl ComputeRaft {
         self.consensused.get_mining_api_key_entry(address)
     }
 
+    /// Gets all peers from the raft.
     pub fn get_peers(&self) -> Vec<SocketAddr> {
         self.raft_active.raft_peer_addrs().cloned().collect()
     }
 
-    /// Determine whether the compute node has whitelisting active.
-    pub fn get_compute_whitelisting_active(&self) -> bool {
+    /// Determine whether the mempool node has whitelisting active.
+    pub fn get_mempool_whitelisting_active(&self) -> bool {
         self.consensused.miner_whitelist.active
     }
 
     /// Return full settings for miner whitelisting
-    pub fn get_compute_miner_whitelist(&self) -> MinerWhitelist {
+    pub fn get_mempool_miner_whitelist(&self) -> MinerWhitelist {
         self.consensused.miner_whitelist.clone()
     }
 
     /// Get the full mining partition size
-    pub fn get_compute_partition_full_size(&self) -> usize {
+    pub fn get_mempool_partition_full_size(&self) -> usize {
         self.consensused.partition_full_size
     }
 
-    /// Get the compute nodes whitelist miner API keys
-    pub fn get_compute_miner_whitelist_api_keys(&self) -> Option<HashSet<String>> {
+    /// Get the mempool nodes whitelist miner API keys
+    pub fn get_mempool_miner_whitelist_api_keys(&self) -> Option<HashSet<String>> {
         self.consensused.miner_whitelist.miner_api_keys.clone()
     }
 
-    /// Get the compute nodes whitelist miner API keys
-    pub fn get_compute_miner_whitelist_addresses(&self) -> Option<HashSet<SocketAddr>> {
+    /// Get the mempool nodes whitelist miner API keys
+    pub fn get_mempool_miner_whitelist_addresses(&self) -> Option<HashSet<SocketAddr>> {
         self.consensused.miner_whitelist.miner_addresses.clone()
     }
 
-    /// Get the compute mining event timeout in MS
-    pub fn get_compute_mining_event_timeout(&self) -> usize {
+    /// Get the mempool mining event timeout in MS
+    pub fn get_mempool_mining_event_timeout(&self) -> usize {
         self.propose_mining_event_timeout_duration.as_millis() as usize
     }
 
@@ -399,12 +400,12 @@ impl ComputeRaft {
     }
 
     /// Update the miner whitelisting state
-    pub fn update_compute_miner_whitelist_active(&mut self, active: bool) {
+    pub fn update_mempool_miner_whitelist_active(&mut self, active: bool) {
         self.consensused.update_miner_whitelist_active(active);
     }
 
     /// Update the miner API keys
-    pub fn update_compute_miner_whitelist_api_keys(
+    pub fn update_mempool_miner_whitelist_api_keys(
         &mut self,
         miner_whitelist_api_keys: Option<HashSet<String>>,
     ) {
@@ -413,7 +414,7 @@ impl ComputeRaft {
     }
 
     /// Update the miner API keys
-    pub fn update_compute_miner_whitelist_addresses(
+    pub fn update_mempool_miner_whitelist_addresses(
         &mut self,
         miner_whitelist_addresses: Option<HashSet<SocketAddr>>,
     ) {
@@ -535,14 +536,14 @@ impl ComputeRaft {
             .received_commit_proposal(&raft_data, &raft_ctx)
             .await?;
         if removed {
-            if let ComputeRaftItem::Transactions(ref txs) = &item {
+            if let MempoolRaftItem::Transactions(ref txs) = &item {
                 self.proposed_tx_pool_len -= txs.len();
             }
         }
 
         trace!("received_commit_proposal {:?} -> {:?}", key, item);
         match item {
-            ComputeRaftItem::FirstBlock(uxto_set) => {
+            MempoolRaftItem::FirstBlock(uxto_set) => {
                 if !self.consensused.is_first_block() {
                     error!("Proposed FirstBlock after startup {:?}", key);
                     return None;
@@ -563,19 +564,19 @@ impl ComputeRaft {
                     return Some(CommittedItem::FirstBlock);
                 }
             }
-            ComputeRaftItem::Transactions(mut txs) => {
+            MempoolRaftItem::Transactions(mut txs) => {
                 self.local_tx_hash_last_commited = txs.keys().cloned().collect();
                 self.consensused.tx_pool.append(&mut txs);
                 return Some(CommittedItem::Transactions);
             }
-            ComputeRaftItem::DruidTransactions(mut txs) => {
+            MempoolRaftItem::DruidTransactions(mut txs) => {
                 self.consensused.tx_druid_pool.append(&mut txs);
                 return Some(CommittedItem::Transactions);
             }
-            ComputeRaftItem::Timestamp(timestamp) => {
+            MempoolRaftItem::Timestamp(timestamp) => {
                 self.consensused.timestamp = timestamp;
             }
-            ComputeRaftItem::Block(info) => {
+            MempoolRaftItem::Block(info) => {
                 let b_num = info.block_num;
                 if !self.consensused.is_current_block(info.block_num) {
                     trace!("Ignore invalid or outdated block stored info {:?}", key);
@@ -606,7 +607,7 @@ impl ComputeRaft {
                     }
                 }
             }
-            ComputeRaftItem::PipelineItem(mining_pipeline_item, b_num) => {
+            MempoolRaftItem::PipelineItem(mining_pipeline_item, b_num) => {
                 if !self.consensused.is_current_block(b_num) {
                     trace!("Ignore outdated item {:?}", key);
                     return None;
@@ -633,7 +634,7 @@ impl ComputeRaft {
                     None => return None,
                 }
             }
-            ComputeRaftItem::CoordinatedCmd(cmd) => {
+            MempoolRaftItem::CoordinatedCmd(cmd) => {
                 self.consensused
                     .append_current_coordinated_raft_cmd_stored_info(key, cmd);
                 if self
@@ -648,7 +649,7 @@ impl ComputeRaft {
                     return Some(CommittedItem::CoordinatedCmd(coordinated_command));
                 }
             }
-            ComputeRaftItem::RuntimeData(runtime_item) => {
+            MempoolRaftItem::RuntimeData(runtime_item) => {
                 self.consensused.handle_runtime_item(runtime_item);
             }
         }
@@ -717,7 +718,7 @@ impl ComputeRaft {
     /// Process as received block info necessary for new block to be generated.
     pub async fn propose_block_with_last_info(&mut self, block: BlockStoredInfo) -> bool {
         let b_num = block.block_num;
-        let item = ComputeRaftItem::Block(block);
+        let item = MempoolRaftItem::Block(block);
 
         match self.local_initial_proposal {
             None | Some(InitialProposal::PendingAuthorized) => {
@@ -763,7 +764,7 @@ impl ComputeRaft {
     pub async fn propose_mining_pipeline_item(&mut self, item: MiningPipelineItem) -> bool {
         if let Some(block) = self.get_mining_block() {
             let b_num = block.header.b_num;
-            let item = ComputeRaftItem::PipelineItem(item, b_num);
+            let item = MempoolRaftItem::PipelineItem(item, b_num);
             if let Some(key) = self.propose_item_dedup(&item, b_num).await {
                 self.consensused.block_pipeline.add_proposed_key(key);
                 return true;
@@ -775,8 +776,8 @@ impl ComputeRaft {
     }
 
     /// Propose a new runtime item
-    pub async fn propose_runtime_item(&mut self, item: ComputeRuntimeItem) {
-        self.propose_item(&ComputeRaftItem::RuntimeData(item)).await;
+    pub async fn propose_runtime_item(&mut self, item: MempoolRuntimeItem) {
+        self.propose_item(&MempoolRaftItem::RuntimeData(item)).await;
     }
 
     /// Clear block pipeline proposed keys
@@ -784,7 +785,7 @@ impl ComputeRaft {
         self.consensused.block_pipeline.clear_proposed_keys();
     }
 
-    /// Flush disconnected miners from compute node
+    /// Flush disconnected miners from mempool node
     pub fn flush_stale_miners(&mut self, unsent_miners: &[SocketAddr]) {
         self.consensused
             .block_pipeline
@@ -798,7 +799,7 @@ impl ComputeRaft {
     ///
     /// NOTE: Requires a unanimous majority vote
     pub async fn propose_pause_nodes(&mut self, b_num: u64) {
-        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+        self.propose_item(&MempoolRaftItem::CoordinatedCmd(
             CoordinatedCommand::PauseNodes { b_num },
         ))
         .await;
@@ -808,7 +809,7 @@ impl ComputeRaft {
     ///
     /// NOTE: Requires a unanimous majority vote
     pub async fn propose_resume_nodes(&mut self) {
-        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+        self.propose_item(&MempoolRaftItem::CoordinatedCmd(
             CoordinatedCommand::ResumeNodes,
         ))
         .await;
@@ -818,7 +819,7 @@ impl ComputeRaft {
     ///
     /// NOTE: Requires a unanimous majority vote
     pub async fn propose_apply_shared_config(&mut self) {
-        self.propose_item(&ComputeRaftItem::CoordinatedCmd(
+        self.propose_item(&MempoolRaftItem::CoordinatedCmd(
             CoordinatedCommand::ApplySharedConfig,
         ))
         .await;
@@ -837,7 +838,7 @@ impl ComputeRaft {
         let txs = take_first_n(max_propose_len, &mut self.local_tx_pool);
         if !txs.is_empty() {
             self.proposed_tx_pool_len += txs.len();
-            self.propose_item(&ComputeRaftItem::Transactions(txs)).await;
+            self.propose_item(&MempoolRaftItem::Transactions(txs)).await;
         }
     }
 
@@ -846,7 +847,7 @@ impl ComputeRaft {
     pub async fn propose_local_druid_transactions(&mut self) {
         let txs = std::mem::take(&mut self.local_tx_druid_pool);
         if !txs.is_empty() {
-            self.propose_item(&ComputeRaftItem::DruidTransactions(txs))
+            self.propose_item(&MempoolRaftItem::DruidTransactions(txs))
                 .await;
         }
     }
@@ -857,7 +858,7 @@ impl ComputeRaft {
             println!("Proposing timestamp as first peer");
             self.timestamp = get_timestamp_now();
 
-            self.propose_item(&ComputeRaftItem::Timestamp(self.timestamp))
+            self.propose_item(&MempoolRaftItem::Timestamp(self.timestamp))
                 .await;
         }
     }
@@ -880,7 +881,7 @@ impl ComputeRaft {
     ///  * `b_num` - Block number associated with this item.
     async fn propose_item_dedup(
         &mut self,
-        item: &ComputeRaftItem,
+        item: &MempoolRaftItem,
         b_num: u64,
     ) -> Option<RaftContextKey> {
         self.proposed_in_flight
@@ -893,7 +894,7 @@ impl ComputeRaft {
     /// ### Arguments
     ///
     /// * `item` - The item to be proposed to a raft.
-    async fn propose_item(&mut self, item: &ComputeRaftItem) -> RaftContextKey {
+    async fn propose_item(&mut self, item: &MempoolRaftItem) -> RaftContextKey {
         self.proposed_in_flight
             .propose_item(&mut self.raft_active, item, None)
             .await
@@ -934,8 +935,8 @@ impl ComputeRaft {
     }
 
     /// Gets the current number of tokens in circulation
-    pub fn get_current_circulation(&self) -> &TokenAmount {
-        &self.consensused.current_circulation
+    pub fn get_current_issuance(&self) -> &TokenAmount {
+        &self.consensused.current_issuance
     }
 
     /// Gets the current reward for a given block
@@ -1009,7 +1010,7 @@ impl ComputeRaft {
     #[cfg(test)]
     pub fn get_committed_utxo_tracked_pk_cache(
         &self,
-    ) -> std::collections::HashMap<String, BTreeSet<a_block_chain::primitives::transaction::OutPoint>>
+    ) -> std::collections::HashMap<String, BTreeSet<tw_chain::primitives::transaction::OutPoint>>
     {
         self.consensused.utxo_set.get_pk_cache()
     }
@@ -1127,14 +1128,14 @@ impl ComputeRaft {
     }
 }
 
-impl ComputeConsensused {
+impl MempoolConsensused {
     /// Get runtime data
-    pub fn get_runtime_data(&self) -> ComputeConsensusedRuntimeData {
+    pub fn get_runtime_data(&self) -> MempoolConsensusedRuntimeData {
         self.runtime_data.clone()
     }
 
     /// Set runtime data
-    pub fn set_runtime_data(&mut self, runtime_data: ComputeConsensusedRuntimeData) {
+    pub fn set_runtime_data(&mut self, runtime_data: MempoolConsensusedRuntimeData) {
         self.runtime_data = runtime_data;
     }
 
@@ -1205,9 +1206,9 @@ impl ComputeConsensused {
         self
     }
 
-    /// Create ComputeConsensused from imported data in upgrade
-    pub fn from_import(consensused: ComputeConsensusedImport) -> Self {
-        let ComputeConsensusedImport {
+    /// Create MempoolConsensused from imported data in upgrade
+    pub fn from_import(consensused: MempoolConsensusedImport) -> Self {
+        let MempoolConsensusedImport {
             unanimous_majority,
             sufficient_majority,
             partition_full_size,
@@ -1216,7 +1217,7 @@ impl ComputeConsensused {
             current_block,
             utxo_set,
             last_committed_raft_idx_and_term,
-            current_circulation,
+            current_issuance,
             special_handling,
             miner_whitelist,
             init_issuances,
@@ -1241,7 +1242,7 @@ impl ComputeConsensused {
             current_block_stored_info: Default::default(),
             current_raft_coordinated_cmd_stored_info: Default::default(),
             last_committed_raft_idx_and_term,
-            current_circulation,
+            current_issuance,
             block_pipeline: MiningPipelineInfo::from_import(block_pipeline),
             last_mining_transaction_hashes: Default::default(),
             runtime_data: Default::default(),
@@ -1256,10 +1257,10 @@ impl ComputeConsensused {
     pub fn into_import(
         self,
         special_handling: Option<SpecialHandling>,
-    ) -> ComputeConsensusedImport {
+    ) -> MempoolConsensusedImport {
         let block_pipeline = self.block_pipeline.into_import();
 
-        ComputeConsensusedImport {
+        MempoolConsensusedImport {
             unanimous_majority: self.unanimous_majority,
             sufficient_majority: self.sufficient_majority,
             partition_full_size: self.partition_full_size,
@@ -1268,7 +1269,7 @@ impl ComputeConsensused {
             current_block: block_pipeline.current_block,
             utxo_set: self.utxo_set.into_utxoset(),
             last_committed_raft_idx_and_term: self.last_committed_raft_idx_and_term,
-            current_circulation: self.current_circulation,
+            current_issuance: self.current_issuance,
             miner_whitelist: self.miner_whitelist,
             special_handling,
             init_issuances: self.init_issuances,
@@ -1326,8 +1327,8 @@ impl ComputeConsensused {
     }
 
     /// Current number of tokens in circulation
-    pub fn get_current_circulation(&self) -> &TokenAmount {
-        &self.current_circulation
+    pub fn get_current_issuance(&self) -> &TokenAmount {
+        &self.current_issuance
     }
 
     /// Current utxo_set including block being mined
@@ -1404,7 +1405,7 @@ impl ComputeConsensused {
                 let tx_hash = construct_tx_hash(&tx);
 
                 // State updates
-                self.current_circulation += issuance.amount;
+                self.current_issuance += issuance.amount;
                 block.transactions.push(tx_hash.clone());
                 txs.insert(tx_hash, tx);
             }
@@ -1583,10 +1584,10 @@ impl ComputeConsensused {
             .unwrap_or(0)
     }
 
-    /// Handle compute runtime data item
-    pub fn handle_runtime_item(&mut self, runtime_item: ComputeRuntimeItem) {
+    /// Handle mempool runtime data item
+    pub fn handle_runtime_item(&mut self, runtime_item: MempoolRuntimeItem) {
         match runtime_item {
-            ComputeRuntimeItem::AddMiningApiKeys(keys) => {
+            MempoolRuntimeItem::AddMiningApiKeys(keys) => {
                 for (address, mining_api_key) in keys {
                     if !self
                         .runtime_data
@@ -1611,7 +1612,7 @@ impl ComputeConsensused {
                     }
                 }
             }
-            ComputeRuntimeItem::RemoveMiningApiKeys(addresses) => {
+            MempoolRuntimeItem::RemoveMiningApiKeys(addresses) => {
                 trace!("Removing mining api key for addresses: {:?}", addresses);
                 for address in addresses {
                     self.runtime_data.mining_api_keys.remove(&address);
@@ -1689,7 +1690,7 @@ impl ComputeConsensused {
     pub fn apply_ready_block_stored_info(&mut self) {
         let block_num = match self.take_ready_block_stored_info() {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
-                self.current_circulation = get_total_coinbase_tokens(&utxo_set);
+                self.current_issuance = get_total_coinbase_tokens(&utxo_set);
                 self.initial_utxo_txs = Some(utxo_set);
                 0
             }
@@ -1702,7 +1703,7 @@ impl ComputeConsensused {
                 }
 
                 self.special_handling = None;
-                self.current_circulation += get_total_coinbase_tokens(&info.mining_transactions);
+                self.current_issuance += get_total_coinbase_tokens(&info.mining_transactions);
                 self.tx_current_block_previous_hash = Some(info.block_hash);
                 self.utxo_set
                     .extend_tracked_utxo_set(&info.mining_transactions);
@@ -1712,7 +1713,7 @@ impl ComputeConsensused {
                 info.block_num + 1
             }
         };
-        let reward = calculate_reward(self.current_circulation) / self.unanimous_majority as u64;
+        let reward = calculate_reward(self.current_issuance) / self.unanimous_majority as u64;
 
         self.block_pipeline
             .apply_ready_block_stored_info(block_num, reward);
@@ -1790,10 +1791,10 @@ mod test {
     use super::*;
     use crate::configurations::{DbMode, NodeSpec, TxOutSpec};
     use crate::utils::{create_socket_addr, create_valid_transaction, get_test_common_unicorn};
-    use a_block_chain::crypto::sign_ed25519 as sign;
-    use a_block_chain::primitives::asset::TokenAmount;
     use rug::Integer;
     use std::collections::BTreeSet;
+    use tw_chain::crypto::sign_ed25519 as sign;
+    use tw_chain::primitives::asset::TokenAmount;
 
     #[tokio::test]
     async fn generate_first_block_no_raft() {
@@ -2005,7 +2006,7 @@ mod test {
         // Act
         //
         let mut actual_combined_local_flight_consensused = Vec::new();
-        let mut collect_info = |node: &ComputeRaft| {
+        let mut collect_info = |node: &MempoolRaft| {
             actual_combined_local_flight_consensused.push((
                 node.combined_tx_pool_len(),
                 node.local_tx_pool.len(),
@@ -2076,50 +2077,50 @@ mod test {
         );
     }
 
-    async fn new_test_node(seed_utxo: &[&str]) -> ComputeRaft {
-        let compute_node = create_socket_addr("0.0.0.0").await.unwrap();
+    async fn new_test_node(seed_utxo: &[&str]) -> MempoolRaft {
+        let mempool_node = create_socket_addr("0.0.0.0").await.unwrap();
         let tx_out = TxOutSpec {
             public_key: "5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c"
                 .to_owned(),
             amount: TokenAmount(1),
             locktime: 0,
         };
-        let compute_config = ComputeNodeConfig {
-            compute_node_idx: 0,
-            compute_db_mode: DbMode::InMemory,
+        let mempool_config = MempoolNodeConfig {
+            mempool_node_idx: 0,
+            mempool_db_mode: DbMode::InMemory,
             tls_config: Default::default(),
             api_keys: Default::default(),
-            compute_unicorn_fixed_param: get_test_common_unicorn(),
-            compute_nodes: vec![NodeSpec {
-                address: compute_node.to_string(),
+            mempool_unicorn_fixed_param: get_test_common_unicorn(),
+            mempool_nodes: vec![NodeSpec {
+                address: mempool_node.to_string(),
             }],
             storage_nodes: vec![],
             user_nodes: vec![],
-            compute_raft: 0,
-            compute_raft_tick_timeout: 10,
-            compute_mining_event_timeout: 500,
-            compute_transaction_timeout: 50,
-            compute_seed_utxo: seed_utxo
+            mempool_raft: 0,
+            mempool_raft_tick_timeout: 10,
+            mempool_mining_event_timeout: 500,
+            mempool_transaction_timeout: 50,
+            mempool_seed_utxo: seed_utxo
                 .iter()
                 .map(|v| (v.to_string(), vec![tx_out.clone()]))
                 .collect(),
-            compute_genesis_tx_in: None,
-            compute_partition_full_size: 1,
-            compute_minimum_miner_pool_len: 1,
+            mempool_genesis_tx_in: None,
+            mempool_partition_full_size: 1,
+            mempool_minimum_miner_pool_len: 1,
             jurisdiction: "US".to_string(),
             sanction_list: Vec::new(),
-            compute_api_use_tls: true,
-            compute_api_port: 3003,
+            mempool_api_use_tls: true,
+            mempool_api_port: 3003,
             routes_pow: Default::default(),
             backup_block_modulo: Default::default(),
             utxo_re_align_block_modulo: Default::default(),
             backup_restore: Default::default(),
             enable_trigger_messages_pipeline_reset: Default::default(),
-            compute_miner_whitelist: Default::default(),
+            mempool_miner_whitelist: Default::default(),
             peer_limit: 1000,
             initial_issuances: Default::default(),
         };
-        let mut node = ComputeRaft::new(&compute_config, Default::default()).await;
+        let mut node = MempoolRaft::new(&mempool_config, Default::default()).await;
         node.set_key_run(0);
         node
     }

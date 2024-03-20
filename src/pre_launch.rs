@@ -88,15 +88,15 @@ struct PreLaunchNodeConfigSelected {
 impl PreLaunchNodeConfigSelected {
     async fn new(config: PreLaunchNodeConfig) -> Self {
         match config.node_type {
-            PreLaunchNodeType::Compute => Self {
-                pre_launch_node_idx: config.compute_node_idx,
-                pre_launch_db_mode: config.compute_db_mode,
+            PreLaunchNodeType::Mempool => Self {
+                pre_launch_node_idx: config.mempool_node_idx,
+                pre_launch_db_mode: config.mempool_db_mode,
                 tls_config: config.tls_config,
-                pre_launch_nodes: create_socket_addr_for_list(&config.compute_nodes)
+                pre_launch_nodes: create_socket_addr_for_list(&config.mempool_nodes)
                     .await
                     .unwrap_or_default(),
-                db_spec: crate::compute::DB_SPEC,
-                raft_db_spec: crate::compute_raft::DB_SPEC,
+                db_spec: crate::mempool::DB_SPEC,
+                raft_db_spec: crate::mempool_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
             },
             PreLaunchNodeType::Storage => Self {

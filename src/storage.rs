@@ -6,7 +6,7 @@ use crate::constants::{
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, ComputeRequest, Contract, DruidTxInfo,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, MempoolRequest, Contract, DruidTxInfo,
     MineRequest, MinedBlock, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
     StoredSerializingBlock,
 };
@@ -79,7 +79,7 @@ pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     ],
 };
 
-/// Result wrapper for compute errors
+/// Result wrapper for mempool errors
 pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug)]
@@ -137,7 +137,7 @@ pub struct StorageNode {
     catchup_fetch: StorageFetch,
     db: Arc<Mutex<SimpleDb>>,
     local_events: LocalEventChannel,
-    compute_addr: SocketAddr,
+    mempool_addr: SocketAddr,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
@@ -160,13 +160,13 @@ impl StorageNode {
             .await
             .map_err(|_| StorageError::ConfigError("Invalid storage address supplied"))?;
 
-        let raw_compute_addr = config
-            .compute_nodes
+        let raw_mempool_addr = config
+            .mempool_nodes
             .get(config.storage_node_idx)
-            .ok_or(StorageError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+            .ok_or(StorageError::ConfigError("Invalid mempool index"))?;
+        let mempool_addr = create_socket_addr(&raw_mempool_addr.address)
             .await
-            .map_err(|_| StorageError::ConfigError("Invalid compute address supplied"))?;
+            .map_err(|_| StorageError::ConfigError("Invalid mempool address supplied"))?;
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.storage_api_port);
@@ -196,9 +196,9 @@ impl StorageNode {
         };
 
         let shutdown_group = {
-            let compute = std::iter::once(compute_addr);
+            let mempool = std::iter::once(mempool_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
-            raft_peers.chain(compute).collect()
+            raft_peers.chain(mempool).collect()
         };
 
         StorageNode {
@@ -208,7 +208,7 @@ impl StorageNode {
             db,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             local_events: Default::default(),
-            compute_addr,
+            mempool_addr,
             whitelisted: Default::default(),
             shutdown_group,
             blockchain_item_fetched: Default::default(),
@@ -341,9 +341,9 @@ impl StorageNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Compute Shutdown",
+                reason: "Mempool Shutdown",
             }) => {
-                debug!("Compute shutdown");
+                debug!("Mempool shutdown");
                 if self.flood_closing_events().await.unwrap() {
                     warn!("Flood closing event shutdown");
                     return ResponseResult::Exit;
@@ -361,7 +361,7 @@ impl StorageNode {
                 success: true,
                 reason: "Block complete stored",
             }) => {
-                info!("Block stored: Send to compute");
+                info!("Block stored: Send to mempool");
                 if let Err(e) = self.send_stored_block().await {
                     error!("Block stored not sent {:?}", e);
                 }
@@ -882,7 +882,7 @@ impl StorageNode {
         get_stored_value_from_db(self.db.clone(), key)
     }
 
-    /// Get the last block stored info to send to the compute nodes
+    /// Get the last block stored info to send to the mempool nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.node_raft.get_last_block_stored()
     }
@@ -898,7 +898,7 @@ impl StorageNode {
         // Only the first call will send to storage.
         if let Some(block) = self.get_last_block_stored().clone() {
             self.node
-                .send(self.compute_addr, ComputeRequest::SendBlockStored(block))
+                .send(self.mempool_addr, MempoolRequest::SendBlockStored(block))
                 .await?;
         }
 
@@ -907,7 +907,7 @@ impl StorageNode {
 
     /// Re-sends messages triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
-        info!("Resend block stored: Send to compute");
+        info!("Resend block stored: Send to mempool");
         if let Err(e) = self.send_stored_block().await {
             error!("Resend lock stored not sent {:?}", e);
         }
@@ -916,7 +916,7 @@ impl StorageNode {
     /// Floods the closing event to everyone
     pub async fn flood_closing_events(&mut self) -> Result<bool> {
         self.node
-            .send_to_all(Some(self.compute_addr).into_iter(), ComputeRequest::Closing)
+            .send_to_all(Some(self.mempool_addr).into_iter(), MempoolRequest::Closing)
             .await
             .unwrap();
 
@@ -941,10 +941,10 @@ impl StorageNode {
             return None;
         }
 
-        if peer == self.compute_addr {
+        if peer == self.mempool_addr {
             return Some(Response {
                 success: true,
-                reason: "Compute Shutdown",
+                reason: "Mempool Shutdown",
             });
         }
 
@@ -961,7 +961,7 @@ impl StorageNode {
         })
     }
 
-    /// Receives a mined block from compute
+    /// Receives a mined block from mempool
     ///
     /// ### Arguments
     ///

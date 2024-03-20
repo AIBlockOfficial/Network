@@ -1,12 +1,12 @@
-# A-Block Network
+# AIBlock Network
 
-A repo for the development of the A-Block Network.
+A repo for the development of the AIBlock Network.
 
 ..
 
 ## Setup
 
-The A-Block Network runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
+The AIBlock Network runs on Rust, so installing this is the first step before dealing with any code. You can install `rustup`, Rust's toolchain installer, by running the following:
 
 ```
 curl https://sh.rustup.rs -sSf | sh
@@ -34,28 +34,6 @@ sudo apt-get install libclang-dev
 
 The above should enable you to install `librocksdb-sys` successfully, but older versions of this crate had bugs so it would be wise to ensure you've installed `rocksdb = "0.21.0"` or higher in order to avoid compilation issues.
 
-### Repo Setup
-
-You can then set up the project on your local machine using the following steps:
-
-- Clone this repo using one of the options in Gitlab
-- From your terminal, move into the cloned folder on your local machine
-- Run the following:
-
-```
-make
-```
-
-You will also require a local instances of the A-Block `NAOM` and `Keccak Prime` repo, which is a crate dependency. The dependency 
-is listed in the `Cargo.toml` as:
-
-```
-a_block_chain = { path = "../a_block_chain" }
-keccak_prime = { path = "../keccak-prime" }
-```
-
-The path can be changed as needed. Once done you can build the project using `cargo build` and run it using `cargo run`, as per usual.
-
 ..
 
 ## Running Nodes Locally
@@ -68,7 +46,7 @@ cargo build --release
 
 This will compile everything into a release state, from which you can then run your nodes locally. The following are example commands for each type to get you up and running quickly:
 
-- **Compute**: `RUST_LOG=warp target/release/node compute --config=src/bin/node_settings_local_raft_1.toml`
+- **Mempool**: `RUST_LOG=warp target/release/node mempool --config=src/bin/node_settings_local_raft_1.toml`
 - **Storage**: `RUST_LOG=warp target/release/node storage --config=src/bin/node_settings_local_raft_1.toml`
 - **Miner**: `RUST_LOG=warp target/release/node miner --config=src/bin/node_settings_local_raft_1.toml`
 - **User**: `RUST_LOG=warp target/release/node user --config=src/bin/node_settings_local_raft_1.toml`
@@ -86,7 +64,7 @@ If you run into TLS problems on the API routes, you can pass `--api_use_tls=0` t
 ensure that your local version has the latest code for the project and minimizes the possibility of unnecessary merge 
 conflicts.**
 
-A-Block's Git flow generally involves working on each new task in a new branch, which you should checkout from `develop` and can be done as in the following example
+AIBlock's Git flow generally involves working on each new task in a new branch, which you should checkout from `develop` and can be done as in the following example
 
 ```
 git checkout -b branch_name
@@ -107,7 +85,7 @@ Steps to deploy the node binaries in choice of your environment.
 
 - Run the pipeline for branch of your choice with following variables.
 - Set `deploy_binaries` to `true` to enforce infrastructure changes.
-- Set `a_block_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc.
+- Set `ai_block_env` with choice of your environment. e.g - `dev-stg`, `dev-byron` etc.
 - Successful run of `infra` pipeline will present with you IP addresses of different nodes.
 - IP address of node will still need to be configured in `node_settings.toml` and `tls_certificates.json` manually post rollout.
 

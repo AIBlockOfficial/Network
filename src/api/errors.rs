@@ -17,7 +17,7 @@ pub enum ApiErrorType {
     CannotAccessWallet,
     CannotAccessUserNode,
     CannotAccessMinerNode,
-    CannotAccessComputeNode,
+    CannotAccessMempoolNode,
     CannotAccessPeerUserNode,
     CannotSaveAddressesToWallet,
     CannotFetchBalance,
@@ -59,7 +59,7 @@ impl std::fmt::Display for ApiErrorType {
             ApiErrorType::CannotAccessWallet => write!(f, "Cannot access wallet"),
             ApiErrorType::CannotAccessUserNode => write!(f, "Cannot access user node"),
             ApiErrorType::CannotAccessMinerNode => write!(f, "Cannot access miner node"),
-            ApiErrorType::CannotAccessComputeNode => write!(f, "Cannot access compute node"),
+            ApiErrorType::CannotAccessMempoolNode => write!(f, "Cannot access mempool node"),
             ApiErrorType::CannotAccessPeerUserNode => write!(f, "Cannot access peer user node"),
             ApiErrorType::CannotSaveAddressesToWallet => {
                 write!(f, "Cannot save address to wallet")

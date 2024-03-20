@@ -9,10 +9,10 @@ echo " "
 UPLOAD=$2
 BASE_NAME_UPLOAD=`basename $UPLOAD`
 
-NODE_ADDR_1=ubuntu@ec2-52-40-82-170.us-west-2.compute.amazonaws.com
-NODE_ADDR_2=ubuntu@ec2-52-27-248-13.us-west-2.compute.amazonaws.com
-NODE_ADDR_3=ubuntu@ec2-44-239-251-56.us-west-2.compute.amazonaws.com
-NODE_ADDR_4=ubuntu@ec2-35-155-18-122.us-west-2.compute.amazonaws.com
+NODE_ADDR_1=ubuntu@ec2-52-40-82-170.us-west-2.mempool.amazonaws.com
+NODE_ADDR_2=ubuntu@ec2-52-27-248-13.us-west-2.mempool.amazonaws.com
+NODE_ADDR_3=ubuntu@ec2-44-239-251-56.us-west-2.mempool.amazonaws.com
+NODE_ADDR_4=ubuntu@ec2-35-155-18-122.us-west-2.mempool.amazonaws.com
 
 if [ "$1" = "stage_first" ]
 then
@@ -129,7 +129,7 @@ then
     set -x
     scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_1:~/znp/storage_0.log ./
     scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_2:~/znp/miner_0.log ./
-    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3:~/znp/compute_0.log ./
+    scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3:~/znp/mempool_0.log ./
     scp -o ConnectTimeout=5 -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_4:~/znp/user_0.log ./
     set +x
     if [ "$ONLY_GET_EXISTING_LOGS" = "1" ]
@@ -169,7 +169,7 @@ echo "//-----------------------------//"
 echo " "
 set -v
 cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/storage/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_storage_0.sh
-cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/compute/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_compute_0.sh
+cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/mempool/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_mempool_0.sh
 cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/miner/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_miner_0.sh
 cat src/bin/node_settings_aws_run_one.sh | sed -e "s/\$1/user/g" | sed -e "s/\$2/0/g" | sed -e "s/\$3/0/g" | sed -e "s/\$4/info/g" | sed -e "s/\$5/$BASE_NAME_UPLOAD/g" | sed -e "s/\$6/$START_WITH_CLEAN/g" > target/release/node_settings_aws_run_user_0.sh
 set +v
@@ -187,11 +187,11 @@ then
     echo "Complete deploy Others"
     set -x
     scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_miner_0.sh $NODE_ADDR_2:~/
-    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_compute_0.sh $NODE_ADDR_3:~/
+    scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_mempool_0.sh $NODE_ADDR_3:~/
     scp -i ~/.ssh/ABlock-Node.pem target/release/node_settings_aws_run_user_0.sh $NODE_ADDR_4:~/
 
     ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_2 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_miner_0.sh
-    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_compute_0.sh
+    ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_3 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_mempool_0.sh
     ssh  -i ~/.ssh/ABlock-Node.pem $NODE_ADDR_4 screen -S auto_deploy -d -m -L -Logfile auto_deploy_screen.log sh ./node_settings_aws_run_user_0.sh
 
     set +x

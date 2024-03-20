@@ -3,7 +3,7 @@ use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::db_utils;
 use crate::interfaces::{
-    BlockchainItem, ComputeRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
+    BlockchainItem, MempoolRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
     ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -16,10 +16,6 @@ use crate::utils::{
     RunningTaskOrResult,
 };
 use crate::wallet::{LockedCoinbase, WalletDb, WalletDbError, DB_SPEC};
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::block::{self, BlockHeader};
-use a_block_chain::primitives::transaction::Transaction;
-use a_block_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 use async_trait::async_trait;
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -39,6 +35,10 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::block::{self, BlockHeader};
+use tw_chain::primitives::transaction::Transaction;
+use tw_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash};
 
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
@@ -147,7 +147,7 @@ pub struct MinerNode {
     local_events: LocalEventChannel,
     threaded_calls: ThreadedCallChannel<MinerNode>,
     ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
-    compute_addr: SocketAddr,
+    mempool_addr: SocketAddr,
     rand_num: Vec<u8>,
     pause_node: Arc<RwLock<bool>>,
     address_aggregation_limit: Option<usize>,
@@ -175,13 +175,13 @@ impl MinerNode {
     /// * `extra`  - additional parameter for construction
     pub async fn new(config: MinerNodeConfig, mut extra: ExtraNodeParams) -> Result<MinerNode> {
         let addr = config.miner_address;
-        let raw_compute_addr = config
-            .compute_nodes
-            .get(config.miner_compute_node_idx)
-            .ok_or(MinerError::ConfigError("Invalid compute index"))?;
-        let compute_addr = create_socket_addr(&raw_compute_addr.address)
+        let raw_mempool_addr = config
+            .mempool_nodes
+            .get(config.miner_mempool_node_idx)
+            .ok_or(MinerError::ConfigError("Invalid mempool index"))?;
+        let mempool_addr = create_socket_addr(&raw_mempool_addr.address)
             .await
-            .map_err(|_| MinerError::ConfigError("Invalid compute node address in config file"))?;
+            .map_err(|_| MinerError::ConfigError("Invalid mempool node address in config file"))?;
 
         // Restore old keys if backup is present
         if config.backup_restore.unwrap_or(false) {
@@ -221,7 +221,7 @@ impl MinerNode {
             threaded_calls: Default::default(),
             ui_feedback_tx: Default::default(),
             wallet_db,
-            compute_addr,
+            mempool_addr,
             rand_num: Default::default(),
             pause_node: Arc::new(RwLock::new(false)),
             current_block: Arc::new(Mutex::new(None)),
@@ -301,16 +301,16 @@ impl MinerNode {
         self.node.public_address().await
     }
 
-    /// Returns the node's compute endpoint.
-    pub fn compute_address(&self) -> SocketAddr {
-        self.compute_addr
+    /// Returns the node's mempool endpoint.
+    pub fn mempool_address(&self) -> SocketAddr {
+        self.mempool_addr
     }
 
-    /// Returns whether the node is connected to its Compute peer
+    /// Returns whether the node is connected to its Mempool peer
     pub async fn is_disconnected(&self) -> bool {
         !self
             .node
-            .unconnected_peers(&[self.compute_address()])
+            .unconnected_peers(&[self.mempool_address()])
             .await
             .is_empty()
     }
@@ -327,9 +327,9 @@ impl MinerNode {
 
     /// Connect info for peers on the network.
     pub fn connect_info_peers(&self) -> (Node, Vec<SocketAddr>, Vec<SocketAddr>) {
-        let compute = Some(self.compute_addr);
-        let to_connect = compute.iter();
-        let expect_connect = compute.iter();
+        let mempool = Some(self.mempool_addr);
+        let to_connect = mempool.iter();
+        let expect_connect = mempool.iter();
         (
             self.node.clone(),
             to_connect.copied().collect(),
@@ -498,23 +498,23 @@ impl MinerNode {
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Connected to compute",
+                reason: "Connected to mempool",
             }) => {}
             Ok(Response {
                 success: true,
-                reason: "Disconnected from compute",
+                reason: "Disconnected from mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Failed to connect to compute",
+                reason: "Failed to connect to mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Failed to disconnect from compute",
+                reason: "Failed to disconnect from mempool",
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Already disconnected from compute",
+                reason: "Already disconnected from mempool",
             }) => {}
             Ok(Response {
                 success: true,
@@ -523,7 +523,7 @@ impl MinerNode {
                 info!("Initiate pause node");
                 if let Err(e) = self
                     .node
-                    .send(self.compute_address(), ComputeRequest::RequestRemoveMiner)
+                    .send(self.mempool_address(), MempoolRequest::RequestRemoveMiner)
                     .await
                 {
                     error!("Failed to send request to remove miner: {:?}", e);
@@ -543,7 +543,7 @@ impl MinerNode {
             }) => {}
             Ok(Response {
                 success: false,
-                reason: "Received miner removed ack from non-compute peer",
+                reason: "Received miner removed ack from non-mempool peer",
             }) => {}
             Ok(Response {
                 success: true,
@@ -553,7 +553,7 @@ impl MinerNode {
             }
             Ok(Response {
                 success: false,
-                reason: "Received miner unauthorized notification from non-compute peer",
+                reason: "Received miner unauthorized notification from non-mempool peer",
             }) => {}
             Ok(Response {
                 success: false,
@@ -693,7 +693,7 @@ impl MinerNode {
         Ok(response)
     }
 
-    /// Handles a compute request.
+    /// Handles a mempool request.
     ///
     /// ### Arguments
     ///
@@ -763,12 +763,12 @@ impl MinerNode {
             MineApiRequest::InitiateResumeMining => {
                 Some(self.receive_pause_node_request(peer, false).await)
             }
-            MineApiRequest::ConnectToCompute => Some(self.handle_connect_to_compute().await),
-            MineApiRequest::DisconnectFromCompute => {
-                Some(self.handle_disconnect_from_compute().await)
+            MineApiRequest::ConnectToMempool => Some(self.handle_connect_to_mempool().await),
+            MineApiRequest::DisconnectFromMempool => {
+                Some(self.handle_disconnect_from_mempool().await)
             }
             MineApiRequest::RequestUTXOSet(addrs) => self
-                .send_request_utxo_set(addrs, self.compute_address(), NodeType::Miner)
+                .send_request_utxo_set(addrs, self.mempool_address(), NodeType::Miner)
                 .await
                 .ok()
                 .map(|_| Response {
@@ -805,7 +805,7 @@ impl MinerNode {
 
     /// Handle miner not being authorized
     pub async fn handle_receive_miner_not_authorized(&mut self, peer: SocketAddr) -> Response {
-        if self.compute_address() == peer {
+        if self.mempool_address() == peer {
             *self.pause_node.write().await = true;
             try_send_to_ui(
                 self.ui_feedback_tx.as_ref(),
@@ -828,14 +828,14 @@ impl MinerNode {
         } else {
             Response {
                 success: false,
-                reason: "Received miner unauthorized notification from non-compute peer",
+                reason: "Received miner unauthorized notification from non-mempool peer",
             }
         }
     }
 
-    /// Handle acknowledgement of miner removed from compute node
+    /// Handle acknowledgement of miner removed from mempool node
     pub async fn handle_receive_miner_removed_ack(&mut self, peer: SocketAddr) -> Response {
-        if self.compute_address() == peer {
+        if self.mempool_address() == peer {
             *self.pause_node.write().await = true;
             try_send_to_ui(
                 self.ui_feedback_tx.as_ref(),
@@ -851,27 +851,27 @@ impl MinerNode {
         } else {
             Response {
                 success: false,
-                reason: "Received miner removed ack from non-compute peer",
+                reason: "Received miner removed ack from non-mempool peer",
             }
         }
     }
 
-    /// Handle disconnect from compute node
-    pub async fn handle_disconnect_from_compute(&mut self) -> Response {
-        let compute_addr = self.compute_address();
-        let join_handles = self.node.disconnect_all(Some(&[compute_addr])).await;
+    /// Handle disconnect from mempool node
+    pub async fn handle_disconnect_from_mempool(&mut self) -> Response {
+        let mempool_addr = self.mempool_address();
+        let join_handles = self.node.disconnect_all(Some(&[mempool_addr])).await;
         if join_handles.is_empty() {
             return Response {
                 success: false,
-                reason: "Already disconnected from compute",
+                reason: "Already disconnected from mempool",
             };
         }
         for join_handle in join_handles {
             if let Err(err) = join_handle.await {
-                error!("Failed to disconnect from compute: {}", err);
+                error!("Failed to disconnect from mempool: {}", err);
                 return Response {
                     success: false,
-                    reason: "Failed to disconnect from compute",
+                    reason: "Failed to disconnect from mempool",
                 };
             }
         }
@@ -884,18 +884,18 @@ impl MinerNode {
         .await;
         Response {
             success: true,
-            reason: "Disconnected from compute",
+            reason: "Disconnected from mempool",
         }
     }
 
-    /// Handle connect to compute node
-    pub async fn handle_connect_to_compute(&mut self) -> Response {
-        let compute_addr = self.compute_address();
-        if let Err(e) = self.node.connect_to(compute_addr).await {
-            error!("Failed to connect to compute: {e:?}");
+    /// Handle connect to mempool node
+    pub async fn handle_connect_to_mempool(&mut self) -> Response {
+        let mempool_addr = self.mempool_address();
+        if let Err(e) = self.node.connect_to(mempool_addr).await {
+            error!("Failed to connect to mempool: {e:?}");
             return Response {
                 success: false,
-                reason: "Failed to connect to compute",
+                reason: "Failed to connect to mempool",
             };
         }
         try_send_to_ui(
@@ -909,7 +909,7 @@ impl MinerNode {
         // because we don't necessarily want to start mining
         Response {
             success: true,
-            reason: "Connected to compute",
+            reason: "Connected to mempool",
         }
     }
 
@@ -932,7 +932,7 @@ impl MinerNode {
 
         // Request came from the miner node itself,
         // which means we need to send a request to
-        // the compute node to have the miner removed
+        // the mempool node to have the miner removed
         if pause {
             // Pause mining
             Response {
@@ -1032,7 +1032,7 @@ impl MinerNode {
     ///
     /// * `peer`     - Sending peer's socket address
     fn receive_closing(&mut self, peer: SocketAddr) -> Option<Response> {
-        if peer != self.compute_address() {
+        if peer != self.mempool_address() {
             return None;
         }
 
@@ -1129,7 +1129,7 @@ impl MinerNode {
         rand_num: Vec<u8>,
         win_coinbases: Vec<String>,
     ) -> bool {
-        if peer != self.compute_address() {
+        if peer != self.mempool_address() {
             return false;
         }
 
@@ -1161,7 +1161,7 @@ impl MinerNode {
         pre_block: BlockHeader,
         reward: TokenAmount,
     ) -> bool {
-        if peer != self.compute_address() {
+        if peer != self.mempool_address() {
             return false;
         }
 
@@ -1284,7 +1284,7 @@ impl MinerNode {
         true
     }
 
-    /// Sends PoW to a compute node.
+    /// Sends PoW to a mempool node.
     ///
     /// ### Arguments
     ///
@@ -1301,7 +1301,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeRequest::SendPoW {
+                MempoolRequest::SendPoW {
                     block_num,
                     nonce,
                     coinbase,
@@ -1339,7 +1339,7 @@ impl MinerNode {
         true
     }
 
-    /// Sends the light partition PoW to a compute node
+    /// Sends the light partition PoW to a mempool node
     ///
     /// ### Arguments
     ///
@@ -1354,7 +1354,7 @@ impl MinerNode {
         self.node
             .send(
                 peer,
-                ComputeRequest::SendPartitionEntry {
+                MempoolRequest::SendPartitionEntry {
                     pow_info,
                     partition_entry,
                 },
@@ -1363,13 +1363,13 @@ impl MinerNode {
         Ok(())
     }
 
-    /// Sends a request to partition to a Compute node
+    /// Sends a request to partition to a Mempool node
     pub async fn send_partition_request(&mut self) -> Result<()> {
         let peer_span = error_span!("sending partition participation request");
         self.node
             .send(
-                self.compute_addr,
-                ComputeRequest::SendPartitionRequest {
+                self.mempool_addr,
+                MempoolRequest::SendPartitionRequest {
                     mining_api_key: self.mining_api_key.clone(),
                 },
             )
@@ -1490,22 +1490,22 @@ impl MinerNode {
                         // Construct aggregation transaction
                         let aggregating_tx = construct_tx_core(tx_ins, tx_outs, None);
 
-                        trace!("Sending aggregation tx to compute node");
+                        trace!("Sending aggregation tx to mempool node");
 
-                        // Send aggregating Transaction to compute node
+                        // Send aggregating Transaction to mempool node
                         if let Err(e) = self
-                            .send_transactions_to_compute(
-                                self.compute_addr,
+                            .send_transactions_to_mempool(
+                                self.mempool_addr,
                                 vec![aggregating_tx.clone()],
                             )
                             .await
                         {
                             let error =
-                                format!("Error sending aggregation tx to compute nodes: {e:?}");
+                                format!("Error sending aggregation tx to mempool nodes: {e:?}");
                             error!("{:?}", &e);
                             try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error })
                                 .await;
-                            // Return if sending to compute has failed
+                            // Return if sending to mempool has failed
                             return;
                         }
 
@@ -1513,7 +1513,7 @@ impl MinerNode {
                         // and the other for the excess amount(which will be `0` theoretically).
 
                         // TODO: Should we update the wallet DB here, or only once we've got confirmation
-                        // from compute node through received UTXO set?
+                        // from mempool node through received UTXO set?
                         let b_num = self
                             .current_block
                             .lock()
@@ -1537,17 +1537,17 @@ impl MinerNode {
                 AggregationStatus::UtxoUpdate(aggregation_addr) => {
                     // Request for UTXO set to confirm that aggregation tx
                     // has went through the previous time.
-                    let compute_addr = self.compute_address();
+                    let mempool_addr = self.mempool_address();
 
                     if let Err(e) = self
                         .send_request_utxo_set(
                             UtxoFetchType::AnyOf(vec![aggregation_addr.clone()]),
-                            compute_addr,
+                            mempool_addr,
                             NodeType::Miner,
                         )
                         .await
                     {
-                        let error = format!("Error sending UTXO request to compute nodes: {e:?}");
+                        let error = format!("Error sending UTXO request to mempool nodes: {e:?}");
                         error!("{:?}", &error);
                         try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Error { error })
                             .await;
@@ -1614,7 +1614,7 @@ impl MinerNode {
         rand_num: Vec<u8>,
     ) {
         // Here we need to generate a proof-of-work based on the public address
-        // resolved by the compute node.
+        // resolved by the mempool node.
         let address_proof = if let Some(public_addr) = self.public_address().await {
             format_parition_pow_address(public_addr)
         } else {
@@ -1661,14 +1661,14 @@ impl MinerNode {
             error!("load_local_db: load_locked_coinbase {:?}", e);
             warn!("load_local_db: generating new locked coinbase from UTXO set");
             // Existing locked coinbase failed to deserialize, so we need to
-            // generate a new one using a UTXO subset from the compute node
+            // generate a new one using a UTXO subset from the mempool node
             let all_known_addresses = self.wallet_db.get_known_addresses();
-            let request = ComputeRequest::SendUtxoRequest {
+            let request = MempoolRequest::SendUtxoRequest {
                 address_list: UtxoFetchType::AnyOf(all_known_addresses),
                 requester_node_type: NodeType::Miner,
             };
 
-            if let Err(e) = self.node.send(self.compute_addr, request).await {
+            if let Err(e) = self.node.send(self.mempool_addr, request).await {
                 error!("load_local_db: send UtxoRequest {:?}", e);
             }
         }
@@ -1731,16 +1731,16 @@ impl MinerInterface for MinerNode {
 impl Transactor for MinerNode {
     type Error = MinerError;
 
-    async fn send_transactions_to_compute(
+    async fn send_transactions_to_mempool(
         &mut self,
-        compute_peer: SocketAddr,
+        mempool_peer: SocketAddr,
         transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let _peer_span = info_span!("sending transactions to compute node for processing");
+        let _peer_span = info_span!("sending transactions to mempool node for processing");
         self.node
             .send(
-                compute_peer,
-                ComputeRequest::SendTransactions { transactions },
+                mempool_peer,
+                MempoolRequest::SendTransactions { transactions },
             )
             .await?;
 
@@ -1750,14 +1750,14 @@ impl Transactor for MinerNode {
     async fn send_request_utxo_set(
         &mut self,
         address_list: UtxoFetchType,
-        compute_addr: SocketAddr,
+        mempool_addr: SocketAddr,
         requester_node_type: NodeType,
     ) -> Result<()> {
-        let _peer_span = info_span!("Sending UXTO request to compute node");
+        let _peer_span = info_span!("Sending UXTO request to mempool node");
         self.node
             .send(
-                compute_addr,
-                ComputeRequest::SendUtxoRequest {
+                mempool_addr,
+                MempoolRequest::SendUtxoRequest {
                     address_list,
                     requester_node_type,
                 },

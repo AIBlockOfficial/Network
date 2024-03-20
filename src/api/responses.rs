@@ -1,6 +1,6 @@
 use crate::api::errors::ApiErrorType;
-use a_block_chain::primitives::asset::Asset;
 use serde::Serialize;
+use tw_chain::primitives::asset::Asset;
 use warp::hyper::StatusCode;
 
 /*------- JSON HANDLING --------*/

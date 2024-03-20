@@ -20,7 +20,7 @@ use crate::db_utils::{
 };
 use crate::miner::LAST_COINBASE_KEY;
 use crate::utils::StringError;
-use crate::{compute, compute_raft, raft_store, storage, storage_raft, user, wallet};
+use crate::{mempool, mempool_raft, raft_store, storage, storage_raft, user, wallet};
 use bincode::{deserialize, serialize};
 use frozen_last_version as old;
 use std::error::Error;
@@ -29,14 +29,14 @@ use tracing::error;
 
 pub const DB_SPEC_INFOS: &[DbSpecInfo] = &[
     DbSpecInfo {
-        node_type: "compute",
+        node_type: "mempool",
         db_path: DB_PATH,
-        suffix: ".compute",
+        suffix: ".mempool",
     },
     DbSpecInfo {
-        node_type: "compute",
+        node_type: "mempool",
         db_path: DB_PATH,
-        suffix: ".compute_raft",
+        suffix: ".mempool_raft",
     },
     DbSpecInfo {
         node_type: "storage",
@@ -74,8 +74,8 @@ pub struct UpgradeStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpgradeCfg {
     pub raft_len: usize,
-    pub compute_partition_full_size: usize,
-    pub compute_unicorn_fixed_param: UnicornFixedInfo,
+    pub mempool_partition_full_size: usize,
+    pub mempool_unicorn_fixed_param: UnicornFixedInfo,
     pub passphrase: String,
 }
 
@@ -144,12 +144,12 @@ impl From<wallet::WalletDbError> for UpgradeError {
 }
 
 /// Upgrade DB: New column are added at begining of upgrade and old one removed at the end.
-pub fn get_upgrade_compute_db(
+pub fn get_upgrade_mempool_db(
     db_mode: DbMode,
     old_dbs: ExtraNodeParams,
 ) -> Result<ExtraNodeParams> {
-    let spec = &old::compute::DB_SPEC;
-    let raft_spec = &old::compute_raft::DB_SPEC;
+    let spec = &old::mempool::DB_SPEC;
+    let raft_spec = &old::mempool_raft::DB_SPEC;
     let version = old::constants::NETWORK_VERSION_SERIALIZED;
     let db = new_db_with_version(db_mode, spec, version, old_dbs.db, None)?;
     let raft_db = new_db_with_version(db_mode, raft_spec, version, old_dbs.raft_db, None)?;
@@ -162,14 +162,14 @@ pub fn get_upgrade_compute_db(
 }
 
 /// Upgrade DB: upgrade ready given db  .
-pub fn upgrade_compute_db(
+pub fn upgrade_mempool_db(
     mut dbs: ExtraNodeParams,
     upgrade_cfg: &UpgradeCfg,
 ) -> Result<(ExtraNodeParams, UpgradeStatus)> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
-    let (batch, raft_batch, status) = upgrade_compute_db_batch(
+    let (batch, raft_batch, status) = upgrade_mempool_db_batch(
         (db, raft_db),
         (db.batch_writer(), raft_db.batch_writer()),
         upgrade_cfg,
@@ -182,7 +182,7 @@ pub fn upgrade_compute_db(
 }
 
 /// Upgrade DB: all columns new and old are expected to be opened
-pub fn upgrade_compute_db_batch<'a>(
+pub fn upgrade_mempool_db_batch<'a>(
     (db, raft_db): (&SimpleDb, &SimpleDb),
     (mut batch, mut raft_batch): (SimpleDbWriteBatch<'a>, SimpleDbWriteBatch<'a>),
     upgrade_cfg: &UpgradeCfg,
@@ -194,17 +194,17 @@ pub fn upgrade_compute_db_batch<'a>(
     let mut status = UpgradeStatus::default();
     batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
     raft_batch.put_cf(DB_COL_DEFAULT, DB_VERSION_KEY, NETWORK_VERSION_SERIALIZED);
-    batch.put_cf(compute::DB_COL_INTERNAL, compute::RAFT_KEY_RUN, key_run()?);
+    batch.put_cf(mempool::DB_COL_INTERNAL, mempool::RAFT_KEY_RUN, key_run()?);
 
-    let column = compute::DB_COL_INTERNAL;
+    let column = mempool::DB_COL_INTERNAL;
     for (key, value) in db.iter_cf_clone(column) {
-        if key == old::compute::REQUEST_LIST_KEY.as_bytes()
-            || key == old::compute::USER_NOTIFY_LIST_KEY.as_bytes()
+        if key == old::mempool::REQUEST_LIST_KEY.as_bytes()
+            || key == old::mempool::USER_NOTIFY_LIST_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
-        } else if key == compute::RAFT_KEY_RUN.as_bytes()
-            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
-            || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
+        } else if key == mempool::RAFT_KEY_RUN.as_bytes()
+            || key == mempool::POW_PREV_RANDOM_NUM_KEY.as_bytes()
+            || key == mempool::POW_RANDOM_NUM_KEY.as_bytes()
         {
             // Keep unmodified
         } else {
@@ -212,15 +212,15 @@ pub fn upgrade_compute_db_batch<'a>(
         }
     }
 
-    let column = compute::DB_COL_LOCAL_TXS;
+    let column = mempool::DB_COL_LOCAL_TXS;
     for (key, _) in db.iter_cf_clone(column) {
         batch.delete_cf(column, &key);
     }
 
     clean_raft_db(raft_db, &mut raft_batch, |k, v| {
-        let mut consensus = old::convert_compute_consensused_to_import(
-            tracked_deserialize("ComputeConsensused", k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+        let mut consensus = old::convert_mempool_consensused_to_import(
+            tracked_deserialize("MempoolConsensused", k, &v)?,
+            Some(mempool_raft::SpecialHandling::FirstUpgradeBlock),
         );
 
         status.last_raft_block_num = consensus.tx_current_block_num;
@@ -228,10 +228,10 @@ pub fn upgrade_compute_db_batch<'a>(
         // Already mined block it would have been discarded when PoW found.
         consensus.current_block = None;
 
-        let consensus = compute_raft::ComputeConsensused::from_import(consensus)
+        let consensus = mempool_raft::MempoolConsensused::from_import(consensus)
             .with_peers_len(upgrade_cfg.raft_len)
-            .with_partition_full_size(upgrade_cfg.compute_partition_full_size)
-            .with_unicorn_fixed_param(upgrade_cfg.compute_unicorn_fixed_param.clone())
+            .with_partition_full_size(upgrade_cfg.mempool_partition_full_size)
+            .with_unicorn_fixed_param(upgrade_cfg.mempool_unicorn_fixed_param.clone())
             .init_block_pipeline_status();
 
         Ok(serialize(&consensus)?)
@@ -241,40 +241,40 @@ pub fn upgrade_compute_db_batch<'a>(
 }
 
 /// Update the database to be as if it had just been upgraded
-pub fn upgrade_same_version_compute_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
+pub fn upgrade_same_version_mempool_db(mut dbs: ExtraNodeParams) -> Result<ExtraNodeParams> {
     let db = dbs.db.as_mut().unwrap();
     let raft_db = dbs.raft_db.as_mut().unwrap();
 
     let (mut batch, mut raft_batch) = (db.batch_writer(), raft_db.batch_writer());
 
-    let column = compute::DB_COL_INTERNAL;
+    let column = mempool::DB_COL_INTERNAL;
     for (key, value) in db.iter_cf_clone(column) {
-        if key == compute::REQUEST_LIST_KEY.as_bytes()
-            || key == compute::USER_NOTIFY_LIST_KEY.as_bytes()
-            || key == compute::POW_RANDOM_NUM_KEY.as_bytes()
-            || key == compute::POW_PREV_RANDOM_NUM_KEY.as_bytes()
+        if key == mempool::REQUEST_LIST_KEY.as_bytes()
+            || key == mempool::USER_NOTIFY_LIST_KEY.as_bytes()
+            || key == mempool::POW_RANDOM_NUM_KEY.as_bytes()
+            || key == mempool::POW_PREV_RANDOM_NUM_KEY.as_bytes()
         {
             batch.delete_cf(column, &key);
-        } else if key == compute::RAFT_KEY_RUN.as_bytes() {
+        } else if key == mempool::RAFT_KEY_RUN.as_bytes() {
             // Keep modified
         } else {
             return Err(key_value_error("Unexpected key", &key, &value));
         }
     }
 
-    let column = compute::DB_COL_LOCAL_TXS;
+    let column = mempool::DB_COL_LOCAL_TXS;
     for (key, _) in db.iter_cf_clone(column) {
         batch.delete_cf(column, &key);
     }
 
     clean_same_raft_db(raft_db, &mut raft_batch, |k, v| {
-        let mut consensus = compute_raft::ComputeConsensused::into_import(
-            tracked_deserialize("ComputeConsensused", k, &v)?,
-            Some(compute_raft::SpecialHandling::FirstUpgradeBlock),
+        let mut consensus = mempool_raft::MempoolConsensused::into_import(
+            tracked_deserialize("MempoolConsensused", k, &v)?,
+            Some(mempool_raft::SpecialHandling::FirstUpgradeBlock),
         );
         // Version 0.3.0 coordinated shutdown should never have a block in snapshoot
         consensus.current_block = None;
-        Ok(serialize(&compute_raft::ComputeConsensused::from_import(
+        Ok(serialize(&mempool_raft::MempoolConsensused::from_import(
             consensus,
         ))?)
     })?;
@@ -353,7 +353,7 @@ pub fn upgrade_storage_db_batch<'a>(
     let column = old::storage::DB_COL_BC_V0_6_0;
     for (key, value) in db.iter_cf_clone(column) {
         if is_transaction_key(&key) {
-            let _: old::a_block_chain::Transaction =
+            let _: old::tw_chain::Transaction =
                 tracked_deserialize("Tx deserialize", &key, &value)?;
         } else if is_block_key(&key) {
             let stored_block: old::interfaces::StoredSerializingBlock =

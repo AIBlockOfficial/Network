@@ -1,8 +1,8 @@
 use crate::wallet::LockedCoinbase;
-use a_block_chain::primitives::asset::{Asset, AssetValues};
-use a_block_chain::primitives::transaction::OutPoint;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use tw_chain::primitives::asset::{Asset, AssetValues};
+use tw_chain::primitives::transaction::OutPoint;
 
 /// A reference to fund stores, where `transactions` contains the hash
 /// of the transaction and its holding `AssetValue`
