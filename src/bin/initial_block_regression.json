@@ -9,62 +9,62 @@
     "compute_seed_utxo": {
         "000000": [
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 0
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 1
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 2
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 3
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 4
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 5
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 6
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 7
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 8
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 9
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 10
             },
             {
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 72072000000,
                 "locktime": 11
             }
@@ -74,8 +74,8 @@
         [
             {
                 "out_point": "0-000010",
-                "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a123032100933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
-                "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
+                "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a1230321006f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
+                "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
                 "amount": 123
             }
         ],
@@ -139,8 +139,8 @@
             "public_key": "a80fc230590e38bd648dc6bc4b6019d39e841f78657ad5138f351a70b6165c43"
         },
         {
-            "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a123032100933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab",
-            "public_key": "933ee5f8541f728e38c0ff42c0ece46551a6fa3db7c17088fb4f38feca66fbab"
+            "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a1230321006f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8",
+            "public_key": "6f26a1754def1b7115ff1150c6c75a1c6e6bee6b97492eece6266046504c70e8"
         },
         {
             "secret_key": "3053020101300506032b65700422042005c5098f18eb4a85676c167b89455af63709779e6e4bcddf250f20ec35b510b0a1230321009caa593f680c373872e4980bf15d119b373966f0e6f11a810718bfbf2e81017a",
