@@ -1,5 +1,7 @@
 pub use a_block_chain::constants::*;
 
+pub const FEE: u64 = 72072;
+
 /*------- BLOCK CONSTANTS --------*/
 
 /// Bit shifting value for reward issuance

@@ -1,8 +1,8 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
-    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
+    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, FEE, MINING_DIFFICULTY,
+    NETWORK_VERSION, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
 };
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
@@ -432,6 +432,11 @@ pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
         ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
             + smoothing_value_as_token_amount,
     )
+}
+
+/// Calculates the minimum fee required for a transaction to be processed by the network
+pub fn calculate_fee() -> TokenAmount {
+    TokenAmount(FEE)
 }
 
 /// Gets the total amount of tokens for all present coinbase transactions,
