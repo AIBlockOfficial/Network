@@ -529,6 +529,7 @@ pub mod convert {
             nonce_and_mining_tx_hash: old.nonce_and_mining_tx_hash,
             b_num: old.b_num,
             timestamp: 0,
+            difficulty: Vec::new(),
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
             txs_merkle_root_and_hash: old.txs_merkle_root_and_hash,
