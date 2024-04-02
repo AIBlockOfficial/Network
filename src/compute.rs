@@ -2142,9 +2142,18 @@ impl ComputeNode {
                     error!("Resend block and rand to partition miners failed {:?}", e);
                 }
                 if self.enable_trigger_messages_pipeline_reset {
+                    info!("Resend trigger messages for pipeline reset");
                     let mining_participants = &self.node_raft.get_mining_participants().unsorted;
                     let disconnected_participants =
                         self.node.unconnected_peers(mining_participants).await;
+
+                    info!(
+                        "Disconnected participants: {:?}",
+                        disconnected_participants.len());
+                    
+                    info!(
+                            "Mining participants: {:?}",
+                            mining_participants.len());
 
                     // If all miners participating in this mining round disconnected
                     // and we've reached the appropriate threshold for maximum number of
@@ -2156,6 +2165,11 @@ impl ComputeNode {
                     if disconnected_participants.len() == mining_participants.len() {
                         self.current_trigger_messages_count += 1;
                     }
+
+                    info!(
+                        "Current trigger messages count: {:?}",
+                        self.current_trigger_messages_count);
+
                     if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
                     {
                         self.current_trigger_messages_count = Default::default();
@@ -2163,6 +2177,8 @@ impl ComputeNode {
                             .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)
                             .await;
                     }
+                } else {
+                    warn!("Resend trigger messages for pipeline reset is not enabled");
                 }
             }
         }
