@@ -3,6 +3,21 @@
         {
             "amount": 100,
             "address": "c378675e327b48ca14bb2ef603b5c81bfdf2d2bbddb973cb1a2cfad8b5da29c2",
+            "block_height": 1
+        },
+        {
+            "amount": 100,
+            "address": "c378675e327b48ca14bb2ef603b5c81bfdf2d2bbddb973cb1a2cfad8b5da29c2",
+            "block_height": 2
+        },
+        {
+            "amount": 100,
+            "address": "c378675e327b48ca14bb2ef603b5c81bfdf2d2bbddb973cb1a2cfad8b5da29c2",
+            "block_height": 3
+        },
+        {
+            "amount": 100,
+            "address": "c378675e327b48ca14bb2ef603b5c81bfdf2d2bbddb973cb1a2cfad8b5da29c2",
             "block_height": 4
         }
     ]
