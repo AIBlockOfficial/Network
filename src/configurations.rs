@@ -1,13 +1,13 @@
 // use crate::comms_handler::Node;
-use crate::compute_raft::MinerWhitelist;
+use crate::mempool_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::interfaces::InitialIssuance;
 use crate::wallet::WalletDb;
-use a_block_chain::primitives::asset::TokenAmount;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
+use tw_chain::primitives::asset::TokenAmount;
 
 pub type UtxoSetSpec = BTreeMap<String, Vec<TxOutSpec>>;
 
@@ -99,45 +99,45 @@ pub struct NodeSpec {
     pub address: String,
 }
 
-/// Configuration option for a compute node
+/// Configuration option for a mempool node
 #[derive(Debug, Clone, Deserialize)]
-pub struct ComputeNodeConfig {
-    /// Index of the current node in compute_nodes
-    pub compute_node_idx: usize,
+pub struct MempoolNodeConfig {
+    /// Index of the current node in mempool_nodes
+    pub mempool_node_idx: usize,
     /// Use specific database
-    pub compute_db_mode: DbMode,
+    pub mempool_db_mode: DbMode,
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: BTreeMap<String, Vec<String>>,
     /// Configuation for unicorn
-    pub compute_unicorn_fixed_param: UnicornFixedInfo,
-    /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    pub mempool_unicorn_fixed_param: UnicornFixedInfo,
+    /// All mempool nodes addresses
+    pub mempool_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
     /// All user nodes addresses
     pub user_nodes: Vec<NodeSpec>,
-    /// Whether compute node will use raft or act independently (0)
-    pub compute_raft: usize,
+    /// Whether mempool node will use raft or act independently (0)
+    pub mempool_raft: usize,
     /// API port
-    pub compute_api_port: u16,
+    pub mempool_api_port: u16,
     /// API use TLS
-    pub compute_api_use_tls: bool,
+    pub mempool_api_use_tls: bool,
     /// Timeout for ticking raft
-    pub compute_raft_tick_timeout: usize,
+    pub mempool_raft_tick_timeout: usize,
     /// Timeout duration between mining event pipelines
-    pub compute_mining_event_timeout: usize,
+    pub mempool_mining_event_timeout: usize,
     /// Timeout duration between committing transactions
-    pub compute_transaction_timeout: usize,
+    pub mempool_transaction_timeout: usize,
     /// Transaction hash and TxOut info to use to seed utxo
-    pub compute_seed_utxo: UtxoSetSpec,
+    pub mempool_seed_utxo: UtxoSetSpec,
     /// String to use for genesis block TxIn
-    pub compute_genesis_tx_in: Option<String>,
+    pub mempool_genesis_tx_in: Option<String>,
     /// Partition full size
-    pub compute_partition_full_size: usize,
+    pub mempool_partition_full_size: usize,
     /// Minimum miner pool size
-    pub compute_minimum_miner_pool_len: usize,
+    pub mempool_minimum_miner_pool_len: usize,
     /// Node's legal jurisdiction
     pub jurisdiction: String,
     /// Node's address sanction list
@@ -153,28 +153,28 @@ pub struct ComputeNodeConfig {
     /// Enable trigger messages to reset the pipeline when it gets stuck
     pub enable_trigger_messages_pipeline_reset: Option<bool>,
     /// Enable API-key based whitelisting for miners
-    pub compute_miner_whitelist: MinerWhitelist,
+    pub mempool_miner_whitelist: MinerWhitelist,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
     /// Initial issuances
     pub initial_issuances: Vec<InitialIssuance>,
 }
 
-/// Configuration option for a compute node that can be shared across peers
+/// Configuration option for a mempool node that can be shared across peers
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct ComputeNodeSharedConfig {
+pub struct MempoolNodeSharedConfig {
     /// Timeout duration between mining event pipelines
-    pub compute_mining_event_timeout: usize,
+    pub mempool_mining_event_timeout: usize,
     /// Partition full size
-    pub compute_partition_full_size: usize,
+    pub mempool_partition_full_size: usize,
     /// Miner whitelisting
-    pub compute_miner_whitelist: MinerWhitelist,
+    pub mempool_miner_whitelist: MinerWhitelist,
 }
 
 /// Configuration option for a storage node
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageNodeConfig {
-    /// Index of the current node in compute_nodes
+    /// Index of the current node in mempool_nodes
     pub storage_node_idx: usize,
     /// Use specific database
     pub storage_db_mode: DbMode,
@@ -182,8 +182,8 @@ pub struct StorageNodeConfig {
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: BTreeMap<String, Vec<String>>,
-    /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    /// All mempool nodes addresses
+    pub mempool_nodes: Vec<NodeSpec>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<NodeSpec>,
     /// Whether storage node will use raft or act independently (0)
@@ -217,10 +217,10 @@ pub struct MinerNodeConfig {
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: BTreeMap<String, Vec<String>>,
-    /// Index of the compute node to use in compute_nodes
-    pub miner_compute_node_idx: usize,
-    /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    /// Index of the mempool node to use in mempool_nodes
+    pub miner_mempool_node_idx: usize,
+    /// All mempool nodes addresses
+    pub mempool_nodes: Vec<NodeSpec>,
     /// API port
     pub miner_api_port: u16,
     /// API use TLS
@@ -254,10 +254,10 @@ pub struct UserNodeConfig {
     pub tls_config: TlsSpec,
     /// Initial API keys
     pub api_keys: BTreeMap<String, Vec<String>>,
-    /// Index of the compute node to use in compute_nodes
-    pub user_compute_node_idx: usize,
-    /// All compute nodes addresses
-    pub compute_nodes: Vec<NodeSpec>,
+    /// Index of the mempool node to use in mempool_nodes
+    pub user_mempool_node_idx: usize,
+    /// All mempool nodes addresses
+    pub mempool_nodes: Vec<NodeSpec>,
     /// API port
     pub user_api_port: u16,
     /// API use TLS
@@ -284,18 +284,18 @@ pub struct UserNodeConfig {
 pub struct PreLaunchNodeConfig {
     /// Type of node to launch
     pub node_type: PreLaunchNodeType,
-    /// Index of the current node in compute_nodes
-    pub compute_node_idx: usize,
+    /// Index of the current node in mempool_nodes
+    pub mempool_node_idx: usize,
     /// Use specific database
-    pub compute_db_mode: DbMode,
+    pub mempool_db_mode: DbMode,
     /// Configuration for handling TLS
     pub tls_config: TlsSpec,
-    /// Index of the current node in compute_nodes
+    /// Index of the current node in mempool_nodes
     pub storage_node_idx: usize,
     /// Use specific database
     pub storage_db_mode: DbMode,
-    /// All compute nodes addresses
-    pub compute_nodes: Vec<String>,
+    /// All mempool nodes addresses
+    pub mempool_nodes: Vec<String>,
     /// All storage nodes addresses: only use first
     pub storage_nodes: Vec<String>,
     /// Limit for the number of peers this node can have
@@ -305,7 +305,7 @@ pub struct PreLaunchNodeConfig {
 /// Type of node in pre-launch mode
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub enum PreLaunchNodeType {
-    Compute,
+    Mempool,
     Storage,
 }
 

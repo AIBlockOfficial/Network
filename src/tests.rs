@@ -1,14 +1,14 @@
 //! Test suite for the network functions.
 
-use crate::compute::ComputeNode;
-use crate::compute_raft::MinerWhitelist;
+use crate::mempool::MempoolNode;
+use crate::mempool_raft::MinerWhitelist;
 use crate::configurations::{
-    ComputeNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
+    MempoolNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
 };
 use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    ComputeApi, ComputeRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response,
+    MempoolApi, MempoolRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
     WinningPoWInfo,
 };
@@ -27,18 +27,6 @@ use crate::utils::{
     create_valid_transaction_with_ins_outs, decode_pub_key, decode_secret_key,
     generate_pow_for_block, get_sanction_addresses, tracing_log_try_init, LocalEvent, StringError,
 };
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::crypto::sign_ed25519 as sign;
-use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
-use a_block_chain::primitives::asset::{Asset, AssetValues, TokenAmount};
-use a_block_chain::primitives::block::{Block, BlockHeader};
-use a_block_chain::primitives::druid::DruidExpectation;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxOut};
-use a_block_chain::script::StackEntry;
-use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_item_create_tx, construct_tx_hash,
-    construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
-};
 use bincode::{deserialize, deserialize_from};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
@@ -51,6 +39,18 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tracing::{debug, error, error_span, info};
 use tracing_futures::Instrument;
+use tw_chain::crypto::sha3_256;
+use tw_chain::crypto::sign_ed25519 as sign;
+use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
+use tw_chain::primitives::asset::{Asset, AssetValues, TokenAmount};
+use tw_chain::primitives::block::{Block, BlockHeader};
+use tw_chain::primitives::druid::DruidExpectation;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxOut};
+use tw_chain::script::StackEntry;
+use tw_chain::utils::transaction_utils::{
+    construct_address, construct_item_create_tx, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, get_tx_out_with_out_point_cloned,
+};
 
 const TIMEOUT_TEST_WAIT_DURATION: Duration = Duration::from_millis(5000);
 
@@ -106,7 +106,7 @@ const COMMON_PUB_ADDR: &str = "5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7
 enum Cfg {
     All,
     IgnoreStorage,
-    IgnoreCompute,
+    IgnoreMempool,
     IgnoreWaitTxComplete,
 }
 
@@ -152,7 +152,7 @@ async fn full_flow_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_real_db_1_node() {
-    let mut cfg = complete_network_config_with_n_compute_raft(10505, 1);
+    let mut cfg = complete_network_config_with_n_mempool_raft(10505, 1);
     cfg.in_memory_db = false;
 
     remove_all_node_dbs(&cfg);
@@ -161,28 +161,28 @@ async fn full_flow_raft_real_db_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_1_no_tls_node() {
-    full_flow_no_tls(complete_network_config_with_n_compute_raft(10510, 1)).await;
+    full_flow_no_tls(complete_network_config_with_n_mempool_raft(10510, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_1_node() {
-    full_flow(complete_network_config_with_n_compute_raft(10515, 1)).await;
+    full_flow(complete_network_config_with_n_mempool_raft(10515, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_2_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10520, 2)).await;
+    full_flow(complete_network_config_with_n_mempool_raft(10520, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_3_nodes() {
-    full_flow(complete_network_config_with_n_compute_raft(10530, 3)).await;
+    full_flow(complete_network_config_with_n_mempool_raft(10530, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_majority_3_nodes() {
     full_flow_tls(
-        complete_network_config_with_n_compute_raft(10540, 3),
+        complete_network_config_with_n_mempool_raft(10540, 3),
         CfgNum::Majority,
         Vec::new(),
     )
@@ -194,7 +194,7 @@ async fn full_flow_raft_majority_3_nodes() {
 #[ignore]
 async fn full_flow_raft_majority_15_nodes() {
     full_flow_tls(
-        complete_network_config_with_n_compute_raft(10550, 15),
+        complete_network_config_with_n_mempool_raft(10550, 15),
         CfgNum::Majority,
         Vec::new(),
     )
@@ -203,7 +203,7 @@ async fn full_flow_raft_majority_15_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_no_raft() {
-    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+    full_flow_multi_miners(complete_network_config_with_n_mempool_miner(
         11000, false, 1, 3,
     ))
     .await;
@@ -215,11 +215,11 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_miner(11030, true, 1, 1);
+    let network_config = complete_network_config_with_n_mempool_miner(11030, true, 1, 1);
     let mut network = Network::create_from_config(&network_config).await;
     let active_nodes = network.all_active_nodes().clone();
     let miner_addr = &active_nodes[&NodeType::Miner][0];
-    let compute_addr = &active_nodes[&NodeType::Compute][0];
+    let mempool_addr = &active_nodes[&NodeType::Mempool][0];
     let mut prev_mining_reward = TokenAmount(0);
     let address_aggregation_limit = network_config.address_aggregation_limit.unwrap_or_default();
 
@@ -251,7 +251,7 @@ async fn full_flow_single_miner_single_raft_with_aggregation_tx_check() {
         }
 
         if handle_aggregation_tx {
-            prev_mining_reward = compute_get_prev_mining_reward(&mut network, compute_addr).await;
+            prev_mining_reward = mempool_get_prev_mining_reward(&mut network, mempool_addr).await;
         }
 
         proof_of_work_act(
@@ -292,11 +292,11 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_miner(11040, true, 1, 1);
+    let network_config = complete_network_config_with_n_mempool_miner(11040, true, 1, 1);
     let mut network = Network::create_from_config(&network_config).await;
     let active_nodes = network.all_active_nodes().clone();
     let miner = &active_nodes[&NodeType::Miner][0];
-    let compute = &active_nodes[&NodeType::Compute][0];
+    let mempool = &active_nodes[&NodeType::Mempool][0];
     let user = &active_nodes[&NodeType::User][0];
     let static_addr = user_generate_static_address_for_miner(&mut network, user).await;
 
@@ -326,7 +326,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
     request_utxo_set_act(
         &mut network,
         user,
-        compute,
+        mempool,
         UtxoFetchType::AnyOf(vec![static_addr.clone()]),
     )
     .await;
@@ -343,7 +343,7 @@ async fn full_flow_single_miner_single_raft_with_static_miner_address_check() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_raft_1_node() {
-    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+    full_flow_multi_miners(complete_network_config_with_n_mempool_miner(
         11010, true, 1, 3,
     ))
     .await;
@@ -351,7 +351,7 @@ async fn full_flow_multi_miners_raft_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_multi_miners_raft_2_nodes() {
-    full_flow_multi_miners(complete_network_config_with_n_compute_miner(
+    full_flow_multi_miners(complete_network_config_with_n_mempool_miner(
         11020, true, 2, 6,
     ))
     .await;
@@ -360,15 +360,15 @@ async fn full_flow_multi_miners_raft_2_nodes() {
 #[tokio::test(flavor = "current_thread")]
 async fn full_flow_raft_kill_forever_miner_node_3_nodes() {
     let modify_cfg = vec![("After create block 0", CfgModif::Drop("miner2"))];
-    let network_config = complete_network_config_with_n_compute_raft(11130, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11130, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn full_flow_raft_kill_forever_compute_node_3_nodes() {
-    let modify_cfg = vec![("After create block 0", CfgModif::Drop("compute2"))];
+async fn full_flow_raft_kill_forever_mempool_node_3_nodes() {
+    let modify_cfg = vec![("After create block 0", CfgModif::Drop("mempool2"))];
 
-    let network_config = complete_network_config_with_n_compute_raft(11140, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11140, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -376,7 +376,7 @@ async fn full_flow_raft_kill_forever_compute_node_3_nodes() {
 async fn full_flow_raft_kill_forever_storage_node_3_nodes() {
     let modify_cfg = vec![("After create block 0", CfgModif::Drop("storage2"))];
 
-    let network_config = complete_network_config_with_n_compute_raft(11150, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11150, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -387,31 +387,31 @@ async fn full_flow_raft_kill_miner_node_3_nodes() {
         ("After create block 1", CfgModif::Respawn("miner2")),
         (
             "After create block 1",
-            CfgModif::HandleEvents(&[("compute2", "Received partition request successfully")]),
+            CfgModif::HandleEvents(&[("mempool2", "Received partition request successfully")]),
         ),
     ];
-    let network_config = complete_network_config_with_n_compute_raft(11160, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11160, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn full_flow_raft_kill_compute_node_3_nodes() {
+async fn full_flow_raft_kill_mempool_node_3_nodes() {
     let modify_cfg = vec![
-        ("After create block 0", CfgModif::Drop("compute2")),
-        ("After create block 1", CfgModif::Respawn("compute2")),
+        ("After create block 0", CfgModif::Drop("mempool2")),
+        ("After create block 1", CfgModif::Respawn("mempool2")),
         (
             "After create block 1",
             CfgModif::HandleEvents(&[
-                ("compute2", "Snapshot applied"),
-                ("compute2", "Winning PoW intake open"),
-                ("compute2", "Pipeline halted"),
-                ("compute2", "Transactions committed"),
-                ("compute2", "Block committed"),
+                ("mempool2", "Snapshot applied"),
+                ("mempool2", "Winning PoW intake open"),
+                ("mempool2", "Pipeline halted"),
+                ("mempool2", "Transactions committed"),
+                ("mempool2", "Block committed"),
             ]),
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_raft(11170, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11170, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -426,7 +426,7 @@ async fn full_flow_raft_kill_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_raft(11180, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11180, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -436,27 +436,27 @@ async fn full_flow_raft_dis_and_re_connect_miner_node_3_nodes() {
         ("After create block 0", CfgModif::Disconnect("miner2")),
         ("After create block 1", CfgModif::Reconnect("miner2")),
     ];
-    let network_config = complete_network_config_with_n_compute_raft(11190, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11190, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn full_flow_raft_dis_and_re_connect_compute_node_3_nodes() {
+async fn full_flow_raft_dis_and_re_connect_mempool_node_3_nodes() {
     let modify_cfg = vec![
-        ("After create block 0", CfgModif::Disconnect("compute2")),
-        ("After create block 1", CfgModif::Reconnect("compute2")),
+        ("After create block 0", CfgModif::Disconnect("mempool2")),
+        ("After create block 1", CfgModif::Reconnect("mempool2")),
         (
             "After create block 1",
             CfgModif::HandleEvents(&[
-                ("compute2", "Winning PoW intake open"),
-                ("compute2", "Pipeline halted"),
-                ("compute2", "Transactions committed"),
-                ("compute2", "Block committed"),
+                ("mempool2", "Winning PoW intake open"),
+                ("mempool2", "Pipeline halted"),
+                ("mempool2", "Transactions committed"),
+                ("mempool2", "Block committed"),
             ]),
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_raft(11200, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11200, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
@@ -471,13 +471,13 @@ async fn full_flow_raft_dis_and_re_connect_storage_node_3_nodes() {
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_raft(11220, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11220, 3);
     full_flow_tls(network_config, CfgNum::All, modify_cfg).await;
 }
 
 async fn full_flow_multi_miners(mut network_config: NetworkConfig) {
-    network_config.compute_partition_full_size = 2;
-    network_config.compute_minimum_miner_pool_len = 3;
+    network_config.mempool_partition_full_size = 2;
+    network_config.mempool_minimum_miner_pool_len = 3;
     full_flow(network_config).await;
 }
 
@@ -621,15 +621,15 @@ async fn modify_network(network: &mut Network, tag: &str, modif_config: &[(&str,
                 .collect();
                 node_all_handle_different_event(network, &[v.to_string()], &event).await;
 
-                // Process miner's request at compute node
+                // Process miner's request at mempool node
                 if let Some(miner) = network.miner(v) {
-                    let compute_addr = miner.lock().await.compute_address();
+                    let mempool_addr = miner.lock().await.mempool_address();
 
-                    let compute_nodes = network.all_active_nodes()[&NodeType::Compute].clone();
-                    for c in compute_nodes {
-                        if network.compute(&c).unwrap().lock().await.local_address() == compute_addr
+                    let mempool_nodes = network.all_active_nodes()[&NodeType::Mempool].clone();
+                    for c in mempool_nodes {
+                        if network.mempool(&c).unwrap().lock().await.local_address() == mempool_addr
                         {
-                            compute_handle_event(
+                            mempool_handle_event(
                                 network,
                                 &c,
                                 &["Received partition request successfully"],
@@ -651,22 +651,22 @@ async fn create_first_block_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_1_node() {
-    create_first_block(complete_network_config_with_n_compute_raft(10010, 1)).await;
+    create_first_block(complete_network_config_with_n_mempool_raft(10010, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_2_nodes() {
-    create_first_block(complete_network_config_with_n_compute_raft(10020, 2)).await;
+    create_first_block(complete_network_config_with_n_mempool_raft(10020, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_3_nodes() {
-    create_first_block(complete_network_config_with_n_compute_raft(10030, 3)).await;
+    create_first_block(complete_network_config_with_n_mempool_raft(10030, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_first_block_raft_15_nodes() {
-    create_first_block(complete_network_config_with_n_compute_raft(10040, 15)).await;
+    create_first_block(complete_network_config_with_n_mempool_raft(10040, 15)).await;
 }
 
 async fn create_first_block(network_config: NetworkConfig) {
@@ -676,7 +676,7 @@ async fn create_first_block(network_config: NetworkConfig) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let expected_utxo = to_utxo_set(&network.collect_initial_uxto_txs());
 
     //
@@ -687,8 +687,8 @@ async fn create_first_block(network_config: NetworkConfig) {
     //
     // Assert
     //
-    let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
-    assert_eq!(utxo_set_after, node_all(compute_nodes, expected_utxo));
+    let utxo_set_after = mempool_all_committed_utxo_set(&mut network, mempool_nodes).await;
+    assert_eq!(utxo_set_after, node_all(mempool_nodes, expected_utxo));
 
     test_step_complete(network).await;
 }
@@ -696,12 +696,12 @@ async fn create_first_block(network_config: NetworkConfig) {
 async fn create_first_block_act(network: &mut Network) {
     let config = network.config().clone();
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
-    let first_request_size = config.compute_minimum_miner_pool_len;
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
+    let first_request_size = config.mempool_minimum_miner_pool_len;
 
     info!("Test Step Connect nodes");
-    for compute in compute_nodes {
-        let miners = &config.compute_to_miner_mapping[compute];
+    for mempool in mempool_nodes {
+        let miners = &config.mempool_to_miner_mapping[mempool];
         for (idx, miner) in miners.iter().enumerate() {
             node_send_startup_requests(network, miner).await;
             let evt = if idx == first_request_size - 1 {
@@ -709,12 +709,12 @@ async fn create_first_block_act(network: &mut Network) {
             } else {
                 "Received partition request successfully"
             };
-            compute_handle_event(network, compute, &[evt]).await;
+            mempool_handle_event(network, mempool, &[evt]).await;
         }
     }
 
     info!("Test Step Create first Block");
-    node_all_handle_event(network, compute_nodes, &["First Block committed"]).await;
+    node_all_handle_event(network, mempool_nodes, &["First Block committed"]).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -724,23 +724,23 @@ async fn send_first_block_to_storage_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_1_node() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10810, 1)).await;
+    send_first_block_to_storage(complete_network_config_with_n_mempool_raft(10810, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_2_nodes() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10820, 2)).await;
+    send_first_block_to_storage(complete_network_config_with_n_mempool_raft(10820, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_3_nodes() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10830, 3)).await;
+    send_first_block_to_storage(complete_network_config_with_n_mempool_raft(10830, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_majority_3_nodes() {
     send_first_block_to_storage_common(
-        complete_network_config_with_n_compute_raft(10840, 3),
+        complete_network_config_with_n_mempool_raft(10840, 3),
         CfgNum::Majority,
     )
     .await;
@@ -748,7 +748,7 @@ async fn send_first_block_to_storage_raft_majority_3_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_first_block_to_storage_raft_15_nodes() {
-    send_first_block_to_storage(complete_network_config_with_n_compute_raft(10850, 15)).await;
+    send_first_block_to_storage(complete_network_config_with_n_mempool_raft(10850, 15)).await;
 }
 
 async fn send_first_block_to_storage(network_config: NetworkConfig) {
@@ -762,13 +762,13 @@ async fn send_first_block_to_storage_common(network_config: NetworkConfig, cfg_n
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
     let initial_utxo_txs = network.collect_initial_uxto_txs();
     let (expected0, block_info0) = complete_first_block(&initial_utxo_txs).await;
 
     create_first_block_act(&mut network).await;
-    compute_all_skip_mining(&mut network, compute_nodes, &block_info0).await;
+    mempool_all_skip_mining(&mut network, mempool_nodes, &block_info0).await;
 
     //
     // Act
@@ -805,38 +805,38 @@ async fn add_transactions_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_1_node() {
-    add_transactions(complete_network_config_with_n_compute_raft(10610, 1)).await;
+    add_transactions(complete_network_config_with_n_mempool_raft(10610, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn add_transactions_restart_tx_raft_1_node() {
     let tag = "After add local Transactions";
     let modify_cfg = vec![
-        (tag, CfgModif::Drop("compute1")),
-        (tag, CfgModif::Respawn("compute1")),
+        (tag, CfgModif::Drop("mempool1")),
+        (tag, CfgModif::Respawn("mempool1")),
         (
             tag,
-            CfgModif::HandleEvents(&[("compute1", "Snapshot applied")]),
+            CfgModif::HandleEvents(&[("mempool1", "Snapshot applied")]),
         ),
     ];
 
-    let network_config = complete_network_config_with_n_compute_raft(10615, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(10615, 1);
     add_transactions_common(network_config, &modify_cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_2_nodes() {
-    add_transactions(complete_network_config_with_n_compute_raft(10620, 2)).await;
+    add_transactions(complete_network_config_with_n_mempool_raft(10620, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_3_nodes() {
-    add_transactions(complete_network_config_with_n_compute_raft(10630, 3)).await;
+    add_transactions(complete_network_config_with_n_mempool_raft(10630, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn add_transactions_raft_15_nodes() {
-    add_transactions(complete_network_config_with_n_compute_raft(10640, 15)).await;
+    add_transactions(complete_network_config_with_n_mempool_raft(10640, 15)).await;
 }
 
 async fn add_transactions(network_config: NetworkConfig) {
@@ -850,7 +850,7 @@ async fn add_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let transactions = valid_transactions(true);
 
     create_first_block_act(&mut network).await;
@@ -865,9 +865,9 @@ async fn add_transactions_common(network_config: NetworkConfig, modify_cfg: &[(&
     //
     // Assert
     //
-    let actual = compute_all_committed_tx_pool(&mut network, compute_nodes).await;
+    let actual = mempool_all_committed_tx_pool(&mut network, mempool_nodes).await;
     assert_eq!(actual[0], transactions);
-    assert_eq!(equal_first(&actual), node_all(compute_nodes, true));
+    assert_eq!(equal_first(&actual), node_all(mempool_nodes, true));
 
     test_step_complete(network).await;
 }
@@ -882,18 +882,18 @@ async fn add_transactions_act_with(
     cfg: Cfg,
 ) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
 
     for tx in txs.values() {
         info!("Test Step Add Transactions");
-        user_send_transaction_to_compute(network, "user1", "compute1", tx).await;
+        user_send_transaction_to_mempool(network, "user1", "mempool1", tx).await;
     }
     for _tx in txs.values() {
-        compute_handle_event(network, "compute1", &["Transactions added to tx pool"]).await;
+        mempool_handle_event(network, "mempool1", &["Transactions added to tx pool"]).await;
     }
 
     if cfg != Cfg::IgnoreWaitTxComplete {
-        node_all_handle_event(network, compute_nodes, &["Transactions committed"]).await;
+        node_all_handle_event(network, mempool_nodes, &["Transactions committed"]).await;
     }
 }
 
@@ -904,23 +904,23 @@ async fn create_block_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_1_node() {
-    create_block(complete_network_config_with_n_compute_raft(10110, 1)).await;
+    create_block(complete_network_config_with_n_mempool_raft(10110, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_2_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10120, 2)).await;
+    create_block(complete_network_config_with_n_mempool_raft(10120, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_3_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10130, 3)).await;
+    create_block(complete_network_config_with_n_mempool_raft(10130, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_majority_3_nodes() {
     create_block_common(
-        complete_network_config_with_n_compute_raft(10140, 3),
+        complete_network_config_with_n_mempool_raft(10140, 3),
         CfgNum::Majority,
     )
     .await;
@@ -928,7 +928,7 @@ async fn create_block_raft_majority_3_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn create_block_raft_15_nodes() {
-    create_block(complete_network_config_with_n_compute_raft(10150, 15)).await;
+    create_block(complete_network_config_with_n_mempool_raft(10150, 15)).await;
 }
 
 async fn create_block(network_config: NetworkConfig) {
@@ -942,7 +942,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let transactions = valid_transactions(true);
     let transactions_h = transactions.keys().cloned().collect::<Vec<_>>();
     let transactions_utxo = to_utxo_set(&transactions);
@@ -954,7 +954,7 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     remove_keys(&mut left_init_utxo, valid_txs_in().keys());
 
     create_first_block_act(&mut network).await;
-    compute_all_skip_mining(&mut network, compute_nodes, &block_info0).await;
+    mempool_all_skip_mining(&mut network, mempool_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     add_transactions_act(&mut network, &transactions).await;
 
@@ -962,26 +962,26 @@ async fn create_block_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Act
     //
     let block_transaction_before =
-        compute_all_current_block_transactions(&mut network, compute_nodes).await;
+        mempool_all_current_block_transactions(&mut network, mempool_nodes).await;
 
     create_block_act(&mut network, Cfg::All, cfg_num).await;
 
     let block_transaction_after =
-        compute_all_current_block_transactions(&mut network, compute_nodes).await;
-    let utxo_set_after = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+        mempool_all_current_block_transactions(&mut network, mempool_nodes).await;
+    let utxo_set_after = mempool_all_committed_utxo_set(&mut network, mempool_nodes).await;
 
     //
     // Assert
     //
-    assert_eq!(block_transaction_before, node_all(compute_nodes, None));
+    assert_eq!(block_transaction_before, node_all(mempool_nodes, None));
     assert_eq!(
         block_transaction_after,
-        node_all(compute_nodes, Some(transactions_h))
+        node_all(mempool_nodes, Some(transactions_h))
     );
 
     let expected_utxo = merge_txs_3(&left_init_utxo, &transactions_utxo, &block0_mining_utxo);
     assert_eq!(len_and_map(&utxo_set_after[0]), len_and_map(&expected_utxo));
-    assert_eq!(equal_first(&utxo_set_after), node_all(compute_nodes, true));
+    assert_eq!(equal_first(&utxo_set_after), node_all(mempool_nodes, true));
 
     test_step_complete(network).await;
 }
@@ -992,9 +992,9 @@ async fn create_block_act(network: &mut Network, cfg: Cfg, cfg_num: CfgNum) {
 
 async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum, block_num: u64) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
     let (msg_c_nodes, msg_s_nodes) = node_combined_select(
-        &network.config().nodes[&NodeType::Compute],
+        &network.config().nodes[&NodeType::Mempool],
         &network.config().nodes[&NodeType::Storage],
         network.dead_nodes(),
         cfg_num,
@@ -1007,15 +1007,15 @@ async fn create_block_act_with(network: &mut Network, cfg: Cfg, cfg_num: CfgNum,
             block_num,
             ..Default::default()
         };
-        let req = ComputeRequest::SendBlockStored(block);
-        compute_all_inject_next_event(network, &msg_s_nodes, &msg_c_nodes, req).await;
+        let req = MempoolRequest::SendBlockStored(block);
+        mempool_all_inject_next_event(network, &msg_s_nodes, &msg_c_nodes, req).await;
     } else {
         storage_all_send_stored_block(network, &msg_s_nodes).await;
     }
-    compute_all_handle_event(network, &msg_c_nodes, "Received block stored").await;
+    mempool_all_handle_event(network, &msg_c_nodes, "Received block stored").await;
 
     info!("Test Step Generate Block");
-    node_all_handle_event(network, compute_nodes, &["Block committed"]).await;
+    node_all_handle_event(network, mempool_nodes, &["Block committed"]).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1025,10 +1025,10 @@ async fn create_block_with_seed() {
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_raft(11600, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(11600, 1);
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
-    let compute = &compute_nodes[0];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
+    let mempool = &mempool_nodes[0];
     let transactions = valid_transactions(true);
     let (_, block_info0) = complete_first_block(&network.collect_initial_uxto_txs()).await;
 
@@ -1036,15 +1036,15 @@ async fn create_block_with_seed() {
     // Act
     //
     create_first_block_act(&mut network).await;
-    let block0 = compute_current_mining_block(&mut network, compute).await;
+    let block0 = mempool_current_mining_block(&mut network, mempool).await;
     let seed0 = block0.as_ref().map(|b| b.header.seed_value.as_slice());
     let seed0 = seed0.and_then(|s| std::str::from_utf8(s).ok());
 
-    compute_all_skip_mining(&mut network, compute_nodes, &block_info0).await;
+    mempool_all_skip_mining(&mut network, mempool_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
     add_transactions_act(&mut network, &transactions).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
-    let block1 = compute_current_mining_block(&mut network, compute).await;
+    let block1 = mempool_current_mining_block(&mut network, mempool).await;
     let seed1 = block1.as_ref().map(|b| b.header.seed_value.as_slice());
     let seed1 = seed1.and_then(|s| std::str::from_utf8(s).ok());
 
@@ -1065,23 +1065,23 @@ async fn proof_of_work_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_1_node() {
-    proof_of_work(complete_network_config_with_n_compute_raft(10210, 1)).await;
+    proof_of_work(complete_network_config_with_n_mempool_raft(10210, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_2_nodes() {
-    proof_of_work(complete_network_config_with_n_compute_raft(10220, 2)).await;
+    proof_of_work(complete_network_config_with_n_mempool_raft(10220, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_3_nodes() {
-    proof_of_work(complete_network_config_with_n_compute_raft(10230, 3)).await;
+    proof_of_work(complete_network_config_with_n_mempool_raft(10230, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_raft_majority_3_nodes() {
     proof_of_work_common(
-        complete_network_config_with_n_compute_raft(10240, 3),
+        complete_network_config_with_n_mempool_raft(10240, 3),
         CfgNum::Majority,
     )
     .await;
@@ -1089,25 +1089,25 @@ async fn proof_of_work_raft_majority_3_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_no_raft() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10250, false, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
+    let mut cfg = complete_network_config_with_n_mempool_miner(10250, false, 1, 3);
+    cfg.mempool_partition_full_size = 2;
+    cfg.mempool_minimum_miner_pool_len = 3;
     proof_of_work(cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_raft_1_node() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10260, true, 1, 3);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
+    let mut cfg = complete_network_config_with_n_mempool_miner(10260, true, 1, 3);
+    cfg.mempool_partition_full_size = 2;
+    cfg.mempool_minimum_miner_pool_len = 3;
     proof_of_work(cfg).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_of_work_multi_raft_2_nodes() {
-    let mut cfg = complete_network_config_with_n_compute_miner(10270, true, 2, 6);
-    cfg.compute_partition_full_size = 2;
-    cfg.compute_minimum_miner_pool_len = 3;
+    let mut cfg = complete_network_config_with_n_mempool_miner(10270, true, 2, 6);
+    cfg.mempool_partition_full_size = 2;
+    cfg.mempool_minimum_miner_pool_len = 3;
     proof_of_work(cfg).await;
 }
 
@@ -1122,7 +1122,7 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
 
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
@@ -1130,18 +1130,18 @@ async fn proof_of_work_common(network_config: NetworkConfig, cfg_num: CfgNum) {
     //
     // Act
     //
-    let block_before = compute_all_mined_block_num(&mut network, compute_nodes).await;
+    let block_before = mempool_all_mined_block_num(&mut network, mempool_nodes).await;
 
     proof_of_work_act(&mut network, CfgPow::First, cfg_num, false, None).await;
     proof_of_work_send_more_act(&mut network, cfg_num).await;
 
-    let block_after = compute_all_mined_block_num(&mut network, compute_nodes).await;
+    let block_after = mempool_all_mined_block_num(&mut network, mempool_nodes).await;
 
     //
     // Assert
     //
-    assert_eq!(block_before, node_all(compute_nodes, None));
-    assert_eq!(block_after, node_all(compute_nodes, Some(1)));
+    assert_eq!(block_before, node_all(mempool_nodes, None));
+    assert_eq!(block_after, node_all(mempool_nodes, Some(1)));
 
     test_step_complete(network).await;
 }
@@ -1159,26 +1159,26 @@ async fn proof_of_work_act(
 
 async fn proof_of_work_participation_act(network: &mut Network, cfg_num: CfgNum, cfg_pow: CfgPow) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
-    let c_mined = &node_select(compute_nodes, cfg_num);
-    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
+    let c_mined = &node_select(mempool_nodes, cfg_num);
+    let active_mempool_to_miner_mapping = network.active_mempool_to_miner_mapping().clone();
     const POWS_COMPLETE: [&str; 2] = ["Partition PoW complete", "Block PoW complete"];
 
     info!("Test Step Miner block Proof of Work: partition-> rand num -> num pow -> pre-block -> block pow");
     if cfg_pow == CfgPow::First {
-        for compute in c_mined {
-            let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
-            compute_flood_rand_and_block_to_partition(network, compute).await;
+        for mempool in c_mined {
+            let c_miners = &active_mempool_to_miner_mapping.get(mempool).unwrap();
+            mempool_flood_rand_and_block_to_partition(network, mempool).await;
             miner_all_handle_event(network, c_miners, "Received random number successfully").await;
             for miner in c_miners.iter() {
                 miner_handle_event(network, miner, "Partition PoW complete").await;
                 miner_process_found_partition_pow(network, miner).await;
-                compute_handle_event(network, compute, &["Partition PoW received successfully"])
+                mempool_handle_event(network, mempool, &["Partition PoW received successfully"])
                     .await;
             }
         }
 
-        node_all_handle_event(network, compute_nodes, &["Winning PoW intake open"]).await;
+        node_all_handle_event(network, mempool_nodes, &["Winning PoW intake open"]).await;
     }
 }
 
@@ -1189,26 +1189,26 @@ async fn proof_of_work_block_act(
     prev_mining_reward: Option<TokenAmount>,
 ) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
-    let c_mined = &node_select(compute_nodes, cfg_num);
-    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
+    let c_mined = &node_select(mempool_nodes, cfg_num);
+    let active_mempool_to_miner_mapping = network.active_mempool_to_miner_mapping().clone();
 
-    for compute in c_mined {
-        let c_miners = &active_compute_to_miner_mapping.get(compute).unwrap();
-        let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
+    for mempool in c_mined {
+        let c_miners = &active_mempool_to_miner_mapping.get(mempool).unwrap();
+        let in_miners = mempool_get_filtered_participants(network, mempool, c_miners).await;
         let in_miners = &in_miners;
-        compute_flood_rand_and_block_to_partition(network, compute).await;
+        mempool_flood_rand_and_block_to_partition(network, mempool).await;
         // TODO: Better to validate all miners => needs to have the miner with barrier as well.
 
         let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
         node_all_handle_different_event(network, c_miners, &all_evts).await;
-        compute_flood_transactions_to_partition(network, compute).await;
+        mempool_flood_transactions_to_partition(network, mempool).await;
         miner_all_handle_event(network, in_miners, "Block is valid").await;
 
         for miner in c_miners.iter() {
             miner_process_found_partition_pow(network, miner).await;
             // `handle_aggregation_tx` indicates that an aggregation tx has been sent by the miner
-            // Compute node needs to handle this special case
+            // Mempool node needs to handle this special case
             if handle_aggregation_tx {
                 // Supplied as an array because these Tx event and Partition event can happen in any order
                 let results = &[
@@ -1216,18 +1216,18 @@ async fn proof_of_work_block_act(
                     "Transactions committed",
                     "Partition PoW received successfully",
                 ];
-                compute_handle_event(network, compute, results).await;
-                compute_handle_event(network, compute, results).await;
-                compute_handle_event(network, compute, results).await;
+                mempool_handle_event(network, mempool, results).await;
+                mempool_handle_event(network, mempool, results).await;
+                mempool_handle_event(network, mempool, results).await;
             } else {
-                // Compute node needs to process the UTXO request sent by the miner
+                // Mempool node needs to process the UTXO request sent by the miner
                 if let Some(addr) = miner_has_aggregation_tx_active(network, miner).await {
-                    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
+                    mempool_handle_event(network, mempool, &["Received UTXO fetch request"]).await;
 
                     // Send the UTXO set to the miner
                     {
-                        let compute_node = network.compute(compute).unwrap();
-                        compute_node
+                        let mempool_node = network.mempool(mempool).unwrap();
+                        mempool_node
                             .lock()
                             .await
                             .send_fetched_utxo_set()
@@ -1250,9 +1250,9 @@ async fn proof_of_work_block_act(
                             .running_total()
                             .clone();
 
-                        let utxo_bal = compute_get_utxo_balance_for_addresses(
+                        let utxo_bal = mempool_get_utxo_balance_for_addresses(
                             network,
-                            compute,
+                            mempool,
                             vec![addr.clone()],
                         )
                         .await
@@ -1267,31 +1267,31 @@ async fn proof_of_work_block_act(
                         }
                     }
                 }
-                compute_handle_event(network, compute, &["Partition PoW received successfully"])
+                mempool_handle_event(network, mempool, &["Partition PoW received successfully"])
                     .await;
             }
         }
         for miner in in_miners {
             miner_process_found_block_pow(network, miner).await;
-            compute_handle_event(network, compute, &["Received PoW successfully"]).await;
+            mempool_handle_event(network, mempool, &["Received PoW successfully"]).await;
         }
     }
-    node_all_handle_event(network, compute_nodes, &["Pipeline halted"]).await;
+    node_all_handle_event(network, mempool_nodes, &["Pipeline halted"]).await;
 }
 
 async fn proof_of_work_send_more_act(network: &mut Network, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
-    let c_mined = &node_select(compute_nodes, cfg_num);
-    let active_compute_to_miner_mapping = network.active_compute_to_miner_mapping().clone();
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
+    let c_mined = &node_select(mempool_nodes, cfg_num);
+    let active_mempool_to_miner_mapping = network.active_mempool_to_miner_mapping().clone();
 
     info!("Test Step Miner block Proof of Work to late");
-    for compute in c_mined {
-        let c_miners = active_compute_to_miner_mapping.get(compute).unwrap();
-        let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
+    for mempool in c_mined {
+        let c_miners = active_mempool_to_miner_mapping.get(mempool).unwrap();
+        let in_miners = mempool_get_filtered_participants(network, mempool, c_miners).await;
         for miner in &in_miners {
             miner_process_found_block_pow(network, miner).await;
-            compute_handle_error(network, compute, &["Not block currently mined"]).await;
+            mempool_handle_error(network, mempool, &["Not block currently mined"]).await;
         }
     }
 }
@@ -1303,12 +1303,12 @@ async fn proof_winner_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_winner_raft_1_node() {
-    proof_winner(complete_network_config_with_n_compute_raft(10910, 1)).await;
+    proof_winner(complete_network_config_with_n_mempool_raft(10910, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_no_raft() {
-    proof_winner_multi(complete_network_config_with_n_compute_miner(
+    proof_winner_multi(complete_network_config_with_n_mempool_miner(
         10920, false, 1, 3,
     ))
     .await;
@@ -1316,7 +1316,7 @@ async fn proof_winner_multi_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_raft_1_node() {
-    proof_winner_multi(complete_network_config_with_n_compute_miner(
+    proof_winner_multi(complete_network_config_with_n_mempool_miner(
         10930, true, 1, 3,
     ))
     .await;
@@ -1324,15 +1324,15 @@ async fn proof_winner_multi_raft_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proof_winner_multi_raft_2_nodes() {
-    proof_winner_multi(complete_network_config_with_n_compute_miner(
+    proof_winner_multi(complete_network_config_with_n_mempool_miner(
         10940, true, 2, 6,
     ))
     .await;
 }
 
 async fn proof_winner_multi(mut network_config: NetworkConfig) {
-    network_config.compute_partition_full_size = 2;
-    network_config.compute_minimum_miner_pool_len = 3;
+    network_config.mempool_partition_full_size = 2;
+    network_config.mempool_minimum_miner_pool_len = 3;
     proof_winner(network_config).await;
 }
 
@@ -1391,21 +1391,21 @@ async fn proof_winner(network_config: NetworkConfig) {
 async fn proof_winner_act(network: &mut Network) {
     let config = network.config().clone();
     let active_nodes = network.all_active_nodes().clone();
-    let compute_nodes = &active_nodes[&NodeType::Compute];
+    let mempool_nodes = &active_nodes[&NodeType::Mempool];
     let miner_nodes = &active_nodes[&NodeType::Miner];
 
-    if miner_nodes.len() < compute_nodes.len() {
+    if miner_nodes.len() < mempool_nodes.len() {
         info!("Test Step Miner winner: Ignored/Miner re-use");
         return;
     }
 
     info!("Test Step Miner winner:");
-    for compute in compute_nodes {
-        let c_miners = &config.compute_to_miner_mapping.get(compute).unwrap();
-        let in_miners = compute_get_filtered_participants(network, compute, c_miners).await;
+    for mempool in mempool_nodes {
+        let c_miners = &config.mempool_to_miner_mapping.get(mempool).unwrap();
+        let in_miners = mempool_get_filtered_participants(network, mempool, c_miners).await;
         let in_miners = &in_miners;
 
-        compute_flood_rand_and_block_to_partition(network, compute).await;
+        mempool_flood_rand_and_block_to_partition(network, mempool).await;
         let all_evts = block_and_partition_evt_in_miner_pow(c_miners, in_miners);
         node_all_handle_different_event(network, c_miners, &all_evts).await;
     }
@@ -1418,23 +1418,23 @@ async fn send_block_to_storage_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_1_node() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10310, 1)).await;
+    send_block_to_storage(complete_network_config_with_n_mempool_raft(10310, 1)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_2_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10320, 2)).await;
+    send_block_to_storage(complete_network_config_with_n_mempool_raft(10320, 2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_3_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10330, 3)).await;
+    send_block_to_storage(complete_network_config_with_n_mempool_raft(10330, 3)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_majority_3_nodes() {
     send_block_to_storage_common(
-        complete_network_config_with_n_compute_raft(10340, 3),
+        complete_network_config_with_n_mempool_raft(10340, 3),
         CfgNum::Majority,
     )
     .await;
@@ -1442,7 +1442,7 @@ async fn send_block_to_storage_raft_majority_3_nodes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn send_block_to_storage_raft_15_nodes() {
-    send_block_to_storage(complete_network_config_with_n_compute_raft(10350, 15)).await;
+    send_block_to_storage(complete_network_config_with_n_mempool_raft(10350, 15)).await;
 }
 
 async fn send_block_to_storage(network_config: NetworkConfig) {
@@ -1456,7 +1456,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     // Arrange
     //
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
 
     let transactions = valid_transactions(true);
@@ -1466,11 +1466,11 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     let block1_mining_tx = complete_block_mining_txs(&block_info1);
 
     create_first_block_act(&mut network).await;
-    compute_all_skip_mining(&mut network, compute_nodes, &block_info0).await;
+    mempool_all_skip_mining(&mut network, mempool_nodes, &block_info0).await;
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
-    compute_all_skip_block_gen(&mut network, compute_nodes, &block_info1).await;
-    compute_all_skip_mining(&mut network, compute_nodes, &block_info1).await;
+    mempool_all_skip_block_gen(&mut network, mempool_nodes, &block_info1).await;
+    mempool_all_skip_mining(&mut network, mempool_nodes, &block_info1).await;
 
     let initial_db_count =
         storage_all_get_stored_key_values_count(&mut network, storage_nodes).await;
@@ -1478,7 +1478,7 @@ async fn send_block_to_storage_common(network_config: NetworkConfig, cfg_num: Cf
     //
     // Act
     //
-    storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", &wrong_block3).await;
+    storage_inject_send_block_to_storage(&mut network, "mempool1", "storage1", &wrong_block3).await;
     storage_handle_event(&mut network, "storage1", BLOCK_RECEIVED).await;
 
     send_block_to_storage_act(&mut network, cfg_num).await;
@@ -1513,30 +1513,30 @@ async fn send_block_to_storage_act(network: &mut Network, cfg_num: CfgNum) {
     let active_nodes = network.all_active_nodes().clone();
     let storage_nodes = &active_nodes[&NodeType::Storage];
 
-    let compute_no_mining = network
-        .active_compute_to_miner_mapping()
+    let mempool_no_mining = network
+        .active_mempool_to_miner_mapping()
         .iter()
         .filter(|(_, miners)| miners.is_empty())
         .map(|(c, _)| c.clone());
     let mut dead_nodes = network.dead_nodes().clone();
-    dead_nodes.extend(compute_no_mining);
+    dead_nodes.extend(mempool_no_mining);
 
     let (msg_c_nodes, msg_s_nodes) = node_combined_select(
-        &network.config().nodes[&NodeType::Compute],
+        &network.config().nodes[&NodeType::Mempool],
         &network.config().nodes[&NodeType::Storage],
         &dead_nodes,
         cfg_num,
     );
 
-    info!("Test Step Compute Send block to Storage");
-    compute_all_send_block_to_storage(network, &msg_c_nodes).await;
+    info!("Test Step Mempool Send block to Storage");
+    mempool_all_send_block_to_storage(network, &msg_c_nodes).await;
     storage_all_handle_event(network, &msg_s_nodes, BLOCK_RECEIVED).await;
     node_all_handle_event(network, storage_nodes, &[BLOCK_STORED]).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_1_node_with_file_backup() {
-    let mut network_config = complete_network_config_with_n_compute_raft(11300, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11300, 1);
     network_config.in_memory_db = false;
     network_config.backup_block_modulo = Some(2);
     remove_all_node_dbs(&network_config);
@@ -1545,13 +1545,13 @@ async fn main_loops_few_txs_raft_1_node_with_file_backup() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_2_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11310, 2);
+    let network_config = complete_network_config_with_n_mempool_raft(11310, 2);
     main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_raft_3_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11320, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11320, 3);
     main_loops_raft_1_node_common(network_config, vec![2], TokenAmount(17), 20, 1, 1_000, &[]).await
 }
 
@@ -1560,7 +1560,7 @@ async fn main_loops_few_txs_raft_3_node() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn main_loops_many_txs_threaded_raft_1_node() {
-    let mut network_config = complete_network_config_with_n_compute_raft(11330, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11330, 1);
     network_config.test_duration_divider = 1;
 
     // 5_000 TxIn in transactions of 3 TxIn.
@@ -1580,7 +1580,7 @@ async fn main_loops_many_txs_threaded_raft_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11340, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(11340, 1);
     let stop_nums = vec![1, 2];
     let amount = TokenAmount(17);
     let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
@@ -1589,7 +1589,7 @@ async fn main_loops_few_txs_restart_raft_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_raft_3_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11350, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11350, 3);
     let stop_nums = vec![1, 2];
     let amount = TokenAmount(17);
     let modify = vec![("Before start 1", CfgModif::RestartEventsAll(&[]))];
@@ -1598,7 +1598,7 @@ async fn main_loops_few_txs_restart_raft_3_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11360, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(11360, 1);
     let stop_nums = vec![1, 2];
     let amount = TokenAmount(17);
     let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
@@ -1607,7 +1607,7 @@ async fn main_loops_few_txs_restart_upgrade_raft_1_node() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn main_loops_few_txs_restart_upgrade_raft_3_node() {
-    let network_config = complete_network_config_with_n_compute_raft(11370, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11370, 3);
     let stop_nums = vec![1, 2];
     let amount = TokenAmount(17);
     let modify = vec![("Before start 1", CfgModif::RestartUpgradeEventsAll(&[]))];
@@ -1629,8 +1629,8 @@ async fn main_loops_raft_1_node_common(
     // Arrange
     // initial_amount is split into TokenAmount(1) TxOuts for the next round.
     //
-    network_config.compute_seed_utxo =
-        make_compute_seed_utxo(&[(seed_count, "000000")], initial_amount);
+    network_config.mempool_seed_utxo =
+        make_mempool_seed_utxo(&[(seed_count, "000000")], initial_amount);
     network_config.user_test_auto_gen_setup = UserAutoGenTxSetup {
         user_initial_transactions: (0..seed_wallet_count)
             .map(|i| wallet_seed((i, "000000"), &initial_amount))
@@ -1641,19 +1641,19 @@ async fn main_loops_raft_1_node_common(
     };
 
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
 
     //
     // Act
     //
     let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
-    let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
+    let (mut actual_mempool, mut expected_mempool) = (Vec::new(), Vec::new());
     for (idx, expected_block_num) in expected_block_nums.iter().copied().enumerate() {
         let tag = format!("Before start {idx}");
         modify_network(&mut network, &tag, modify_cfg).await;
 
-        for node_name in compute_nodes {
+        for node_name in mempool_nodes {
             node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
         }
 
@@ -1664,17 +1664,17 @@ async fn main_loops_raft_1_node_common(
 
         actual_stored
             .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
-        actual_compute
-            .push(compute_all_committed_current_block_num(&mut network, compute_nodes).await);
+        actual_mempool
+            .push(mempool_all_committed_current_block_num(&mut network, mempool_nodes).await);
         expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
-        expected_compute.push(node_all(compute_nodes, Some(expected_block_num)));
+        expected_mempool.push(node_all(mempool_nodes, Some(expected_block_num)));
     }
 
     //
     // Assert
     //
     assert_eq!(actual_stored, expected_stored);
-    assert_eq!(actual_compute, expected_compute);
+    assert_eq!(actual_mempool, expected_mempool);
 
     test_step_complete(network).await;
 }
@@ -1690,7 +1690,7 @@ async fn receive_payment_tx_user() {
     network_config
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
-    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo(SEED_UTXO, TokenAmount(11));
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.nodes[&NodeType::User];
@@ -1713,9 +1713,9 @@ async fn receive_payment_tx_user() {
     user_send_address_to_trading_peer(&mut network, "user2").await;
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
-    user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
-    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
-    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
+    user_send_next_payment_to_destinations(&mut network, "user1", "mempool1").await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions added to tx pool"]).await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions committed"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     // Ignore donations:
@@ -1747,9 +1747,9 @@ async fn receive_payment_tx_user() {
     user_send_address_to_trading_peer(&mut network, "user1").await;
     user_handle_event(&mut network, "user2", "Next payment transaction ready").await;
 
-    user_send_next_payment_to_destinations(&mut network, "user2", "compute1").await;
-    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
-    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
+    user_send_next_payment_to_destinations(&mut network, "user2", "mempool1").await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions added to tx pool"]).await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions committed"]).await;
     user_handle_event(&mut network, "user1", "Payment transaction received").await;
 
     let after_payment_user2_user1 = node_all_get_wallet_info(&mut network, user_nodes).await;
@@ -1804,7 +1804,7 @@ async fn receive_testnet_donation_payment_tx_user() {
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
     network_config.user_auto_donate = 5;
-    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo(SEED_UTXO, TokenAmount(11));
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
     let user_nodes = &network_config.nodes[&NodeType::User];
@@ -1821,8 +1821,8 @@ async fn receive_testnet_donation_payment_tx_user() {
     user_send_donation_address_to_peer(&mut network, "user2", "user1").await;
     user_handle_event(&mut network, "user1", "Next payment transaction ready").await;
 
-    user_send_next_payment_to_destinations(&mut network, "user1", "compute1").await;
-    compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
+    user_send_next_payment_to_destinations(&mut network, "user1", "mempool1").await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions added to tx pool"]).await;
     user_handle_event(&mut network, "user2", "Payment transaction received").await;
 
     let after = node_all_get_wallet_info(&mut network, user_nodes).await;
@@ -1860,7 +1860,7 @@ async fn reject_payment_txs() {
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
 
     let valid_txs = valid_transactions(true);
     let invalid_txs = vec![
@@ -1885,12 +1885,12 @@ async fn reject_payment_txs() {
     // Act/Assert
     //
     for tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
-        user_send_transaction_to_compute(&mut network, "user2", "compute1", tx).await;
+        user_send_transaction_to_mempool(&mut network, "user2", "mempool1", tx).await;
     }
     for _tx in invalid_txs.iter().flat_map(|txs| txs.values()) {
-        compute_handle_error(
+        mempool_handle_error(
             &mut network,
-            "compute1",
+            "mempool1",
             &["No valid transactions provided"],
         )
         .await;
@@ -1900,9 +1900,9 @@ async fn reject_payment_txs() {
     //
     // Assert
     //
-    let actual = compute_all_committed_tx_pool(&mut network, compute_nodes).await;
+    let actual = mempool_all_committed_tx_pool(&mut network, mempool_nodes).await;
     assert_eq!(actual[0], valid_txs);
-    assert_eq!(equal_first(&actual), node_all(compute_nodes, true));
+    assert_eq!(equal_first(&actual), node_all(mempool_nodes, true));
 
     test_step_complete(network).await;
 }
@@ -1916,7 +1916,7 @@ async fn gen_transactions_no_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn gen_transactions_restart() {
     let tag = "After block notification request";
-    let name = "compute1";
+    let name = "mempool1";
     let modify_cfg = vec![(tag, CfgModif::Drop(name)), (tag, CfgModif::Respawn(name))];
 
     let network_config = complete_network_config(10425);
@@ -1944,7 +1944,7 @@ async fn gen_transactions_common(
     // Act
     //
     node_send_startup_requests(&mut network, "user1").await;
-    compute_handle_event(&mut network, "compute1", &["Received block notification"]).await;
+    mempool_handle_event(&mut network, "mempool1", &["Received block notification"]).await;
     modify_network(&mut network, "After block notification request", modify_cfg).await;
 
     let mut tx_expected = Vec::new();
@@ -1956,12 +1956,12 @@ async fn gen_transactions_common(
             create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num - 1).await;
         }
 
-        compute_flood_block_to_users(&mut network, "compute1").await;
+        mempool_flood_block_to_users(&mut network, "mempool1").await;
         user_handle_event(&mut network, "user1", "Block mining notified").await;
         let transactions = user_process_mining_notified(&mut network, "user1").await;
-        compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
-        compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
-        let committed = compute_committed_tx_pool(&mut network, "compute1").await;
+        mempool_handle_event(&mut network, "mempool1", &["Transactions added to tx pool"]).await;
+        mempool_handle_event(&mut network, "mempool1", &["Transactions committed"]).await;
+        let committed = mempool_committed_tx_pool(&mut network, "mempool1").await;
 
         tx_expected.push(transactions.unwrap());
         tx_committed.push(committed);
@@ -1985,61 +1985,61 @@ async fn proof_of_work_reject() {
     let network_config = complete_network_config(10430);
     let mut network = Network::create_from_config(&network_config).await;
 
-    let compute = "compute1";
+    let mempool = "mempool1";
     let miner = "miner1";
     let block_num = 1;
     create_first_block_act(&mut network).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
-    compute_flood_rand_and_block_to_partition(&mut network, compute).await;
+    mempool_flood_rand_and_block_to_partition(&mut network, mempool).await;
     miner_handle_event(&mut network, miner, "Received random number successfully").await;
     miner_handle_event(&mut network, miner, "Partition PoW complete").await;
     miner_process_found_partition_pow(&mut network, miner).await;
-    compute_handle_event(
+    mempool_handle_event(
         &mut network,
-        compute,
+        mempool,
         &["Partition PoW received successfully"],
     )
     .await;
-    compute_handle_event(&mut network, compute, &["Winning PoW intake open"]).await;
+    mempool_handle_event(&mut network, mempool, &["Winning PoW intake open"]).await;
 
     //
     // Act
     //
     {
         // From node not in partition (user1 is not a miner).
-        let request = ComputeRequest::SendPoW {
+        let request = MempoolRequest::SendPoW {
             block_num,
             nonce: Default::default(),
             coinbase: Default::default(),
         };
-        compute_inject_next_event(&mut network, "user1", compute, request).await;
-        compute_handle_error(&mut network, compute, &["Not block currently mined"]).await;
+        mempool_inject_next_event(&mut network, "user1", mempool, request).await;
+        mempool_handle_error(&mut network, mempool, &["Not block currently mined"]).await;
     }
     {
         // For not currently mined block number.
-        let request = ComputeRequest::SendPoW {
+        let request = MempoolRequest::SendPoW {
             block_num: block_num + 1,
             nonce: Default::default(),
             coinbase: Default::default(),
         };
-        compute_inject_next_event(&mut network, miner, compute, request).await;
-        compute_handle_error(&mut network, compute, &["Not block currently mined"]).await;
+        mempool_inject_next_event(&mut network, miner, mempool, request).await;
+        mempool_handle_error(&mut network, mempool, &["Not block currently mined"]).await;
     }
     {
         // For miner in partition and correct block, but wrong nonce/coinbase
-        let request = ComputeRequest::SendPoW {
+        let request = MempoolRequest::SendPoW {
             block_num,
             nonce: Default::default(),
             coinbase: Default::default(),
         };
-        compute_inject_next_event(&mut network, miner, compute, request).await;
-        compute_handle_error(&mut network, compute, &["Coinbase transaction invalid"]).await;
+        mempool_inject_next_event(&mut network, miner, mempool, request).await;
+        mempool_handle_error(&mut network, mempool, &["Coinbase transaction invalid"]).await;
     }
 
     //
     // Assert
     //
-    let block = compute_current_mining_block(&mut network, compute).await;
+    let block = mempool_current_mining_block(&mut network, mempool).await;
     assert!(block.is_some(), "Expect still mining");
 
     test_step_complete(network).await;
@@ -2052,18 +2052,18 @@ async fn handle_message_lost_no_restart_no_raft() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_no_restart_raft_1_node() {
-    handle_message_lost_common(complete_network_config_with_n_compute_raft(10450, 1), &[]).await
+    handle_message_lost_common(complete_network_config_with_n_mempool_raft(10450, 1), &[]).await
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_block_stored_raft_1_node() {
-    let network_config = complete_network_config_with_n_compute_raft(10460, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(10460, 1);
     handle_message_lost_restart_block_stored_raft_1_node_common(network_config).await
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_message_lost_restart_block_stored_raft_real_db_1_node() {
-    let mut network_config = complete_network_config_with_n_compute_raft(10465, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(10465, 1);
     network_config.in_memory_db = false;
 
     remove_all_node_dbs(&network_config);
@@ -2076,10 +2076,10 @@ async fn handle_message_lost_restart_block_stored_raft_1_node_common(
     let modify_cfg = vec![(
         "After store block 0",
         CfgModif::RestartEventsAll(&[
-            (NodeType::Compute, "Snapshot applied"),
-            (NodeType::Compute, "Winning PoW intake open"),
-            (NodeType::Compute, "Pipeline halted"),
-            (NodeType::Compute, "Received partition request successfully"),
+            (NodeType::Mempool, "Snapshot applied"),
+            (NodeType::Mempool, "Winning PoW intake open"),
+            (NodeType::Mempool, "Pipeline halted"),
+            (NodeType::Mempool, "Received partition request successfully"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
@@ -2091,13 +2091,13 @@ async fn handle_message_lost_restart_block_complete_raft_1_node() {
     let modify_cfg = vec![(
         "After create block 1",
         CfgModif::RestartEventsAll(&[
-            (NodeType::Compute, "Snapshot applied"),
-            (NodeType::Compute, "Received partition request successfully"),
+            (NodeType::Mempool, "Snapshot applied"),
+            (NodeType::Mempool, "Received partition request successfully"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
 
-    let network_config = complete_network_config_with_n_compute_raft(10470, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(10470, 1);
     handle_message_lost_common(network_config, &modify_cfg).await
 }
 
@@ -2106,13 +2106,13 @@ async fn handle_message_lost_restart_upgrade_block_complete_raft_1_node() {
     let modify_cfg = vec![(
         "After store block 0",
         CfgModif::RestartUpgradeEventsAll(&[
-            (NodeType::Compute, "Snapshot applied"),
-            (NodeType::Compute, "Received first full partition request"),
+            (NodeType::Mempool, "Snapshot applied"),
+            (NodeType::Mempool, "Received first full partition request"),
             (NodeType::Storage, "Snapshot applied"),
         ]),
     )];
 
-    let network_config = complete_network_config_with_n_compute_raft(10480, 1);
+    let network_config = complete_network_config_with_n_mempool_raft(10480, 1);
     handle_message_lost_common_with_pow(network_config, CfgPow::First, &modify_cfg).await
 }
 
@@ -2125,7 +2125,7 @@ async fn handle_messages_lost_reset_pipeline_stage() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11520, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11520, 1);
     // Enable pipeline resets when message retrigger threshold has been reached
     network_config.enable_pipeline_reset = Some(true);
     network_config.test_duration_divider = 10;
@@ -2138,7 +2138,7 @@ async fn handle_messages_lost_reset_pipeline_stage() {
         // for retrigger messages has been reached
         (
             "After Winning PoW intake open",
-            CfgModif::HandleEvents(&[("compute1", "Pipeline reset")]),
+            CfgModif::HandleEvents(&[("mempool1", "Pipeline reset")]),
         ),
         // After the pipeline status has been reset, the pipeline should be able to
         // accept participants again, so we respawn Miner 1
@@ -2149,7 +2149,7 @@ async fn handle_messages_lost_reset_pipeline_stage() {
         ),
         (
             "After Winning PoW intake open",
-            CfgModif::HandleEvents(&[("compute1", "Received partition request successfully")]),
+            CfgModif::HandleEvents(&[("mempool1", "Received partition request successfully")]),
         ),
     ];
 
@@ -2203,7 +2203,7 @@ async fn handle_message_lost_common_with_pow(
     let mining_reward = network.mining_reward();
 
     let expected_events_b1_create = network.all_active_nodes_events(|t, _| match t {
-        NodeType::Compute => vec![
+        NodeType::Mempool => vec![
             "Received block stored".to_owned(),
             "Block committed".to_owned(),
         ],
@@ -2211,12 +2211,12 @@ async fn handle_message_lost_common_with_pow(
     });
     let expected_events_b1_stored = network.all_active_nodes_events(|t, _| match t {
         NodeType::Storage => vec![BLOCK_RECEIVED.to_owned(), BLOCK_STORED.to_owned()],
-        NodeType::Compute if cfg_pow == CfgPow::Parallel => vec![
+        NodeType::Mempool if cfg_pow == CfgPow::Parallel => vec![
             "Partition PoW received successfully".to_owned(),
             "Received PoW successfully".to_owned(),
             "Pipeline halted".to_owned(),
         ],
-        NodeType::Compute => vec![
+        NodeType::Mempool => vec![
             "Partition PoW received successfully".to_owned(),
             "Winning PoW intake open".to_owned(),
             "Partition PoW received successfully".to_owned(),
@@ -2286,7 +2286,7 @@ async fn request_blockchain_item_no_raft() {
     let ((block_keys, _), blocks) = complete_blocks(11, &transactions).await;
 
     for block in &blocks {
-        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", block).await;
+        storage_inject_send_block_to_storage(&mut network, "mempool1", "storage1", block).await;
         node_all_handle_event(&mut network, storage_nodes, &BLOCK_RECEIVED_AND_STORED).await;
     }
 
@@ -2390,7 +2390,7 @@ async fn catchup_fetch_blockchain_item_raft() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11420, 3);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11420, 3);
     network_config.test_duration_divider = 10;
 
     let mut network = Network::create_from_config(&network_config).await;
@@ -2426,8 +2426,8 @@ async fn catchup_fetch_blockchain_item_raft() {
         modify_network(&mut network, &tag, &modify_cfg).await;
         let storage_nodes = network.active_nodes(NodeType::Storage).to_owned();
 
-        storage_inject_send_block_to_storage(&mut network, "compute1", "storage1", block).await;
-        storage_inject_send_block_to_storage(&mut network, "compute2", "storage2", block).await;
+        storage_inject_send_block_to_storage(&mut network, "mempool1", "storage1", block).await;
+        storage_inject_send_block_to_storage(&mut network, "mempool2", "storage2", block).await;
 
         storage_all_handle_event(&mut network, &storage_nodes[0..2], BLOCK_RECEIVED).await;
         node_all_handle_event(&mut network, &storage_nodes, &[BLOCK_STORED]).await;
@@ -2482,28 +2482,28 @@ async fn relaunch_with_new_raft_nodes() {
     // Arrange
     //
     let extra_params = {
-        let mut network_config = complete_network_config_with_n_compute_raft(11430, 1);
+        let mut network_config = complete_network_config_with_n_mempool_raft(11430, 1);
         network_config.nodes.insert(NodeType::User, vec![]);
         let mut network = Network::create_from_config(&network_config).await;
 
-        // Create intiial snapshoot in compute and storage
+        // Create intiial snapshoot in mempool and storage
         create_first_block_act(&mut network).await;
         proof_of_work_act(&mut network, CfgPow::First, CfgNum::All, false, None).await;
         send_block_to_storage_act(&mut network, CfgNum::All).await;
         network.close_raft_loops_and_drop().await
     };
 
-    let mut network_config = complete_network_config_with_n_compute_raft(11430, 3);
-    network_config.compute_seed_utxo = Default::default();
+    let mut network_config = complete_network_config_with_n_mempool_raft(11430, 3);
+    network_config.mempool_seed_utxo = Default::default();
     network_config.nodes.insert(NodeType::User, vec![]);
 
     let mut network = Network::create_stopped_from_config(&network_config);
     network.set_all_extra_params(extra_params);
     network.upgrade_closed_nodes().await;
 
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     let storage_nodes = &network_config.nodes[&NodeType::Storage];
-    let raft_nodes: Vec<String> = compute_nodes.iter().chain(storage_nodes).cloned().collect();
+    let raft_nodes: Vec<String> = mempool_nodes.iter().chain(storage_nodes).cloned().collect();
 
     let restart_raft_reasons: BTreeMap<String, Vec<String>> = {
         let snap_applied = vec!["Snapshot applied".to_owned()];
@@ -2512,9 +2512,9 @@ async fn relaunch_with_new_raft_nodes() {
             ("storage1".to_owned(), snap_applied.clone()),
             ("storage2".to_owned(), snap_applied_fetch.clone()),
             ("storage3".to_owned(), snap_applied_fetch),
-            ("compute1".to_owned(), snap_applied.clone()),
-            ("compute2".to_owned(), snap_applied.clone()),
-            ("compute3".to_owned(), snap_applied),
+            ("mempool1".to_owned(), snap_applied.clone()),
+            ("mempool2".to_owned(), snap_applied.clone()),
+            ("mempool3".to_owned(), snap_applied),
         ]
         .into_iter()
         .collect()
@@ -2524,12 +2524,12 @@ async fn relaunch_with_new_raft_nodes() {
     // Act
     //
     let (mut actual_stored, mut expected_stored) = (Vec::new(), Vec::new());
-    let (mut actual_compute, mut expected_compute) = (Vec::new(), Vec::new());
+    let (mut actual_mempool, mut expected_mempool) = (Vec::new(), Vec::new());
 
     network.pre_launch_nodes_named(&raft_nodes).await;
     for (pre_launch, expected_block_num) in vec![(true, 0u64), (false, 1u64)].into_iter() {
         if !pre_launch {
-            for node_name in compute_nodes {
+            for node_name in mempool_nodes {
                 node_send_coordinated_shutdown(&mut network, node_name, expected_block_num).await;
             }
         }
@@ -2547,17 +2547,17 @@ async fn relaunch_with_new_raft_nodes() {
 
         actual_stored
             .push(storage_all_get_last_block_stored_num(&mut network, storage_nodes).await);
-        actual_compute
-            .push(compute_all_committed_current_block_num(&mut network, compute_nodes).await);
+        actual_mempool
+            .push(mempool_all_committed_current_block_num(&mut network, mempool_nodes).await);
         expected_stored.push(node_all(storage_nodes, Some(expected_block_num)));
-        expected_compute.push(node_all(compute_nodes, Some(expected_block_num)));
+        expected_mempool.push(node_all(mempool_nodes, Some(expected_block_num)));
     }
 
     //
     // Assert
     //
     assert_eq!(actual_stored, expected_stored);
-    assert_eq!(actual_compute, expected_compute);
+    assert_eq!(actual_mempool, expected_mempool);
 
     test_step_complete(network).await;
 }
@@ -2569,8 +2569,8 @@ async fn request_utxo_set_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11440, 1);
-    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+    let mut network_config = complete_network_config_with_n_mempool_raft(11440, 1);
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;
         &[
@@ -2582,7 +2582,7 @@ async fn request_utxo_set_raft_1_node() {
     let mut network = Network::create_from_config(&network_config).await;
     create_first_block_act(&mut network).await;
 
-    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+    let committed_utxo_set = mempool_committed_utxo_set(&mut network, "mempool1").await;
 
     let addresses = {
         let a = SOME_PUB_KEY_ADDRS;
@@ -2639,7 +2639,7 @@ async fn request_utxo_set_raft_1_node() {
     //
     let mut actual = Vec::new();
     for address_list in addresses {
-        request_utxo_set_act(&mut network, "user1", "compute1", address_list).await;
+        request_utxo_set_act(&mut network, "user1", "mempool1", address_list).await;
         actual.push(user_get_received_utxo_set_keys(&mut network, "user1").await);
     }
 
@@ -2653,12 +2653,12 @@ async fn request_utxo_set_raft_1_node() {
 async fn request_utxo_set_act(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
     address_list: UtxoFetchType,
 ) {
     user_send_request_utxo_set(network, user, address_list).await;
-    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
-    compute_send_utxo_set(network, compute).await;
+    mempool_handle_event(network, mempool, &["Received UTXO fetch request"]).await;
+    mempool_send_utxo_set(network, mempool).await;
     user_handle_event(network, user, "Received UTXO set").await;
 }
 
@@ -2669,8 +2669,8 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11450, 1);
-    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+    let mut network_config = complete_network_config_with_n_mempool_raft(11450, 1);
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo_with_info({
         let a = DEFAULT_SEED_AMOUNT;
         let pk = SOME_PUB_KEYS;
         &[
@@ -2720,7 +2720,7 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
     send_block_to_storage_act(&mut network, CfgNum::All).await;
 
     let before = node_all_get_wallet_info(&mut network, user_nodes).await;
-    request_utxo_set_and_update_running_total_act(&mut network, "user1", "compute1", address_list)
+    request_utxo_set_and_update_running_total_act(&mut network, "user1", "mempool1", address_list)
         .await;
     let after = node_all_get_wallet_info(&mut network, user_nodes).await;
 
@@ -2749,13 +2749,13 @@ async fn request_utxo_set_and_update_running_total_raft_1_node() {
 async fn request_utxo_set_and_update_running_total_act(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
     address_list: UtxoFetchType,
 ) {
     user_trigger_update_wallet_from_utxo_set(network, user, address_list).await;
     user_handle_event(network, user, "Request UTXO set").await;
-    compute_handle_event(network, compute, &["Received UTXO fetch request"]).await;
-    compute_send_utxo_set(network, compute).await;
+    mempool_handle_event(network, mempool, &["Received UTXO fetch request"]).await;
+    mempool_send_utxo_set(network, mempool).await;
     user_handle_event(network, user, "Received UTXO set").await;
     user_update_running_total(network, user).await;
 }
@@ -2767,10 +2767,10 @@ pub async fn create_item_asset_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11460, 1);
-    network_config.compute_seed_utxo = BTreeMap::new();
+    let mut network_config = complete_network_config_with_n_mempool_raft(11460, 1);
+    network_config.mempool_seed_utxo = BTreeMap::new();
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     create_first_block_act(&mut network).await;
     let item_metadata = Some("item_metadata".to_string());
 
@@ -2779,10 +2779,10 @@ pub async fn create_item_asset_raft_1_node() {
     //
     let actual_running_total_before = node_get_wallet_info(&mut network, "user1").await.0;
     let tx_hash =
-        create_item_asset_act(&mut network, "user1", "compute1", 10, item_metadata.clone()).await;
+        create_item_asset_act(&mut network, "user1", "mempool1", 10, item_metadata.clone()).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
-    let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+    let committed_utxo_set = mempool_all_committed_utxo_set(&mut network, mempool_nodes).await;
     let actual_utxo_item: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
         .map(|v| v.into_values().map(|v| v.value).collect())
@@ -2795,7 +2795,7 @@ pub async fn create_item_asset_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_item,
-        node_all(compute_nodes, vec![Asset::item(10, None, item_metadata)])
+        node_all(mempool_nodes, vec![Asset::item(10, None, item_metadata)])
     );
     assert_eq!(
         actual_running_total_before,
@@ -2810,18 +2810,18 @@ pub async fn create_item_asset_raft_1_node() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-pub async fn create_item_asset_on_compute_raft_1_node() {
+pub async fn create_item_asset_on_mempool_raft_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11465, 1);
-    network_config.compute_seed_utxo = BTreeMap::new();
+    let mut network_config = complete_network_config_with_n_mempool_raft(11465, 1);
+    network_config.mempool_seed_utxo = BTreeMap::new();
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
-    network_config.compute_seed_utxo =
-        make_compute_seed_utxo_with_info(&[("000000", vec![(COMMON_PUB_KEY, TokenAmount(0))])]);
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
+    network_config.mempool_seed_utxo =
+        make_mempool_seed_utxo_with_info(&[("000000", vec![(COMMON_PUB_KEY, TokenAmount(0))])]);
     create_first_block_act(&mut network).await;
     let item_metadata = Some("item_metadata".to_string());
 
@@ -2833,9 +2833,9 @@ pub async fn create_item_asset_on_compute_raft_1_node() {
     let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
     let signature = hex::encode(sign::sign_detached(asset_hash.as_bytes(), &secret_key).as_ref());
 
-    compute_create_item_asset_tx(
+    mempool_create_item_asset_tx(
         &mut network,
-        "compute1",
+        "mempool1",
         1,
         COMMON_PUB_ADDR.to_string(),
         COMMON_PUB_KEY.to_string(),
@@ -2844,10 +2844,10 @@ pub async fn create_item_asset_on_compute_raft_1_node() {
     )
     .await;
 
-    compute_handle_event(&mut network, "compute1", &["Transactions committed"]).await;
+    mempool_handle_event(&mut network, "mempool1", &["Transactions committed"]).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
-    let committed_utxo_set = compute_all_committed_utxo_set(&mut network, compute_nodes).await;
+    let committed_utxo_set = mempool_all_committed_utxo_set(&mut network, mempool_nodes).await;
     let actual_utxo_item: Vec<Vec<_>> = committed_utxo_set
         .into_iter()
         .map(|v| v.into_values().map(|v| v.value).collect())
@@ -2858,7 +2858,7 @@ pub async fn create_item_asset_on_compute_raft_1_node() {
     //
     assert_eq!(
         actual_utxo_item,
-        node_all(compute_nodes, vec![Asset::item(1, None, item_metadata)]) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Item`s */
+        node_all(mempool_nodes, vec![Asset::item(1, None, item_metadata)]) /* DRS tx hash will reflect as `None` on UTXO set for newly created `Item`s */
     );
 
     test_step_complete(network).await;
@@ -2871,14 +2871,14 @@ pub async fn make_item_based_payment_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11470, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11470, 1);
     network_config
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
-    network_config.compute_seed_utxo = make_compute_seed_utxo(SEED_UTXO, TokenAmount(11));
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo(SEED_UTXO, TokenAmount(11));
     network_config.user_wallet_seeds = vec![vec![wallet_seed(VALID_TXS_IN[0], &TokenAmount(11))]];
     let mut network = Network::create_from_config(&network_config).await;
-    let compute_nodes = &network_config.nodes[&NodeType::Compute];
+    let mempool_nodes = &network_config.nodes[&NodeType::Mempool];
     // This metadata ONLY forms part of the create transaction
     // , and is not present in any on-spending
     let item_metadata = Some("item metadata".to_string());
@@ -2886,7 +2886,7 @@ pub async fn make_item_based_payment_raft_1_node() {
     create_first_block_act(&mut network).await;
     node_connect_to(&mut network, "user1", "user2").await;
     let tx_hash =
-        create_item_asset_act(&mut network, "user2", "compute1", 5, item_metadata.clone()).await;
+        create_item_asset_act(&mut network, "user2", "mempool1", 5, item_metadata.clone()).await;
     create_block_act(&mut network, Cfg::IgnoreStorage, CfgNum::All).await;
 
     //
@@ -2899,7 +2899,7 @@ pub async fn make_item_based_payment_raft_1_node() {
         &mut network,
         "user1",
         "user2",
-        "compute1",
+        "mempool1",
         Asset::Token(DEFAULT_SEED_AMOUNT),
         Some(tx_hash.clone()),
     )
@@ -2909,7 +2909,7 @@ pub async fn make_item_based_payment_raft_1_node() {
         user_get_wallet_asset_totals_for_tx(&mut network, "user1", "user2").await;
 
     let committed_tx_druid_pool: Vec<Transaction> =
-        compute_all_committed_tx_druid_pool(&mut network, compute_nodes)
+        mempool_all_committed_tx_druid_pool(&mut network, mempool_nodes)
             .await
             .into_iter()
             .flatten()
@@ -2985,11 +2985,11 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11480, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11480, 1);
     network_config
         .nodes_mut(NodeType::User)
         .push("user2".to_string());
-    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo_with_info({
         let a = TokenAmount(11);
         let pk = SOME_PUB_KEYS;
         &[("000000", vec![(pk[0], a)]), ("000001", vec![(pk[1], a)])]
@@ -3020,10 +3020,10 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
     create_first_block_act(&mut network).await;
     // Item type "one" belongs to "user1"
     let tx_hash_1 =
-        create_item_asset_act(&mut network, "user1", "compute1", 5, item_metadata.clone()).await;
+        create_item_asset_act(&mut network, "user1", "mempool1", 5, item_metadata.clone()).await;
     // Item type "two" belongs to "user2"
     let tx_hash_2 =
-        create_item_asset_act(&mut network, "user2", "compute1", 10, item_metadata.clone()).await;
+        create_item_asset_act(&mut network, "user2", "mempool1", 10, item_metadata.clone()).await;
     node_connect_to(&mut network, "user1", "user2").await;
 
     //
@@ -3045,7 +3045,7 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
         Vec<(AssetValues, AssetValues)>,
     > = BTreeMap::new();
 
-    for (payment_amount, from, to, drs_tx_hash, b_num) in amounts_to_pay {
+    for (payment_amount, from, to, genesis_hash, b_num) in amounts_to_pay {
         create_block_act_with(&mut network, Cfg::IgnoreStorage, CfgNum::All, b_num).await;
         let initial_info = vec![user_get_wallet_asset_totals_for_tx(&mut network, from, to).await];
         let infos = all_gathered_wallet_asset_info
@@ -3056,9 +3056,9 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
             &mut network,
             from,
             to,
-            "compute1",
+            "mempool1",
             Asset::Token(payment_amount),
-            Some(drs_tx_hash.clone()),
+            Some(genesis_hash.clone()),
         )
         .await;
 
@@ -3069,8 +3069,8 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
     let all_wallet_assets_actual: Vec<_> = all_gathered_wallet_asset_info.into_iter().collect();
 
     let users_utxo_balance_actual = (
-        compute_get_utxo_balance_for_user(&mut network, "compute1", "user1").await,
-        compute_get_utxo_balance_for_user(&mut network, "compute1", "user2").await,
+        mempool_get_utxo_balance_for_user(&mut network, "mempool1", "user1").await,
+        mempool_get_utxo_balance_for_user(&mut network, "mempool1", "user2").await,
     );
 
     let all_assets_expected = vec![
@@ -3154,34 +3154,34 @@ pub async fn make_multiple_item_based_payments_raft_1_node() {
 async fn create_item_asset_act(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
     item_amount: u64,
     item_metadata: Option<String>,
 ) -> String {
-    let tx_hash = user_send_item_asset(network, user, compute, item_amount, item_metadata).await;
-    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
-    compute_handle_event(network, compute, &["Transactions committed"]).await;
+    let tx_hash = user_send_item_asset(network, user, mempool, item_amount, item_metadata).await;
+    mempool_handle_event(network, mempool, &["Transactions added to tx pool"]).await;
+    mempool_handle_event(network, mempool, &["Transactions committed"]).await;
     tx_hash
 }
 
-async fn compute_create_item_asset_tx(
+async fn mempool_create_item_asset_tx(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
     item_amount: u64,
     script_public_key: String,
     public_key: String,
     signature: String,
     item_metadata: Option<String>,
 ) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    let drs_tx_hash_spec = DrsTxHashSpec::Create; /* Generate unique DRS tx hash */
+    let mut c = network.mempool(mempool).unwrap().lock().await;
+    let genesis_hash_spec = GenesisTxHashSpec::Create; /* Generate unique DRS tx hash */
     let (tx, _) = c
         .create_item_asset_tx(
             item_amount,
             script_public_key,
             public_key,
             signature,
-            drs_tx_hash_spec,
+            genesis_hash_spec,
             item_metadata,
         )
         .unwrap();
@@ -3192,21 +3192,21 @@ async fn make_item_based_payment_act(
     network: &mut Network,
     from: &str,
     to: &str,
-    compute: &str,
+    mempool: &str,
     send_asset: Asset,
-    drs_tx_hash: Option<String>, /* Expected `drs_tx_hash` of `Item` asset to receive */
+    genesis_hash: Option<String>, /* Expected `genesis_hash` of `Item` asset to receive */
 ) {
-    user_send_item_based_payment_request(network, from, to, send_asset, drs_tx_hash).await;
+    user_send_item_based_payment_request(network, from, to, send_asset, genesis_hash).await;
     user_handle_event(network, to, "Received item-based payment request").await;
     user_send_item_based_payment_response(network, to).await;
     user_handle_event(network, from, "Received item-based payment response").await;
-    user_send_item_based_payment_to_desinations(network, from, compute).await;
-    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
+    user_send_item_based_payment_to_desinations(network, from, mempool).await;
+    mempool_handle_event(network, mempool, &["Transactions added to tx pool"]).await;
     user_handle_event(network, to, "Payment transaction received").await;
-    user_send_item_based_payment_to_desinations(network, to, compute).await;
-    compute_handle_event(network, compute, &["Transactions added to tx pool"]).await;
+    user_send_item_based_payment_to_desinations(network, to, mempool).await;
+    mempool_handle_event(network, mempool, &["Transactions added to tx pool"]).await;
     user_handle_event(network, from, "Payment transaction received").await;
-    compute_handle_event(network, compute, &["Transactions committed"]).await;
+    mempool_handle_event(network, mempool, &["Transactions committed"]).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3248,8 +3248,8 @@ async fn reject_item_based_payment() {
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11500, 1);
-    network_config.compute_seed_utxo = make_compute_seed_utxo_with_info({
+    let mut network_config = complete_network_config_with_n_mempool_raft(11500, 1);
+    network_config.mempool_seed_utxo = make_mempool_seed_utxo_with_info({
         &[("000000", vec![(SOME_PUB_KEYS[0], DEFAULT_SEED_AMOUNT)])]
     });
     let mut network = Network::create_from_config(&network_config).await;
@@ -3260,7 +3260,7 @@ async fn reject_item_based_payment() {
         decode_pub_key(SOME_PUB_KEYS[1]).unwrap(),
         &decode_secret_key(SOME_SEC_KEYS[1]).unwrap(),
         1,
-        DrsTxHashSpec::Create,
+        GenesisTxHashSpec::Create,
         None,
         None,
     );
@@ -3308,12 +3308,12 @@ async fn reject_item_based_payment() {
     // Act
     //
     for i in 0..2 {
-        user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_send_txs[i]).await;
-        compute_handle_event(&mut network, "compute1", &["Transactions added to tx pool"]).await;
-        user_send_transaction_to_compute(&mut network, "user1", "compute1", &rb_recv_txs[i]).await;
-        compute_handle_event(
+        user_send_transaction_to_mempool(&mut network, "user1", "mempool1", &rb_send_txs[i]).await;
+        mempool_handle_event(&mut network, "mempool1", &["Transactions added to tx pool"]).await;
+        user_send_transaction_to_mempool(&mut network, "user1", "mempool1", &rb_recv_txs[i]).await;
+        mempool_handle_event(
             &mut network,
-            "compute1",
+            "mempool1",
             &["Some transactions invalid. Adding valid transactions only"],
         )
         .await;
@@ -3322,8 +3322,8 @@ async fn reject_item_based_payment() {
     //
     // Assert
     //
-    let actual_pending_druid_pool = compute_pending_druid_pool(&mut network, "compute1").await;
-    let actual_local_druid_pool = compute_local_druid_pool(&mut network, "compute1").await;
+    let actual_pending_druid_pool = mempool_pending_druid_pool(&mut network, "mempool1").await;
+    let actual_local_druid_pool = mempool_local_druid_pool(&mut network, "mempool1").await;
 
     assert_eq!(
         (
@@ -3335,26 +3335,26 @@ async fn reject_item_based_payment() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn compute_pause_update_and_resume_raft_3_nodes() {
+async fn mempool_pause_update_and_resume_raft_3_nodes() {
     test_step_start();
 
     //
     // Arrange
     //
-    let network_config = complete_network_config_with_n_compute_raft(11550, 3);
+    let network_config = complete_network_config_with_n_mempool_raft(11550, 3);
 
     // Initial network config as loaded
-    let initial_network_config = ComputeNodeSharedConfig {
-        compute_partition_full_size: network_config.compute_partition_full_size,
-        compute_mining_event_timeout: 500,
-        compute_miner_whitelist: Default::default(), // No whitelisting
+    let initial_network_config = MempoolNodeSharedConfig {
+        mempool_partition_full_size: network_config.mempool_partition_full_size,
+        mempool_mining_event_timeout: 500,
+        mempool_miner_whitelist: Default::default(), // No whitelisting
     };
 
-    // This is the configuration we want applied to all compute nodes during runtime
-    let shared_config_to_send = ComputeNodeSharedConfig {
-        compute_partition_full_size: 5,
-        compute_mining_event_timeout: 10000,
-        compute_miner_whitelist: MinerWhitelist {
+    // This is the configuration we want applied to all mempool nodes during runtime
+    let shared_config_to_send = MempoolNodeSharedConfig {
+        mempool_partition_full_size: 5,
+        mempool_mining_event_timeout: 10000,
+        mempool_miner_whitelist: MinerWhitelist {
             active: true, // This will enable whitelisting
             miner_api_keys: Some(
                 // Filter based on API keys
@@ -3366,10 +3366,10 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
         },
     };
 
-    let compute_ring = &[
-        "compute1".to_string(),
-        "compute2".to_string(),
-        "compute3".to_string(),
+    let mempool_ring = &[
+        "mempool1".to_string(),
+        "mempool2".to_string(),
+        "mempool3".to_string(),
     ];
 
     let mut network = Network::create_from_config(&network_config).await;
@@ -3383,20 +3383,20 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     //
 
     // Create pause all nodes at block 0 + 1 = 1
-    compute_initiate_coordinated_pause_act("compute1", compute_ring, &mut network, 1).await;
+    mempool_initiate_coordinated_pause_act("mempool1", mempool_ring, &mut network, 1).await;
     create_block_act(&mut network, Cfg::All, CfgNum::All).await;
 
     // Confirm that the nodes are actually all paused.
     let all_nodes_paused_after_block_create =
-        compute_all_nodes_paused(&mut network, compute_ring).await;
+        mempool_all_nodes_paused(&mut network, mempool_ring).await;
 
     // All nodes should be paused now
     // ,and ready to update their configs
-    // with the one received from "compute1"
-    compute_initiate_send_shared_config_act(
+    // with the one received from "mempool1"
+    mempool_initiate_send_shared_config_act(
         shared_config_to_send.clone(),
-        "compute1",
-        compute_ring,
+        "mempool1",
+        mempool_ring,
         &mut network,
     )
     .await;
@@ -3405,14 +3405,14 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
     miner_handle_event_failure(&mut network, "miner1", "Miner not authorized").await;
 
     // All shared config values should now be the same
-    let all_nodes_same_config = all_nodes_same_config(&mut network, compute_ring).await;
+    let all_nodes_same_config = all_nodes_same_config(&mut network, mempool_ring).await;
 
     // Resume the nodes again
-    compute_initiate_coordinated_resume_act("compute1", compute_ring, &mut network).await;
+    mempool_initiate_coordinated_resume_act("mempool1", mempool_ring, &mut network).await;
 
     // Confirm all nodes are now resumed
     let all_nodes_resumed_after_coordinated_resume =
-        compute_all_nodes_resumed(&mut network, compute_ring).await;
+        mempool_all_nodes_resumed(&mut network, mempool_ring).await;
 
     //
     // Assert
@@ -3424,13 +3424,13 @@ async fn compute_pause_update_and_resume_raft_3_nodes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn compute_re_align_utxo_set_1_node() {
+async fn mempool_re_align_utxo_set_1_node() {
     test_step_start();
 
     //
     // Arrange
     //
-    let mut network_config = complete_network_config_with_n_compute_raft(11650, 1);
+    let mut network_config = complete_network_config_with_n_mempool_raft(11650, 1);
     let utxo_re_align_block_count = 2;
     network_config.utxo_re_align_block_modulo = Some(utxo_re_align_block_count);
     let mut network = Network::create_from_config(&network_config).await;
@@ -3461,17 +3461,17 @@ async fn compute_re_align_utxo_set_1_node() {
 
         // After the first block, misalign `pk_cache` with `base` of `TrackedUtxoSet`
         if i == 1 {
-            let mut committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+            let mut committed_utxo_set = mempool_committed_utxo_set(&mut network, "mempool1").await;
             if let Some(entry) = committed_utxo_set.first_entry() {
                 let addr_to_remove = entry.get().script_public_key.clone().unwrap_or_default();
                 // Remove entry for mis-alignment
-                compute_remove_entry_from_pk_cache(&mut network, "compute1", &addr_to_remove).await;
+                mempool_remove_entry_from_pk_cache(&mut network, "mempool1", &addr_to_remove).await;
             }
         }
     }
 
-    let pk_cache_after_re_alignment = compute_get_pk_cache(&mut network, "compute1").await;
-    let committed_utxo_set = compute_committed_utxo_set(&mut network, "compute1").await;
+    let pk_cache_after_re_alignment = mempool_get_pk_cache(&mut network, "mempool1").await;
+    let committed_utxo_set = mempool_committed_utxo_set(&mut network, "mempool1").await;
 
     // Ensure that `pk_cache` is contains all `OutPoint` values from `committed_utxo_set`
     let all_outpoints_present = move || {
@@ -3491,32 +3491,32 @@ async fn compute_re_align_utxo_set_1_node() {
     assert!(all_outpoints_present());
 }
 
-async fn compute_remove_entry_from_pk_cache<'a>(network: &mut Network, compute: &str, entry: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_remove_entry_from_pk_cache<'a>(network: &mut Network, mempool: &str, entry: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.remove_pk_cache_entry(entry);
 }
 
-async fn compute_get_pk_cache(
+async fn mempool_get_pk_cache(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
 ) -> HashMap<String, BTreeSet<OutPoint>> {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_pk_cache()
 }
 
-async fn compute_get_shared_config(
+async fn mempool_get_shared_config(
     network: &mut Network,
-    compute: &str,
-) -> ComputeNodeSharedConfig {
-    let c = network.compute(compute).unwrap().lock().await;
+    mempool: &str,
+) -> MempoolNodeSharedConfig {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_shared_config()
 }
 
-async fn all_nodes_same_config(network: &mut Network, compute_ring: &[String]) -> bool {
+async fn all_nodes_same_config(network: &mut Network, mempool_ring: &[String]) -> bool {
     let mut all_shared_config_same = true;
-    let first_shared_config = compute_get_shared_config(network, &compute_ring[0]).await;
-    for compute in compute_ring {
-        let shared_config = compute_get_shared_config(network, compute).await;
+    let first_shared_config = mempool_get_shared_config(network, &mempool_ring[0]).await;
+    for mempool in mempool_ring {
+        let shared_config = mempool_get_shared_config(network, mempool).await;
         if shared_config != first_shared_config {
             all_shared_config_same = false;
             break;
@@ -3525,10 +3525,10 @@ async fn all_nodes_same_config(network: &mut Network, compute_ring: &[String]) -
     all_shared_config_same
 }
 
-async fn compute_all_nodes_paused(network: &mut Network, compute_ring: &[String]) -> bool {
+async fn mempool_all_nodes_paused(network: &mut Network, mempool_ring: &[String]) -> bool {
     let mut all_nodes_paused = true;
-    for compute in compute_ring {
-        let c = network.compute(compute).unwrap().lock().await;
+    for mempool in mempool_ring {
+        let c = network.mempool(mempool).unwrap().lock().await;
         if !c.is_paused().await {
             all_nodes_paused = false;
             break;
@@ -3537,10 +3537,10 @@ async fn compute_all_nodes_paused(network: &mut Network, compute_ring: &[String]
     all_nodes_paused
 }
 
-async fn compute_all_nodes_resumed(network: &mut Network, compute_ring: &[String]) -> bool {
+async fn mempool_all_nodes_resumed(network: &mut Network, mempool_ring: &[String]) -> bool {
     let mut all_nodes_resumed = true;
-    for compute in compute_ring {
-        let c = network.compute(compute).unwrap().lock().await;
+    for mempool in mempool_ring {
+        let c = network.mempool(mempool).unwrap().lock().await;
         if c.is_paused().await {
             all_nodes_resumed = false;
             break;
@@ -3549,52 +3549,52 @@ async fn compute_all_nodes_resumed(network: &mut Network, compute_ring: &[String
     all_nodes_resumed
 }
 
-async fn compute_initiate_coordinated_pause_act(
-    compute: &str,
-    compute_ring: &[String],
+async fn mempool_initiate_coordinated_pause_act(
+    mempool: &str,
+    mempool_ring: &[String],
     network: &mut Network,
     b_num_from_current: u64,
 ) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     let _ = c.pause_nodes(b_num_from_current);
-    drop(c); // Drop compute node to avoid borrow checker violation
+    drop(c); // Drop mempool node to avoid borrow checker violation
     node_all_handle_event(
         network,
-        compute_ring,
+        mempool_ring,
         &["Received coordinated pause request"],
     )
     .await;
-    node_all_handle_event(network, compute_ring, &["Node pause configuration set"]).await;
+    node_all_handle_event(network, mempool_ring, &["Node pause configuration set"]).await;
 }
 
-async fn compute_initiate_send_shared_config_act(
-    shared_config: ComputeNodeSharedConfig,
-    compute: &str,
-    compute_peers: &[String],
+async fn mempool_initiate_send_shared_config_act(
+    shared_config: MempoolNodeSharedConfig,
+    mempool: &str,
+    mempool_peers: &[String],
     network: &mut Network,
 ) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     let _ = c.send_shared_config(shared_config);
-    drop(c); // Drop compute node to avoid borrow checker violation
-    node_all_handle_event(network, compute_peers, &["Received shared config"]).await;
-    node_all_handle_event(network, compute_peers, &["Shared config applied"]).await;
+    drop(c); // Drop mempool node to avoid borrow checker violation
+    node_all_handle_event(network, mempool_peers, &["Received shared config"]).await;
+    node_all_handle_event(network, mempool_peers, &["Shared config applied"]).await;
 }
 
-async fn compute_initiate_coordinated_resume_act(
-    compute: &str,
-    compute_ring: &[String],
+async fn mempool_initiate_coordinated_resume_act(
+    mempool: &str,
+    mempool_ring: &[String],
     network: &mut Network,
 ) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     let _ = c.resume_nodes();
-    drop(c); // Drop compute node to avoid borrow checker violation
+    drop(c); // Drop mempool node to avoid borrow checker violation
     node_all_handle_event(
         network,
-        compute_ring,
+        mempool_ring,
         &["Received coordinated resume request"],
     )
     .await;
-    node_all_handle_event(network, compute_ring, &["Node resumed"]).await;
+    node_all_handle_event(network, mempool_ring, &["Node resumed"]).await;
 }
 
 //
@@ -3668,7 +3668,7 @@ async fn node_all_handle_different_event<'a>(
         let barrier = barrier.clone();
         let reason_str = all_raisons.get(node_name).cloned().unwrap_or_default();
         let node_name = node_name.clone();
-        let compute = network.compute(&node_name).cloned();
+        let mempool = network.mempool(&node_name).cloned();
         let storage = network.storage(&node_name).cloned();
         let miner = network.miner(&node_name).cloned();
         let user = network.user(&node_name).cloned();
@@ -3678,8 +3678,8 @@ async fn node_all_handle_different_event<'a>(
             node_name.clone(),
             tokio::spawn(
                 async move {
-                    if let Some(compute) = compute {
-                        compute_one_handle_event(&compute, &barrier, &reason_str).await;
+                    if let Some(mempool) = mempool {
+                        mempool_one_handle_event(&mempool, &barrier, &reason_str).await;
                     } else if let Some(storage) = storage {
                         storage_one_handle_event(&storage, &barrier, &reason_str).await;
                     } else if let Some(miner) = miner {
@@ -3822,41 +3822,41 @@ async fn node_send_startup_requests(network: &mut Network, node: &str) {
 }
 
 //
-// ComputeNode helpers
+// MempoolNode helpers
 //
 
-async fn compute_handle_event(network: &mut Network, compute: &str, reason_str: &[&str]) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
+async fn mempool_handle_event(network: &mut Network, mempool: &str, reason_str: &[&str]) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
+    mempool_handle_event_for_node(&mut c, true, reason_str, &mut test_timeout()).await;
 }
 
-async fn compute_all_handle_event(
+async fn mempool_all_handle_event(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
     reason_str: &str,
 ) {
-    for compute in compute_group {
-        compute_handle_event(network, compute, &[reason_str]).await;
+    for mempool in mempool_group {
+        mempool_handle_event(network, mempool, &[reason_str]).await;
     }
 }
 
-async fn compute_handle_error(network: &mut Network, compute: &str, reason_str: &[&str]) {
-    let mut c = network.compute(compute).unwrap().lock().await;
-    compute_handle_event_for_node(&mut c, false, reason_str, &mut test_timeout()).await;
+async fn mempool_handle_error(network: &mut Network, mempool: &str, reason_str: &[&str]) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
+    mempool_handle_event_for_node(&mut c, false, reason_str, &mut test_timeout()).await;
 }
 
-async fn compute_all_handle_error(
+async fn mempool_all_handle_error(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
     reason_str: &str,
 ) {
-    for compute in compute_group {
-        compute_handle_error(network, compute, &[reason_str]).await;
+    for mempool in mempool_group {
+        mempool_handle_error(network, mempool, &[reason_str]).await;
     }
 }
 
-async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
-    c: &mut ComputeNode,
+async fn mempool_handle_event_for_node<E: Future<Output = &'static str> + Unpin>(
+    c: &mut MempoolNode,
     success_val: bool,
     reason_val: &[&str],
     exit: &mut E,
@@ -3866,197 +3866,197 @@ async fn compute_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
         Some(Ok(Response { success, reason }))
             if success == success_val && reason_val.contains(&reason) =>
         {
-            info!("Compute handle_next_event {} success ({})", reason, addr);
+            info!("Mempool handle_next_event {} success ({})", reason, addr);
         }
         other => {
             error!(
-                "Unexpected Compute result: {:?} (expected:{:?})({})",
+                "Unexpected Mempool result: {:?} (expected:{:?})({})",
                 other, reason_val, addr
             );
             panic!(
-                "Unexpected Compute result: {:?} (expected:{:?})({})",
+                "Unexpected Mempool result: {:?} (expected:{:?})({})",
                 other, reason_val, addr
             );
         }
     }
 }
 
-async fn compute_one_handle_event(
-    compute: &Arc<Mutex<ComputeNode>>,
+async fn mempool_one_handle_event(
+    mempool: &Arc<Mutex<MempoolNode>>,
     barrier: &Barrier,
     reason_str: &[String],
 ) {
     debug!("Start wait for event");
 
-    let mut compute = compute.lock().await;
+    let mut mempool = mempool.lock().await;
     for reason in reason_str {
-        compute_handle_event_for_node(&mut compute, true, &[reason.as_str()], &mut test_timeout())
+        mempool_handle_event_for_node(&mut mempool, true, &[reason.as_str()], &mut test_timeout())
             .await;
     }
 
     debug!("Start wait for completion of other in raft group");
 
     let mut exit = test_timeout_barrier(barrier);
-    compute_handle_event_for_node(&mut compute, true, &["Barrier complete"], &mut exit).await;
+    mempool_handle_event_for_node(&mut mempool, true, &["Barrier complete"], &mut exit).await;
 
     debug!("Stop wait for event");
 }
 
-async fn compute_skip_block_gen(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_skip_block_gen(network: &mut Network, mempool: &str, block_info: &CompleteBlock) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     let common = block_info.common.clone();
     c.test_skip_block_gen(common.block, common.block_txs);
 }
 
-async fn compute_all_skip_block_gen(
+async fn mempool_all_skip_block_gen(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
     block_info: &CompleteBlock,
 ) {
-    for compute in compute_group {
-        compute_skip_block_gen(network, compute, block_info).await;
+    for mempool in mempool_group {
+        mempool_skip_block_gen(network, mempool, block_info).await;
     }
 }
 
-async fn compute_mined_block_num(network: &mut Network, compute: &str) -> Option<u64> {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_mined_block_num(network: &mut Network, mempool: &str) -> Option<u64> {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_current_mined_block()
         .as_ref()
         .map(|b| b.common.block.header.b_num)
 }
 
-async fn compute_all_mined_block_num(
+async fn mempool_all_mined_block_num(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<Option<u64>> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_mined_block_num(network, name).await;
+    for name in mempool_group {
+        let r = mempool_mined_block_num(network, name).await;
         result.push(r);
     }
     result
 }
 
-async fn compute_all_current_block_transactions(
+async fn mempool_all_current_block_transactions(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<Option<Vec<String>>> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_current_block_transactions(network, name).await;
+    for name in mempool_group {
+        let r = mempool_current_block_transactions(network, name).await;
         result.push(r);
     }
     result
 }
 
-async fn compute_current_block_transactions(
+async fn mempool_current_block_transactions(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
 ) -> Option<Vec<String>> {
-    compute_current_mining_block(network, compute)
+    mempool_current_mining_block(network, mempool)
         .await
         .map(|b| b.transactions)
 }
 
-async fn compute_current_mining_block(network: &mut Network, compute: &str) -> Option<Block> {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_current_mining_block(network: &mut Network, mempool: &str) -> Option<Block> {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_mining_block().clone()
 }
 
-async fn compute_committed_current_block_num(network: &mut Network, compute: &str) -> Option<u64> {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_committed_current_block_num(network: &mut Network, mempool: &str) -> Option<u64> {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_committed_current_block_num()
 }
 
-async fn compute_all_committed_current_block_num(
+async fn mempool_all_committed_current_block_num(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<Option<u64>> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_committed_current_block_num(network, name).await;
+    for name in mempool_group {
+        let r = mempool_committed_current_block_num(network, name).await;
         result.push(r);
     }
     result
 }
 
-async fn compute_all_committed_utxo_set(
+async fn mempool_all_committed_utxo_set(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<UtxoSet> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_committed_utxo_set(network, name).await;
+    for name in mempool_group {
+        let r = mempool_committed_utxo_set(network, name).await;
         result.push(r);
     }
     result
 }
 
-async fn compute_committed_utxo_set(network: &mut Network, compute: &str) -> UtxoSet {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_committed_utxo_set(network: &mut Network, mempool: &str) -> UtxoSet {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_committed_utxo_set().clone()
 }
 
-async fn compute_all_committed_tx_pool(
+async fn mempool_all_committed_tx_pool(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<BTreeMap<String, Transaction>> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_committed_tx_pool(network, name).await;
+    for name in mempool_group {
+        let r = mempool_committed_tx_pool(network, name).await;
         result.push(r);
     }
     result
 }
 
-pub async fn compute_committed_tx_pool(
+pub async fn mempool_committed_tx_pool(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
 ) -> BTreeMap<String, Transaction> {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_committed_tx_pool().clone()
 }
 
-async fn compute_all_committed_tx_druid_pool(
+async fn mempool_all_committed_tx_druid_pool(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
 ) -> Vec<Vec<BTreeMap<String, Transaction>>> {
     let mut result = Vec::new();
-    for name in compute_group {
-        let r = compute_committed_tx_druid_pool(network, name).await;
+    for name in mempool_group {
+        let r = mempool_committed_tx_druid_pool(network, name).await;
         result.push(r);
     }
     result
 }
 
-async fn compute_committed_tx_druid_pool(
+async fn mempool_committed_tx_druid_pool(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
 ) -> Vec<BTreeMap<String, Transaction>> {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_committed_tx_druid_pool().clone()
 }
 
-async fn compute_pending_druid_pool(network: &mut Network, compute: &str) -> DruidPool {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_pending_druid_pool(network: &mut Network, mempool: &str) -> DruidPool {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_pending_druid_pool().clone()
 }
 
-async fn compute_local_druid_pool(
+async fn mempool_local_druid_pool(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
 ) -> Vec<BTreeMap<String, Transaction>> {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_local_druid_pool().clone()
 }
 
-async fn compute_get_utxo_balance_for_user(
+async fn mempool_get_utxo_balance_for_user(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
     user: &str,
 ) -> AssetValues {
     let addresses = user_get_all_known_addresses(network, user).await;
-    compute_get_utxo_balance_for_addresses(network, compute, addresses)
+    mempool_get_utxo_balance_for_addresses(network, mempool, addresses)
         .await
         .get_asset_values()
         .clone()
@@ -4067,72 +4067,72 @@ async fn miner_get_last_aggregation_address(network: &mut Network, miner: &str) 
     miner.has_aggregation_tx_active()
 }
 
-async fn compute_get_utxo_balance_for_addresses(
+async fn mempool_get_utxo_balance_for_addresses(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
     addresses: Vec<String>,
 ) -> TrackedUtxoBalance {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_committed_utxo_tracked_set()
         .get_balance_for_addresses(&addresses)
 }
 
-async fn compute_get_prev_mining_reward(network: &mut Network, compute: &str) -> TokenAmount {
-    let c = network.compute(compute).unwrap().lock().await;
+async fn mempool_get_prev_mining_reward(network: &mut Network, mempool: &str) -> TokenAmount {
+    let c = network.mempool(mempool).unwrap().lock().await;
     c.get_current_mining_reward()
 }
 
-async fn compute_all_inject_next_event(
+async fn mempool_all_inject_next_event(
     network: &mut Network,
     from_group: &[String],
-    to_compute_group: &[String],
-    request: ComputeRequest,
+    to_mempool_group: &[String],
+    request: MempoolRequest,
 ) {
-    for (from, to) in from_group.iter().zip(to_compute_group.iter()) {
-        compute_inject_next_event(network, from, to, request.clone()).await;
+    for (from, to) in from_group.iter().zip(to_mempool_group.iter()) {
+        mempool_inject_next_event(network, from, to, request.clone()).await;
     }
 }
 
-async fn compute_inject_next_event(
+async fn mempool_inject_next_event(
     network: &mut Network,
     from: &str,
-    to_compute: &str,
-    request: ComputeRequest,
+    to_mempool: &str,
+    request: MempoolRequest,
 ) {
     let from_addr = network.get_address(from).await.unwrap();
-    let c = network.compute(to_compute).unwrap().lock().await;
+    let c = network.mempool(to_mempool).unwrap().lock().await;
 
     c.inject_next_event(from_addr, request).unwrap();
 }
 
-async fn compute_flood_rand_and_block_to_partition(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_flood_rand_and_block_to_partition(network: &mut Network, mempool: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.flood_rand_and_block_to_partition().await.unwrap();
 }
 
-async fn compute_flood_transactions_to_partition(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_flood_transactions_to_partition(network: &mut Network, mempool: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.flood_transactions_to_partition().await.unwrap();
 }
 
-async fn compute_flood_block_to_users(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_flood_block_to_users(network: &mut Network, mempool: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.flood_block_to_users().await.unwrap();
 }
 
-async fn compute_send_block_to_storage(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_send_block_to_storage(network: &mut Network, mempool: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.send_block_to_storage().await.unwrap();
 }
 
-async fn compute_all_send_block_to_storage(network: &mut Network, compute_group: &[String]) {
-    for compute in compute_group {
-        compute_send_block_to_storage(network, compute).await;
+async fn mempool_all_send_block_to_storage(network: &mut Network, mempool_group: &[String]) {
+    for mempool in mempool_group {
+        mempool_send_block_to_storage(network, mempool).await;
     }
 }
 
-async fn compute_skip_mining(network: &mut Network, compute: &str, block_info: &CompleteBlock) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_skip_mining(network: &mut Network, mempool: &str, block_info: &CompleteBlock) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
 
     let seed = block_info.common.block.header.seed_value.clone();
     let winning_pow_info = complete_block_winning_pow(block_info);
@@ -4141,22 +4141,22 @@ async fn compute_skip_mining(network: &mut Network, compute: &str, block_info: &
     c.test_skip_mining((addr, winning_pow_info), seed)
 }
 
-async fn compute_all_skip_mining(
+async fn mempool_all_skip_mining(
     network: &mut Network,
-    compute_group: &[String],
+    mempool_group: &[String],
     block_info: &CompleteBlock,
 ) {
-    for compute in compute_group {
-        compute_skip_mining(network, compute, block_info).await;
+    for mempool in mempool_group {
+        mempool_skip_mining(network, mempool, block_info).await;
     }
 }
 
-async fn compute_get_filtered_participants(
+async fn mempool_get_filtered_participants(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
     mining_group: &[String],
 ) -> Vec<String> {
-    let c = network.compute(compute).unwrap().lock().await;
+    let c = network.mempool(mempool).unwrap().lock().await;
     let sockets = c.get_mining_participants();
 
     let mut participants = Vec::new();
@@ -4169,8 +4169,8 @@ async fn compute_get_filtered_participants(
     participants
 }
 
-async fn compute_send_utxo_set(network: &mut Network, compute: &str) {
-    let mut c = network.compute(compute).unwrap().lock().await;
+async fn mempool_send_utxo_set(network: &mut Network, mempool: &str) {
+    let mut c = network.mempool(mempool).unwrap().lock().await;
     c.send_fetched_utxo_set().await.unwrap();
 }
 
@@ -4202,7 +4202,7 @@ async fn storage_catchup_fetch_blockchain_item(network: &mut Network, from_stora
 
 async fn storage_inject_send_block_to_storage(
     network: &mut Network,
-    compute: &str,
+    mempool: &str,
     storage: &str,
     block_info: &CompleteBlock,
 ) {
@@ -4211,7 +4211,7 @@ async fn storage_inject_send_block_to_storage(
         extra_info: block_info.extra_info.clone(),
     });
     let request = StorageRequest::SendBlock { mined_block };
-    storage_inject_next_event(network, compute, storage, request).await;
+    storage_inject_next_event(network, mempool, storage, request).await;
 }
 
 async fn storage_get_stored_key_values_count(network: &mut Network, storage: &str) -> usize {
@@ -4486,15 +4486,15 @@ async fn user_one_handle_event(
     debug!("Stop wait for event");
 }
 
-async fn user_send_transaction_to_compute(
+async fn user_send_transaction_to_mempool(
     network: &mut Network,
     from_user: &str,
-    to_compute: &str,
+    to_mempool: &str,
     tx: &Transaction,
 ) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let mempool_node_addr = network.get_address(to_mempool).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_transactions_to_compute(compute_node_addr, vec![tx.clone()])
+    u.send_transactions_to_mempool(mempool_node_addr, vec![tx.clone()])
         .await
         .unwrap();
 }
@@ -4502,11 +4502,11 @@ async fn user_send_transaction_to_compute(
 async fn user_send_next_payment_to_destinations(
     network: &mut Network,
     from_user: &str,
-    to_compute: &str,
+    to_mempool: &str,
 ) {
-    let compute_node_addr = network.get_address(to_compute).await.unwrap();
+    let mempool_node_addr = network.get_address(to_mempool).await.unwrap();
     let mut u = network.user(from_user).unwrap().lock().await;
-    u.send_next_payment_to_destinations(compute_node_addr)
+    u.send_next_payment_to_destinations(mempool_node_addr)
         .await
         .unwrap();
 }
@@ -4605,10 +4605,10 @@ async fn user_send_request_utxo_set(
     address_list: UtxoFetchType,
 ) {
     let mut u = network.user(user).unwrap().lock().await;
-    let compute_addr = u.compute_address();
+    let mempool_addr = u.mempool_address();
     u.send_request_utxo_set(
         address_list,
-        compute_addr,
+        mempool_addr,
         crate::interfaces::NodeType::User,
     )
     .await
@@ -4620,11 +4620,11 @@ async fn user_send_item_based_payment_request(
     from: &str,
     to: &str,
     send_asset: Asset,
-    drs_tx_hash: Option<String>, /* Expected DRS tx hash from recipient */
+    genesis_hash: Option<String>, /* Expected DRS tx hash from recipient */
 ) {
     let mut u = network.user(from).unwrap().lock().await;
     let to_addr = network.get_address(to).await.unwrap();
-    u.send_rb_payment_request(to_addr, send_asset, drs_tx_hash)
+    u.send_rb_payment_request(to_addr, send_asset, genesis_hash)
         .await
         .unwrap();
 }
@@ -4637,11 +4637,11 @@ async fn user_send_item_based_payment_response(network: &mut Network, user: &str
 async fn user_send_item_based_payment_to_desinations(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
 ) {
     let mut u = network.user(user).unwrap().lock().await;
-    let compute_addr = network.get_address(compute).await.unwrap();
-    u.send_next_rb_transaction_to_destinations(compute_addr)
+    let mempool_addr = network.get_address(mempool).await.unwrap();
+    u.send_next_rb_transaction_to_destinations(mempool_addr)
         .await
         .unwrap();
 }
@@ -4649,17 +4649,17 @@ async fn user_send_item_based_payment_to_desinations(
 async fn user_send_item_asset(
     network: &mut Network,
     user: &str,
-    compute: &str,
+    mempool: &str,
     item_amount: u64,
     item_metadata: Option<String>,
 ) -> String {
     // Returns transactio hash
     let mut u = network.user(user).unwrap().lock().await;
-    let compute_addr = network.get_address(compute).await.unwrap();
-    u.generate_item_asset_tx(item_amount, DrsTxHashSpec::Create, item_metadata)
+    let mempool_addr = network.get_address(mempool).await.unwrap();
+    u.generate_item_asset_tx(item_amount, GenesisTxHashSpec::Create, item_metadata)
         .await;
     let tx_hash = construct_tx_hash(&u.get_next_payment_transaction().unwrap().1);
-    u.send_next_payment_to_destinations(compute_addr)
+    u.send_next_payment_to_destinations(mempool_addr)
         .await
         .unwrap();
     tx_hash
@@ -4834,16 +4834,16 @@ fn valid_transactions_with(
     transactions
 }
 
-fn make_compute_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetSpec {
+fn make_mempool_seed_utxo(seed: &[(i32, &str)], amount: TokenAmount) -> UtxoSetSpec {
     let seed: Vec<_> = seed
         .iter()
         .copied()
         .map(|(n, v)| (v, (0..n).map(|_| (COMMON_PUB_KEY, amount)).collect()))
         .collect();
-    make_compute_seed_utxo_with_info(&seed)
+    make_mempool_seed_utxo_with_info(&seed)
 }
 
-fn make_compute_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -> UtxoSetSpec {
+fn make_mempool_seed_utxo_with_info(seed: &[(&str, Vec<(&str, TokenAmount)>)]) -> UtxoSetSpec {
     seed.iter()
         .map(|(v, txo)| {
             (
@@ -5093,18 +5093,18 @@ async fn complete_block_with_seed(
 fn basic_network_config(initial_port: u16) -> NetworkConfig {
     NetworkConfig {
         initial_port,
-        compute_raft: false,
+        mempool_raft: false,
         storage_raft: false,
         in_memory_db: true,
-        compute_partition_full_size: 1,
-        compute_minimum_miner_pool_len: 1,
+        mempool_partition_full_size: 1,
+        mempool_minimum_miner_pool_len: 1,
         nodes: vec![(NodeType::User, vec!["user1".to_string()])]
             .into_iter()
             .collect(),
-        compute_seed_utxo: make_compute_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
-        compute_genesis_tx_in: None,
+        mempool_seed_utxo: make_mempool_seed_utxo(SEED_UTXO, DEFAULT_SEED_AMOUNT),
+        mempool_genesis_tx_in: None,
         user_wallet_seeds: Vec::new(),
-        compute_to_miner_mapping: Default::default(),
+        mempool_to_miner_mapping: Default::default(),
         test_duration_divider: TEST_DURATION_DIVIDER,
         passphrase: Some("Test Passphrase".to_owned()),
         user_auto_donate: 0,
@@ -5116,7 +5116,7 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
         backup_restore: Default::default(),
         enable_pipeline_reset: Default::default(),
         static_miner_address: Default::default(),
-        compute_miner_whitelist: Default::default(),
+        mempool_miner_whitelist: Default::default(),
         mining_api_key: Default::default(),
         peer_limit: 1000,
         address_aggregation_limit: Some(5),
@@ -5125,17 +5125,17 @@ fn basic_network_config(initial_port: u16) -> NetworkConfig {
 }
 
 fn complete_network_config(initial_port: u16) -> NetworkConfig {
-    complete_network_config_with_n_compute_miner(initial_port, false, 1, 1)
+    complete_network_config_with_n_mempool_miner(initial_port, false, 1, 1)
 }
 
-fn complete_network_config_with_n_compute_raft(
+fn complete_network_config_with_n_mempool_raft(
     initial_port: u16,
-    compute_count: usize,
+    mempool_count: usize,
 ) -> NetworkConfig {
-    complete_network_config_with_n_compute_miner(initial_port, true, compute_count, compute_count)
+    complete_network_config_with_n_mempool_miner(initial_port, true, mempool_count, mempool_count)
 }
 
-fn complete_network_config_with_n_compute_miner(
+fn complete_network_config_with_n_mempool_miner(
     initial_port: u16,
     use_raft: bool,
     raft_count: usize,

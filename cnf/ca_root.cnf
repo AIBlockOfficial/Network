@@ -6,7 +6,7 @@ days                   = 9999
 prompt = no
 
 [req_distinguished_name]
-CN = A-Block Root CA
+CN = AIBlock Root CA
 
 [ v3_ca ]
 subjectKeyIdentifier=hash

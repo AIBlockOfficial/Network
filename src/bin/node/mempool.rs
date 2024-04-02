@@ -1,8 +1,8 @@
-//! App to run a compute node.
+//! App to run a mempool node.
 
-use ablock_network::configurations::ComputeNodeConfig;
-use ablock_network::ComputeNode;
-use ablock_network::{
+use aiblock_network::configurations::MempoolNodeConfig;
+use aiblock_network::MempoolNode;
+use aiblock_network::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
 };
@@ -16,7 +16,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     println!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
-    let node = ComputeNode::new(config, Default::default()).await.unwrap();
+    let node = MempoolNode::new(config, Default::default()).await.unwrap();
     let api_inputs = node.api_inputs();
 
     println!("API Inputs: {api_inputs:?}");
@@ -63,7 +63,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::compute_node_routes(
+            let serve = warp::serve(routes::mempool_node_routes(
                 api_keys,
                 routes_pow,
                 threaded_calls_tx,
@@ -119,14 +119,14 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 }
 
 pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("compute")
-        .about("Runs a basic compute node.")
+    App::new("mempool")
+        .about("Runs a basic mempool node.")
         .arg(
             Arg::with_name("config")
                 .long("config")
                 .short("c")
                 .env("CONFIG")
-                .help("Run the compute node using the given config file.")
+                .help("Run the mempool node using the given config file.")
                 .takes_value(true),
         )
         .arg(
@@ -168,21 +168,21 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .env("INITIAL_BLOCK_CONFIG")
-                .help("Run the compute node using the given initial block config file.")
+                .help("Run the mempool node using the given initial block config file.")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("compute_miner_whitelist")
-                .long("compute_miner_whitelist")
+            Arg::with_name("mempool_miner_whitelist")
+                .long("mempool_miner_whitelist")
                 .env("COMPUTE_MINER_WHITELIST")
-                .help("Specify miner whitelist config for compute nodes.")
+                .help("Specify miner whitelist config for mempool nodes.")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("index")
                 .short("i")
                 .long("index")
-                .help("Run the specified compute node index from config file")
+                .help("Run the specified mempool node index from config file")
                 .takes_value(true),
         )
         .arg(
@@ -196,7 +196,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("enable_pipeline_reset")
                 .long("enable_pipeline_reset")
                 .help(
-                    "Enable the compute node to vote for a pipeline reset if it should get stuck.",
+                    "Enable the mempool node to vote for a pipeline reset if it should get stuck.",
                 )
                 .takes_value(true),
         )
@@ -217,8 +217,8 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .value_of("api_config")
         .unwrap_or("src/bin/api_config.json");
     let miner_white_list_file = matches
-        .value_of("compute_miner_whitelist")
-        .unwrap_or("src/bin/compute_miner_whitelist.json");
+        .value_of("mempool_miner_whitelist")
+        .unwrap_or("src/bin/mempool_miner_whitelist.json");
     let initial_issuances = matches
         .value_of("initial_issuance")
         .unwrap_or("src/bin/initial_issuance.json");
@@ -229,21 +229,21 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("compute_api_port", 3002).unwrap();
-    settings.set_default("compute_api_use_tls", true).unwrap();
+    settings.set_default("mempool_api_port", 3002).unwrap();
+    settings.set_default("mempool_api_use_tls", true).unwrap();
 
     settings.set_default("jurisdiction", "US").unwrap();
-    settings.set_default("compute_node_idx", 0).unwrap();
-    settings.set_default("compute_raft", 0).unwrap();
+    settings.set_default("mempool_node_idx", 0).unwrap();
+    settings.set_default("mempool_raft", 0).unwrap();
 
     settings
-        .set_default("compute_raft_tick_timeout", 10)
+        .set_default("mempool_raft_tick_timeout", 10)
         .unwrap();
     settings
-        .set_default("compute_transaction_timeout", 100)
+        .set_default("mempool_transaction_timeout", 100)
         .unwrap();
     settings
-        .set_default("compute_mining_event_timeout", 500)
+        .set_default("mempool_mining_event_timeout", 500)
         .unwrap();
     settings
         .set_default("enable_pipeline_reset", false)
@@ -274,10 +274,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
 
     if let Some(port) = matches.value_of("api_port") {
-        settings.set("compute_api_port", port).unwrap();
+        settings.set("mempool_api_port", port).unwrap();
     }
     if let Some(use_tls) = matches.value_of("api_use_tls") {
-        settings.set("compute_api_use_tls", use_tls).unwrap();
+        settings.set("mempool_api_use_tls", use_tls).unwrap();
     }
     if let Some(enable_pipeline_reset) = matches.value_of("enable_pipeline_reset") {
         settings
@@ -289,11 +289,11 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     }
 
     if let Some(index) = matches.value_of("index") {
-        settings.set("compute_node_idx", index).unwrap();
-        let mut db_mode = settings.get_table("compute_db_mode").unwrap();
+        settings.set("mempool_node_idx", index).unwrap();
+        let mut db_mode = settings.get_table("mempool_db_mode").unwrap();
         if let Some(test_idx) = db_mode.get_mut("Test") {
             *test_idx = config::Value::new(None, index);
-            settings.set("compute_db_mode", db_mode).unwrap();
+            settings.set("mempool_db_mode", db_mode).unwrap();
         }
     }
 
@@ -309,14 +309,14 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
 }
 
-fn configuration(settings: config::Config) -> ComputeNodeConfig {
+fn configuration(settings: config::Config) -> MempoolNodeConfig {
     settings.try_into().unwrap()
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 
@@ -396,7 +396,7 @@ mod test {
         // Assert
         //
         let (expected_mode, expected_key) = expected;
-        assert_eq!(config.compute_db_mode, expected_mode);
+        assert_eq!(config.mempool_db_mode, expected_mode);
         assert_eq!(
             config.tls_config.pem_pkcs8_private_key_override,
             expected_key

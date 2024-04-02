@@ -1,7 +1,7 @@
 //! App to run a user node.
 
-use ablock_network::configurations::UserNodeConfig;
-use ablock_network::{
+use aiblock_network::configurations::UserNodeConfig;
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult, UserNode,
 };
@@ -117,7 +117,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .env("INITIAL_BLOCK_CONFIG")
-                .help("Run the compute node using the given initial block config file.")
+                .help("Run the mempool node using the given initial block config file.")
                 .takes_value(true),
         )
         .arg(
@@ -155,9 +155,9 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("compute_index")
-                .long("compute_index")
-                .help("Endpoint index of a compute node that the user should connect to")
+            Arg::with_name("mempool_index")
+                .long("mempool_index")
+                .help("Endpoint index of a mempool node that the user should connect to")
                 .takes_value(true),
         )
         .arg(
@@ -209,7 +209,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
-    settings.set_default("user_compute_node_idx", 0).unwrap();
+    settings.set_default("user_mempool_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
 
     settings
@@ -312,8 +312,8 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("user_api_port", api_port).unwrap();
     }
 
-    if let Some(index) = matches.value_of("compute_index") {
-        settings.set("user_compute_node_idx", index).unwrap();
+    if let Some(index) = matches.value_of("mempool_index") {
+        settings.set("user_mempool_node_idx", index).unwrap();
     }
 
     if let Some(index) = matches.value_of("passphrase") {
@@ -348,7 +348,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

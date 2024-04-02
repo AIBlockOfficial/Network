@@ -10,7 +10,7 @@ pub mod constants {
     pub const WALLET_PATH: &str = "src/wallet/wallet";
 }
 
-pub mod a_block_chain {
+pub mod tw_chain {
     use super::*;
 
     //
@@ -153,7 +153,7 @@ pub mod a_block_chain {
     #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
     pub struct ItemAsset {
         pub amount: u64,
-        pub drs_tx_hash: Option<String>,
+        pub genesis_hash: Option<String>,
         pub metadata: Option<String>,
     }
 
@@ -164,7 +164,7 @@ pub mod a_block_chain {
 }
 
 pub mod interfaces {
-    use super::a_block_chain::{Block, Transaction};
+    use super::tw_chain::{Block, Transaction};
     use super::*;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -190,7 +190,7 @@ pub mod raft_store {
     pub const LAST_ENTRY_KEY: &str = "LastEntryKey";
 }
 
-pub mod compute {
+pub mod mempool {
     use super::*;
 
     /// Key for local miner list
@@ -205,14 +205,14 @@ pub mod compute {
     // New but compatible with 1.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
-        suffix: ".compute",
+        suffix: ".mempool",
         columns: &[DB_COL_INTERNAL, DB_COL_LOCAL_TXS],
     };
 }
 
-pub mod compute_raft {
-    use super::a_block_chain::*;
+pub mod mempool_raft {
     use super::block_pipeline::*;
+    use super::tw_chain::*;
     use super::*;
 
     // Only serialize the UtxoSet
@@ -221,7 +221,7 @@ pub mod compute_raft {
     // New but compatible with 0.2.0
     pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
         db_path: constants::DB_PATH,
-        suffix: ".compute_raft",
+        suffix: ".mempool_raft",
         columns: &[],
     };
 
@@ -245,7 +245,7 @@ pub mod compute_raft {
     /// All fields that are consensused between the RAFT group.
     /// These fields need to be written and read from a committed log event.
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct ComputeConsensused {
+    pub struct MempoolConsensused {
         pub unanimous_majority: usize,
         pub sufficient_majority: usize,
         pub partition_full_size: usize,
@@ -258,7 +258,7 @@ pub mod compute_raft {
             BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
         pub current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
         pub last_committed_raft_idx_and_term: (u64, u64),
-        pub current_circulation: TokenAmount,
+        pub current_issuance: TokenAmount,
         pub block_pipeline: MiningPipelineInfo,
         pub last_mining_transaction_hashes: Vec<String>,
         pub special_handling: Option<SpecialHandling>,
@@ -309,7 +309,7 @@ pub mod raft {
 pub mod block_pipeline {
     use std::net::SocketAddr;
 
-    use super::a_block_chain::*;
+    use super::tw_chain::*;
     use super::unicorn::UnicornInfo;
     use super::*;
 
@@ -434,7 +434,7 @@ pub mod storage_raft {
 }
 
 pub mod wallet {
-    use super::a_block_chain::{
+    use super::tw_chain::{
         Asset, Nonce, OutPoint, PublicKey, Salt, SecretKey, TokenAmount, Transaction,
     };
     use super::*;
@@ -479,8 +479,8 @@ pub mod wallet {
     #[derive(Default, Debug, Clone, Serialize, Deserialize)]
     pub struct AssetValues {
         pub tokens: TokenAmount,
-        // Note: Items from create transactions will have `drs_tx_hash` = `t_hash`
-        pub items: BTreeMap<String, u64>, /* `drs_tx_hash` - amount */
+        // Note: Items from create transactions will have `genesis_hash` = `t_hash`
+        pub items: BTreeMap<String, u64>, /* `genesis_hash` - amount */
     }
 
     pub type KnownAddresses = Vec<String>;
@@ -503,39 +503,40 @@ pub mod convert {
         pub use super::super::*;
     }
     use crate::unicorn::UnicornFixedParam;
-    use crate::{compute_raft, interfaces, storage_raft, transaction_gen, wallet};
-    use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
-    use a_block_chain::primitives::asset::{AssetValues, ItemAsset};
-    use a_block_chain::primitives::{
+    use crate::{mempool_raft, interfaces, storage_raft, transaction_gen, wallet};
+    use std::collections::BTreeMap;
+    use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
+    use tw_chain::primitives::asset::{AssetValues, ItemAsset};
+    use tw_chain::primitives::{
         asset::{Asset, TokenAmount},
         block::{Block, BlockHeader},
         druid::{DdeValues, DruidExpectation},
         transaction::{OutPoint, Transaction, TxIn, TxOut},
     };
-    use a_block_chain::script::{lang::Script, OpCodes, StackEntry};
-    use std::collections::BTreeMap;
+    use tw_chain::script::{lang::Script, OpCodes, StackEntry};
 
-    pub fn convert_block(old: old::a_block_chain::Block) -> Block {
+    pub fn convert_block(old: old::tw_chain::Block) -> Block {
         Block {
             header: convert_block_header(old.header),
             transactions: old.transactions,
         }
     }
 
-    pub fn convert_block_header(old: old::a_block_chain::BlockHeader) -> BlockHeader {
+    pub fn convert_block_header(old: old::tw_chain::BlockHeader) -> BlockHeader {
         BlockHeader {
             version: old.version,
             bits: old.bits,
             nonce_and_mining_tx_hash: old.nonce_and_mining_tx_hash,
             b_num: old.b_num,
             timestamp: 0,
+            difficulty: Vec::new(),
             seed_value: old.seed_value,
             previous_hash: old.previous_hash,
             txs_merkle_root_and_hash: old.txs_merkle_root_and_hash,
         }
     }
 
-    pub fn convert_transaction(old: old::a_block_chain::Transaction) -> Transaction {
+    pub fn convert_transaction(old: old::tw_chain::Transaction) -> Transaction {
         Transaction {
             inputs: old.inputs.into_iter().map(convert_txin).collect(),
             outputs: old.outputs.into_iter().map(convert_txout).collect(),
@@ -545,10 +546,10 @@ pub mod convert {
         }
     }
 
-    pub fn convert_dde_values(old: old::a_block_chain::DdeValues) -> DdeValues {
+    pub fn convert_dde_values(old: old::tw_chain::DdeValues) -> DdeValues {
         DdeValues {
             druid: old.druid,
-            drs_tx_hash: None,
+            genesis_hash: None,
             participants: old.participants,
             expectations: old
                 .expectations
@@ -558,9 +559,7 @@ pub mod convert {
         }
     }
 
-    pub fn convert_druid_expectation(
-        old: old::a_block_chain::DruidExpectation,
-    ) -> DruidExpectation {
+    pub fn convert_druid_expectation(old: old::tw_chain::DruidExpectation) -> DruidExpectation {
         DruidExpectation {
             from: old.from,
             to: old.to,
@@ -568,71 +567,68 @@ pub mod convert {
         }
     }
 
-    pub fn convert_txin(old: old::a_block_chain::TxIn) -> TxIn {
+    pub fn convert_txin(old: old::tw_chain::TxIn) -> TxIn {
         TxIn {
             previous_out: old.previous_out.map(convert_outpoint),
             script_signature: convert_script(old.script_signature),
         }
     }
 
-    pub fn convert_outpoint(old: old::a_block_chain::OutPoint) -> OutPoint {
+    pub fn convert_outpoint(old: old::tw_chain::OutPoint) -> OutPoint {
         OutPoint {
             t_hash: old.t_hash,
             n: old.n,
         }
     }
 
-    pub fn convert_script(old: old::a_block_chain::Script) -> Script {
+    pub fn convert_script(old: old::tw_chain::Script) -> Script {
         Script {
             stack: old.stack.into_iter().map(convert_stack_entry).collect(),
         }
     }
 
-    pub fn convert_stack_entry(old: old::a_block_chain::StackEntry) -> StackEntry {
+    pub fn convert_stack_entry(old: old::tw_chain::StackEntry) -> StackEntry {
         match old {
-            old::a_block_chain::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
-            old::a_block_chain::StackEntry::Signature(v) => {
-                StackEntry::Signature(convert_signature(v))
-            }
-            old::a_block_chain::StackEntry::PubKey(v) => StackEntry::PubKey(convert_public_key(v)),
-            old::a_block_chain::StackEntry::PubKeyHash(v) => StackEntry::Bytes(v),
-            old::a_block_chain::StackEntry::Num(v) => StackEntry::Num(v),
-            old::a_block_chain::StackEntry::Bytes(v) => StackEntry::Bytes(v),
+            old::tw_chain::StackEntry::Op(v) => StackEntry::Op(convert_op_code(v)),
+            old::tw_chain::StackEntry::Signature(v) => StackEntry::Signature(convert_signature(v)),
+            old::tw_chain::StackEntry::PubKey(v) => StackEntry::PubKey(convert_public_key(v)),
+            old::tw_chain::StackEntry::PubKeyHash(v) => StackEntry::Bytes(v),
+            old::tw_chain::StackEntry::Num(v) => StackEntry::Num(v),
+            old::tw_chain::StackEntry::Bytes(v) => StackEntry::Bytes(v),
         }
     }
 
-    pub fn convert_op_code(old: old::a_block_chain::OpCodes) -> OpCodes {
+    pub fn convert_op_code(old: old::tw_chain::OpCodes) -> OpCodes {
         match old {
-            old::a_block_chain::OpCodes::OP_DUP => OpCodes::OP_DUP,
-            old::a_block_chain::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
-            old::a_block_chain::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
-            old::a_block_chain::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
-            old::a_block_chain::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
-            old::a_block_chain::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
-            old::a_block_chain::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
+            old::tw_chain::OpCodes::OP_DUP => OpCodes::OP_DUP,
+            old::tw_chain::OpCodes::OP_HASH256 => OpCodes::OP_HASH256,
+            old::tw_chain::OpCodes::OP_EQUALVERIFY => OpCodes::OP_EQUALVERIFY,
+            old::tw_chain::OpCodes::OP_CHECKSIG => OpCodes::OP_CHECKSIG,
+            old::tw_chain::OpCodes::OP_CREATE => OpCodes::OP_CREATE,
+            old::tw_chain::OpCodes::OP_HASH256_V0 => OpCodes::OP_HASH256_V0,
+            old::tw_chain::OpCodes::OP_HASH256_TEMP => OpCodes::OP_HASH256_TEMP,
         }
     }
 
-    pub fn convert_txout(old: old::a_block_chain::TxOut) -> TxOut {
+    pub fn convert_txout(old: old::tw_chain::TxOut) -> TxOut {
         TxOut {
             value: convert_asset(old.value),
             locktime: old.locktime,
-            drs_block_hash: old.drs_block_hash,
             script_public_key: old.script_public_key,
         }
     }
 
-    pub fn convert_asset(old: old::a_block_chain::Asset) -> Asset {
+    pub fn convert_asset(old: old::tw_chain::Asset) -> Asset {
         match old {
-            old::a_block_chain::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
-            old::a_block_chain::Asset::Item(v) => Asset::Item(convert_item_asset(v)),
+            old::tw_chain::Asset::Token(v) => Asset::Token(convert_token_amount(v)),
+            old::tw_chain::Asset::Item(v) => Asset::Item(convert_item_asset(v)),
         }
     }
 
-    pub fn convert_item_asset(old: old::a_block_chain::ItemAsset) -> ItemAsset {
+    pub fn convert_item_asset(old: old::tw_chain::ItemAsset) -> ItemAsset {
         ItemAsset {
             amount: old.amount,
-            drs_tx_hash: old.drs_tx_hash,
+            genesis_hash: old.genesis_hash,
             metadata: old.metadata,
         }
     }
@@ -642,11 +638,11 @@ pub mod convert {
         old
     }
 
-    pub fn convert_token_amount(old: old::a_block_chain::TokenAmount) -> TokenAmount {
+    pub fn convert_token_amount(old: old::tw_chain::TokenAmount) -> TokenAmount {
         TokenAmount(old.0)
     }
 
-    pub fn convert_token_to_asset(old: old::a_block_chain::TokenAmount) -> Asset {
+    pub fn convert_token_to_asset(old: old::tw_chain::TokenAmount) -> Asset {
         Asset::Token(convert_token_amount(old))
     }
 
@@ -659,15 +655,15 @@ pub mod convert {
         }
     }
 
-    pub fn convert_public_key(old: old::a_block_chain::PublicKey) -> PublicKey {
+    pub fn convert_public_key(old: old::tw_chain::PublicKey) -> PublicKey {
         PublicKey::from_slice(&old).unwrap()
     }
 
-    pub fn convert_secret_key(old: old::a_block_chain::SecretKey) -> SecretKey {
+    pub fn convert_secret_key(old: old::tw_chain::SecretKey) -> SecretKey {
         SecretKey::from_slice(&old).unwrap()
     }
 
-    pub fn convert_signature(old: old::a_block_chain::Signature) -> Signature {
+    pub fn convert_signature(old: old::tw_chain::Signature) -> Signature {
         Signature::from_slice(&old).unwrap()
     }
 
@@ -697,7 +693,7 @@ pub mod convert {
 
     //Creares pages from the frozen transactions
     pub fn convert_saved_wallet_transactions_pages(
-        old: Vec<BTreeMap<old::a_block_chain::OutPoint, old::a_block_chain::Asset>>,
+        old: Vec<BTreeMap<old::tw_chain::OutPoint, old::tw_chain::Asset>>,
     ) -> Vec<BTreeMap<OutPoint, Asset>> {
         old.iter()
             .map(|page| {
@@ -708,11 +704,11 @@ pub mod convert {
             .collect()
     }
 
-    pub fn convert_compute_consensused_to_import(
-        old: old::compute_raft::ComputeConsensused,
-        special_handling: Option<compute_raft::SpecialHandling>,
-    ) -> compute_raft::ComputeConsensusedImport {
-        compute_raft::ComputeConsensusedImport {
+    pub fn convert_mempool_consensused_to_import(
+        old: old::mempool_raft::MempoolConsensused,
+        special_handling: Option<mempool_raft::SpecialHandling>,
+    ) -> mempool_raft::MempoolConsensusedImport {
+        mempool_raft::MempoolConsensusedImport {
             unanimous_majority: old.unanimous_majority,
             sufficient_majority: old.sufficient_majority,
             partition_full_size: old.partition_full_size,
@@ -723,7 +719,7 @@ pub mod convert {
             current_block: old.block_pipeline.current_block.map(convert_block),
             utxo_set: convert_utxoset(old.utxo_set),
             last_committed_raft_idx_and_term: old.last_committed_raft_idx_and_term,
-            current_circulation: convert_token_amount(old.current_circulation),
+            current_issuance: convert_token_amount(old.current_issuance),
             miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
             init_issuances: Default::default(),  // Will require sensible conversion on next upgrade
             special_handling,
@@ -738,7 +734,7 @@ pub mod convert {
         }
     }
 
-    pub fn convert_utxoset(old: old::a_block_chain::UtxoSet) -> interfaces::UtxoSet {
+    pub fn convert_utxoset(old: old::tw_chain::UtxoSet) -> interfaces::UtxoSet {
         old.into_iter()
             .map(|(op, out)| (convert_outpoint(op), convert_txout(out)))
             .collect()
@@ -768,7 +764,7 @@ pub mod convert {
     }
 
     pub fn convert_transactions(
-        old: BTreeMap<String, old::a_block_chain::Transaction>,
+        old: BTreeMap<String, old::tw_chain::Transaction>,
     ) -> BTreeMap<String, Transaction> {
         old.into_iter()
             .map(|(k, v)| (k, convert_transaction(v)))
@@ -776,7 +772,7 @@ pub mod convert {
     }
 
     pub fn convert_last_coinbase(
-        old: (String, old::a_block_chain::Transaction),
+        old: (String, old::tw_chain::Transaction),
     ) -> (String, Transaction) {
         (old.0, convert_transaction(old.1))
     }

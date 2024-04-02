@@ -3,9 +3,6 @@ use crate::constants::{MINER_PARTICIPATION_UN, WINNING_MINER_UN};
 use crate::interfaces::WinningPoWInfo;
 use crate::raft_util::RaftContextKey;
 use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, UnicornInfo};
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::Block;
-use a_block_chain::primitives::transaction::Transaction;
 use keccak_prime::fortuna::Fortuna;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +10,9 @@ use std::convert::TryInto;
 use std::fmt;
 use std::net::SocketAddr;
 use tracing::log::{debug, info};
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::Block;
+use tw_chain::primitives::transaction::Transaction;
 
 /// Different states of the mining pipeline
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -121,7 +121,7 @@ pub struct MiningPipelineInfo {
     current_block: Option<Block>,
     /// All transactions present in current_block (consensused).
     current_block_tx: BTreeMap<String, Transaction>,
-    /// The current reward for a given compute node
+    /// The current reward for a given mempool node
     current_reward: TokenAmount,
     /// Proposed keys for current mining pipeline cycle
     proposed_keys: BTreeSet<RaftContextKey>,
@@ -551,7 +551,7 @@ impl MiningPipelineInfo {
         }
     }
 
-    /// Create ComputeConsensused from imported data in upgrade
+    /// Create MempoolConsensused from imported data in upgrade
     pub fn from_import(value: MiningPipelineInfoImport) -> Self {
         let MiningPipelineInfoImport {
             unicorn_fixed_param,

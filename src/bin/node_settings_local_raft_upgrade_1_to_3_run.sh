@@ -48,7 +48,7 @@ echo "//-----------------------------//"
 echo "Running upgrade for node_settings_local_raft_3.toml"
 echo "//-----------------------------//"
 echo " "
-RUST_LOG="$UPGRADE_LOG" target/release/upgrade --config=src/bin/node_settings_local_raft_3.toml --type=all --processing=upgrade --compute_block=discard --ignore=storage.1,storage.2,compute.1,compute.2,miner.1,miner.2,miner.3,miner.4,miner.5,miner.6,miner.7,miner.8,miner.9,user.1> upgrade_all.log 2>&1
+RUST_LOG="$UPGRADE_LOG" target/release/upgrade --config=src/bin/node_settings_local_raft_3.toml --type=all --processing=upgrade --mempool_block=discard --ignore=storage.1,storage.2,mempool.1,mempool.2,miner.1,miner.2,miner.3,miner.4,miner.5,miner.6,miner.7,miner.8,miner.9,user.1> upgrade_all.log 2>&1
 cat upgrade_all.log
 
 echo " "
@@ -63,11 +63,11 @@ s1=$!
 RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=storage > pre_launch_storage_0.log 2>&1 &
 s0=$!
 
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=2 > pre_launch_compute_2.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=mempool --index=2 > pre_launch_mempool_2.log 2>&1 &
 c2=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute --index=1 > pre_launch_compute_1.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=mempool --index=1 > pre_launch_mempool_1.log 2>&1 &
 c1=$!
-RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=compute > pre_launch_compute_0.log 2>&1 &
+RUST_LOG="$PRE_LAUNCH_LOG" target/release/node pre_launch --config=src/bin/node_settings_local_raft_3.toml --type=mempool > pre_launch_mempool_0.log 2>&1 &
 c0=$!
 
 echo $s2 $s1 $s0 $c2 $c1 $c0

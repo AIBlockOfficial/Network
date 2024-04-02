@@ -44,10 +44,10 @@
 //! `CommMessage` has two message types: [`Direct`](crate::interfaces::CommMessage::Direct) (used for one-to-one communication between peers) and
 //! [`Gossip`](crate::interfaces::CommMessage::Gossip) (used for multicast). Both have a parameter that's called `payload` which can contain an arbitrary
 //! sequence of bytes (`Vec<u8>`). Usually, however, it should be interpreted as a serialized message specific to a given node type. For example, it can
-//! encapsulate a [`ComputeRequest`](crate::interfaces::ComputeRequest) if a message is being sent within a compute ring.
+//! encapsulate a [`MempoolRequest`](crate::interfaces::MempoolRequest) if a message is being sent within a mempool ring.
 //!
-//! Usually, a single message type handles both requests and responses (i.e., instead of having separate `ComputeRequest` or `ComputeResponse` enums, we
-//! but both types of messages within a single `ComputeRequest` type). This simplifies deserialization and handling of these
+//! Usually, a single message type handles both requests and responses (i.e., instead of having separate `MempoolRequest` or `MempoolResponse` enums, we
+//! but both types of messages within a single `MempoolRequest` type). This simplifies deserialization and handling of these
 //! messages.
 //!
 //! ## Multicast
@@ -998,8 +998,8 @@ impl Node {
                 address: Some(peer_out_addr),
             }))?;
 
-        // We only do DNS validation on compute and storage nodes
-        if self.node_type == NodeType::Compute || self.node_type == NodeType::Storage {
+        // We only do DNS validation on mempool and storage nodes
+        if self.node_type == NodeType::Mempool || self.node_type == NodeType::Storage {
             if let Some(peer_cert) = peer_cert {
                 let connector = self.tcp_tls_connector.read().await;
                 let peer_name = connector.socket_name_mapping(peer_in_addr);
@@ -1252,7 +1252,7 @@ impl Node {
 
         for key in sort_keys {
             if let Ok(peertype) = self.get_peer_node_type(*key.1).await {
-                if peertype == NodeType::Compute || peertype == NodeType::Storage {
+                if peertype == NodeType::Mempool || peertype == NodeType::Storage {
                     return_vec.push((key.0, *key.1, String::from(node_type_as_str(peertype))));
                 }
             }
@@ -1314,8 +1314,8 @@ mod test {
         //
         // Arrange
         //
-        let mut n1 = create_compute_node_version(2, 0).await;
-        let mut n2 = create_compute_node_version(2, 0).await;
+        let mut n1 = create_mempool_node_version(2, 0).await;
+        let mut n2 = create_mempool_node_version(2, 0).await;
         let conn_address_1 = vec![n2.local_address()];
         let conn_address_2 = vec![n1.local_address()];
 
@@ -1367,15 +1367,15 @@ mod test {
             ((conn_address_1, conn_address_2), (vec![], vec![]))
         );
 
-        complete_compute_nodes(vec![n1, n2]).await;
+        complete_mempool_nodes(vec![n1, n2]).await;
     }
 
-    async fn create_compute_node_version(peer_limit: usize, network_version: u32) -> Node {
+    async fn create_mempool_node_version(peer_limit: usize, network_version: u32) -> Node {
         let tcp_tls_config = get_common_tls_config();
         Node::new_with_version(
             &tcp_tls_config,
             peer_limit,
-            NodeType::Compute,
+            NodeType::Mempool,
             network_version,
             false,
             false,
@@ -1384,7 +1384,7 @@ mod test {
         .unwrap()
     }
 
-    async fn complete_compute_nodes(nodes: Vec<Node>) {
+    async fn complete_mempool_nodes(nodes: Vec<Node>) {
         for mut node in nodes.into_iter() {
             join_all(node.stop_listening().await).await;
         }
