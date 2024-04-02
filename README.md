@@ -1,6 +1,24 @@
-# AIBlock Network
+<div align="center">
+  <a>
+    <img src="https://github.com/AIBlockOfficial/Network/blob/develop/assets/hero.jpg" alt="Logo" style="width:100%;max-width:700px">
+  </a>
 
-A repo for the development of the AIBlock Network.
+  <h2 align="center">AIBlock Network</h2> <div style="height:30px"></div>
+<!-- 
+  <div>
+  <img src="https://img.shields.io/github/actions/workflow/status/AIBlockOfficial/Chain/.github/workflows/rust.yml?branch=main" alt="Pipeline Status" style="display:inline-block"/>
+  <img src="https://img.shields.io/crates/v/tw_chain" alt="Cargo Crates Version" style="display:inline-block" />
+  </div> -->
+
+  <p align="center">
+    The network that runs the AIBlock chain.
+    <br />
+    <br />
+    <a href="https://aiblock.dev"><strong>Official documentation »</strong></a>
+    <br />
+    <br />
+  </p>
+</div>
 
 ..
 
