@@ -1,4 +1,4 @@
-pub use a_block_chain::constants::*;
+pub use tw_chain::constants::*;
 
 /*------- BLOCK CONSTANTS --------*/
 
@@ -72,12 +72,12 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 /*------- LIMIT CONSTANTS -------*/
 
 /// Maximum number of attempts to resend trigger messages before proposing to reset the mining pipeline
-pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 10;
+pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 5;
 
-/// Limit for the transaction pool per compute node
+/// Limit for the transaction pool per mempool node
 pub const TX_POOL_LIMIT: usize = 10_000_000;
 
-/// Limit for the number of PoWs a compute node may have for UnicornShard creation
+/// Limit for the number of PoWs a mempool node may have for UnicornShard creation
 pub const UNICORN_LIMIT: usize = 5;
 
 /// Set the mining difficulty by number of required zeroes

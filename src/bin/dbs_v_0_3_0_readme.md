@@ -6,14 +6,14 @@
 ## In a separate clone of znp and noam:
  * checkout ZNP at tag v1.0.1
  * checkout NAOM at tag v1.0.0
- * Make sure znp cargo.toml point to corresponding a_block_chain
+ * Make sure znp cargo.toml point to corresponding tw_chain
 
 ## Generate database and snapshots in v0.3.0 clone
 
 These instructions will be easier to follow with 5 tabs ready to run the following:
  * `cargo build --bins --release`
  * `rm -rf src/db/db/test.* src/wallet/wallet/test.*; tar -xzf src/bin/dbs_v_0_2_0_no_new_block.tar.gz`
- * `target/release/upgrade --config=src/bin/node_settings_upgraded.toml --type=all --processing=upgrade --compute_block=discard --passphrase=TestPassword`
+ * `target/release/upgrade --config=src/bin/node_settings_upgraded.toml --type=all --processing=upgrade --mempool_block=discard --passphrase=TestPassword`
  * `tar -czf src/bin/dbs_v_0_2_0_upgraded.tar.gz src/db/db src/wallet/wallet`
 
  Then:

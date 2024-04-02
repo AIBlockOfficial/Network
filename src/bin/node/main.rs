@@ -1,8 +1,8 @@
-//! App to run an A-Block node.
+//! App to run an AIBlock node.
 
 use clap::{App, ArgMatches};
 
-mod compute;
+mod mempool;
 mod miner;
 mod pre_launch;
 mod storage;
@@ -21,7 +21,7 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
         match sub_command {
             "user" => user::run_node(sub_matches).await,
             "miner" => miner::run_node(sub_matches).await,
-            "compute" => compute::run_node(sub_matches).await,
+            "mempool" => mempool::run_node(sub_matches).await,
             "storage" => storage::run_node(sub_matches).await,
             "pre_launch" => pre_launch::run_node(sub_matches).await,
             invalid_type => panic!("Invalid node type: {:?}", invalid_type),
@@ -32,11 +32,11 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
 }
 
 fn clap_app<'a, 'b>() -> App<'a, 'b> {
-    App::new("A-Block Node")
-        .about("Runs an A-Block node.")
+    App::new("AIBlock Node")
+        .about("Runs an AIBlock node.")
         .subcommand(user::clap_app())
         .subcommand(miner::clap_app())
-        .subcommand(compute::clap_app())
+        .subcommand(mempool::clap_app())
         .subcommand(storage::clap_app())
         .subcommand(pre_launch::clap_app())
 }

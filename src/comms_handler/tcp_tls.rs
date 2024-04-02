@@ -26,6 +26,7 @@ pub type TlsStreamClient = tokio_rustls::client::TlsStream<TcpStream>;
 pub type TlsStreamServer = tokio_rustls::server::TlsStream<TcpStream>;
 pub type TlsCertificate = Certificate;
 
+#[derive(Debug)]
 pub struct TcpTlsConfig {
     address: SocketAddr,
     socket_name_mapping: BTreeMap<SocketAddr, String>,
@@ -429,5 +430,5 @@ pub fn socket_name_mapping_or_default(
 }
 
 pub fn default_name_mapping(addr: SocketAddr) -> String {
-    format!("{}.{}.nodes.a-block.net", addr.ip(), addr.port())
+    format!("{}.{}.nodes.aiblock.ch", addr.ip(), addr.port())
 }
