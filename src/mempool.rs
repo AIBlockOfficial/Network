@@ -1161,32 +1161,28 @@ impl MempoolNode {
             SendSharedConfig { shared_config } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_shared_config(peer, shared_config).await
+                    false => self.handle_shared_config(peer, shared_config).await,
                 }
             }
             Closing => self.receive_closing(peer),
             CoordinatedPause { b_num } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_coordinated_pause(peer, b_num).await
+                    false => self.handle_coordinated_pause(peer, b_num).await,
                 }
             }
             CoordinatedResume => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_coordinated_resume(peer).await
+                    false => self.handle_coordinated_resume(peer).await,
                 }
             }
-            RequestRemoveMiner => {
-                self.handle_request_remove_miner(peer).await
-            }
-            RequestRuntimeData => {
-                self.handle_receive_request_runtime_data(peer).await
-            }
+            RequestRemoveMiner => self.handle_request_remove_miner(peer).await,
+            RequestRuntimeData => self.handle_receive_request_runtime_data(peer).await,
             SendRuntimeData { runtime_data } => {
                 match peer != self.local_address() && !self.node_raft.get_peers().contains(&peer) {
                     true => None,
-                    false => self.handle_receive_runtime_data(peer, runtime_data).await
+                    false => self.handle_receive_runtime_data(peer, runtime_data).await,
                 }
             }
             SendRaftCmd(msg) => {
@@ -2142,9 +2138,17 @@ impl MempoolNode {
                     error!("Resend block and rand to partition miners failed {:?}", e);
                 }
                 if self.enable_trigger_messages_pipeline_reset {
+                    info!("Resend trigger messages for pipeline reset");
                     let mining_participants = &self.node_raft.get_mining_participants().unsorted;
                     let disconnected_participants =
                         self.node.unconnected_peers(mining_participants).await;
+
+                    info!(
+                        "Disconnected participants: {:?}",
+                        disconnected_participants.len()
+                    );
+
+                    info!("Mining participants: {:?}", mining_participants.len());
 
                     // If all miners participating in this mining round disconnected
                     // and we've reached the appropriate threshold for maximum number of
@@ -2156,6 +2160,12 @@ impl MempoolNode {
                     if disconnected_participants.len() == mining_participants.len() {
                         self.current_trigger_messages_count += 1;
                     }
+
+                    info!(
+                        "Current trigger messages count: {:?}",
+                        self.current_trigger_messages_count
+                    );
+
                     if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
                     {
                         self.current_trigger_messages_count = Default::default();
@@ -2163,6 +2173,8 @@ impl MempoolNode {
                             .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)
                             .await;
                     }
+                } else {
+                    warn!("Resend trigger messages for pipeline reset is not enabled");
                 }
             }
         }
