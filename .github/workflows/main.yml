@@ -16,9 +16,10 @@ jobs:
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
+      NODE_TYPE: 'mempool'
   scan-image:
     uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
     needs: build
     with:
-      IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}:${{ github.sha }}
+      IMAGE: ${{ vars.REGISTRY }}/aiblockofficial/node-mempool:${{ github.sha }}
