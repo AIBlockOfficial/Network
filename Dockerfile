@@ -29,7 +29,7 @@ ENV INITIAL_BLOCK_CONFIG="/etc/initial_block.json"
 ENV API_CONFIG="/etc/api_config.json"
 ENV INITIAL_ISSUANCE="/etc/initial_issuance.json"
 ENV API_USE_TLS="0"
-ENV COMPUTE_MINER_WHITELIST="/etc/mempool_miner_whitelist.json"
+ENV MEMPOOL_MINER_WHITELIST="/etc/mempool_miner_whitelist.json"
 ENV RUST_LOG=info,debug
 
 # Copy node bin
