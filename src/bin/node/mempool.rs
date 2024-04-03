@@ -174,7 +174,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("mempool_miner_whitelist")
                 .long("mempool_miner_whitelist")
-                .env("COMPUTE_MINER_WHITELIST")
+                .env("MEMPOOL_MINER_WHITELIST")
                 .help("Specify miner whitelist config for mempool nodes.")
                 .takes_value(true),
         )
