@@ -1,6 +1,8 @@
 # Accept the risk
-CVE-2020-25573
+
 
 # Ignore misconfigurations
-AVD-DS-001
-AVD-DS-026
+# https://avd.aquasec.com/misconfig/dockerfile/general/avd-ds-0001/
+AVD-DS-0001
+# https://avd.aquasec.com/misconfig/dockerfile/general/avd-ds-0026/
+AVD-DS-0026
