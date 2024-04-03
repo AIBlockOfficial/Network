@@ -3,7 +3,7 @@ use super::{
     handlers::DbgPaths,
     responses::{common_error_reply, json_serialize_embed, CallResponse, JsonReply},
 };
-use crate::utils::{validate_pow_for_diff, ApiKeys, RoutesPoWInfo};
+use crate::utils::{ApiKeys, RoutesPoWInfo};
 use futures::Future;
 use moka::future::{Cache, CacheBuilder};
 use std::convert::Infallible;
@@ -52,14 +52,14 @@ pub fn map_api_res_and_cache(
 // Authorizes a request based on API keys as well as PoW requirements for the route
 // Successfull authorization will extract the x-cache-id header value
 pub fn auth_request(
-    routes_pow: RoutesPoWInfo,
+    _routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
 ) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
     warp::path::full()
         .and(warp::header::headers_cloned())
         .and_then(move |path: FullPath, headers: HeaderMap| {
             let route_path = path.as_str()[1..].to_owned(); /* Slice to remove '/' prefix */
-            let route_difficulty = routes_pow.lock().unwrap().get(&route_path).cloned();
+            // let route_difficulty = routes_pow.lock().unwrap().get(&route_path).cloned();
             let needed_keys = api_keys.lock().unwrap().get(&route_path).cloned();
 
             async move {
@@ -69,7 +69,7 @@ pub fn auth_request(
                     .and_then(|n| n.to_str().ok())
                     .unwrap_or_default();
 
-                let nonce = headers
+                let _nonce = headers
                     .get("x-nonce")
                     .and_then(|n| n.to_str().ok())
                     .unwrap_or_default();
@@ -101,15 +101,15 @@ pub fn auth_request(
                     }
                 }
 
-                let hash_content = format!("{nonce}-{id}");
+                // let hash_content = format!("{nonce}-{id}");
 
                 // This route requires PoW
-                if let Some(difficulty) = route_difficulty {
-                    if validate_pow_for_diff(difficulty, hash_content.as_bytes()).is_none() {
-                        println!("Unauthorized - Route difficulty");
-                        return err_unauthorized;
-                    }
-                }
+                // if let Some(difficulty) = route_difficulty {
+                //     if validate_pow_for_diff(difficulty, hash_content.as_bytes()).is_none() {
+                //         println!("Unauthorized - Route difficulty");
+                //         return err_unauthorized;
+                //     }
+                // }
 
                 // No PoW required
                 Ok(id.to_owned())
