@@ -13,4 +13,4 @@ jobs:
     uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
     with:
-      IMAGE: ${{ vars.REGISTRY }}/aiblockofficial/node-mempool:latest
+      IMAGE: ${{ vars.REGISTRY }}/aiblockofficial/node-miner:latest
