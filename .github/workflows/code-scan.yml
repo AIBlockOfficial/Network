@@ -1,0 +1,11 @@
+name: code-scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  scan-code:
+    uses: aiblockofficial/workflows/.github/workflows/scan-code.yml@main
