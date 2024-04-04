@@ -21,7 +21,5 @@
             "get_shared_config_route_key_3"
         ]
     },
-    "routes_pow": {
-        "create_transactions": 2
-    }
+    "routes_pow": {}
 }
