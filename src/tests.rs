@@ -1,17 +1,17 @@
 //! Test suite for the network functions.
 
-use crate::mempool::MempoolNode;
-use crate::mempool_raft::MinerWhitelist;
 use crate::configurations::{
     MempoolNodeSharedConfig, TxOutSpec, UserAutoGenTxSetup, UtxoSetSpec, WalletTxSpec,
 };
 use crate::constants::{NETWORK_VERSION, SANC_LIST_TEST};
 use crate::interfaces::{
     BlockStoredInfo, BlockchainItem, BlockchainItemMeta, BlockchainItemType, CommonBlockInfo,
-    MempoolApi, MempoolRequest, DruidPool, MinedBlock, MinedBlockExtraInfo, Response,
+    DruidPool, MempoolApi, MempoolRequest, MinedBlock, MinedBlockExtraInfo, Response,
     StorageRequest, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
     WinningPoWInfo,
 };
+use crate::mempool::MempoolNode;
+use crate::mempool_raft::MinerWhitelist;
 use crate::miner::MinerNode;
 use crate::storage::{all_ordered_stored_block_tx_hashes, StorageNode};
 use crate::storage_raft::CompleteBlock;

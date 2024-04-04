@@ -6,7 +6,7 @@ use crate::constants::{
 };
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec, SimpleDbWriteBatch};
 use crate::interfaces::{
-    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, MempoolRequest, Contract, DruidTxInfo,
+    BlockStoredInfo, BlockchainItem, BlockchainItemMeta, Contract, DruidTxInfo, MempoolRequest,
     MineRequest, MinedBlock, NodeType, ProofOfWork, Response, StorageInterface, StorageRequest,
     StoredSerializingBlock,
 };

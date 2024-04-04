@@ -1,6 +1,7 @@
 //! App to run an AIBlock node.
 
 use clap::{App, ArgMatches};
+use tracing::info;
 
 mod mempool;
 mod miner;
@@ -27,7 +28,7 @@ async fn launch_node_with_args(matches: ArgMatches<'_>) {
             invalid_type => panic!("Invalid node type: {:?}", invalid_type),
         }
     } else {
-        println!("Node type needs to be specified.")
+        info!("Node type needs to be specified.")
     }
 }
 

@@ -3,15 +3,15 @@
 //! correctness of the mempool, miner, & storage modules.
 
 use crate::comms_handler::{test_tls_certificates, Node, TcpTlsConfig, TcpTlsListner};
-use crate::mempool::MempoolNode;
-use crate::mempool_raft::MinerWhitelist;
 use crate::configurations::{
-    MempoolNodeConfig, DbMode, ExtraNodeParams, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
+    DbMode, ExtraNodeParams, MempoolNodeConfig, MinerNodeConfig, NodeSpec, PreLaunchNodeConfig,
     PreLaunchNodeType, StorageNodeConfig, TlsSpec, UserAutoGenTxSetup, UserNodeConfig, UtxoSetSpec,
     WalletTxSpec,
 };
 use crate::constants::{DB_PATH, DB_PATH_TEST, WALLET_PATH};
 use crate::interfaces::{InitialIssuance, Response};
+use crate::mempool::MempoolNode;
+use crate::mempool_raft::MinerWhitelist;
 use crate::miner::MinerNode;
 use crate::pre_launch::PreLaunchNode;
 use crate::storage::StorageNode;

@@ -1,19 +1,19 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
-use crate::mempool_raft::{
-    CommittedItem, MempoolConsensusedRuntimeData, MempoolRaft, MempoolRuntimeItem,
-    CoordinatedCommand,
-};
 use crate::configurations::{
-    MempoolNodeConfig, MempoolNodeSharedConfig, ExtraNodeParams, TlsPrivateInfo,
+    ExtraNodeParams, MempoolNodeConfig, MempoolNodeSharedConfig, TlsPrivateInfo,
 };
 use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, MempoolApi, MempoolApiRequest, MempoolInterface,
-    MempoolRequest, Contract, DruidDroplet, DruidPool, InitialIssuance, MineRequest, MinedBlock,
+    BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
+    MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
     UtxoFetchType, UtxoSet, WinningPoWInfo,
+};
+use crate::mempool_raft::{
+    CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
+    MempoolRuntimeItem,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -593,9 +593,9 @@ impl MempoolNode {
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
 
-        println!();
-        println!("Proposing timestamp next");
-        println!();
+        info!("");
+        info!("Proposing timestamp next");
+        info!("");
 
         self.node_raft.propose_timestamp().await;
         self.node
