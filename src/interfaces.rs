@@ -1,22 +1,22 @@
-use crate::compute::ComputeError;
-use crate::compute_raft::ComputeConsensusedRuntimeData;
-use crate::configurations::ComputeNodeSharedConfig;
+use crate::configurations::MempoolNodeSharedConfig;
+use crate::mempool::MempoolError;
+use crate::mempool_raft::MempoolConsensusedRuntimeData;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;
 use crate::utils::rug_integer;
-use a_block_chain::primitives::asset::Asset;
-use a_block_chain::primitives::asset::TokenAmount;
-use a_block_chain::primitives::block::{Block, BlockHeader};
-use a_block_chain::primitives::druid::DruidExpectation;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, TxIn};
-use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxOut};
 use bytes::Bytes;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
+use tw_chain::primitives::asset::Asset;
+use tw_chain::primitives::asset::TokenAmount;
+use tw_chain::primitives::block::{Block, BlockHeader};
+use tw_chain::primitives::druid::DruidExpectation;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, TxIn};
+use tw_chain::primitives::transaction::{OutPoint, Transaction, TxOut};
 
 //*======== INITIAL ISSUANCES =========*//
 
@@ -227,7 +227,7 @@ pub struct Heat;
 pub enum NodeType {
     Miner,
     Storage,
-    Compute,
+    Mempool,
     User,
     PreLaunch,
 }
@@ -236,7 +236,7 @@ pub enum NodeType {
 pub fn node_type_as_str(node_type: NodeType) -> &'static str {
     match node_type {
         NodeType::Miner => "Miner",
-        NodeType::Compute => "Compute",
+        NodeType::Mempool => "Mempool",
         NodeType::Storage => "Storage",
         NodeType::User => "User",
         NodeType::PreLaunch => "Prelaunch",
@@ -462,10 +462,10 @@ pub enum MineApiRequest {
     InitiatePauseMining,
     /// Initiate resume mining
     InitiateResumeMining,
-    /// Connect to to compute Node
-    ConnectToCompute,
-    // Disconnect from compute Node
-    DisconnectFromCompute,
+    /// Connect to to mempool Node
+    ConnectToMempool,
+    // Disconnect from mempool Node
+    DisconnectFromMempool,
     // Request UTXO set for wallet update
     RequestUTXOSet(UtxoFetchType),
     // Set static miner address
@@ -520,8 +520,8 @@ impl fmt::Debug for MineRequest {
             MinerApi(MineApiRequest::GetMiningStatus) => write!(f, "GetMiningStatus"),
             MinerApi(MineApiRequest::InitiatePauseMining) => write!(f, "InitiatePauseMining"),
             MinerApi(MineApiRequest::InitiateResumeMining) => write!(f, "InitiateResumeMining"),
-            MinerApi(MineApiRequest::ConnectToCompute) => write!(f, "ConnectToCompute"),
-            MinerApi(MineApiRequest::DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            MinerApi(MineApiRequest::ConnectToMempool) => write!(f, "ConnectToMempool"),
+            MinerApi(MineApiRequest::DisconnectFromMempool) => write!(f, "DisconnectFromMempool"),
             MinerApi(MineApiRequest::RequestUTXOSet(_)) => write!(f, "RequestUTXOSet"),
             MinerApi(MineApiRequest::SetStaticMinerAddress { .. }) => {
                 write!(f, "SetStaticMinerAddress")
@@ -568,16 +568,16 @@ pub enum Rs2JsMsg {
 
 ///============ COMPUTE NODE ============///
 
-// Encapsulates compute requests injected by API
+// Encapsulates mempool requests injected by API
 #[allow(clippy::enum_variant_names)]
 #[derive(Deserialize, Serialize, Clone)]
-pub enum ComputeApiRequest {
+pub enum MempoolApiRequest {
     SendCreateItemRequest {
         item_amount: u64,
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     },
     SendTransactions {
@@ -588,19 +588,19 @@ pub enum ComputeApiRequest {
     },
     ResumeNodes,
     SendSharedConfig {
-        shared_config: ComputeNodeSharedConfig,
+        shared_config: MempoolNodeSharedConfig,
     },
 }
 
-/// Encapsulates compute requests & responses.
+/// Encapsulates mempool requests & responses.
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Clone)]
-pub enum ComputeRequest {
+pub enum MempoolRequest {
     /// Process an API internal request
-    ComputeApi(ComputeApiRequest),
+    MempoolApi(MempoolApiRequest),
 
     SendSharedConfig {
-        shared_config: ComputeNodeSharedConfig,
+        shared_config: MempoolNodeSharedConfig,
     },
     SendUtxoRequest {
         address_list: UtxoFetchType,
@@ -631,25 +631,25 @@ pub enum ComputeRequest {
     RequestRemoveMiner,
     RequestRuntimeData,
     SendRuntimeData {
-        runtime_data: ComputeConsensusedRuntimeData,
+        runtime_data: MempoolConsensusedRuntimeData,
     },
     SendRaftCmd(RaftMessageWrapper),
 }
 
-impl fmt::Debug for ComputeRequest {
+impl fmt::Debug for MempoolRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ComputeRequest::*;
+        use MempoolRequest::*;
 
         match *self {
-            ComputeApi(ComputeApiRequest::SendCreateItemRequest { .. }) => {
+            MempoolApi(MempoolApiRequest::SendCreateItemRequest { .. }) => {
                 write!(f, "Api::SendCreateItemRequest")
             }
-            ComputeApi(ComputeApiRequest::SendTransactions { .. }) => {
+            MempoolApi(MempoolApiRequest::SendTransactions { .. }) => {
                 write!(f, "Api::SendTransactions")
             }
-            ComputeApi(ComputeApiRequest::PauseNodes { .. }) => write!(f, "Api::PauseNodes"),
-            ComputeApi(ComputeApiRequest::ResumeNodes) => write!(f, "Api::ResumeNodes"),
-            ComputeApi(ComputeApiRequest::SendSharedConfig { .. }) => {
+            MempoolApi(MempoolApiRequest::PauseNodes { .. }) => write!(f, "Api::PauseNodes"),
+            MempoolApi(MempoolApiRequest::ResumeNodes) => write!(f, "Api::ResumeNodes"),
+            MempoolApi(MempoolApiRequest::SendSharedConfig { .. }) => {
                 write!(f, "Api::SendSharedConfig")
             }
             SendUtxoRequest { .. } => write!(f, "SendUtxoRequest"),
@@ -671,7 +671,7 @@ impl fmt::Debug for ComputeRequest {
     }
 }
 
-pub trait ComputeInterface {
+pub trait MempoolInterface {
     /// Fetch UTXO set for given addresses
     fn fetch_utxo_set(
         &mut self,
@@ -698,25 +698,25 @@ pub trait ComputeInterface {
     fn get_next_block_reward(&self) -> f64;
 }
 
-/// Compute node API
-pub trait ComputeApi {
-    /// Get compute node configuration that is shareable between peers
-    fn get_shared_config(&self) -> ComputeNodeSharedConfig;
+/// Mempool node API
+pub trait MempoolApi {
+    /// Get mempool node configuration that is shareable between peers
+    fn get_shared_config(&self) -> MempoolNodeSharedConfig;
 
-    /// Pause all compute nodes
+    /// Pause all mempool nodes
     fn pause_nodes(&mut self, b_num: u64) -> Response;
 
-    /// Resume all compute nodes
+    /// Resume all mempool nodes
     fn resume_nodes(&mut self) -> Response;
 
-    /// Share compute node config with other compute nodes
-    fn send_shared_config(&mut self, shared_config: ComputeNodeSharedConfig) -> Response;
+    /// Share mempool node config with other mempool nodes
+    fn send_shared_config(&mut self, shared_config: MempoolNodeSharedConfig) -> Response;
 
     /// Get the UTXO tracked set
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet;
 
-    /// Get the current circulating supply
-    fn get_circulating_supply(&self) -> TokenAmount;
+    /// Get the current issued supply
+    fn get_issued_supply(&self) -> TokenAmount;
 
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;
@@ -735,9 +735,9 @@ pub trait ComputeApi {
         script_public_key: String,
         public_key: String,
         signature: String,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
-    ) -> Result<(Transaction, String), ComputeError>;
+    ) -> Result<(Transaction, String), MempoolError>;
 }
 
 ///============ USER NODE ============///
@@ -748,7 +748,7 @@ pub enum UserApiRequest {
     /// Request to generate item-based asset
     SendCreateItemRequest {
         item_amount: u64,
-        drs_tx_hash_spec: DrsTxHashSpec,
+        genesis_hash_spec: GenesisTxHashSpec,
         metadata: Option<String>,
     },
 
@@ -789,11 +789,11 @@ pub enum UserApiRequest {
     /// Get the connection status of this node
     GetConnectionStatus,
 
-    /// Connect to compute node
-    ConnectToCompute,
+    /// Connect to mempool node
+    ConnectToMempool,
 
-    /// Disconnect from compute
-    DisconnectFromCompute,
+    /// Disconnect from mempool
+    DisconnectFromMempool,
 
     /// Delete addresses
     DeleteAddresses { addresses: BTreeSet<String> },
@@ -857,8 +857,8 @@ impl fmt::Debug for UserRequest {
             }
             UserApi(GenerateNewAddress) => write!(f, "GenerateNewAddress"),
             UserApi(GetConnectionStatus) => write!(f, "GetConnectionStatus"),
-            UserApi(ConnectToCompute) => write!(f, "ConnectToCompute"),
-            UserApi(DisconnectFromCompute) => write!(f, "DisconnectFromCompute"),
+            UserApi(ConnectToMempool) => write!(f, "ConnectToMempool"),
+            UserApi(DisconnectFromMempool) => write!(f, "DisconnectFromMempool"),
             UserApi(DeleteAddresses { .. }) => write!(f, "DeleteAddresses"),
             UserApi(MergeAddresses { .. }) => write!(f, "MergeAddresses"),
 

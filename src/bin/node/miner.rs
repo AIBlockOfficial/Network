@@ -1,21 +1,22 @@
 //! App to run a mining node.
 
-use ablock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
-use ablock_network::{
+use aiblock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
-use ablock_network::{MinerNode, UserNode};
+use aiblock_network::{MinerNode, UserNode};
 use clap::{App, Arg, ArgMatches};
 use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let (config, user_config) = configuration(load_settings(matches));
-    println!("Start node with config {:?}", config);
+    info!("Start node with config {:?}", config);
     let node = MinerNode::new(config, Default::default()).await.unwrap();
-    println!("Started node at {}", node.local_address());
+    info!("Started node at {}", node.local_address());
 
     let miner_api_inputs = node.api_inputs();
     let shared_wallet_db = Some(node.get_wallet_db().clone());
@@ -64,10 +65,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 ..Default::default()
             };
 
-            println!("Start user node with config {config:?}");
+            info!("Start user node with config {config:?}");
             let user_node = UserNode::new(config, shared_members).await.unwrap();
             let api_inputs = (user_node.api_inputs(), miner_api_inputs);
-            println!("Started user node at {}", user_node.local_address());
+            info!("Started user node at {}", user_node.local_address());
 
             let (user_node_conn, user_addrs_to_connect, user_expected_connected_addrs) =
                 user_node.connect_info_peers();
@@ -125,8 +126,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                     (_, miner_node, _, _, _, current_block, _),
                 ) = api_inputs;
 
-                println!("Warp API started on port {:?}", api_addr.port());
-                println!();
+                info!("Warp API started on port {:?}", api_addr.port());
+                info!("");
 
                 let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
                 bind_address.set_port(api_addr.port());
@@ -177,8 +178,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 let (db, miner_node, api_addr, api_tls, api_keys, current_block, api_pow_info) =
                     miner_api_inputs;
 
-                println!("Warp API started on port {:?}", api_addr.port());
-                println!();
+                info!("Warp API started on port {:?}", api_addr.port());
+                info!("");
 
                 let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
                 bind_address.set_port(api_addr.port());
@@ -248,7 +249,7 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("initial_block_config")
                 .long("initial_block_config")
                 .env("INITIAL_BLOCK_CONFIG")
-                .help("Run the compute node using the given initial block config file.")
+                .help("Run the mempool node using the given initial block config file.")
                 .takes_value(true),
         )
         .arg(
@@ -294,9 +295,9 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("compute_index")
-                .long("compute_index")
-                .help("Endpoint index of a compute node that the miner should connect to")
+            Arg::with_name("mempool_index")
+                .long("mempool_index")
+                .help("Endpoint index of a mempool node that the miner should connect to")
                 .takes_value(true),
         )
         .arg(
@@ -357,14 +358,14 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("miner_compute_node_idx", 0).unwrap();
+    settings.set_default("miner_mempool_node_idx", 0).unwrap();
     settings.set_default("miner_storage_node_idx", 0).unwrap();
     settings.set_default("user_api_port", 3000).unwrap();
     settings.set_default("miner_api_port", 3000).unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("miner_api_use_tls", true).unwrap();
     settings.set_default("user_node_idx", 0).unwrap();
-    settings.set_default("user_compute_node_idx", 0).unwrap();
+    settings.set_default("user_mempool_node_idx", 0).unwrap();
     settings.set_default("peer_user_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
 
@@ -524,9 +525,9 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("tls_config", tls_config).unwrap();
     }
 
-    if let Some(index) = matches.value_of("compute_index") {
-        settings.set("miner_compute_node_idx", index).unwrap();
-        settings.set("user_compute_node_idx", index).unwrap();
+    if let Some(index) = matches.value_of("mempool_index") {
+        settings.set("miner_mempool_node_idx", index).unwrap();
+        settings.set("user_mempool_node_idx", index).unwrap();
     }
 
     if let Some(index) = matches.value_of("passphrase") {
@@ -574,7 +575,7 @@ fn default_user_test_auto_gen_setup() -> HashMap<String, Value> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
     type UserExpected = Option<(DbMode, Option<String>)>;

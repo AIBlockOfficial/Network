@@ -1,22 +1,23 @@
 //! App to run a storage node.
 
-use ablock_network::configurations::StorageNodeConfig;
-use ablock_network::StorageNode;
-use ablock_network::{
+use aiblock_network::configurations::StorageNodeConfig;
+use aiblock_network::StorageNode;
+use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
 };
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
+use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
 
-    println!("Start node with config {config:?}");
+    info!("Start node with config {config:?}");
     let node = StorageNode::new(config, Default::default()).await.unwrap();
 
-    println!("Started node at {}", node.local_address());
+    info!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let api_inputs = node.api_inputs();
@@ -41,9 +42,9 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let raft_loop_handle = {
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
-            println!("Peer connect complete, start Raft");
+            info!("Peer connect complete, start Raft");
             raft_loop.await;
-            println!("Raft complete");
+            info!("Raft complete");
         })
     };
 
@@ -51,8 +52,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let warp_handle = tokio::spawn({
         let (db, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
 
-        println!("Warp API started on port {:?}", api_addr.port());
-        println!();
+        info!("Warp API started on port {:?}", api_addr.port());
+        info!("");
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());
@@ -247,7 +248,7 @@ fn configuration(settings: config::Config) -> StorageNodeConfig {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ablock_network::configurations::DbMode;
+    use aiblock_network::configurations::DbMode;
 
     type Expected = (DbMode, Option<String>);
 

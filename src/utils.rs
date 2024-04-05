@@ -9,21 +9,6 @@ use crate::interfaces::{
 };
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
-use a_block_chain::constants::TOTAL_TOKENS;
-use a_block_chain::crypto::sha3_256;
-use a_block_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
-use a_block_chain::primitives::transaction::DrsTxHashSpec;
-use a_block_chain::primitives::{
-    asset::{Asset, TokenAmount},
-    block::{build_hex_txs_hash, Block, BlockHeader},
-    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
-};
-use a_block_chain::script::{lang::Script, StackEntry};
-use a_block_chain::utils::transaction_utils::{
-    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
-    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
-    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
-};
 use bincode::serialize;
 use chrono::Utc;
 use futures::future::join_all;
@@ -41,8 +26,23 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use trust_dns_resolver::TokioAsyncResolver;
+use tw_chain::constants::TOTAL_TOKENS;
+use tw_chain::crypto::sha3_256;
+use tw_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
+use tw_chain::primitives::transaction::GenesisTxHashSpec;
+use tw_chain::primitives::{
+    asset::{Asset, TokenAmount},
+    block::{build_hex_txs_hash, Block, BlockHeader},
+    transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut},
+};
+use tw_chain::script::{lang::Script, StackEntry};
+use tw_chain::utils::transaction_utils::{
+    construct_address, construct_payment_tx_ins, construct_tx_core, construct_tx_hash,
+    construct_tx_in_signable_asset_hash, construct_tx_in_signable_hash, get_fees_with_out_point,
+    get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
+};
 use url::Url;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
@@ -306,7 +306,7 @@ pub async fn loop_connnect_to_peers_async(
             } else {
                 trace!(?peer, "Try to connect to succeeded");
                 if !is_initial_conn {
-                    trace!("Sending PartitionRequest to Compute node: {peer:?} after reconnection");
+                    trace!("Sending PartitionRequest to Mempool node: {peer:?} after reconnection");
                     local_events_tx
                         .send(LocalEvent::ReconnectionComplete, "Reconnect Complete")
                         .await
@@ -420,16 +420,16 @@ pub fn format_parition_pow_address(addr: SocketAddr) -> String {
 ///
 /// ### Arguments
 ///
-/// * `current_circulation` - Current circulation of all tokens
-pub fn calculate_reward(current_circulation: TokenAmount) -> TokenAmount {
+/// * `current_issuance` - Current issuance of all tokens
+pub fn calculate_reward(current_issuance: TokenAmount) -> TokenAmount {
     let smoothing_value_as_token_amount = D_DISPLAY_PLACES_U64 * REWARD_SMOOTHING_VAL as u64;
 
-    if current_circulation.0 >= TOTAL_TOKENS {
+    if current_issuance.0 >= TOTAL_TOKENS {
         return TokenAmount(smoothing_value_as_token_amount);
     }
 
     TokenAmount(
-        ((TOTAL_TOKENS - current_circulation.0) >> REWARD_ISSUANCE_VAL)
+        ((TOTAL_TOKENS - current_issuance.0) >> REWARD_ISSUANCE_VAL)
             + smoothing_value_as_token_amount,
     )
 }
@@ -485,12 +485,10 @@ pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std
     let thread_url = url_str.to_owned();
     let handle = tokio::task::spawn_blocking(move || {
         if let Ok(url) = Url::parse(&thread_url.clone()) {
-            // println!("url: {:?}", url);
             let host_str = match url.host_str() {
                 Some(v) => v,
                 None => return None,
             };
-            // println!("host_str: {:?}", host_str);
             let port = url.port().unwrap_or(80);
 
             // Check if the host is an IP address
@@ -754,7 +752,6 @@ pub fn create_valid_transaction_with_ins_outs(
                 value: Asset::Token(amount),
                 locktime: 0,
                 script_public_key: Some(addr.to_string()),
-                drs_block_hash: None,
             });
         }
         tx_outs
@@ -946,7 +943,7 @@ pub fn loops_re_connect_disconnect(
         let node_conn = node_conn.clone();
         (
             async move {
-                println!("Start connect to requested peers");
+                info!("Start connect to requested peers");
                 loop_connnect_to_peers_async(
                     node_conn,
                     addrs_to_connect,
@@ -954,7 +951,7 @@ pub fn loops_re_connect_disconnect(
                     local_events_tx,
                 )
                 .await;
-                println!("Reconnect complete");
+                info!("Reconnect complete");
             },
             stop_re_connect_tx,
         )
@@ -968,7 +965,7 @@ pub fn loops_re_connect_disconnect(
         let mut shutdown_num = None;
         (
             async move {
-                println!("Start mode input check");
+                info!("Start mode input check");
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_millis(100)) => (),
@@ -983,7 +980,7 @@ pub fn loops_re_connect_disconnect(
                     )
                     .await;
                 }
-                println!("Complete mode input check");
+                info!("Complete mode input check");
             },
             stop_re_connect_tx,
         )
@@ -1162,7 +1159,7 @@ pub fn concat_maps<K: Clone + Ord, V: Clone>(
         .collect()
 }
 
-/// Create a new item asset transaction (only used on Compute node)
+/// Create a new item asset transaction (only used on Mempool node)
 ///
 /// ### Arguments
 ///
@@ -1176,11 +1173,11 @@ pub fn create_item_asset_tx_from_sig(
     script_public_key: String,
     public_key: String,
     signature: String,
-    drs_tx_hash_spec: DrsTxHashSpec,
+    genesis_hash_spec: GenesisTxHashSpec,
     metadata: Option<String>,
 ) -> Result<(Transaction, String), StringError> {
-    let drs_tx_hash_create = drs_tx_hash_spec.get_drs_tx_hash();
-    let item = Asset::item(item_amount, drs_tx_hash_create.clone(), metadata);
+    let genesis_hash_create = genesis_hash_spec.get_genesis_hash();
+    let item = Asset::item(item_amount, genesis_hash_create.clone(), metadata);
     let asset_hash = construct_tx_in_signable_asset_hash(&item);
     let tx_out = TxOut::new_asset(script_public_key, item, None);
     let public_key = decode_pub_key(&public_key)?;
@@ -1192,13 +1189,13 @@ pub fn create_item_asset_tx_from_sig(
     };
 
     let tx = construct_tx_core(vec![tx_in], vec![tx_out], None);
-    let tx_hash = drs_tx_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
+    let tx_hash = genesis_hash_create.unwrap_or_else(|| construct_tx_hash(&tx));
 
     Ok((tx, tx_hash))
 }
 
 /// Constructs a coinbase transaction
-/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Compute
+/// TODO: Adding block number to coinbase construction non-ideal. Consider moving to Mempool
 /// construction or mining later
 ///
 /// ### Arguments

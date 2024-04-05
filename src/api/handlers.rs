@@ -5,34 +5,34 @@ use crate::api::responses::{
 };
 use crate::api::utils::map_string_err;
 use crate::comms_handler::Node;
-use crate::compute::ComputeError;
-use crate::configurations::ComputeNodeSharedConfig;
+use crate::configurations::MempoolNodeSharedConfig;
 use crate::constants::LAST_BLOCK_HASH_KEY;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
-    BlockchainItemType, ComputeApi, DebugData, DruidPool, MineApiRequest, MineRequest, NodeType,
+    BlockchainItemType, DebugData, DruidPool, MempoolApi, MineApiRequest, MineRequest, NodeType,
     OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
+use crate::mempool::MempoolError;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
 use crate::storage::{get_stored_value_from_db, indexed_block_hash_key};
 use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use a_block_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
-use a_block_chain::crypto::sign_ed25519::PublicKey;
-use a_block_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
-use a_block_chain::primitives::druid::DdeValues;
-use a_block_chain::primitives::transaction::{DrsTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
-use a_block_chain::script::lang::Script;
-use a_block_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error};
+use tw_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
+use tw_chain::crypto::sign_ed25519::PublicKey;
+use tw_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
+use tw_chain::primitives::druid::DdeValues;
+use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
+use tw_chain::script::lang::Script;
+use tw_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use warp::hyper::StatusCode;
 
 pub type DbgPaths = Vec<&'static str>;
@@ -76,11 +76,11 @@ pub struct EncapsulatedPayment {
 /// Item asset creation structure received from client
 ///
 /// This structure is used to create a item asset on EITHER
-/// the compute or user node.
+/// the mempool or user node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateItemAssetDataCompute {
+pub struct CreateItemAssetDataMempool {
     pub item_amount: u64,
-    pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub genesis_hash_spec: GenesisTxHashSpec,
     pub script_public_key: String,
     pub public_key: String,
     pub signature: String,
@@ -90,7 +90,7 @@ pub struct CreateItemAssetDataCompute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateItemAssetDataUser {
     pub item_amount: u64,
-    pub drs_tx_hash_spec: DrsTxHashSpec,
+    pub genesis_hash_spec: GenesisTxHashSpec,
     pub metadata: Option<String>,
 }
 
@@ -326,7 +326,7 @@ pub async fn get_current_mining_block(
 
 /// Get all addresses for unspent tokens on the UTXO set
 pub async fn get_utxo_addresses(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
@@ -346,18 +346,18 @@ pub async fn get_utxo_addresses(
     )
 }
 
-//POST get a compute node's config which is shareable amongst its peers
-pub async fn get_shared_config_compute(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+//POST get a mempool node's config which is shareable amongst its peers
+pub async fn get_shared_config_mempool(
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    // Send request to compute node
+    // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
         move |c| c.get_shared_config(),
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -368,24 +368,24 @@ pub async fn get_shared_config_compute(
     )
 }
 
-/// GET The current circulating supply of the token
-pub async fn get_circulating_supply(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+/// GET The current issued supply of the token
+pub async fn get_issued_supply(
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    // Send request to compute node
+    // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
-        move |c| c.get_circulating_supply(),
-        "Cannot access Compute Node",
+        move |c| c.get_issued_supply(),
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     r.into_ok(
-        "Successfully fetched circulating supply",
+        "Successfully fetched issued supply",
         json_serialize_embed(res),
     )
 }
@@ -483,7 +483,7 @@ pub async fn post_import_keypairs(
 
     match peer.get_node_type() {
         NodeType::Miner => {
-            // Update running total from compute node
+            // Update running total from mempool node
             if let Err(e) = peer.inject_next_event(
                 peer.local_address(),
                 MineRequest::MinerApi(MineApiRequest::RequestUTXOSet(UtxoFetchType::AnyOf(
@@ -495,7 +495,7 @@ pub async fn post_import_keypairs(
             }
         }
         NodeType::User => {
-            // Update running total from compute node
+            // Update running total from mempool node
             if let Err(e) = peer.inject_next_event(
                 peer.local_address(),
                 UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
@@ -644,7 +644,7 @@ pub async fn post_update_running_total(
 
 /// Post to fetch the balance for given addresses in UTXO
 pub async fn post_fetch_utxo_balance(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     addresses: Vec<String>,
     route: &'static str,
     call_id: String,
@@ -668,9 +668,9 @@ pub async fn post_fetch_utxo_balance(
     )
 }
 
-//POST fetch pending transaction from a computet node
+//POST fetch pending transaction from a mempool node
 pub async fn post_fetch_druid_pending(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     fetch_input: FetchPendingData,
     route: &'static str,
     call_id: String,
@@ -706,13 +706,13 @@ pub async fn post_create_item_asset_user(
 ) -> Result<JsonReply, JsonReply> {
     let CreateItemAssetDataUser {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         metadata,
     } = item_data;
 
     let request = UserRequest::UserApi(UserApiRequest::SendCreateItemRequest {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         metadata,
     });
     let r = CallResponse::new(route, &call_id);
@@ -725,16 +725,16 @@ pub async fn post_create_item_asset_user(
     r.into_ok("Item asset(s) created", json_serialize_embed(item_amount))
 }
 
-/// Post to create a item asset transaction on Compute node
+/// Post to create a item asset transaction on Mempool node
 pub async fn post_create_item_asset(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    create_item_asset_data: CreateItemAssetDataCompute,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    create_item_asset_data: CreateItemAssetDataMempool,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let CreateItemAssetDataCompute {
+    let CreateItemAssetDataMempool {
         item_amount,
-        drs_tx_hash_spec,
+        genesis_hash_spec,
         script_public_key,
         public_key,
         signature,
@@ -743,10 +743,10 @@ pub async fn post_create_item_asset(
 
     let r = CallResponse::new(route, &call_id);
 
-    // Create item asset on the Compute node
+    // Create item asset on the Mempool node
     let spk = script_public_key.clone();
     let md = metadata.clone();
-    let (tx_hash, compute_resp) = make_api_threaded_call(
+    let (tx_hash, mempool_resp) = make_api_threaded_call(
         &mut threaded_calls,
         move |c| {
             let (tx, tx_hash) = c
@@ -755,19 +755,19 @@ pub async fn post_create_item_asset(
                     spk,
                     public_key,
                     signature,
-                    drs_tx_hash_spec,
+                    genesis_hash_spec,
                     md
                 )?;
-            let compute_resp = c.receive_transactions(vec![tx]);
-            Ok::<(String, Response), ComputeError>((tx_hash, compute_resp))
+            let mempool_resp = c.receive_transactions(vec![tx]);
+            Ok::<(String, Response), MempoolError>((tx_hash, mempool_resp))
         },
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))? /* Error from threaded call */
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?; /* Error in transaction creation process */
 
-    match compute_resp.success {
+    match mempool_resp.success {
         true => {
             // Response content
             let item_asset = ItemAsset::new(item_amount, Some(tx_hash.clone()), metadata);
@@ -778,14 +778,14 @@ pub async fn post_create_item_asset(
         }
         false => r.into_err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            ApiErrorType::Generic(compute_resp.reason.to_owned()),
+            ApiErrorType::Generic(mempool_resp.reason.to_owned()),
         ),
     }
 }
 
-/// Post transactions to compute node
+/// Post transactions to mempool node
 pub async fn post_create_transactions(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     data: Vec<CreateTransaction>,
     route: &'static str,
     call_id: String,
@@ -801,22 +801,22 @@ pub async fn post_create_transactions(
     // Construct response
     let ctx_map = construct_ctx_map(&transactions);
 
-    // Send request to compute node
-    let compute_resp = make_api_threaded_call(
+    // Send request to mempool node
+    let mempool_resp = make_api_threaded_call(
         &mut threaded_calls,
         move |c| c.receive_transactions(transactions),
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
 
     // If the creation failed for some reason
-    if !compute_resp.success {
+    if !mempool_resp.success {
         debug!(
             "route:post_create_transactions error: {:?}",
-            compute_resp.reason
+            mempool_resp.reason
         );
-        return r.into_err_internal(ApiErrorType::Generic(compute_resp.reason.to_owned()));
+        return r.into_err_internal(ApiErrorType::Generic(mempool_resp.reason.to_owned()));
     }
 
     r.into_ok("Transaction(s) processing", json_serialize_embed(ctx_map))
@@ -878,7 +878,7 @@ pub async fn post_blocks_by_tx_hashes(
     )
 }
 
-//POST create a new payment address from a compute node
+//POST create a new payment address from a mempool node
 pub async fn post_payment_address_construction(
     data: AddressConstructData,
     route: &'static str,
@@ -909,18 +909,18 @@ pub async fn post_payment_address_construction(
 
 //POST pause nodes in a coordinated manner
 pub async fn pause_nodes(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
     b_num: Option<u64>, // NOTE: Nodes will pause at b_num + b_num
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    // Send request to compute node
+    // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
         // NOTE: Nodes will pause at current_block + b_num; default is 1 block from current block
         move |c| c.pause_nodes(b_num.unwrap_or(1)),
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -935,16 +935,16 @@ pub async fn pause_nodes(
 
 //POST resume nodes in a coordinated manner
 pub async fn resume_nodes(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    // Send request to compute node
+    // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
         |c| c.resume_nodes(),
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -957,19 +957,19 @@ pub async fn resume_nodes(
     r.into_ok(res.reason, json_serialize_embed("null"))
 }
 
-//POST update a compute node's config, sharing it to all other peers
+//POST update a mempool node's config, sharing it to all other peers
 pub async fn update_shared_config(
-    mut threaded_calls: ThreadedCallSender<dyn ComputeApi>,
-    shared_config: ComputeNodeSharedConfig,
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    shared_config: MempoolNodeSharedConfig,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    // Send request to compute node
+    // Send request to mempool node
     let res = make_api_threaded_call(
         &mut threaded_calls,
         move |c| c.send_shared_config(shared_config),
-        "Cannot access Compute Node",
+        "Cannot access Mempool Node",
     )
     .await
     .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;

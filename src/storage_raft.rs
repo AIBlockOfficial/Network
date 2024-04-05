@@ -6,7 +6,6 @@ use crate::interfaces::{BlockStoredInfo, CommonBlockInfo, MinedBlockExtraInfo};
 use crate::raft::{RaftCommit, RaftCommitData, RaftData, RaftMessageWrapper};
 use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::utils::{create_socket_addr_for_list, BackupCheck};
-use a_block_chain::crypto::sha3_256;
 use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -15,6 +14,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
+use tw_chain::crypto::sha3_256;
 
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: DB_PATH,
@@ -82,7 +82,7 @@ pub struct StorageConsensusedImport {
     pub last_block_stored: Option<BlockStoredInfo>,
 }
 
-/// Consensused Compute fields and consensus managment.
+/// Consensused Mempool fields and consensus managment.
 pub struct StorageRaft {
     /// True if first peer (leader).
     first_raft_peer: bool,
@@ -365,6 +365,11 @@ impl StorageRaft {
         self.consensused.generate_complete_block()
     }
 
+    /// Gets the current RAFT peers
+    pub fn get_peers(&self) -> Vec<SocketAddr> {
+        self.raft_active.raft_peer_addrs().cloned().collect()
+    }
+
     /// Get the last block stored info to send to the compute nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         self.consensused.get_last_block_stored()
@@ -393,7 +398,7 @@ impl StorageConsensused {
         self
     }
 
-    /// Create ComputeConsensused from imported data in upgrade
+    /// Create MempoolConsensused from imported data in upgrade
     pub fn from_import(consensused: StorageConsensusedImport) -> Self {
         let StorageConsensusedImport {
             sufficient_majority,
@@ -484,7 +489,7 @@ impl StorageConsensused {
         complete_block
     }
 
-    /// Get the last block stored info to send to the compute nodes
+    /// Get the last block stored info to send to the mempool nodes
     pub fn get_last_block_stored(&self) -> &Option<BlockStoredInfo> {
         &self.last_block_stored
     }

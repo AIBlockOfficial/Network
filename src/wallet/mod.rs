@@ -5,16 +5,6 @@ use crate::db_utils::{
 };
 use crate::utils::{get_payments_for_wallet, make_wallet_tx_info};
 use crate::Rs2JsMsg;
-use a_block_chain::crypto::pbkdf2 as pwhash;
-use a_block_chain::crypto::secretbox_chacha20_poly1305 as secretbox;
-use a_block_chain::crypto::sign_ed25519 as sign;
-use a_block_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
-use a_block_chain::primitives::asset::{Asset, TokenAmount};
-use a_block_chain::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
-use a_block_chain::utils::transaction_utils::{
-    construct_address_for, construct_payment_tx_ins, construct_tx_hash,
-    construct_tx_in_signable_hash,
-};
 use bincode::{deserialize, serialize};
 use hex::FromHexError;
 use serde::{Deserialize, Serialize};
@@ -24,6 +14,16 @@ use std::{error, fmt, io};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task;
 use tracing::warn;
+use tw_chain::crypto::pbkdf2 as pwhash;
+use tw_chain::crypto::secretbox_chacha20_poly1305 as secretbox;
+use tw_chain::crypto::sign_ed25519 as sign;
+use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey};
+use tw_chain::primitives::asset::{Asset, TokenAmount};
+use tw_chain::primitives::transaction::{OutPoint, Transaction, TxConstructor, TxIn, TxOut};
+use tw_chain::utils::transaction_utils::{
+    construct_address_for, construct_payment_tx_ins, construct_tx_hash,
+    construct_tx_in_signable_hash,
+};
 pub mod fund_store;
 pub use fund_store::FundStore;
 
@@ -1272,7 +1272,7 @@ pub fn tx_constructor_from_prev_out(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use a_block_chain::utils::transaction_utils::construct_address;
+    use tw_chain::utils::transaction_utils::construct_address;
 
     #[test]
     /// Creating a valid payment address
