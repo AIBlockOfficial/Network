@@ -23,7 +23,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{self, Instant};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use tw_chain::crypto::sha3_256;
 use tw_chain::primitives::asset::TokenAmount;
 use tw_chain::primitives::block::Block;
@@ -855,7 +855,7 @@ impl MempoolRaft {
     /// Proposes a timestamp to the raft if this is the first peer.
     pub async fn propose_timestamp(&mut self) {
         if self.first_raft_peer {
-            println!("Proposing timestamp as first peer");
+            info!("Proposing timestamp as first peer");
             self.timestamp = get_timestamp_now();
 
             self.propose_item(&MempoolRaftItem::Timestamp(self.timestamp))

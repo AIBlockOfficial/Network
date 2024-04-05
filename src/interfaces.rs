@@ -1,6 +1,6 @@
+use crate::configurations::MempoolNodeSharedConfig;
 use crate::mempool::MempoolError;
 use crate::mempool_raft::MempoolConsensusedRuntimeData;
-use crate::configurations::MempoolNodeSharedConfig;
 use crate::raft::{CommittedIndex, RaftMessageWrapper};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::Unicorn;

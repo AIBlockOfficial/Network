@@ -9,18 +9,19 @@ use aiblock_network::{
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
+use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut config = configuration(load_settings(matches));
 
-    println!("Start node with config {config:?}");
+    info!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = MempoolNode::new(config, Default::default()).await.unwrap();
     let api_inputs = node.api_inputs();
 
-    println!("API Inputs: {api_inputs:?}");
-    println!("Started node at {}", node.local_address());
+    info!("API Inputs: {api_inputs:?}");
+    info!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
@@ -39,15 +40,15 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
-    println!("Raft and Storage connection complete");
+    info!("Raft and Storage connection complete");
 
     // RAFT HANDLING
     let raft_loop_handle = {
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
-            println!("Peer connect complete, start Raft");
+            info!("Peer connect complete, start Raft");
             raft_loop.await;
-            println!("Raft complete");
+            info!("Raft complete");
         })
     };
 
@@ -56,8 +57,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         let (api_addr, api_tls, api_keys, routes_pow, peer) = api_inputs;
         let threaded_calls_tx = threaded_calls_tx;
 
-        println!("Warp API started on port {:?}", api_addr.port());
-        println!();
+        info!("Warp API started on port {:?}", api_addr.port());
+        info!("");
 
         let mut bind_address = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         bind_address.set_port(api_addr.port());

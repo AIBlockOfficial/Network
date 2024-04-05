@@ -26,7 +26,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use trust_dns_resolver::TokioAsyncResolver;
 use tw_chain::constants::TOTAL_TOKENS;
 use tw_chain::crypto::sha3_256;
@@ -485,12 +485,10 @@ pub async fn create_socket_addr(url_str: &str) -> Result<SocketAddr, Box<dyn std
     let thread_url = url_str.to_owned();
     let handle = tokio::task::spawn_blocking(move || {
         if let Ok(url) = Url::parse(&thread_url.clone()) {
-            // println!("url: {:?}", url);
             let host_str = match url.host_str() {
                 Some(v) => v,
                 None => return None,
             };
-            // println!("host_str: {:?}", host_str);
             let port = url.port().unwrap_or(80);
 
             // Check if the host is an IP address
@@ -945,7 +943,7 @@ pub fn loops_re_connect_disconnect(
         let node_conn = node_conn.clone();
         (
             async move {
-                println!("Start connect to requested peers");
+                info!("Start connect to requested peers");
                 loop_connnect_to_peers_async(
                     node_conn,
                     addrs_to_connect,
@@ -953,7 +951,7 @@ pub fn loops_re_connect_disconnect(
                     local_events_tx,
                 )
                 .await;
-                println!("Reconnect complete");
+                info!("Reconnect complete");
             },
             stop_re_connect_tx,
         )
@@ -967,7 +965,7 @@ pub fn loops_re_connect_disconnect(
         let mut shutdown_num = None;
         (
             async move {
-                println!("Start mode input check");
+                info!("Start mode input check");
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_millis(100)) => (),
@@ -982,7 +980,7 @@ pub fn loops_re_connect_disconnect(
                     )
                     .await;
                 }
-                println!("Complete mode input check");
+                info!("Complete mode input check");
             },
             stop_re_connect_tx,
         )

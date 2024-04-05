@@ -8,16 +8,17 @@ use aiblock_network::{
 };
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
+use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
 
-    println!("Start node with config {config:?}");
+    info!("Start node with config {config:?}");
     let node = PreLaunchNode::new(config, Default::default())
         .await
         .unwrap();
 
-    println!("Started node at {}", node.local_address());
+    info!("Started node at {}", node.local_address());
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();

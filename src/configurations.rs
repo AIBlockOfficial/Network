@@ -1,7 +1,7 @@
 // use crate::comms_handler::Node;
-use crate::mempool_raft::MinerWhitelist;
 use crate::db_utils::{CustomDbSpec, SimpleDb};
 use crate::interfaces::InitialIssuance;
+use crate::mempool_raft::MinerWhitelist;
 use crate::wallet::WalletDb;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
