@@ -8,9 +8,4 @@ on:
 
 jobs:
   scan-code:
-    uses: aiblockofficial/workflows/.github/workflows/scan-code.yml@main
-  scan-image:
-    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
-    secrets: inherit
-    with:
-      IMAGE: ${{ vars.REGISTRY }}/aiblockofficial/node-miner:latest
+    uses:  ${{ vars.ORGANISATION_WORKFLOW_PATH }}/scan-code.yml@main
