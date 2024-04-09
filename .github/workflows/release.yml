@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build: 
-    uses: aiblockofficial/workflows/.github/workflows/build.yml@main
+    uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/build.yml@main
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
