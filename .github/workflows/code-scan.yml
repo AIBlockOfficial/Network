@@ -8,10 +8,10 @@ on:
 
 jobs:
   scan-code:
-    uses:  ${{ vars.ORGANISATION_WORKFLOW_PATH }}/.github/workflows/scan-code.yml@main
+    uses:  aiblockofficial/workflows/.github/workflows/scan-code.yml@main
   # TODO: just here for testing purposes will remove
   scan-image:
-    uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/.github/workflows/scan-image.yml@main
+    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
     with:
       IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ vars.NODE_TYPE }}:latest
