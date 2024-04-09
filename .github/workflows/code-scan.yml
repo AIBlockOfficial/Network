@@ -9,7 +9,7 @@ on:
 jobs:
   scan-code:
     uses:  ${{ vars.ORGANISATION_WORKFLOW_PATH }}/scan-code.yml@main
-  # just here for testing purposes
+  # TODO: just here for testing purposes will remove
   scan-image:
     uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/scan-image.yml@main
     secrets: inherit
