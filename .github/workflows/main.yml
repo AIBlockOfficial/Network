@@ -21,4 +21,4 @@ jobs:
     secrets: inherit
     needs: build
     with:
-      IMAGE: ${{ vars.REGISTRY }}/aiblockofficial/node-${{ vars.NODE_TYPE }}:${{ github.sha }}
+      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ vars.NODE_TYPE }}:${{ github.sha }}
