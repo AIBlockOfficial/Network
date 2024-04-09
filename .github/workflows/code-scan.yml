@@ -1,0 +1,17 @@
+name: code-scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  scan-code:
+    uses:  ${{ vars.ORGANISATION_WORKFLOW_PATH }}/scan-code.yml@main
+  # just here for testing purposes
+  scan-image:
+    uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/scan-image.yml@main
+    secrets: inherit
+    with:
+      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ vars.NODE_TYPE }}:latest
