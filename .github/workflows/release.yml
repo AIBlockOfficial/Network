@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build: 
-    uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/build.yml@main
+    uses: ${{ vars.ORGANISATION_WORKFLOW_PATH }}/.github/workflows/build.yml@main
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
