@@ -30,82 +30,14 @@ jobs:
 
       - name: Send custom JSON data to Slack workflow
         id: slack_success
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: ./.github/slack-msg.yml 
         if: success()
         with:
-          # For posting a rich message using Block Kit
-          payload: |
-            {
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "Tests Passed :mechanical_arm:",
-                    "emoji": true
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "Status: ${{ job.status }}"
-                  },
-                  "accessory": {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View Results",
-                      "emoji": true
-                    },
-                    "value": "click_me_123",
-                    "url": "${{ github.event.pull_request.html_url || github.event.head_commit.url }}",
-                    "action_id": "button-action"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          heading: "Tests Passed :large_green_circle:"
 
       - name: Send custom JSON data to Slack workflow
         id: slack_fail
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: ./.github/slack-msg.yml
         if: failure()
         with:
-          # For posting a rich message using Block Kit
-          payload: |
-            {
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "Tests Failed :green_circle:",
-                    "emoji": true
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "Repository: *${{ vars.REPOSITORY }}* with Status: *${{ job.status }}* for PR *${{ github.event.pull_request.title }}*"
-                  },
-                  "accessory": {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View Results",
-                      "emoji": true
-                    },
-                    "value": "click_me_123",
-                    "url": "${{ github.event.pull_request.html_url || github.event.head_commit.url }}",
-                    "action_id": "button-action"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          heading: "Tests Failed :red_circle:"
