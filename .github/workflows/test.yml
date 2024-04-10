@@ -30,14 +30,14 @@ jobs:
 
       - name: Send custom JSON data to Slack workflow
         id: slack_success
-        uses: ./.github/slack-msg.yml 
+        uses: ./.github/workflows/slack-msg.yml 
         if: success()
         with:
           heading: "Tests Passed :large_green_circle:"
 
       - name: Send custom JSON data to Slack workflow
         id: slack_fail
-        uses: ./.github/slack-msg.yml
+        uses: ./.github/workflows/slack-msg.yml
         if: failure()
         with:
           heading: "Tests Failed :red_circle:"
