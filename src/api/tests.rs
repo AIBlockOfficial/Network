@@ -6,14 +6,14 @@ use crate::api::handlers::{
 use crate::api::routes;
 use crate::api::utils::{auth_request, create_new_cache, handle_rejection, CACHE_LIVE_TIME};
 use crate::comms_handler::{Event, Node, TcpTlsConfig};
-use crate::mempool::MempoolError;
-use crate::configurations::{MempoolNodeSharedConfig, DbMode};
+use crate::configurations::{DbMode, MempoolNodeSharedConfig};
 use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
-    BlockchainItemMeta, MempoolApi, MempoolApiRequest, DruidDroplet, DruidPool, NodeType, Response,
+    BlockchainItemMeta, DruidDroplet, DruidPool, MempoolApi, MempoolApiRequest, NodeType, Response,
     StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
 };
+use crate::mempool::MempoolError;
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
 use crate::test_utils::{generate_rb_transactions, RbReceiverData, RbSenderData};
 use crate::threaded_call::ThreadedCallChannel;

@@ -503,7 +503,7 @@ pub mod convert {
         pub use super::super::*;
     }
     use crate::unicorn::UnicornFixedParam;
-    use crate::{mempool_raft, interfaces, storage_raft, transaction_gen, wallet};
+    use crate::{interfaces, mempool_raft, storage_raft, transaction_gen, wallet};
     use std::collections::BTreeMap;
     use tw_chain::crypto::sign_ed25519::{PublicKey, SecretKey, Signature};
     use tw_chain::primitives::asset::{AssetValues, ItemAsset};

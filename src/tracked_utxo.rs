@@ -3,6 +3,7 @@ use crate::utils::get_pk_with_out_point_from_utxo_set_cloned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
+use tracing::debug;
 use tw_chain::primitives::asset::AssetValues;
 use tw_chain::primitives::transaction::{OutPoint, Transaction};
 use tw_chain::utils::transaction_utils::{
@@ -119,7 +120,7 @@ impl TrackedUtxoSet {
         for address in addresses {
             if let Some(ops) = self.get_pk_cache_vec(address) {
                 for op in ops {
-                    println!("OP: {:?}", op);
+                    debug!("OP: {:?}", op);
                     // Ignore `OutPoint` values already present
                     if known_op.get(op).is_some() {
                         continue;
