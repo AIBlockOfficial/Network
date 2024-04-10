@@ -6,6 +6,9 @@ on:
       heading:
         required: true
         type: string
+      info:
+        required: true
+        type: string
     secrets:
       webhook:
         required: true
@@ -24,7 +27,7 @@ jobs:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "${{ inputs.heading }}",
+                    "text": "${{ inputs.heading }} (${{ vars.REPOSITORY }})",
                     "emoji": true
                 }
                 },
@@ -32,7 +35,7 @@ jobs:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "Repository: *${{ vars.REPOSITORY }}* with Status: *${{ job.status }}* for PR *${{ github.event.pull_request.title }}*"
+                    "text": "${{ inputs.info }}"
                 },
                 "accessory": {
                     "type": "button",

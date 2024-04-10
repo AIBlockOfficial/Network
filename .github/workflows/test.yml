@@ -34,6 +34,7 @@ jobs:
         uses: ./.github/workflows/slack-msg.yml 
         with:
           heading: "Tests Passed :large_green_circle:"
+          info: "PR: *${{ github.event.pull_request.title }}* / Branch: *${{ github.event.pull_request.head }}*"
         secrets:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
   slack-notification-failure:
@@ -42,5 +43,6 @@ jobs:
         uses: ./.github/workflows/slack-msg.yml
         with:
           heading: "Tests Failed :red_circle:"
+          info: "PR: *${{ github.event.pull_request.title }}* / Branch: *${{ github.event.pull_request.head }}*"
         secrets:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
