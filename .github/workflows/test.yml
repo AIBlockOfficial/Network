@@ -28,15 +28,12 @@ jobs:
         timeout-minutes: 30
         run: cargo test --release -- --test-threads=1
 
-      - name: Send custom JSON data to Slack workflow
-        id: slack_success
+  slack-notification-success:        
         uses: ./.github/workflows/slack-msg.yml 
         if: success()
         with:
           heading: "Tests Passed :large_green_circle:"
-
-      - name: Send custom JSON data to Slack workflow
-        id: slack_fail
+  slack-notification-failure:
         uses: ./.github/workflows/slack-msg.yml
         if: failure()
         with:
