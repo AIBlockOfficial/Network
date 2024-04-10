@@ -99,7 +99,7 @@ pub struct CreateItemAssetDataUser {
 pub enum CreateTxInScript {
     Pay2PkH {
         /// Data to sign
-        signable_data: String,
+        signable_data: Option<String>,
         /// Hex encoded signature
         signature: String,
         /// Hex encoded complete public key
@@ -1017,6 +1017,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         for i in inputs {
             let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
+
             let tx_in = {
                 let CreateTxInScript::Pay2PkH {
                     signable_data,
@@ -1024,6 +1025,12 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                     public_key,
                     address_version,
                 } = script_signature;
+
+                let final_signable_data = if let Some(sd) = signable_data {
+                    sd
+                } else {
+                    "".to_string()
+                };
 
                 let signature =
                     with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
@@ -1033,7 +1040,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                 TxIn {
                     previous_out: Some(previous_out),
                     script_signature: Script::pay2pkh(
-                        signable_data,
+                        final_signable_data,
                         signature,
                         public_key,
                         address_version,
