@@ -28,13 +28,19 @@ jobs:
         timeout-minutes: 30
         run: cargo test --release -- --test-threads=1
 
-  slack-notification-success:        
-        uses: ./.github/workflows/slack-msg.yml 
+  slack-notification-success:
+        needs: integration-tests 
         if: success()
+        uses: ./.github/workflows/slack-msg.yml 
         with:
           heading: "Tests Passed :large_green_circle:"
+        secrets:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
   slack-notification-failure:
-        uses: ./.github/workflows/slack-msg.yml
+        needs: integration-tests 
         if: failure()
+        uses: ./.github/workflows/slack-msg.yml
         with:
           heading: "Tests Failed :red_circle:"
+        secrets:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
