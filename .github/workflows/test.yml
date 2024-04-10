@@ -90,7 +90,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "Status: ${{ job.status }}"
+                    "text": "Repository: ${{ vars.REPOSITORY }} with Status: ${{ job.status }} for PR ${{ github.event.pull_request.title }}"
                   },
                   "accessory": {
                     "type": "button",
