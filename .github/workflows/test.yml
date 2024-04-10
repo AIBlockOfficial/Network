@@ -82,7 +82,7 @@ jobs:
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    "text": "Tests Failed :skull_and_crossbones:",
+                    "text": "Tests Failed :green_circle:",
                     "emoji": true
                   }
                 },
@@ -90,7 +90,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "Repository: ${{ vars.REPOSITORY }} with Status: ${{ job.status }} for PR ${{ github.event.pull_request.title }}"
+                    "text": "Repository: *${{ vars.REPOSITORY }}* with Status: *${{ job.status }}* for PR *${{ github.event.pull_request.title }}*"
                   },
                   "accessory": {
                     "type": "button",
