@@ -7,24 +7,24 @@ on:
         required: true
         type: string
     secrets:
-        webhook:
-            required: true
+      webhook:
+        required: true
 
 jobs:
   slack-notify:
     runs-on: ubuntu-latest
     steps:
-    - uses: slackapi/slack-github-action@v1.25.0
-      with:
-        # For posting a rich message using Block Kit
-        payload: |
+      - uses: slackapi/slack-github-action@v1.25.0
+        with:
+          # For posting a rich message using Block Kit
+          payload: |
             {
             "blocks": [
                 {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": ${{ inputs.heading }},
+                    "text": "${{ inputs.heading }}",
                     "emoji": true
                 }
                 },
@@ -48,6 +48,6 @@ jobs:
                 }
             ]
             }
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.webhook }}
-        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.webhook }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
