@@ -1819,7 +1819,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         inputs: vec![CreateTxIn {
             previous_out: Some(previous_out.clone()),
             script_signature: Some(CreateTxInScript::Pay2PkH {
-                signable_data,
+                signable_data: Some(signable_data),
                 signature,
                 public_key,
                 address_version,
