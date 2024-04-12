@@ -3094,9 +3094,9 @@ dependencies = [
 
 [[package]]
 name = "tw_chain"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4b58e592594bfb99811c71519b18c674c91439a7ce54f1dfd0037a899e8f781"
+checksum = "cf05aff1fe87a256839435f02648d512d36797f3906533b5313ded1e40582237"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",
