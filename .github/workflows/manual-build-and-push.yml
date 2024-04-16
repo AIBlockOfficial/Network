@@ -8,6 +8,7 @@ on:
         default: "mempool"
         required: true
         type: string
+  push:
 
 permissions:
   contents: read
