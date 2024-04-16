@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       node_type:
-        description: "enter a node type (mempool, user, miner, storage)"
+        description: "enter a node type"
         default: "mempool"
         required: true
-        type: string
-  push:
+        type: choice
+        options:
+          - mempool
+          - miner
+          - user
+          - storage
 
 permissions:
   contents: read
