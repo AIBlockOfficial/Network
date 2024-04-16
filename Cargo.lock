@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "aiblock_network"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "async-std",
  "async-stream",
@@ -3094,9 +3094,9 @@ dependencies = [
 
 [[package]]
 name = "tw_chain"
-version = "1.0.6"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf05aff1fe87a256839435f02648d512d36797f3906533b5313ded1e40582237"
+checksum = "6bf90e17fe3fa36bb03fe603f75234f8ed1184a6dff3dea188536cff17583616"
 dependencies = [
  "actix-rt",
  "base64 0.20.0",
