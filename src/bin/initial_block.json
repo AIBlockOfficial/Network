@@ -15,12 +15,7 @@
     },
     "user_wallet_seeds": [
         [
-            {
-                "out_point": "0-000010",
-                "secret_key": "3053020101300506032b6570042204200f49984bb4f0a1276af12b31b81245a47ba56ad4fd9aca163e056dea3ff00f73a123032100c111594923b43ddceb8031a5ac3dceeaba566dea24aa6119b62dcefb02ace5b8",
-                "public_key": "bf686a959447d6277513a9e7a534bab4bc3ee384afe5abbace6c31e2b2cc01ee",
-                "amount": 123
-            }
+
         ]
     ],
     "user_test_auto_gen_setup": {

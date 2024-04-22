@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task;
-use tracing::warn;
+use tracing::{debug, warn};
 use tw_chain::crypto::pbkdf2 as pwhash;
 use tw_chain::crypto::secretbox_chacha20_poly1305 as secretbox;
 use tw_chain::crypto::sign_ed25519 as sign;
@@ -583,6 +583,8 @@ impl WalletDb {
         }
 
         let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+
+        debug!("Total amount collected by store {:?}", total_amount);
 
         Ok((tx_ins, tx_outs))
     }
