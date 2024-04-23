@@ -1,9 +1,9 @@
 use crate::wallet::LockedCoinbase;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use tracing::warn;
 use tw_chain::primitives::asset::{Asset, AssetValues};
 use tw_chain::primitives::transaction::OutPoint;
-use tracing::warn;
 
 /// A reference to fund stores, where `transactions` contains the hash
 /// of the transaction and its holding `AssetValue`
@@ -136,7 +136,11 @@ impl FundStore {
 
     pub fn spend_tx(&mut self, out_p: &OutPoint) {
         if let Some((out_p_v, amount)) = self.transactions.remove_entry(out_p) {
-            if self.spent_transactions.insert(out_p_v, amount.clone()).is_some() {
+            if self
+                .spent_transactions
+                .insert(out_p_v, amount.clone())
+                .is_some()
+            {
                 warn!("Try to spend already spent transaction {:?}", out_p);
                 return;
             }
