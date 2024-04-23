@@ -1,8 +1,8 @@
 name: build-and-push-miner
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*.*.*"]
 
 permissions:
   contents: read
@@ -11,8 +11,17 @@ permissions:
 
 jobs:
   build:
-    uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
-    with:
-      REGISTRY: ${{ vars.REGISTRY }}
-      REPOSITORY: ${{ vars.REPOSITORY }}
-      NODE_TYPE: "miner"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+  
+      - name: Set Version
+        id: vars
+        run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+  
+      - uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
+        with:
+          REGISTRY: ${{ vars.REGISTRY }}
+          REPOSITORY: ${{ vars.REPOSITORY }}
+          VERSION: ${{ steps.vars.outputs.tag }}
+          NODE_TYPE: "miner"
