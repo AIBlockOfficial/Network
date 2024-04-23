@@ -516,38 +516,45 @@ pub async fn post_import_keypairs(
 pub async fn post_make_payment(
     db: WalletDb,
     peer: Node,
-    encapsulated_data: EncapsulatedPayment,
+    encapsulated_data: Vec<EncapsulatedPayment>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let EncapsulatedPayment {
-        address,
-        amount,
-        passphrase,
-        locktime,
-    } = encapsulated_data;
-
     let r = CallResponse::new(route, &call_id);
+    let mut addresses = Vec::new();
+    let mut amounts = Vec::new();
 
-    let request = match db.test_passphrase(passphrase).await {
-        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
-            address: address.clone(),
+    for ed in encapsulated_data {
+        let EncapsulatedPayment {
+            address,
             amount,
+            passphrase,
             locktime,
-        }),
-        Err(e) => {
-            return wallet_db_error(e, r);
-        }
-    };
+        } = ed;
+    
+        let request = match db.test_passphrase(passphrase).await {
+            Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
+                address: address.clone(),
+                amount,
+                locktime,
+            }),
+            Err(e) => {
+                return wallet_db_error(e, r);
+            }
+        };
 
-    if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
-        error!("route:make_payment error: {:?}", e);
-        return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
+        addresses.push(address);
+        amounts.push(amount);
+    
+        if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
+            error!("route:make_payment error: {:?}", e);
+            return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
+        }
     }
 
     r.into_ok(
         "Payment processing",
-        json_serialize_embed(construct_make_payment_map(address, amount)),
+        json_serialize_embed(construct_make_payment_map(&addresses, &amounts)),
     )
 }
 
@@ -593,7 +600,7 @@ pub async fn post_make_ip_payment(
 
     r.into_ok(
         "IP payment processing",
-        json_serialize_embed(construct_make_payment_map(address.clone(), amount)),
+        json_serialize_embed(construct_make_payment_map(&vec![address.clone()], &vec![amount])),
     )
 }
 
@@ -1148,10 +1155,14 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (Stri
 
 /// Constructs the mapping of output address to asset for `make_payment`
 pub fn construct_make_payment_map(
-    to_address: String,
-    amount: TokenAmount,
+    to_address: &[String],
+    amount: &[TokenAmount],
 ) -> BTreeMap<String, APIAsset> {
     let mut tx_info = BTreeMap::new();
-    tx_info.insert(to_address, APIAsset::new(Asset::Token(amount), None));
+
+    for (to_address, amount) in to_address.iter().zip(amount.iter()) {
+        tx_info.insert(to_address.clone(), APIAsset::new(Asset::Token(amount.clone()), None));
+    }
+
     tx_info
 }
