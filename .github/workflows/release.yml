@@ -1,4 +1,5 @@
 name: build-and-push-miner
+
 on:
   release:
     types: [published]
@@ -9,9 +10,9 @@ permissions:
   security-events: write
 
 jobs:
-  build: 
-    uses: aiblockofficial/workflows/.github/workflows/build.yml@main
-    with: 
-      REGISTRY:  ${{ vars.REGISTRY }}
+  build:
+    uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
-      NODE_TYPE: 'miner'
+      NODE_TYPE: "miner"

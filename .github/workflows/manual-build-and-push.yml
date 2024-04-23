@@ -1,0 +1,28 @@
+name: manual-build-and-push
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_type:
+        description: "enter a node type"
+        default: "mempool"
+        required: true
+        type: choice
+        options:
+          - mempool
+          - miner
+          - user
+          - storage
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  build:
+    uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
+      REPOSITORY: ${{ vars.REPOSITORY }}
+      NODE_TYPE: ${{ inputs.node_type }}

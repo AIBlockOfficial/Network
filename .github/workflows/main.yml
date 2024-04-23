@@ -1,4 +1,5 @@
 name: build-scan
+
 on:
   push:
     branches: 
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   build: 
-    uses: aiblockofficial/workflows/.github/workflows/build.yml@main
+    uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
