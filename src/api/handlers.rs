@@ -1099,15 +1099,21 @@ pub fn get_json_reply_items_from_db(
         .into_iter()
         .map(|key| {
             get_stored_value_from_db(db.clone(), key)
-                .map(|item| (item.key, item.data_json))
-                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec()))
+                .map(|item| {
+                    (
+                        item.key,
+                        item.data_json,
+                        construct_json_meta(item.item_meta),
+                    )
+                })
+                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec(), b"".to_vec()))
         })
         .collect();
 
     // Make JSON tupple with key and JSON item
     let key_values: Vec<_> = key_values
         .iter()
-        .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
+        .map(|(k, v, m)| [&b"[\""[..], k, &b"\","[..], v, &b","[..], m, &b"]"[..]])
         .collect();
 
     // Make JSON array:
@@ -1144,6 +1150,10 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (Stri
     }
 
     tx_info
+}
+
+pub fn construct_json_meta(meta: BlockchainItemMeta) -> Vec<u8> {
+    serde_json::to_vec(&meta).unwrap()
 }
 
 /// Constructs the mapping of output address to asset for `make_payment`
