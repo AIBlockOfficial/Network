@@ -23,5 +23,5 @@ jobs:
         with:
           REGISTRY: ${{ vars.REGISTRY }}
           REPOSITORY: ${{ vars.REPOSITORY }}
-          VERSION: ${{ steps.vars.outputs.tag }}
+          TAG: ${{ steps.vars.outputs.tag }}
           NODE_TYPE: "miner"
