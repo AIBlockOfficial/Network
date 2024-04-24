@@ -3,7 +3,6 @@ name: build-scan
 on:
   push:
     branches: 
-      - main
       - develop
 
 permissions:
@@ -12,15 +11,31 @@ permissions:
   security-events: write
 
 jobs:
-  build: 
+  matrix: 
+    runs-on: ubuntu-latest
+    outputs:
+      node_types: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-matrix
+        run: |
+          echo "matrix=${{vars.NODE_TYPES}}" >> $GITHUB_OUTPUT
+  build:
+    needs: matrix
+    strategy:
+       matrix:
+          node: ${{ fromJson(needs.matrix.outputs.node_types) }}
     uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
-      NODE_TYPE: ${{ vars.NODE_TYPE }}
+      NODE_TYPE: ${{ matrix.node }}
   scan-image:
+    needs: [ matrix, build ]
+    strategy:
+      matrix:
+        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
     uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
-    needs: build
     with:
-      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ vars.NODE_TYPE }}:${{ github.sha }}
+      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ matrix.node }}:${{ github.sha }}
