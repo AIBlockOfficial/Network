@@ -1,6 +1,0 @@
-[
-    {"type": "mempool"},
-    {"type": "miner"},
-    {"type": "user"},
-    {"type": "storage"}
-]
