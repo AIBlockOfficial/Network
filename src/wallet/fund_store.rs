@@ -1,6 +1,7 @@
 use crate::wallet::LockedCoinbase;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use tracing::warn;
 use tw_chain::primitives::asset::{Asset, AssetValues};
 use tw_chain::primitives::transaction::OutPoint;
 
@@ -135,6 +136,15 @@ impl FundStore {
 
     pub fn spend_tx(&mut self, out_p: &OutPoint) {
         if let Some((out_p_v, amount)) = self.transactions.remove_entry(out_p) {
+            if self
+                .spent_transactions
+                .insert(out_p_v, amount.clone())
+                .is_some()
+            {
+                warn!("Try to spend already spent transaction {:?}", out_p);
+                return;
+            }
+
             for i in 0..self.transaction_pages.len() {
                 if let Some(page) = self.transaction_pages.get_mut(i) {
                     page.remove_entry(out_p);
@@ -145,9 +155,6 @@ impl FundStore {
             }
 
             self.running_total.update_sub(&amount);
-            if self.spent_transactions.insert(out_p_v, amount).is_some() {
-                panic!("Try to spend already spent transaction {:?}", out_p);
-            }
         }
     }
 }

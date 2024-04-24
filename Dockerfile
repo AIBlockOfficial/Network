@@ -24,7 +24,8 @@ FROM cgr.dev/chainguard/glibc-dynamic:latest
 USER nonroot
 
 # Set these in the environment to override [use once we have env vars available]
-ENV NODE_TYPE="mempool"
+ARG NODE_TYPE_ARG="mempool"
+ENV NODE_TYPE=$NODE_TYPE_ARG
 ENV CONFIG="/etc/node_settings.toml"
 ENV TLS_CONFIG="/etc/tls_certificates.json"
 ENV INITIAL_BLOCK_CONFIG="/etc/initial_block.json"
@@ -43,5 +44,7 @@ COPY --from=builder /aiblock/release/node ./node
 COPY .docker/conf/* /etc/.
 
 ENTRYPOINT ["./node"]
-CMD ["mempool"]
+
+CMD [$NODE_TYPE]
+
 
