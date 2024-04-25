@@ -1106,7 +1106,7 @@ pub fn get_json_reply_items_from_db(
                         construct_json_meta(item.item_meta),
                     )
                 })
-                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec(), b"".to_vec()))
+                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec(), b"\"\"".to_vec()))
         })
         .collect();
 
