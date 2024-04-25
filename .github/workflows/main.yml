@@ -33,18 +33,11 @@ jobs:
       REGISTRY:  ${{ vars.REGISTRY }}
       REPOSITORY: ${{ vars.REPOSITORY }}
       NODE_TYPE: ${{ matrix.node }}
-  scan-image:
-    needs: [ matrix, build ]
-    strategy:
-      matrix:
-        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
-    secrets: inherit
-    with:
-      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ matrix.node }}:${{ github.sha }}
 
   merge:
-    needs: [matrix, build, scan-image]
+    needs: [matrix, build]
+    outputs:
+      json: ${{ steps.matrix.outputs.json }}
     strategy:
       matrix:
         node: ${{ fromJson(needs.matrix.outputs.node_types) }}
@@ -82,3 +75,13 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+
+  scan-image:
+    needs: [ matrix, build, merge]
+    strategy:
+      matrix:
+        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
+    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
+    secrets: inherit
+    with:
+      IMAGE: ${{ vars.REGISTRY }}/${{ vars.ORGANISATION_NAME }}/node-${{ matrix.node }}:${{ fromJson(needs.merge.outputs.json).tags[0] }}
