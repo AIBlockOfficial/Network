@@ -4,9 +4,6 @@ on:
       REGISTRY:
         required: true
         type: string
-      REPOSITORY:
-        required: true
-        type: string
       NODE_TYPE:
         required: false
         type: string
@@ -17,7 +14,7 @@ env:
 
 jobs:
   build:
-    name: Build local context and push image
+    name: Build local context
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

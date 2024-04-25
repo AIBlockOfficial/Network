@@ -31,13 +31,12 @@ jobs:
     uses: ./.github/workflows/node-build.yml
     with: 
       REGISTRY:  ${{ vars.REGISTRY }}
-      REPOSITORY: ${{ vars.REPOSITORY }}
       NODE_TYPE: ${{ matrix.node }}
 
   merge:
     needs: [matrix, build]
     outputs:
-      json: ${{ steps.matrix.outputs.json }}
+      json: ${{ steps.meta.outputs.json }}
     strategy:
       matrix:
         node: ${{ fromJson(needs.matrix.outputs.node_types) }}
