@@ -8,6 +8,10 @@ on:
         required: false
         type: string
         default: "mempool"
+    outputs:
+      json: 
+        description: 'json output from metadata action'
+        value: ${{ jobs.create-and-push-manifest.outputs.json }}
 
 env:
   REGISTRY_IMAGE: ${{ inputs.REGISTRY }}/aiblockofficial/node-${{ inputs.NODE_TYPE }}
