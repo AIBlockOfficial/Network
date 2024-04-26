@@ -130,6 +130,14 @@ pub struct CreateTransaction {
     pub fees: Option<Vec<TxOut>>,
     pub druid_info: Option<DdeValues>,
 }
+
+/// A Transaction which has been serialized to JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonSerializedTransaction {
+    pub txn_hash_hex: String,
+    pub txn_hex: String,
+}
+
 /// Struct received from client to change passphrase
 ///
 /// Entries will be encrypted with TLS
@@ -822,6 +830,47 @@ pub async fn post_create_transactions(
     r.into_ok("Transaction(s) processing", json_serialize_embed(ctx_map))
 }
 
+/// Serialize transactions to binary without submitting to mempool node
+pub async fn post_serialize_transactions(
+    data: Vec<CreateTransaction>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let serialized_transactions = data
+        .into_iter()
+        .map(to_transaction)
+        .map(|res| {
+            let tx = res?;
+            match bincode::serialize(&tx) {
+                Ok(bytes) => Ok(JsonSerializedTransaction{ txn_hash_hex: construct_tx_hash(&tx), txn_hex: hex::encode(bytes) }),
+                Err(msg) => Err(StringError(msg.to_string()))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
+
+    r.into_ok("Transaction(s) serialized", json_serialize_embed(serialized_transactions))
+}
+
+/// Deserialize transactions from binary without submitting to mempool node
+pub async fn post_deserialize_transactions(
+    data: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let deserialized_transactions = data
+        .into_iter()
+        .map(from_transaction)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
+
+    r.into_ok("Transaction(s) deserialized", json_serialize_embed(deserialized_transactions))
+}
+
 // POST to change wallet passphrase
 pub async fn post_change_wallet_passphrase(
     mut db: WalletDb,
@@ -1017,27 +1066,27 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         for i in inputs {
             let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
-            let tx_in = {
-                let CreateTxInScript::Pay2PkH {
+            let tx_in = match script_signature {
+                CreateTxInScript::Pay2PkH {
                     signable_data,
                     signature,
                     public_key,
                     address_version,
-                } = script_signature;
+                } => {
+                    let signature =
+                        with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
+                    let public_key =
+                        with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
 
-                let signature =
-                    with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
-                let public_key =
-                    with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
-
-                TxIn {
-                    previous_out: Some(previous_out),
-                    script_signature: Script::pay2pkh(
-                        signable_data,
-                        signature,
-                        public_key,
-                        address_version,
-                    ),
+                    TxIn {
+                        previous_out: Some(previous_out),
+                        script_signature: Script::pay2pkh(
+                            signable_data,
+                            signature,
+                            public_key,
+                            address_version,
+                        ),
+                    }
                 }
             };
 
@@ -1053,6 +1102,43 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         fees: fees.unwrap_or_default(),
         druid_info,
     })
+}
+
+/// Create a `CreateTransaction` from a hex string representing a serialized `Transaction`
+pub fn from_transaction(data: String) -> Result<Transaction, StringError> {
+    if let Ok(bytes) = hex::decode(data) {
+        if let Ok(tx) = bincode::deserialize::<Transaction>(bytes.as_slice()) {
+            Ok(tx)
+        } else {
+            Err(StringError("Failed to deserialize txn".to_owned()))
+        }
+    } else {
+        Err(StringError("Failed to decode txn".to_owned()))
+    }
+
+    /*let Transaction {
+        inputs,
+        outputs,
+        version,
+        fees,
+        druid_info,
+    } = tx;
+
+    let inputs = {
+        let mut tx_ins = Vec::new();
+        for i in inputs {
+            //TODO: determine if the transaction is Pay2PkH or something else (?)
+        }
+        tx_ins
+    };
+
+    Ok(CreateTransaction {
+        inputs,
+        outputs,
+        version,
+        fees: Some(fees),
+        druid_info,
+    })*/
 }
 
 /// Fetches JSON blocks.
