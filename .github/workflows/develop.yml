@@ -1,4 +1,4 @@
-name: build-scan
+name: build-push-scan
 
 on:
   push:
@@ -14,31 +14,6 @@ permissions:
   security-events: write
 
 jobs:
-  matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      node_types: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v2
-      - id: set-matrix
-        run: |
-          echo "matrix=${{vars.NODE_TYPES}}" >> $GITHUB_OUTPUT
-  build:
-    needs: matrix
-    strategy:
-      matrix:
-        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: ./.github/workflows/node-build.yml
-    with:
-      REGISTRY: ${{ vars.REGISTRY }}
-      NODE_TYPE: ${{ matrix.node }}
+  build-and-push:
+    uses: ./.github/workflows/node/build-and-push-all.yml
 
-  manifest:
-    needs: [matrix, build]
-    strategy:
-      matrix:
-        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: ./.github/workflows/node-manifest.yml
-    with:
-      REGISTRY: ${{ vars.REGISTRY }}
-      NODE_TYPE: ${{ matrix.node }}

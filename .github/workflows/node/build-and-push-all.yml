@@ -1,0 +1,37 @@
+on:
+  workflow_call:
+    inputs:
+      TAG:
+        required: false
+        type: string
+        default: "latest"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      node_types: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-matrix
+        run: |
+          echo "matrix=${{vars.NODE_TYPES}}" >> $GITHUB_OUTPUT
+  build:
+    needs: matrix
+    strategy:
+      matrix:
+        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
+    uses: ./.github/workflows/node/build.yml
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
+      NODE_TYPE: ${{ matrix.node }}
+
+  manifest:
+    needs: [matrix, build]
+    strategy:
+      matrix:
+        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
+    uses: ./.github/workflows/node/manifest.yml
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
+      NODE_TYPE: ${{ matrix.node }}
