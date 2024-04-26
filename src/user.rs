@@ -904,11 +904,6 @@ impl UserNode {
         self.wallet_db
             .store_payment_transaction(tx.clone(), b_num)
             .await;
-        
-        trace!("Pruning the wallet of old keys after aggregation");
-        self.wallet_db
-                .destroy_spent_transactions_and_keys(None)
-                .await;
 
         if let Some(peer) = peer {
             self.send_payment_to_receiver(peer, tx).await?;
