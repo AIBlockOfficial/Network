@@ -18,7 +18,7 @@ env:
 
 jobs:
   build:
-    name: Build & Push [${{ inputs.NODE_TYPE }}]
+    name: Build & Push [${{ inputs.NODE_TYPE }}] (${{ matrix.platform}})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
