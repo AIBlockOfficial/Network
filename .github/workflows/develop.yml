@@ -15,5 +15,5 @@ permissions:
 
 jobs:
   build-and-push:
-    uses: ./.github/workflows/node/build-and-push-all.yml
+    uses: ./.github/workflows/node-build-and-push-all.yml
 

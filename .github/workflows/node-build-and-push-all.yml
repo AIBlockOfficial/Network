@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: ./.github/workflows/node/build.yml
+    uses: ./.github/workflows/node-build.yml
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ matrix.node }}
@@ -31,7 +31,7 @@ jobs:
     strategy:
       matrix:
         node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: ./.github/workflows/node/manifest.yml
+    uses: ./.github/workflows/node-manifest.yml
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ matrix.node }}
