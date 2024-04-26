@@ -9,6 +9,9 @@ on:
       info:
         required: true
         type: string
+      url:
+        required: true
+        type: string
     secrets:
       webhook:
         required: true
@@ -45,7 +48,7 @@ jobs:
                     "emoji": true
                     },
                     "value": "click_me_123",
-                    "url": "${{ github.event.pull_request.html_url || github.event.head_commit.url }}",
+                    "url": "${{ inputs.url }}",
                     "action_id": "button-action"
                 }
                 }
