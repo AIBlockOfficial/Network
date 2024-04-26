@@ -9,11 +9,6 @@ on:
         type: string
         default: "mempool"
 
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-
 env:
   REGISTRY_IMAGE: ${{ inputs.REGISTRY }}/aiblockofficial/node-${{ inputs.NODE_TYPE }}
 

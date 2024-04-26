@@ -25,6 +25,7 @@ jobs:
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ matrix.node }}
+    secrets: inherit
 
   manifest:
     needs: [matrix, build]
@@ -35,3 +36,4 @@ jobs:
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ matrix.node }}
+    secrets: inherit
