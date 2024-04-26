@@ -400,7 +400,7 @@ pub async fn create_and_save_fake_to_wallet(
     let payment_to_save = Asset::token_u64(4000);
     let payments = vec![(tx_out_p.clone(), payment_to_save, final_address, 0)];
     wallet_db
-        .save_usable_payments_to_wallet(payments, 0)
+        .save_usable_payments_to_wallet(payments, 0, false)
         .await
         .unwrap();
 

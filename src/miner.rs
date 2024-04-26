@@ -1425,7 +1425,7 @@ impl MinerNode {
         );
 
         self.wallet_db
-            .save_usable_payments_to_wallet(payments, b_num)
+            .save_usable_payments_to_wallet(payments, b_num, false)
             .await
             .unwrap();
 
@@ -1790,7 +1790,7 @@ impl Transactor for MinerNode {
             .map(|c| c.block.b_num)
             .unwrap();
         self.wallet_db
-            .save_usable_payments_to_wallet(payments, b_num)
+            .save_usable_payments_to_wallet(payments, b_num, false)
             .await
             .unwrap();
     }

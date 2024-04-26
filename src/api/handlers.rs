@@ -625,14 +625,26 @@ pub async fn post_request_donation(
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,
+    wallet_db: WalletDb,
     addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-        address_list: UtxoFetchType::AnyOf(addresses),
-    });
     let r = CallResponse::new(route, &call_id);
+
+    if addresses.is_empty() {
+        return r.into_err_internal(ApiErrorType::Generic("No addresses provided".to_owned()));
+    }
+
+    let known_addresses = wallet_db.get_known_addresses();
+    let address_list = match addresses.first() {
+        Some(first) if first == "all" => known_addresses,
+        _ => addresses,
+    };
+
+    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+        address_list: UtxoFetchType::AnyOf(address_list),
+    });
 
     if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:update_running_total error: {:?}", e);
