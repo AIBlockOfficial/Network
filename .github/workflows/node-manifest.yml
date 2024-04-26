@@ -8,10 +8,6 @@ on:
         required: false
         type: string
         default: "mempool"
-    outputs:
-      json: 
-        description: 'json output from metadata action'
-        value: ${{ jobs.create-and-push-manifest.outputs.json }}
 
 env:
   REGISTRY_IMAGE: ${{ inputs.REGISTRY }}/aiblockofficial/node-${{ inputs.NODE_TYPE }}
@@ -52,3 +48,21 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+
+  slack-notification:
+    needs: [create-and-push-manifest]
+    if: always()
+    uses: ./.github/workflows/slack-msg.yml
+    with:
+      heading: ${{ contains(needs.*.result, 'failure') && 'Image Push Failed :red_circle:' || 'Image Push Success :large_green_circle:' }}
+      info: "IMAGE: *${{ join(fromJson(needs.create-and-push-manifest.outputs.json).tags, ', ') }}*"
+      url: ${{ github.server_url }}/${{ github.repository }}/pkgs/container/node-${{inputs.NODE_TYPE}}
+    secrets:
+      webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  scan-image:
+    needs: [create-and-push-manifest]
+    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
+    secrets: inherit
+    with:
+      IMAGE: ${{ fromJson(needs.create-and-push-manifest.outputs.json).tags[0] }}

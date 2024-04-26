@@ -42,27 +42,3 @@ jobs:
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ matrix.node }}
-
-  slack-notification:
-    needs: [matrix, build, manifest]
-    if: always()
-    strategy:
-      matrix:
-        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: ./.github/workflows/slack-msg.yml
-    with:
-      heading: ${{ contains(needs.*.result, 'failure') && 'Image Push Failed :red_circle:' || 'Image Push Success :large_green_circle:' }}
-      info: "IMAGE: *${{ join(fromJson(needs.manifest.outputs.json).tags, ', ') }}*"
-      url: ${{ github.server_url }}/${{ github.repository }}/pkgs/container/node-${{matrix.node}}
-    secrets:
-      webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  scan-image:
-    needs: [matrix, build, manifest]
-    strategy:
-      matrix:
-        node: ${{ fromJson(needs.matrix.outputs.node_types) }}
-    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
-    secrets: inherit
-    with:
-      IMAGE: ${{ fromJson(needs.manifest.outputs.json).tags[0] }}
