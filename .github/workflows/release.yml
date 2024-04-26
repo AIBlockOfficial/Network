@@ -10,18 +10,20 @@ permissions:
   security-events: write
 
 jobs:
-  build:
+  get-version:
     runs-on: ubuntu-latest
+    outputs: 
+      tag: ${{ steps.vars.outputs.tag }}
     steps:
       - uses: actions/checkout@v2
-  
+
       - name: Set Version
         id: vars
         run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
-  
-      - uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
-        with:
-          REGISTRY: ${{ vars.REGISTRY }}
-          REPOSITORY: ${{ vars.REPOSITORY }}
-          TAG: ${{ steps.vars.outputs.tag }}
-          NODE_TYPE: "miner"
+  release:
+    needs: get-version
+    uses: ./.github/workflows/node-build.yml
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
+      TAG: ${{ needs.get-version.outputs.tag }}
+      NODE_TYPE: "miner"

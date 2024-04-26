@@ -15,7 +15,7 @@ env:
 jobs:
   create-and-push-manifest:
     outputs:
-      json: ${{ steps.matrix.outputs.json }}
+      json: ${{ steps.meta.outputs.json }}
     runs-on: ubuntu-latest
     steps:
       - name: Download digests
