@@ -52,7 +52,7 @@ jobs:
     uses: ./.github/workflows/slack-msg.yml
     with:
       heading: ${{ contains(needs.*.result, 'failure') && 'Image Push Failed :red_circle:' || 'Image Push Success :large_green_circle:' }}
-      info: "IMAGES: *${{ fromJson(needs.manifest.outputs.json).tags }}*"
+      info: "IMAGE: *${{ join(fromJson(needs.manifest.outputs.json).tags, ', ') }}*"
       url: ${{ github.server_url }}/${{ github.repository }}/pkgs/container/node-${{matrix.node}}
     secrets:
       webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
