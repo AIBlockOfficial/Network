@@ -1,3 +1,5 @@
+name: node-manifest
+
 on:
   workflow_call:
     inputs:
@@ -14,6 +16,7 @@ env:
 
 jobs:
   create-and-push-manifest:
+    name: Create & Push Manifest [${{ inputs.NODE_TYPE }}]
     outputs:
       json: ${{ steps.meta.outputs.json }}
     runs-on: ubuntu-latest
@@ -50,6 +53,7 @@ jobs:
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
 
   slack-notification:
+    name: Slack Notify [${{ inputs.NODE_TYPE }}]
     needs: [create-and-push-manifest]
     if: always()
     uses: ./.github/workflows/slack-msg.yml
@@ -61,6 +65,7 @@ jobs:
       webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   scan-image:
+    name: Scan Image [${{ inputs.NODE_TYPE }}]
     needs: [create-and-push-manifest]
     uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
     secrets: inherit
