@@ -71,6 +71,9 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
 /*------- LIMIT CONSTANTS -------*/
 
+/// Default limit on number of internal transactions for a miner node
+pub const INTERNAL_TX_LIMIT: usize = 999;
+
 /// Maximum number of attempts to resend trigger messages before proposing to reset the mining pipeline
 pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 5;
 
