@@ -10,6 +10,10 @@ on:
         required: false
         type: string
         default: "mempool"
+      TAG:
+        required: false
+        type: string
+        default: "latest"
 
 env:
   REGISTRY_IMAGE: ${{ inputs.REGISTRY }}/aiblockofficial/node-${{ inputs.NODE_TYPE }}
@@ -35,7 +39,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=${{ inputs.TAG }}
             type=sha
       - name: Log in to the Container registry
         uses: docker/login-action@v2

@@ -22,8 +22,7 @@ jobs:
         run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
   release:
     needs: get-version
-    uses: ./.github/workflows/node-build.yml
+    uses: ./.github/workflows/node-build-and-push-all.yml
     with:
-      REGISTRY: ${{ vars.REGISTRY }}
       TAG: ${{ needs.get-version.outputs.tag }}
-      NODE_TYPE: "miner"
+    secrets: inherit
