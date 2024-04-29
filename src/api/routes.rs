@@ -501,6 +501,7 @@ pub fn request_donation(
 pub fn update_running_total(
     dp: &mut DbgPaths,
     node: Node,
+    db: WalletDb,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -510,13 +511,14 @@ pub fn update_running_total(
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(node))
+        .and(with_node_component(db))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, node, info, cache| {
+        .and_then(move |call_id: String, node, db: WalletDb, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_update_running_total(node, info, route, call_id),
+                handlers::post_update_running_total(node, db, info, route, call_id),
             )
         })
         .with(post_cors())
@@ -856,6 +858,7 @@ pub fn user_node_routes(
     .or(update_running_total(
         dp,
         node.clone(),
+        db.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1197,6 +1200,7 @@ pub fn miner_node_with_user_routes(
     .or(update_running_total(
         dp,
         user_node.clone(),
+        db.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

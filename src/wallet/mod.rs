@@ -237,6 +237,31 @@ impl WalletDb {
         self.locked_coinbase.lock().await.clone()
     }
 
+    /// Builds a key material map for a given set of transaction inputs
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `tx_ins` - Transaction inputs
+    pub fn get_key_material(&self, tx_ins: &[TxIn]) -> BTreeMap<OutPoint, (PublicKey, SecretKey)> {
+        let mut key_material = BTreeMap::new();
+        
+        for tx_in in tx_ins {
+            let out_p = &tx_in.previous_out;
+
+            if let Some(out) = out_p {
+                let key_address = self.get_transaction_address(out);
+                let address_store = self.get_address_store(&key_address);
+                let public_key = address_store.public_key;
+                let secret_key = address_store.secret_key;
+    
+                key_material.insert(out.clone(), (public_key, secret_key));
+            }
+            
+        }
+
+        key_material
+    }
+
     /// Test old passphrase and then change to a new passphrase
     ///
     /// ### Arguments
@@ -336,7 +361,7 @@ impl WalletDb {
             let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(&seed);
             let (address, _) = self.store_payment_address(pk, sk, v).await;
             let payments = vec![(tx_out_p, Asset::Token(amount), address, 0)];
-            self.save_usable_payments_to_wallet(payments, 0)
+            self.save_usable_payments_to_wallet(payments, 0, false)
                 .await
                 .unwrap();
         }
@@ -477,6 +502,7 @@ impl WalletDb {
         &mut self,
         payments: Vec<(OutPoint, Asset, String, u64)>,
         current_b_num: u64,
+        reset_db: bool
     ) -> Result<Vec<(OutPoint, Asset, String, u64)>> {
         let db = self.db.clone();
         let locked_coinbase = self.get_locked_coinbase().await.unwrap_or_default();
@@ -491,6 +517,21 @@ impl WalletDb {
                 .into_iter()
                 .filter(|(_, _, a, _)| addresses.contains(a))
                 .collect();
+
+            let usable_outpoints = usable_payments
+                .iter()
+                .map(|(out_p, _, _, _)| out_p.clone())
+                .collect::<Vec<_>>();
+
+            // Reset DB if needed
+            if reset_db {
+                let existing_tx = fund_store.transactions().clone();
+                for (out_p, _) in &existing_tx {
+                    if !usable_outpoints.contains(out_p) {
+                        fund_store.spend_tx(out_p);
+                    }
+                }
+            }
 
             for (out_p, asset, key_address, locktime) in &usable_payments {
                 let key_address = key_address.clone();
@@ -621,7 +662,7 @@ impl WalletDb {
         let hash = construct_tx_hash(&transaction);
         let payments = get_payments_for_wallet(Some((&hash, &transaction)).into_iter());
         let our_payments = self
-            .save_usable_payments_to_wallet(payments, b_num)
+            .save_usable_payments_to_wallet(payments, b_num, false)
             .await
             .unwrap();
         tracing::debug!("store_payment_transactions: {:?}", our_payments);
@@ -959,8 +1000,18 @@ pub fn save_address_store_to_wallet(
 pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
     match db.get_cf(DB_COL_DEFAULT, serialize(&out_p).unwrap()) {
         Ok(Some(store)) => deserialize(&store).unwrap(),
-        Ok(None) => panic!("Transaction not present in wallet: {:?}", out_p),
-        Err(e) => panic!("Error accessing wallet: {:?}", e),
+        Ok(None) =>{
+            warn!("Transaction not present in wallet: {:?}", out_p);
+            TransactionStore {
+                key_address: "".to_string(),
+            }
+        } 
+        Err(e) => {
+            warn!("Error accessing wallet: {:?}", e);
+            TransactionStore {
+                key_address: "".to_string(),
+            }
+        }
     }
 }
 
@@ -1081,11 +1132,20 @@ pub fn fetch_inputs_for_payment_from_db(
     }
     let mut amount_made = Asset::default_of_type(&asset_required);
 
+    // TODO: Check for spent outpoints before determining whether the wallet has enough
     if !fund_store.running_total().has_enough(&asset_required) {
         return Err(WalletDbError::InsufficientFundsError);
     }
 
+    let fund_store_spents = fund_store.spent_transactions().clone();
     for (out_p, amount) in fund_store.into_transactions() {
+        if fund_store_spents.contains_key(&out_p) {
+            debug!("Skipping spent transaction {:?}", out_p);
+            continue;
+        }
+
+        debug!("Checking transaction {:?}", out_p);
+
         if amount_made.add_assign(&amount) {
             let (cons, used) = tx_constructor_from_prev_out(db, out_p, encryption_key);
             tx_cons.push(cons);
@@ -1380,6 +1440,7 @@ mod tests {
                     (out_p4, amount4, key_addr_non_existent, 0),
                 ],
                 Default::default(),
+                false
             )
             .await
             .unwrap();

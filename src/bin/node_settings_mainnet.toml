@@ -18,7 +18,7 @@ security = 1
 
 #first node is leader
 [[mempool_nodes]]
-address = "34.65.95.17:9333"
+address = "34.65.95.17:8333"
 
 [[storage_nodes]]
 address = "52.40.82.170:8080"

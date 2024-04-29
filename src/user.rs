@@ -24,8 +24,7 @@ use tw_chain::primitives::block::Block;
 use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
 use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
 use tw_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
-    construct_tx_core, construct_tx_ins_address, ReceiverInfo,
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_tx_core, construct_tx_ins_address, update_input_signatures, ReceiverInfo
 };
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
@@ -889,8 +888,16 @@ impl UserNode {
     ) -> Result<()> {
         let (peer, tx) = self.next_payment.take().unwrap();
 
+        debug!(
+            ?tx,
+            "Sending payment transaction to mempool node for processing"
+        );
+        debug!("Mempool peer: {:?}", mempool_peer);
+
         self.send_transactions_to_mempool(mempool_peer, vec![tx.clone()])
             .await?;
+
+        debug!("Payment transaction sent to mempool node for processing");
 
         let b_num = self.last_block_notified.header.b_num;
 
@@ -947,6 +954,7 @@ impl UserNode {
         address_list: UtxoFetchType,
     ) -> Option<Response> {
         let mempool_addr = self.mempool_address();
+
         self.send_request_utxo_set(address_list, mempool_addr, NodeType::User)
             .await
             .ok()?;
@@ -1078,7 +1086,10 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
+
+        let key_material = self.wallet_db.get_key_material(&tx_ins);
+        let final_tx_ins = update_input_signatures(&tx_ins, &tx_outs, &key_material);
+        let payment_tx = construct_tx_core(final_tx_ins, tx_outs, None);
         self.next_payment = Some((peer, payment_tx));
 
         Response {
@@ -1115,7 +1126,9 @@ impl UserNode {
                 reason: "Insufficient funds for payment",
             };
         };
-        let payment_tx = construct_tx_core(tx_ins, tx_outs, None);
+        let key_material = self.wallet_db.get_key_material(&tx_ins);
+        let final_tx_ins = update_input_signatures(&tx_ins, &tx_outs, &key_material);
+        let payment_tx = construct_tx_core(final_tx_ins, tx_outs, None);
         self.next_payment = Some((None, payment_tx));
 
         Response {
@@ -1614,10 +1627,19 @@ impl Transactor for UserNode {
     async fn update_running_total(&mut self) {
         let utxo_set = self.received_utxo_set.take();
         let payments = get_payments_for_wallet_from_utxo(utxo_set.into_iter().flatten());
+        let known_addresses = self.wallet_db.get_known_addresses();
+        let utxo_addresses = payments
+            .iter()
+            .map(|p| p.2.clone())
+            .collect::<BTreeSet<_>>();
+
+        let addr_diff: BTreeSet<_> = known_addresses.into_iter().collect();
+        let new_addresses: Vec<String> = utxo_addresses.difference(&addr_diff).cloned().collect();
+        let reset_db = new_addresses.is_empty();
 
         let b_num = self.last_block_notified.header.b_num;
         self.wallet_db
-            .save_usable_payments_to_wallet(payments, b_num)
+            .save_usable_payments_to_wallet(payments, b_num, reset_db)
             .await
             .unwrap();
     }
@@ -1702,7 +1724,7 @@ pub fn make_rb_payment_item_tx_and_response(
     };
 
     let rb_receive_tx =
-        construct_rb_receive_payment_tx(tx_ins, tx_outs, None, sender_address, 0, dde_values);
+        construct_rb_receive_payment_tx(tx_ins, tx_outs, None, sender_address, 0, dde_values, &BTreeMap::new());
 
     let rb_payment_response = RbPaymentResponseData {
         receiver_address,
@@ -1747,7 +1769,7 @@ pub fn make_rb_payment_send_transaction(
         asset: sender_asset,
     };
 
-    construct_rb_payments_send_tx(tx_ins, tx_outs, None, receiver, 0, druid_values)
+    construct_rb_payments_send_tx(tx_ins, tx_outs, None, receiver, 0, druid_values, &BTreeMap::new())
 }
 
 fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {
