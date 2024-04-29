@@ -902,7 +902,7 @@ pub async fn post_deserialize_transactions(
 
     let deserialized_transactions = data
         .into_iter()
-        .map(from_transaction)
+        .map(from_hex_transaction)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
 
@@ -1179,16 +1179,21 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
 }
 
 /// Create a `CreateTransaction` from a hex string representing a serialized `Transaction`
-pub fn from_transaction(data: String) -> Result<CreateTransaction, StringError> {
+fn from_hex_transaction(data: String) -> Result<CreateTransaction, StringError> {
     let bytes = hex::decode(data).map_err(map_to_string_err)?;
+    let tx = bincode::deserialize::<Transaction>(bytes.as_slice()).map_err(map_to_string_err)?;
+    Ok(from_transaction(tx))
+}
 
+/// Create a `CreateTransaction` from a hex string representing a serialized `Transaction`
+fn from_transaction(tx: Transaction) -> CreateTransaction {
     let Transaction {
         inputs,
         outputs,
         version,
         fees,
         druid_info,
-    } = bincode::deserialize::<Transaction>(bytes.as_slice()).map_err(map_to_string_err)?;
+    } = tx;
 
     let inputs = {
         let mut tx_ins = Vec::new();
@@ -1204,13 +1209,13 @@ pub fn from_transaction(data: String) -> Result<CreateTransaction, StringError> 
         tx_ins
     };
 
-    Ok(CreateTransaction {
+    CreateTransaction {
         inputs,
         outputs,
         version,
         fees: Some(fees),
         druid_info,
-    })
+    }
 }
 
 /// Fetches JSON blocks.
