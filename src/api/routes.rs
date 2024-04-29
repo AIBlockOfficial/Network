@@ -36,7 +36,7 @@ pub fn get_cors() -> warp::cors::Builder {
             "x-nonce",
             "x-api-key",
         ])
-        .allow_methods(vec!["GET"])
+        .allow_methods(vec!["GET", "OPTIONS"])
 }
 
 // GET wallet info
@@ -312,7 +312,7 @@ pub fn post_cors() -> warp::cors::Builder {
             "x-nonce",
             "x-api-key",
         ])
-        .allow_methods(vec!["POST"])
+        .allow_methods(vec!["POST", "OPTIONS"])
 }
 
 // POST get db item by key

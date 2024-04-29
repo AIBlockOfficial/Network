@@ -120,3 +120,39 @@ cargo +nightly doc --document-private-items
 The resulting documentation can be found in `target/doc/system/index.html`.
 
 Nightly is required because one of dependencies (`gmp-mpfr-sys`) uses unstable features.
+
+## Trivy Code Scanning Exceptions
+
+Trivy scanning will run for each PR submitted although there is a mechanism via which certain rules can be ignored:
+
+Take the following output as an example
+
+```
+Dockerfile (dockerfile)
+
+Tests: 27 (SUCCESSES: 25, FAILURES: 2, EXCEPTIONS: 0)
+Failures: 2 (UNKNOWN: 0, LOW: 1, MEDIUM: 1, HIGH: 0, CRITICAL: 0)
+
+MEDIUM: Specify a tag in the 'FROM' statement for image 'cgr.dev/chainguard/glibc-dynamic'
+══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+When using a 'FROM' statement you should use a specific tag to avoid uncontrolled behavior when the image is updated.
+
+See https://avd.aquasec.com/misconfig/ds001
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Dockerfile:20
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  20 [ FROM cgr.dev/chainguard/glibc-dynamic:latest
+```
+
+Here we can see the rules is located at https://avd.aquasec.com/misconfig/ds001 and when navigating to the url --> https://avd.aquasec.com/misconfig/dockerfile/general/avd-ds-0001/
+
+The last portion of the url can always be used as the ID i.e avd-ds-0001 --> AVD-DS-0001, so if we wanted to ignore this rule we would add the following to the .trivyignore file
+
+**.trivyignore**
+
+```
+# Ignore misconfigurations
+# https://avd.aquasec.com/misconfig/dockerfile/general/avd-ds-0001/
+AVD-DS-0001
+```
+

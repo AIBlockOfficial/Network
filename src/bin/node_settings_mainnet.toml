@@ -2,7 +2,8 @@ mempool_db_mode = {Live = 0}
 storage_db_mode = {Live = 0}
 miner_db_mode = {Live = 0}
 user_db_mode = {Live = 0}
-api_port = 3000
+api_port = 3004
+user_api_port = 3004
 mempool_raft = 1
 storage_raft = 1
 storage_block_timeout = 60000
@@ -17,7 +18,7 @@ security = 1
 
 #first node is leader
 [[mempool_nodes]]
-address = "44.239.251.56:12300"
+address = "34.65.95.17:9333"
 
 [[storage_nodes]]
 address = "52.40.82.170:8080"
@@ -26,4 +27,4 @@ address = "52.40.82.170:8080"
 address = "52.27.248.13:12340"
 
 [[user_nodes]]
-address = "35.155.18.122:12342"
+address = "127.0.0.1:12342"

@@ -137,7 +137,7 @@ pub enum CreateTxInScript {
     stack(Vec<PrettyStackEntry>),
     Pay2PkH {
         /// Data to sign
-        signable_data: String,
+        signable_data: Option<String>,
         /// Hex encoded signature
         signature: String,
         /// Hex encoded complete public key
@@ -1134,6 +1134,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         for i in inputs {
             let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
+
             let tx_in = match script_signature {
                 CreateTxInScript::stack(stack) => TxIn {
                     previous_out: Some(previous_out),
@@ -1147,7 +1148,13 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                     public_key,
                     address_version,
                 } => {
-                    let signature =
+                    let final_signable_data = if let Some(sd) = signable_data {
+                    sd
+                } else {
+                    "".to_string()
+                };
+
+                let signature =
                         with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
                     let public_key =
                         with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
@@ -1155,7 +1162,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                     TxIn {
                         previous_out: Some(previous_out),
                         script_signature: Script::pay2pkh(
-                            signable_data,
+                            final_signable_data,
                             signature,
                             public_key,
                             address_version,
@@ -1255,15 +1262,21 @@ pub fn get_json_reply_items_from_db(
         .into_iter()
         .map(|key| {
             get_stored_value_from_db(db.clone(), key)
-                .map(|item| (item.key, item.data_json))
-                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec()))
+                .map(|item| {
+                    (
+                        item.key,
+                        item.data_json,
+                        construct_json_meta(item.item_meta),
+                    )
+                })
+                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec(), b"\"\"".to_vec()))
         })
         .collect();
 
     // Make JSON tupple with key and JSON item
     let key_values: Vec<_> = key_values
         .iter()
-        .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
+        .map(|(k, v, m)| [&b"[\""[..], k, &b"\","[..], v, &b","[..], m, &b"]"[..]])
         .collect();
 
     // Make JSON array:
@@ -1300,6 +1313,10 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (Stri
     }
 
     tx_info
+}
+
+pub fn construct_json_meta(meta: BlockchainItemMeta) -> Vec<u8> {
+    serde_json::to_vec(&meta).unwrap()
 }
 
 /// Constructs the mapping of output address to asset for `make_payment`

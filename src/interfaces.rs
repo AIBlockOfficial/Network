@@ -73,6 +73,33 @@ pub enum UtxoFetchType {
     AnyOf(Vec<String>),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionResponse {
+    pub tx: Transaction,
+    pub meta: TransactionResponseMeta,
+}
+
+impl TransactionResponse {
+    pub fn new(tx: Transaction, meta: TransactionResponseMeta) -> Self {
+        TransactionResponse { tx, meta }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionResponseMeta {
+    pub block_num: u64,
+    pub block_hash: String,
+}
+
+impl TransactionResponseMeta {
+    pub fn new(block_num: u64, block_hash: String) -> Self {
+        TransactionResponseMeta {
+            block_num,
+            block_hash,
+        }
+    }
+}
+
 /// Struct used to keep-track of the next item-based payment
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RbPaymentData {
