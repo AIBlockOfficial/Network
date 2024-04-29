@@ -1747,6 +1747,7 @@ async fn test_post_update_running_total() {
     // Arrange
     //
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let db = get_wallet_db("old_passphrase").await;
 
     let addresses = vec![COMMON_PUB_ADDR.to_string()];
 
@@ -1765,7 +1766,7 @@ async fn test_post_update_running_total() {
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
     let filter =
-        routes::update_running_total(&mut dp(), self_node.clone(), Default::default(), ks, cache)
+        routes::update_running_total(&mut dp(), self_node.clone(), db, Default::default(), ks, cache)
             .recover(handle_rejection);
     let res = request.reply(&filter).await;
 

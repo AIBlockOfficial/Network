@@ -403,6 +403,21 @@ pub async fn get_total_supply(
     )
 }
 
+/// GET The last constructed transaction
+pub async fn get_last_constructed_tx(
+    route: &'static str,
+    db: WalletDb,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+    let last_tx = db.get_last_constructed_tx();
+
+    r.into_ok(
+        "Successfully fetched last constructed transaction",
+        json_serialize_embed(last_tx),
+    )
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve items from the blockchain db by hash key

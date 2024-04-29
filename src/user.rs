@@ -1090,6 +1090,8 @@ impl UserNode {
         let key_material = self.wallet_db.get_key_material(&tx_ins);
         let final_tx_ins = update_input_signatures(&tx_ins, &tx_outs, &key_material);
         let payment_tx = construct_tx_core(final_tx_ins, tx_outs, None);
+
+        self.wallet_db.set_last_construct_tx(payment_tx.clone());
         self.next_payment = Some((peer, payment_tx));
 
         Response {

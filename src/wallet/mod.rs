@@ -182,6 +182,7 @@ pub struct WalletDb {
     locked_coinbase: LockedCoinbaseWithMutex,
     last_generated_address: Option<String>,
     last_locked_coinbase_filter_b_num: Option<u64>,
+    last_constructed_tx: Option<Transaction>,
 }
 
 impl WalletDb {
@@ -206,12 +207,13 @@ impl WalletDb {
             ui_feedback_tx: None,
             last_generated_address: None,
             last_locked_coinbase_filter_b_num: None,
+            last_constructed_tx: None,
         })
     }
 
     /// Set the UI feedback channel
     ///
-    /// ## Arguments
+    /// ### Arguments
     /// * `tx` - The channel to send UI feedback messages to
     pub fn set_ui_feedback_tx(&mut self, tx: tokio::sync::mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx);
@@ -219,11 +221,27 @@ impl WalletDb {
 
     /// Set locked coinbase value
     ///
-    /// ## Arguments
+    /// ### Arguments
     /// * `value` - The locked coinbase value
     pub async fn set_locked_coinbase(&mut self, value: LockedCoinbase) {
         let mut locked_coinbase = self.locked_coinbase.lock().await;
         *locked_coinbase = value;
+    }
+
+    /// Set the latest constructed transaction
+    /// 
+    /// ### Arguments
+    /// 
+    /// * `tx` - The latest constructed transaction
+    pub fn set_last_construct_tx(&mut self, tx: Transaction) {
+        debug!("Last constructed tx set: {:?}", tx);
+        self.last_constructed_tx = Some(tx);
+    }
+
+    /// Get the latest constructed transaction
+    pub fn get_last_constructed_tx(&self) -> Option<Transaction> {
+        debug!("Last constructed tx get: {:?}", self.last_constructed_tx);
+        self.last_constructed_tx.clone()
     }
 
     /// Get locked coinbase mutex

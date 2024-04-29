@@ -290,6 +290,30 @@ pub fn get_shared_config(
         .with(get_cors())
 }
 
+/// GET last constructed transaction
+pub fn get_last_constructed_tx(
+    dp: &mut DbgPaths,
+    db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "last_constructed_tx";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(db))
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_last_constructed_tx(route, db, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
 //======= POST ROUTES =======//
 
 // POST CORS
@@ -817,6 +841,13 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
+    .or(get_last_constructed_tx(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(make_payment(
         dp,
         db.clone(),
@@ -1163,6 +1194,13 @@ pub fn miner_node_with_user_routes(
         dp,
         db.clone(),
         user_node.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(get_last_constructed_tx(
+        dp,
+        db.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
