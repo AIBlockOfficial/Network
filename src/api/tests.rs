@@ -1765,9 +1765,15 @@ async fn test_post_update_running_total() {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter =
-        routes::update_running_total(&mut dp(), self_node.clone(), db, Default::default(), ks, cache)
-            .recover(handle_rejection);
+    let filter = routes::update_running_total(
+        &mut dp(),
+        self_node.clone(),
+        db,
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //

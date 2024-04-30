@@ -45,14 +45,14 @@ impl FundStore {
     pub fn transactions(&self) -> &BTreeMap<OutPoint, Asset> {
         &self.transactions
     }
-    
+
     pub fn reset(&mut self) {
         self.running_total = Default::default();
         self.transactions = Default::default();
         self.transaction_pages = vec![BTreeMap::new()];
         self.spent_transactions = Default::default();
     }
-    
+
     /// Filters out locked coinbase transactions, updating the running total.
     ///
     /// Returns amount of filtered out coinbase transactions due to locktime

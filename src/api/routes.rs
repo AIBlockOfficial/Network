@@ -291,14 +291,14 @@ pub fn get_shared_config(
 }
 
 /// GET last constructed transaction
-pub fn get_last_constructed_tx(
+pub fn get_outgoing_txs(
     dp: &mut DbgPaths,
     db: WalletDb,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let route = "last_constructed_tx";
+    let route = "outgoing_transactions";
     warp_path(dp, route)
         .and(warp::get())
         .and(auth_request(routes_pow, api_keys))
@@ -308,7 +308,7 @@ pub fn get_last_constructed_tx(
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::get_last_constructed_tx(route, db, call_id),
+                handlers::get_outgoing_txs(route, db, call_id),
             )
         })
         .with(get_cors())
@@ -841,7 +841,7 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
-    .or(get_last_constructed_tx(
+    .or(get_outgoing_txs(
         dp,
         db.clone(),
         routes_pow_info.clone(),
@@ -1198,7 +1198,7 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
-    .or(get_last_constructed_tx(
+    .or(get_outgoing_txs(
         dp,
         db.clone(),
         routes_pow_info.clone(),

@@ -33,6 +33,9 @@ pub const LOCKED_COINBASE_KEY: &str = "LockedCoinbaseKey";
 /// Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
 
+/// Storage key for all outgoing transactions
+pub const OUTGOING_TXS_KEY: &str = "OutgoingTxs";
+
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: WALLET_PATH,
     suffix: "",
@@ -60,6 +63,7 @@ pub enum WalletDbError {
     InsufficientFundsError,
     MasterKeyRetrievalError,
     MasterKeyMissingError,
+    OutgoingTxMissingError,
 }
 
 impl fmt::Display for WalletDbError {
@@ -74,6 +78,7 @@ impl fmt::Display for WalletDbError {
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
             Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
+            Self::OutgoingTxMissingError => write!(f, "OutgoingTxMissingError"),
         }
     }
 }
@@ -90,6 +95,7 @@ impl error::Error for WalletDbError {
             Self::InsufficientFundsError => None,
             Self::MasterKeyRetrievalError => None,
             Self::MasterKeyMissingError => None,
+            Self::OutgoingTxMissingError => None,
         }
     }
 }
@@ -253,6 +259,14 @@ impl WalletDb {
     /// Get locked coinbase value
     pub async fn get_locked_coinbase(&self) -> LockedCoinbase {
         self.locked_coinbase.lock().await.clone()
+    }
+
+    /// Gets all outgoing transactions
+    pub fn get_outgoing_txs(&self) -> Result<BTreeMap<String, Transaction>> {
+        let db = self.db.clone();
+        let db = db.lock().unwrap();
+
+        get_outgoing_txs(&db)
     }
 
     /// Builds a key material map for a given set of transaction inputs
@@ -546,10 +560,12 @@ impl WalletDb {
                 debug!("Usable outpoints: {:?}", usable_outpoints);
                 debug!("Number of usable outpoints: {}", usable_outpoints.len());
                 let existing_tx = fund_store.transactions().clone();
-                debug!("Number of existing transactions: {:?}", existing_tx.len());
                 if usable_outpoints.len() == existing_tx.len() {
                     fund_store.reset();
-                    debug!("Current running total after reset: {:?}", fund_store.running_total());
+                    debug!(
+                        "Current running total after reset: {:?}",
+                        fund_store.running_total()
+                    );
                 } else {
                     for (out_p, _) in &existing_tx {
                         if !usable_outpoints.contains(out_p) {
@@ -696,6 +712,14 @@ impl WalletDb {
             .save_usable_payments_to_wallet(payments, b_num, false)
             .await
             .unwrap();
+
+        let mut db = self.db.lock().unwrap();
+        let mut batch = db.batch_writer();
+        save_outgoing_tx_to_wallet(&db, &mut batch, (hash, transaction));
+
+        let batch = batch.done();
+        db.write(batch).unwrap();
+
         tracing::debug!("store_payment_transactions: {:?}", our_payments);
     }
 
@@ -1061,6 +1085,34 @@ pub fn save_transaction_to_wallet(
     let key = serialize(out_p).unwrap();
     let input = serialize(store).unwrap();
     db.put_cf(DB_COL_DEFAULT, &key, &input);
+}
+
+pub fn save_outgoing_tx_to_wallet(
+    db: &SimpleDb,
+    batch: &mut SimpleDbWriteBatch,
+    outgoing_tx: (String, Transaction),
+) {
+    match get_outgoing_txs(db) {
+        Ok(mut outgoing_txs) => {
+            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            let store = serialize(&outgoing_txs).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
+        }
+        Err(_) => {
+            let mut outgoing_txs = BTreeMap::new();
+            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            let store = serialize(&outgoing_txs).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
+        }
+    }
+}
+
+pub fn get_outgoing_txs(db: &SimpleDb) -> Result<BTreeMap<String, Transaction>> {
+    let store = db.get_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY)?;
+    let store = store.ok_or(WalletDbError::OutgoingTxMissingError)?;
+    let outgoing_tx: BTreeMap<String, Transaction> = deserialize(&store)?;
+
+    Ok(outgoing_tx)
 }
 
 // Set a new master key store
