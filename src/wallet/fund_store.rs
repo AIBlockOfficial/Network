@@ -1,7 +1,7 @@
 use crate::wallet::LockedCoinbase;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tracing::warn;
+use tracing::{debug, warn};
 use tw_chain::primitives::asset::{Asset, AssetValues};
 use tw_chain::primitives::transaction::OutPoint;
 
@@ -45,7 +45,14 @@ impl FundStore {
     pub fn transactions(&self) -> &BTreeMap<OutPoint, Asset> {
         &self.transactions
     }
-
+    
+    pub fn reset(&mut self) {
+        self.running_total = Default::default();
+        self.transactions = Default::default();
+        self.transaction_pages = vec![BTreeMap::new()];
+        self.spent_transactions = Default::default();
+    }
+    
     /// Filters out locked coinbase transactions, updating the running total.
     ///
     /// Returns amount of filtered out coinbase transactions due to locktime
@@ -122,7 +129,8 @@ impl FundStore {
             .insert(out_p.clone(), asset_to_save.clone())
         {
             if old_amount != amount {
-                panic!("Try to insert existing transaction with different amount");
+                warn!("Try to insert existing transaction with different amount");
+                return;
             }
         } else {
             //Adds the entry to transaction pages
@@ -131,6 +139,7 @@ impl FundStore {
                 page.insert(out_p, asset_to_save.clone());
             }
             self.running_total.update_add(&asset_to_save);
+            debug!("Running total after internal add: {:?}", self.running_total);
         }
     }
 

@@ -657,6 +657,7 @@ pub async fn post_update_running_total(
         _ => addresses,
     };
 
+    debug!("Updating running total for addresses: {:?}", address_list);
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
         address_list: UtxoFetchType::AnyOf(address_list),
     });

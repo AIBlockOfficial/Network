@@ -229,9 +229,9 @@ impl WalletDb {
     }
 
     /// Set the latest constructed transaction
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `tx` - The latest constructed transaction
     pub fn set_last_construct_tx(&mut self, tx: Transaction) {
         debug!("Last constructed tx set: {:?}", tx);
@@ -256,13 +256,13 @@ impl WalletDb {
     }
 
     /// Builds a key material map for a given set of transaction inputs
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `tx_ins` - Transaction inputs
     pub fn get_key_material(&self, tx_ins: &[TxIn]) -> BTreeMap<OutPoint, (PublicKey, SecretKey)> {
         let mut key_material = BTreeMap::new();
-        
+
         for tx_in in tx_ins {
             let out_p = &tx_in.previous_out;
 
@@ -271,10 +271,9 @@ impl WalletDb {
                 let address_store = self.get_address_store(&key_address);
                 let public_key = address_store.public_key;
                 let secret_key = address_store.secret_key;
-    
+
                 key_material.insert(out.clone(), (public_key, secret_key));
             }
-            
         }
 
         key_material
@@ -520,7 +519,7 @@ impl WalletDb {
         &mut self,
         payments: Vec<(OutPoint, Asset, String, u64)>,
         current_b_num: u64,
-        reset_db: bool
+        reset_db: bool,
     ) -> Result<Vec<(OutPoint, Asset, String, u64)>> {
         let db = self.db.clone();
         let locked_coinbase = self.get_locked_coinbase().await.unwrap_or_default();
@@ -543,10 +542,20 @@ impl WalletDb {
 
             // Reset DB if needed
             if reset_db {
+                debug!("Resetting DB");
+                debug!("Usable outpoints: {:?}", usable_outpoints);
+                debug!("Number of usable outpoints: {}", usable_outpoints.len());
                 let existing_tx = fund_store.transactions().clone();
-                for (out_p, _) in &existing_tx {
-                    if !usable_outpoints.contains(out_p) {
-                        fund_store.spend_tx(out_p);
+                debug!("Number of existing transactions: {:?}", existing_tx.len());
+                if usable_outpoints.len() == existing_tx.len() {
+                    fund_store.reset();
+                    debug!("Current running total after reset: {:?}", fund_store.running_total());
+                } else {
+                    for (out_p, _) in &existing_tx {
+                        if !usable_outpoints.contains(out_p) {
+                            fund_store.spend_tx(out_p);
+                            debug!("Current running total: {:?}", fund_store.running_total());
+                        }
                     }
                 }
             }
@@ -555,8 +564,12 @@ impl WalletDb {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
                 let asset_to_store = asset.clone().with_fixed_hash(out_p);
+                debug!("Storing asset: {:?}", asset_to_store);
+
                 fund_store.store_tx(out_p.clone(), asset_to_store);
                 save_transaction_to_wallet(&mut batch, out_p, &store);
+                debug!("Running total: {:?}", fund_store.running_total());
+
                 if *locktime > current_b_num {
                     locked_coinbase.insert(out_p.t_hash.clone(), *locktime);
                 }
@@ -1018,12 +1031,12 @@ pub fn save_address_store_to_wallet(
 pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
     match db.get_cf(DB_COL_DEFAULT, serialize(&out_p).unwrap()) {
         Ok(Some(store)) => deserialize(&store).unwrap(),
-        Ok(None) =>{
+        Ok(None) => {
             warn!("Transaction not present in wallet: {:?}", out_p);
             TransactionStore {
                 key_address: "".to_string(),
             }
-        } 
+        }
         Err(e) => {
             warn!("Error accessing wallet: {:?}", e);
             TransactionStore {
@@ -1149,6 +1162,8 @@ pub fn fetch_inputs_for_payment_from_db(
         warn!("{count} locked coinbase transaction filtered out");
     }
     let mut amount_made = Asset::default_of_type(&asset_required);
+
+    debug!("All transactions in store: {:?}", fund_store.transactions());
 
     // TODO: Check for spent outpoints before determining whether the wallet has enough
     if !fund_store.running_total().has_enough(&asset_required) {
@@ -1458,7 +1473,7 @@ mod tests {
                     (out_p4, amount4, key_addr_non_existent, 0),
                 ],
                 Default::default(),
-                false
+                false,
             )
             .await
             .unwrap();
