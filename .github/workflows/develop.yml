@@ -1,0 +1,17 @@
+name: build-push-scan
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  build-and-push:
+    uses: ./.github/workflows/node-build-and-push-all.yml
+    secrets: inherit
+
