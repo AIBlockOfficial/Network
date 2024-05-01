@@ -1747,6 +1747,7 @@ async fn test_post_update_running_total() {
     // Arrange
     //
     let (mut self_node, _self_socket) = new_self_node(NodeType::User).await;
+    let db = get_wallet_db("old_passphrase").await;
 
     let addresses = vec![COMMON_PUB_ADDR.to_string()];
 
@@ -1764,9 +1765,15 @@ async fn test_post_update_running_total() {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter =
-        routes::update_running_total(&mut dp(), self_node.clone(), Default::default(), ks, cache)
-            .recover(handle_rejection);
+    let filter = routes::update_running_total(
+        &mut dp(),
+        self_node.clone(),
+        db,
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1819,7 +1826,7 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
         inputs: vec![CreateTxIn {
             previous_out: Some(previous_out.clone()),
             script_signature: Some(CreateTxInScript::Pay2PkH {
-                signable_data,
+                signable_data: Some(signable_data),
                 signature,
                 public_key,
                 address_version,

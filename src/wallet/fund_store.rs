@@ -1,6 +1,7 @@
 use crate::wallet::LockedCoinbase;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use tracing::{debug, warn};
 use tw_chain::primitives::asset::{Asset, AssetValues};
 use tw_chain::primitives::transaction::OutPoint;
 
@@ -43,6 +44,13 @@ impl FundStore {
 
     pub fn transactions(&self) -> &BTreeMap<OutPoint, Asset> {
         &self.transactions
+    }
+
+    pub fn reset(&mut self) {
+        self.running_total = Default::default();
+        self.transactions = Default::default();
+        self.transaction_pages = vec![BTreeMap::new()];
+        self.spent_transactions = Default::default();
     }
 
     /// Filters out locked coinbase transactions, updating the running total.
@@ -121,7 +129,8 @@ impl FundStore {
             .insert(out_p.clone(), asset_to_save.clone())
         {
             if old_amount != amount {
-                panic!("Try to insert existing transaction with different amount");
+                warn!("Try to insert existing transaction with different amount");
+                return;
             }
         } else {
             //Adds the entry to transaction pages
@@ -130,11 +139,21 @@ impl FundStore {
                 page.insert(out_p, asset_to_save.clone());
             }
             self.running_total.update_add(&asset_to_save);
+            debug!("Running total after internal add: {:?}", self.running_total);
         }
     }
 
     pub fn spend_tx(&mut self, out_p: &OutPoint) {
         if let Some((out_p_v, amount)) = self.transactions.remove_entry(out_p) {
+            if self
+                .spent_transactions
+                .insert(out_p_v, amount.clone())
+                .is_some()
+            {
+                warn!("Try to spend already spent transaction {:?}", out_p);
+                return;
+            }
+
             for i in 0..self.transaction_pages.len() {
                 if let Some(page) = self.transaction_pages.get_mut(i) {
                     page.remove_entry(out_p);
@@ -145,9 +164,6 @@ impl FundStore {
             }
 
             self.running_total.update_sub(&amount);
-            if self.spent_transactions.insert(out_p_v, amount).is_some() {
-                panic!("Try to spend already spent transaction {:?}", out_p);
-            }
         }
     }
 }

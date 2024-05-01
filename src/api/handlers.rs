@@ -99,7 +99,7 @@ pub struct CreateItemAssetDataUser {
 pub enum CreateTxInScript {
     Pay2PkH {
         /// Data to sign
-        signable_data: String,
+        signable_data: Option<String>,
         /// Hex encoded signature
         signature: String,
         /// Hex encoded complete public key
@@ -403,6 +403,23 @@ pub async fn get_total_supply(
     )
 }
 
+/// GET The last constructed transaction
+pub async fn get_outgoing_txs(
+    route: &'static str,
+    db: WalletDb,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    match db.get_outgoing_txs() {
+        Ok(tx) => r.into_ok(
+            "Successfully fetched last constructed transaction",
+            json_serialize_embed(tx),
+        ),
+        Err(_e) => r.into_err_internal(ApiErrorType::CannotAccessWallet),
+    }
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve items from the blockchain db by hash key
@@ -625,14 +642,27 @@ pub async fn post_request_donation(
 /// Post to update running total of connected wallet
 pub async fn post_update_running_total(
     peer: Node,
+    wallet_db: WalletDb,
     addresses: Vec<String>,
     route: &'static str,
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
-    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-        address_list: UtxoFetchType::AnyOf(addresses),
-    });
     let r = CallResponse::new(route, &call_id);
+
+    if addresses.is_empty() {
+        return r.into_err_internal(ApiErrorType::Generic("No addresses provided".to_owned()));
+    }
+
+    let known_addresses = wallet_db.get_known_addresses();
+    let address_list = match addresses.first() {
+        Some(first) if first == "all" => known_addresses,
+        _ => addresses,
+    };
+
+    debug!("Updating running total for addresses: {:?}", address_list);
+    let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+        address_list: UtxoFetchType::AnyOf(address_list),
+    });
 
     if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:update_running_total error: {:?}", e);
@@ -1017,6 +1047,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         for i in inputs {
             let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
+
             let tx_in = {
                 let CreateTxInScript::Pay2PkH {
                     signable_data,
@@ -1024,6 +1055,12 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                     public_key,
                     address_version,
                 } = script_signature;
+
+                let final_signable_data = if let Some(sd) = signable_data {
+                    sd
+                } else {
+                    "".to_string()
+                };
 
                 let signature =
                     with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
@@ -1033,7 +1070,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                 TxIn {
                     previous_out: Some(previous_out),
                     script_signature: Script::pay2pkh(
-                        signable_data,
+                        final_signable_data,
                         signature,
                         public_key,
                         address_version,
@@ -1092,15 +1129,21 @@ pub fn get_json_reply_items_from_db(
         .into_iter()
         .map(|key| {
             get_stored_value_from_db(db.clone(), key)
-                .map(|item| (item.key, item.data_json))
-                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec()))
+                .map(|item| {
+                    (
+                        item.key,
+                        item.data_json,
+                        construct_json_meta(item.item_meta),
+                    )
+                })
+                .unwrap_or_else(|| (b"".to_vec(), b"\"\"".to_vec(), b"\"\"".to_vec()))
         })
         .collect();
 
     // Make JSON tupple with key and JSON item
     let key_values: Vec<_> = key_values
         .iter()
-        .map(|(k, v)| [&b"[\""[..], k, &b"\","[..], v, &b"]"[..]])
+        .map(|(k, v, m)| [&b"[\""[..], k, &b"\","[..], v, &b","[..], m, &b"]"[..]])
         .collect();
 
     // Make JSON array:
@@ -1137,6 +1180,10 @@ pub fn construct_ctx_map(transactions: &[Transaction]) -> BTreeMap<String, (Stri
     }
 
     tx_info
+}
+
+pub fn construct_json_meta(meta: BlockchainItemMeta) -> Vec<u8> {
+    serde_json::to_vec(&meta).unwrap()
 }
 
 /// Constructs the mapping of output address to asset for `make_payment`

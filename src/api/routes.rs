@@ -36,7 +36,7 @@ pub fn get_cors() -> warp::cors::Builder {
             "x-nonce",
             "x-api-key",
         ])
-        .allow_methods(vec!["GET"])
+        .allow_methods(vec!["GET", "OPTIONS"])
 }
 
 // GET wallet info
@@ -290,6 +290,30 @@ pub fn get_shared_config(
         .with(get_cors())
 }
 
+/// GET last constructed transaction
+pub fn get_outgoing_txs(
+    dp: &mut DbgPaths,
+    db: WalletDb,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "outgoing_transactions";
+    warp_path(dp, route)
+        .and(warp::get())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(db))
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, db, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::get_outgoing_txs(route, db, call_id),
+            )
+        })
+        .with(get_cors())
+}
+
 //======= POST ROUTES =======//
 
 // POST CORS
@@ -312,7 +336,7 @@ pub fn post_cors() -> warp::cors::Builder {
             "x-nonce",
             "x-api-key",
         ])
-        .allow_methods(vec!["POST"])
+        .allow_methods(vec!["POST", "OPTIONS"])
 }
 
 // POST get db item by key
@@ -501,6 +525,7 @@ pub fn request_donation(
 pub fn update_running_total(
     dp: &mut DbgPaths,
     node: Node,
+    db: WalletDb,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -510,13 +535,14 @@ pub fn update_running_total(
         .and(warp::post())
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(node))
+        .and(with_node_component(db))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, node, info, cache| {
+        .and_then(move |call_id: String, node, db: WalletDb, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_update_running_total(node, info, route, call_id),
+                handlers::post_update_running_total(node, db, info, route, call_id),
             )
         })
         .with(post_cors())
@@ -815,6 +841,13 @@ pub fn user_node_routes(
         api_keys.clone(),
         cache.clone(),
     )
+    .or(get_outgoing_txs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(make_payment(
         dp,
         db.clone(),
@@ -856,6 +889,7 @@ pub fn user_node_routes(
     .or(update_running_total(
         dp,
         node.clone(),
+        db.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1164,6 +1198,13 @@ pub fn miner_node_with_user_routes(
         api_keys.clone(),
         cache.clone(),
     ))
+    .or(get_outgoing_txs(
+        dp,
+        db.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     // .or(make_ip_payment(
     //     dp,
     //     db.clone(),
@@ -1197,6 +1238,7 @@ pub fn miner_node_with_user_routes(
     .or(update_running_total(
         dp,
         user_node.clone(),
+        db.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

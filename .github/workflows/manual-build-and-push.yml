@@ -21,8 +21,16 @@ permissions:
 
 jobs:
   build:
-    uses: aiblockofficial/workflows/.github/workflows/node-build.yml@main
+    uses: ./.github/workflows/node-build.yml
     with:
       REGISTRY: ${{ vars.REGISTRY }}
-      REPOSITORY: ${{ vars.REPOSITORY }}
       NODE_TYPE: ${{ inputs.node_type }}
+    secrets: inherit
+
+  manifest:
+    needs: [build]
+    uses: ./.github/workflows/node-manifest.yml
+    with:
+      REGISTRY: ${{ vars.REGISTRY }}
+      NODE_TYPE: ${{ inputs.node_type }}
+    secrets: inherit

@@ -27,3 +27,14 @@ jobs:
       - name: Run integration tests
         timeout-minutes: 30
         run: cargo test --release -- --test-threads=1
+
+  slack-notification:
+        needs: integration-tests 
+        if: always()
+        uses: ./.github/workflows/slack-msg.yml 
+        with:
+          heading: ${{ contains(needs.*.result, 'failure') && 'Tests Failed :red_circle:' || 'Tests Passed :large_green_circle:' }}
+          info: "PR: *${{ github.event.pull_request.title }}* / Branch: *${{ github.event.pull_request.head.ref }}*"
+          url: "${{ github.event.pull_request.html_url || github.event.head_commit.url }}"
+        secrets:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

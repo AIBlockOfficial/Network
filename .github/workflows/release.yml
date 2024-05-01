@@ -1,0 +1,28 @@
+name: build-and-push-miner
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs: 
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set Version
+        id: vars
+        run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+  release:
+    needs: get-version
+    uses: ./.github/workflows/node-build-and-push-all.yml
+    with:
+      TAG: ${{ needs.get-version.outputs.tag }}
+    secrets: inherit
