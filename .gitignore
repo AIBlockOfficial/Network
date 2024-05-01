@@ -21,7 +21,6 @@ src/db/db/
 src/wallet/wallet/
 /*.log
 src/bin/tls_data/
-src/bin/tls_certificates.json
 
 *.txt
 
