@@ -24,7 +24,8 @@ use tw_chain::primitives::block::Block;
 use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
 use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
 use tw_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_tx_core, construct_tx_ins_address, update_input_signatures, ReceiverInfo
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_ins_address, update_input_signatures, ReceiverInfo,
 };
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
@@ -1090,6 +1091,8 @@ impl UserNode {
         let key_material = self.wallet_db.get_key_material(&tx_ins);
         let final_tx_ins = update_input_signatures(&tx_ins, &tx_outs, &key_material);
         let payment_tx = construct_tx_core(final_tx_ins, tx_outs, None);
+
+        self.wallet_db.set_last_construct_tx(payment_tx.clone());
         self.next_payment = Some((peer, payment_tx));
 
         Response {
@@ -1723,8 +1726,15 @@ pub fn make_rb_payment_item_tx_and_response(
         genesis_hash: None,
     };
 
-    let rb_receive_tx =
-        construct_rb_receive_payment_tx(tx_ins, tx_outs, None, sender_address, 0, dde_values, &BTreeMap::new());
+    let rb_receive_tx = construct_rb_receive_payment_tx(
+        tx_ins,
+        tx_outs,
+        None,
+        sender_address,
+        0,
+        dde_values,
+        &BTreeMap::new(),
+    );
 
     let rb_payment_response = RbPaymentResponseData {
         receiver_address,
@@ -1769,7 +1779,15 @@ pub fn make_rb_payment_send_transaction(
         asset: sender_asset,
     };
 
-    construct_rb_payments_send_tx(tx_ins, tx_outs, None, receiver, 0, druid_values, &BTreeMap::new())
+    construct_rb_payments_send_tx(
+        tx_ins,
+        tx_outs,
+        None,
+        receiver,
+        0,
+        druid_values,
+        &BTreeMap::new(),
+    )
 }
 
 fn make_transaction_gen(setup: UserAutoGenTxSetup) -> Option<AutoGenTx> {

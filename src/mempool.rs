@@ -1774,13 +1774,10 @@ impl MempoolNode {
                 .await;
         }
 
-        if self.miners_changed {
-            info!(
-                "Change in no. of connected miners: {:?}",
-                self.get_connected_miners().await.len()
-            );
-            self.miners_changed = false;
-        }
+        info!(
+            "Number of connected miners: {:?}",
+            self.get_connected_miners().await.len()
+        );
 
         Ok(())
     }

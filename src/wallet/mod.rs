@@ -33,6 +33,9 @@ pub const LOCKED_COINBASE_KEY: &str = "LockedCoinbaseKey";
 /// Storage key for a &[u8] of the word 'MasterKeyStore'
 pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
 
+/// Storage key for all outgoing transactions
+pub const OUTGOING_TXS_KEY: &str = "OutgoingTxs";
+
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: WALLET_PATH,
     suffix: "",
@@ -60,6 +63,7 @@ pub enum WalletDbError {
     InsufficientFundsError,
     MasterKeyRetrievalError,
     MasterKeyMissingError,
+    OutgoingTxMissingError,
 }
 
 impl fmt::Display for WalletDbError {
@@ -74,6 +78,7 @@ impl fmt::Display for WalletDbError {
             Self::InsufficientFundsError => write!(f, "InsufficientFundsError"),
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
             Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
+            Self::OutgoingTxMissingError => write!(f, "OutgoingTxMissingError"),
         }
     }
 }
@@ -90,6 +95,7 @@ impl error::Error for WalletDbError {
             Self::InsufficientFundsError => None,
             Self::MasterKeyRetrievalError => None,
             Self::MasterKeyMissingError => None,
+            Self::OutgoingTxMissingError => None,
         }
     }
 }
@@ -182,6 +188,7 @@ pub struct WalletDb {
     locked_coinbase: LockedCoinbaseWithMutex,
     last_generated_address: Option<String>,
     last_locked_coinbase_filter_b_num: Option<u64>,
+    last_constructed_tx: Option<Transaction>,
 }
 
 impl WalletDb {
@@ -206,12 +213,13 @@ impl WalletDb {
             ui_feedback_tx: None,
             last_generated_address: None,
             last_locked_coinbase_filter_b_num: None,
+            last_constructed_tx: None,
         })
     }
 
     /// Set the UI feedback channel
     ///
-    /// ## Arguments
+    /// ### Arguments
     /// * `tx` - The channel to send UI feedback messages to
     pub fn set_ui_feedback_tx(&mut self, tx: tokio::sync::mpsc::Sender<Rs2JsMsg>) {
         self.ui_feedback_tx = Some(tx);
@@ -219,11 +227,27 @@ impl WalletDb {
 
     /// Set locked coinbase value
     ///
-    /// ## Arguments
+    /// ### Arguments
     /// * `value` - The locked coinbase value
     pub async fn set_locked_coinbase(&mut self, value: LockedCoinbase) {
         let mut locked_coinbase = self.locked_coinbase.lock().await;
         *locked_coinbase = value;
+    }
+
+    /// Set the latest constructed transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx` - The latest constructed transaction
+    pub fn set_last_construct_tx(&mut self, tx: Transaction) {
+        debug!("Last constructed tx set: {:?}", tx);
+        self.last_constructed_tx = Some(tx);
+    }
+
+    /// Get the latest constructed transaction
+    pub fn get_last_constructed_tx(&self) -> Option<Transaction> {
+        debug!("Last constructed tx get: {:?}", self.last_constructed_tx);
+        self.last_constructed_tx.clone()
     }
 
     /// Get locked coinbase mutex
@@ -237,14 +261,22 @@ impl WalletDb {
         self.locked_coinbase.lock().await.clone()
     }
 
+    /// Gets all outgoing transactions
+    pub fn get_outgoing_txs(&self) -> Result<BTreeMap<String, Transaction>> {
+        let db = self.db.clone();
+        let db = db.lock().unwrap();
+
+        get_outgoing_txs(&db)
+    }
+
     /// Builds a key material map for a given set of transaction inputs
-    /// 
+    ///
     /// ### Arguments
-    /// 
+    ///
     /// * `tx_ins` - Transaction inputs
     pub fn get_key_material(&self, tx_ins: &[TxIn]) -> BTreeMap<OutPoint, (PublicKey, SecretKey)> {
         let mut key_material = BTreeMap::new();
-        
+
         for tx_in in tx_ins {
             let out_p = &tx_in.previous_out;
 
@@ -253,10 +285,9 @@ impl WalletDb {
                 let address_store = self.get_address_store(&key_address);
                 let public_key = address_store.public_key;
                 let secret_key = address_store.secret_key;
-    
+
                 key_material.insert(out.clone(), (public_key, secret_key));
             }
-            
         }
 
         key_material
@@ -502,7 +533,7 @@ impl WalletDb {
         &mut self,
         payments: Vec<(OutPoint, Asset, String, u64)>,
         current_b_num: u64,
-        reset_db: bool
+        reset_db: bool,
     ) -> Result<Vec<(OutPoint, Asset, String, u64)>> {
         let db = self.db.clone();
         let locked_coinbase = self.get_locked_coinbase().await.unwrap_or_default();
@@ -525,10 +556,22 @@ impl WalletDb {
 
             // Reset DB if needed
             if reset_db {
+                debug!("Resetting DB");
+                debug!("Usable outpoints: {:?}", usable_outpoints);
+                debug!("Number of usable outpoints: {}", usable_outpoints.len());
                 let existing_tx = fund_store.transactions().clone();
-                for (out_p, _) in &existing_tx {
-                    if !usable_outpoints.contains(out_p) {
-                        fund_store.spend_tx(out_p);
+                if usable_outpoints.len() == existing_tx.len() {
+                    fund_store.reset();
+                    debug!(
+                        "Current running total after reset: {:?}",
+                        fund_store.running_total()
+                    );
+                } else {
+                    for (out_p, _) in &existing_tx {
+                        if !usable_outpoints.contains(out_p) {
+                            fund_store.spend_tx(out_p);
+                            debug!("Current running total: {:?}", fund_store.running_total());
+                        }
                     }
                 }
             }
@@ -537,8 +580,12 @@ impl WalletDb {
                 let key_address = key_address.clone();
                 let store = TransactionStore { key_address };
                 let asset_to_store = asset.clone().with_fixed_hash(out_p);
+                debug!("Storing asset: {:?}", asset_to_store);
+
                 fund_store.store_tx(out_p.clone(), asset_to_store);
                 save_transaction_to_wallet(&mut batch, out_p, &store);
+                debug!("Running total: {:?}", fund_store.running_total());
+
                 if *locktime > current_b_num {
                     locked_coinbase.insert(out_p.t_hash.clone(), *locktime);
                 }
@@ -665,6 +712,14 @@ impl WalletDb {
             .save_usable_payments_to_wallet(payments, b_num, false)
             .await
             .unwrap();
+
+        let mut db = self.db.lock().unwrap();
+        let mut batch = db.batch_writer();
+        save_outgoing_tx_to_wallet(&db, &mut batch, (hash, transaction));
+
+        let batch = batch.done();
+        db.write(batch).unwrap();
+
         tracing::debug!("store_payment_transactions: {:?}", our_payments);
     }
 
@@ -1000,12 +1055,12 @@ pub fn save_address_store_to_wallet(
 pub fn get_transaction_store(db: &SimpleDb, out_p: &OutPoint) -> TransactionStore {
     match db.get_cf(DB_COL_DEFAULT, serialize(&out_p).unwrap()) {
         Ok(Some(store)) => deserialize(&store).unwrap(),
-        Ok(None) =>{
+        Ok(None) => {
             warn!("Transaction not present in wallet: {:?}", out_p);
             TransactionStore {
                 key_address: "".to_string(),
             }
-        } 
+        }
         Err(e) => {
             warn!("Error accessing wallet: {:?}", e);
             TransactionStore {
@@ -1030,6 +1085,34 @@ pub fn save_transaction_to_wallet(
     let key = serialize(out_p).unwrap();
     let input = serialize(store).unwrap();
     db.put_cf(DB_COL_DEFAULT, &key, &input);
+}
+
+pub fn save_outgoing_tx_to_wallet(
+    db: &SimpleDb,
+    batch: &mut SimpleDbWriteBatch,
+    outgoing_tx: (String, Transaction),
+) {
+    match get_outgoing_txs(db) {
+        Ok(mut outgoing_txs) => {
+            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            let store = serialize(&outgoing_txs).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
+        }
+        Err(_) => {
+            let mut outgoing_txs = BTreeMap::new();
+            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            let store = serialize(&outgoing_txs).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
+        }
+    }
+}
+
+pub fn get_outgoing_txs(db: &SimpleDb) -> Result<BTreeMap<String, Transaction>> {
+    let store = db.get_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY)?;
+    let store = store.ok_or(WalletDbError::OutgoingTxMissingError)?;
+    let outgoing_tx: BTreeMap<String, Transaction> = deserialize(&store)?;
+
+    Ok(outgoing_tx)
 }
 
 // Set a new master key store
@@ -1131,6 +1214,8 @@ pub fn fetch_inputs_for_payment_from_db(
         warn!("{count} locked coinbase transaction filtered out");
     }
     let mut amount_made = Asset::default_of_type(&asset_required);
+
+    debug!("All transactions in store: {:?}", fund_store.transactions());
 
     // TODO: Check for spent outpoints before determining whether the wallet has enough
     if !fund_store.running_total().has_enough(&asset_required) {
@@ -1440,7 +1525,7 @@ mod tests {
                     (out_p4, amount4, key_addr_non_existent, 0),
                 ],
                 Default::default(),
-                false
+                false,
             )
             .await
             .unwrap();

@@ -403,6 +403,23 @@ pub async fn get_total_supply(
     )
 }
 
+/// GET The last constructed transaction
+pub async fn get_outgoing_txs(
+    route: &'static str,
+    db: WalletDb,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    match db.get_outgoing_txs() {
+        Ok(tx) => r.into_ok(
+            "Successfully fetched last constructed transaction",
+            json_serialize_embed(tx),
+        ),
+        Err(_e) => r.into_err_internal(ApiErrorType::CannotAccessWallet),
+    }
+}
+
 //======= POST HANDLERS =======//
 
 /// Post to retrieve items from the blockchain db by hash key
@@ -642,6 +659,7 @@ pub async fn post_update_running_total(
         _ => addresses,
     };
 
+    debug!("Updating running total for addresses: {:?}", address_list);
     let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
         address_list: UtxoFetchType::AnyOf(address_list),
     });
