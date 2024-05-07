@@ -128,10 +128,19 @@ pub struct RbPaymentResponseData {
 }
 
 /// A placeholder struct for sensible feedback
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Response {
     pub success: bool,
-    pub reason: &'static str,
+    pub reason: String,
+}
+
+/// A response struct for payment requests specifically
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentResponse {
+    pub success: bool,
+    pub reason: String,
+    pub tx_hash: String,
+    pub tx: Option<Transaction>,
 }
 
 /// Mined block as stored in DB.
@@ -769,6 +778,15 @@ pub trait MempoolApi {
 
 ///============ USER NODE ============///
 
+pub trait UserApi {
+    fn make_payment(
+        &mut self,
+        address: String,
+        amount: TokenAmount,
+        locktime: Option<u64>,
+    ) -> PaymentResponse;
+}
+
 /// Encapsulates user requests injected by API
 #[derive(Deserialize, Serialize, Clone)]
 pub enum UserApiRequest {
@@ -809,6 +827,9 @@ pub enum UserApiRequest {
         excess_address: String,
         locktime: Option<u64>,
     },
+
+    /// Send next payment constructed
+    SendNextPayment,
 
     /// Request to generate a new address
     GenerateNewAddress,
@@ -888,7 +909,8 @@ impl fmt::Debug for UserRequest {
             UserApi(DisconnectFromMempool) => write!(f, "DisconnectFromMempool"),
             UserApi(DeleteAddresses { .. }) => write!(f, "DeleteAddresses"),
             UserApi(MergeAddresses { .. }) => write!(f, "MergeAddresses"),
-
+            UserApi(SendNextPayment) => write!(f, "SendNextPayment"),
+            
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
@@ -899,6 +921,7 @@ impl fmt::Debug for UserRequest {
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),
             Closing => write!(f, "Closing"),
+
         }
     }
 }

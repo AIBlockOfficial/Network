@@ -249,7 +249,6 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let wallet = user.get_wallet_db();
             let payment = wallet
                 .fetch_inputs_for_payment(Asset::token_u64(123))
-                .await
                 .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
@@ -261,7 +260,6 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
             let wallet = miner.get_wallet_db();
             let payment = wallet
                 .fetch_inputs_for_payment(Asset::token_u64(52571285))
-                .await
                 .unwrap();
             assert_eq!(
                 (payment.0.len(), payment.1, payment.2.len()),
@@ -865,8 +863,7 @@ async fn user_make_payment_transaction(
 ) {
     let mut user = network.user(user).unwrap().lock().await;
     let mempool_addr = network.get_address(mempool).await.unwrap();
-    user.make_payment_transactions(None, to_addr, amount, None)
-        .await;
+    let _resp = user.make_payment_transactions(None, to_addr, amount, None);
     user.send_next_payment_to_destinations(mempool_addr)
         .await
         .unwrap();
