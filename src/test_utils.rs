@@ -1355,7 +1355,7 @@ fn check_timeout<E>(
 ) -> Result<Option<Result<Response, E>>, String> {
     if let Some(Ok(Response {
         success: true,
-        reason: "Test timeout elapsed",
+        reason: _
     })) = response
     {
         Err("Test timeout elapsed".to_owned())

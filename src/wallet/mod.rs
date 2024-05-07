@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt, io};
-use tokio::sync::Mutex as TokioMutex;
 use tokio::task;
 use tracing::{debug, warn};
 use tw_chain::crypto::pbkdf2 as pwhash;
@@ -36,6 +35,9 @@ pub const MASTER_KEY_STORE_KEY: &str = "MasterKeyStore";
 /// Storage key for all outgoing transactions
 pub const OUTGOING_TXS_KEY: &str = "OutgoingTxs";
 
+/// Storage key for all incoming transactions
+pub const INCOMING_TXS_KEY: &str = "IncomingTxs";
+
 pub const DB_SPEC: SimpleDbSpec = SimpleDbSpec {
     db_path: WALLET_PATH,
     suffix: "",
@@ -49,7 +51,7 @@ pub type Result<T> = std::result::Result<T, WalletDbError>;
 
 /// Wrapper for a locked coinbase (tx_hash, locktime)
 pub type LockedCoinbase = Option<BTreeMap<String, u64>>;
-pub type LockedCoinbaseWithMutex = Arc<TokioMutex<LockedCoinbase>>;
+pub type LockedCoinbaseWithMutex = Arc<Mutex<LockedCoinbase>>;
 
 /// Enum for errors that occur during WalletDb operations
 #[derive(Debug)]
@@ -64,6 +66,7 @@ pub enum WalletDbError {
     MasterKeyRetrievalError,
     MasterKeyMissingError,
     OutgoingTxMissingError,
+    IncomingTxMissingError,
 }
 
 impl fmt::Display for WalletDbError {
@@ -79,6 +82,7 @@ impl fmt::Display for WalletDbError {
             Self::MasterKeyRetrievalError => write!(f, "MasterKeyRetrievalError"),
             Self::MasterKeyMissingError => write!(f, "MasterKeyMissingError"),
             Self::OutgoingTxMissingError => write!(f, "OutgoingTxMissingError"),
+            Self::IncomingTxMissingError => write!(f, "IncomingTxMissingError"),
         }
     }
 }
@@ -96,6 +100,7 @@ impl error::Error for WalletDbError {
             Self::MasterKeyRetrievalError => None,
             Self::MasterKeyMissingError => None,
             Self::OutgoingTxMissingError => None,
+            Self::IncomingTxMissingError => None,
         }
     }
 }
@@ -208,7 +213,7 @@ impl WalletDb {
         db.write(batch).unwrap();
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            locked_coinbase: Arc::new(TokioMutex::new(None)),
+            locked_coinbase: Arc::new(Mutex::new(None)),
             encryption_key: masterkey,
             ui_feedback_tx: None,
             last_generated_address: None,
@@ -230,7 +235,7 @@ impl WalletDb {
     /// ### Arguments
     /// * `value` - The locked coinbase value
     pub async fn set_locked_coinbase(&mut self, value: LockedCoinbase) {
-        let mut locked_coinbase = self.locked_coinbase.lock().await;
+        let mut locked_coinbase = self.locked_coinbase.lock().unwrap();
         *locked_coinbase = value;
     }
 
@@ -252,17 +257,17 @@ impl WalletDb {
 
     /// Get locked coinbase mutex
     #[allow(clippy::type_complexity)]
-    pub fn get_locked_coinbase_mutex(&self) -> Arc<TokioMutex<LockedCoinbase>> {
+    pub fn get_locked_coinbase_mutex(&self) -> Arc<Mutex<LockedCoinbase>> {
         self.locked_coinbase.clone()
     }
 
     /// Get locked coinbase value
     pub async fn get_locked_coinbase(&self) -> LockedCoinbase {
-        self.locked_coinbase.lock().await.clone()
+        self.locked_coinbase.lock().unwrap().clone()
     }
 
     /// Gets all outgoing transactions
-    pub fn get_outgoing_txs(&self) -> Result<BTreeMap<String, Transaction>> {
+    pub fn get_outgoing_txs(&self) -> Result<Vec<(String, Transaction)>> {
         let db = self.db.clone();
         let db = db.lock().unwrap();
 
@@ -390,7 +395,7 @@ impl WalletDb {
 
         for seed in seeds {
             let (tx_out_p, pk, sk, amount, v) = make_wallet_tx_info(&seed);
-            let (address, _) = self.store_payment_address(pk, sk, v).await;
+            let (address, _) = self.store_payment_address(pk, sk, v);
             let payments = vec![(tx_out_p, Asset::Token(amount), address, 0)];
             self.save_usable_payments_to_wallet(payments, 0, false)
                 .await
@@ -412,14 +417,13 @@ impl WalletDb {
 
     /// Generates a new payment address, saving the related keys to the wallet
     /// TODO: Add static address capability for frequent payments
-    pub async fn generate_payment_address(&mut self) -> (String, AddressStore) {
+    pub fn generate_payment_address(&mut self) -> (String, AddressStore) {
         let (public_key, secret_key) = sign::gen_keypair();
         self.store_payment_address(public_key, secret_key, None)
-            .await
     }
 
     /// Store a new payment address, saving the related keys to the wallet
-    pub async fn store_payment_address(
+    pub fn store_payment_address(
         &mut self,
         public_key: PublicKey,
         secret_key: SecretKey,
@@ -432,9 +436,7 @@ impl WalletDb {
             address_version,
         };
 
-        let save_result = self
-            .save_address_to_wallet(final_address.clone(), address_keys.clone())
-            .await;
+        let save_result = self.save_address_to_wallet(final_address.clone(), address_keys.clone());
         if save_result.is_err() {
             panic!("Error writing address to wallet");
         }
@@ -450,24 +452,25 @@ impl WalletDb {
     ///
     /// * `address` - Address to save to wallet
     /// * `keys`    - Address-related keys to save
-    pub async fn save_address_to_wallet(&self, address: String, keys: AddressStore) -> Result<()> {
-        let db = self.db.clone();
+    pub fn save_address_to_wallet(&self, address: String, keys: AddressStore) -> Result<()> {
+        let raw_db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
-        Ok(task::spawn_blocking(move || {
-            // Wallet DB handling
-            let mut db = db.lock().unwrap();
-            let mut batch = db.batch_writer();
 
-            let mut address_list = get_known_key_address(&db);
-            address_list.insert(address.clone());
+        let mut db = raw_db.lock().unwrap();
+        let mut batch = db.batch_writer();
 
-            // Save to disk
-            save_address_store_to_wallet(&mut batch, &address, keys, &encryption_key);
-            set_known_key_address(&mut batch, address_list);
-            let batch = batch.done();
-            db.write(batch).unwrap();
-        })
-        .await?)
+        let mut address_list = get_known_key_address(&db);
+        address_list.insert(address.clone());
+
+        // Save to disk
+        save_address_store_to_wallet(&mut batch, &address, keys, &encryption_key);
+        set_known_key_address(&mut batch, address_list);
+        let batch = batch.done();
+
+        match db.write(batch) {
+            Ok(_v) => Ok(()),
+            Err(e) => Err(WalletDbError::Database(SimpleDbError::from(e))),
+        }
     }
 
     /// Saves an AddressStore to wallet in a directly encrypted state
@@ -549,31 +552,10 @@ impl WalletDb {
                 .filter(|(_, _, a, _)| addresses.contains(a))
                 .collect();
 
-            let usable_outpoints = usable_payments
-                .iter()
-                .map(|(out_p, _, _, _)| out_p.clone())
-                .collect::<Vec<_>>();
-
             // Reset DB if needed
             if reset_db {
                 debug!("Resetting DB");
-                debug!("Usable outpoints: {:?}", usable_outpoints);
-                debug!("Number of usable outpoints: {}", usable_outpoints.len());
-                let existing_tx = fund_store.transactions().clone();
-                if usable_outpoints.len() == existing_tx.len() {
-                    fund_store.reset();
-                    debug!(
-                        "Current running total after reset: {:?}",
-                        fund_store.running_total()
-                    );
-                } else {
-                    for (out_p, _) in &existing_tx {
-                        if !usable_outpoints.contains(out_p) {
-                            fund_store.spend_tx(out_p);
-                            debug!("Current running total: {:?}", fund_store.running_total());
-                        }
-                    }
-                }
+                fund_store.reset();
             }
 
             for (out_p, asset, key_address, locktime) in &usable_payments {
@@ -591,10 +573,12 @@ impl WalletDb {
                 }
             }
 
-            set_fund_store(&mut batch, fund_store);
+            set_fund_store(&mut batch, fund_store.clone());
 
             let batch = batch.done();
             db.write(batch).unwrap();
+
+            debug!("Spent transactions: {:?}", fund_store.spent_transactions());
             (usable_payments, locked_coinbase)
         })
         .await?;
@@ -609,13 +593,12 @@ impl WalletDb {
     ///
     /// * `asset_required`              - The required `Asset`
     /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    pub async fn fetch_tx_ins_and_tx_outs(
+    pub fn fetch_tx_ins_and_tx_outs(
         &mut self,
         asset_required: Asset,
         tx_outs: Vec<TxOut>,
     ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
         self.fetch_tx_ins_and_tx_outs_provided_excess(asset_required, tx_outs, None)
-            .await
     }
 
     /// Get `Vec<TxIn>` and `Vec<TxOut>` values for a transaction that merges
@@ -637,11 +620,11 @@ impl WalletDb {
 
         let excess_addr = match excess_address {
             Some(excess_addr) => excess_addr,
-            None => self.generate_payment_address().await.0,
+            None => self.generate_payment_address().0,
         };
 
         let tx_outs: Vec<TxOut> = vec![TxOut::new_asset(excess_addr, asset, None)];
-        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used);
 
         Ok((tx_ins, tx_outs))
     }
@@ -652,25 +635,29 @@ impl WalletDb {
     ///
     /// * `asset_required`              - The required `Asset`
     /// * `tx_outs`                     - Initial `Vec<TxOut>` value
-    pub async fn fetch_tx_ins_and_tx_outs_provided_excess(
+    pub fn fetch_tx_ins_and_tx_outs_provided_excess(
         &mut self,
         asset_required: Asset,
         mut tx_outs: Vec<TxOut>,
         excess_address: Option<String>,
     ) -> Result<(Vec<TxIn>, Vec<TxOut>)> {
-        let (tx_cons, total_amount, tx_used) = self
-            .fetch_inputs_for_payment(asset_required.clone())
-            .await?;
+        let (tx_cons, total_amount, tx_used) =
+            match self.fetch_inputs_for_payment(asset_required.clone()) {
+                Ok((tx_cons, total_amount, tx_used)) => (tx_cons, total_amount, tx_used),
+                Err(_) => {
+                    return Err(WalletDbError::InsufficientFundsError);
+                }
+            };
 
         if let Some(excess) = total_amount.get_excess(&asset_required) {
             let excess_address = match excess_address {
                 Some(address) => address,
-                None => self.generate_payment_address().await.0,
+                None => self.generate_payment_address().0,
             };
             tx_outs.push(TxOut::new_asset(excess_address, excess, None));
         }
 
-        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used);
 
         debug!("Total amount collected by store {:?}", total_amount);
 
@@ -694,7 +681,7 @@ impl WalletDb {
 
         tracing::trace!("Total amount collected by store {total_amount:?}");
 
-        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used).await;
+        let tx_ins = self.consume_inputs_for_payment(tx_cons, tx_used);
 
         Ok((tx_ins, total_amount))
     }
@@ -732,18 +719,22 @@ impl WalletDb {
     /// ### Arguments
     ///
     /// * `asset_required` - Asset needed
-    pub async fn fetch_inputs_for_payment(
+    pub fn fetch_inputs_for_payment(
         &self,
         asset_required: Asset,
     ) -> Result<(Vec<TxConstructor>, Asset, Vec<(OutPoint, String)>)> {
         let db = self.db.clone();
         let encryption_key = self.encryption_key.clone();
-        let locked_coinbase = self.get_locked_coinbase().await;
-        task::spawn_blocking(move || {
-            let db = db.lock().unwrap();
-            fetch_inputs_for_payment_from_db(&db, asset_required, &encryption_key, &locked_coinbase)
-        })
-        .await?
+        let locked_coinbase = self.get_locked_coinbase_mutex();
+
+        let db_arced = db.lock().unwrap();
+        let locked_coinbase_arced = locked_coinbase.lock().unwrap();
+        fetch_inputs_for_payment_from_db(
+            &db_arced,
+            asset_required,
+            &encryption_key,
+            &locked_coinbase_arced,
+        )
     }
 
     /// Fetches valid TxIns based on the supplied transactions
@@ -798,28 +789,25 @@ impl WalletDb {
     ///
     /// * `tx_cons`         - TxIn TxConstructors
     /// * `tx_used`         - TxOut used for TxIns
-    pub async fn consume_inputs_for_payment(
+    pub fn consume_inputs_for_payment(
         &mut self,
         tx_cons: Vec<TxConstructor>,
         tx_used: Vec<(OutPoint, String)>,
     ) -> Vec<TxIn> {
-        let db = self.db.clone();
-        task::spawn_blocking(move || {
-            let mut db = db.lock().unwrap();
-            let mut batch = db.batch_writer();
-            let mut fund_store = get_fund_store(&db);
+        let raw_db = self.db.clone();
 
-            for (out_p, _) in tx_used {
-                fund_store.spend_tx(&out_p);
-            }
-            set_fund_store(&mut batch, fund_store);
-            let batch = batch.done();
-            db.write(batch).unwrap();
+        let mut db = raw_db.lock().unwrap();
+        let mut batch = db.batch_writer();
+        let mut fund_store = get_fund_store(&db);
 
-            construct_payment_tx_ins(tx_cons)
-        })
-        .await
-        .unwrap()
+        for (out_p, _) in tx_used {
+            fund_store.spend_tx(&out_p);
+        }
+        set_fund_store(&mut batch, fund_store);
+        let batch = batch.done();
+        db.write(batch).unwrap();
+
+        construct_payment_tx_ins(tx_cons)
     }
 
     /// Destroy the used transactions with keys purging them from the wallet
@@ -914,7 +902,7 @@ impl WalletDb {
 
     /// Load locked coinbase from wallet
     pub async fn load_locked_coinbase(&mut self) -> Result<()> {
-        let mut cb = self.locked_coinbase.lock().await;
+        let mut cb = self.locked_coinbase.lock().unwrap();
         let serialized_value = self.get_db_value(LOCKED_COINBASE_KEY).await;
         if let Some(serialized_value) = serialized_value {
             let deserialize_old = deserialize::<Vec<(String, u64)>>(&serialized_value);
@@ -1087,6 +1075,39 @@ pub fn save_transaction_to_wallet(
     db.put_cf(DB_COL_DEFAULT, &key, &input);
 }
 
+/// Saves incoming transactions to wallet
+pub fn save_incoming_tx_to_wallet(
+    db: &SimpleDb,
+    batch: &mut SimpleDbWriteBatch,
+    incoming_tx: BTreeMap<String, (OutPoint, Asset)>,
+) {
+    match get_incoming_txs(db) {
+        Ok(existing_incomings) => {
+            let mut new_incomings = existing_incomings.clone();
+
+            for (k, v) in incoming_tx {
+                new_incomings.insert(k, v);
+            }
+            let store = serialize(&new_incomings).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, INCOMING_TXS_KEY, &store);
+        }
+        Err(_) => {
+            let store = serialize(&incoming_tx).unwrap();
+            batch.put_cf(DB_COL_DEFAULT, INCOMING_TXS_KEY, &store);
+        }
+    }
+}
+
+/// Gets existing incoming transactions in wallet
+pub fn get_incoming_txs(db: &SimpleDb) -> Result<BTreeMap<String, (OutPoint, Asset)>> {
+    let store = db.get_cf(DB_COL_DEFAULT, INCOMING_TXS_KEY)?;
+    let store = store.ok_or(WalletDbError::IncomingTxMissingError)?;
+    let incoming_tx: BTreeMap<String, (OutPoint, Asset)> = deserialize(&store)?;
+
+    Ok(incoming_tx)
+}
+
+/// Saves outgoing transactions to wallet
 pub fn save_outgoing_tx_to_wallet(
     db: &SimpleDb,
     batch: &mut SimpleDbWriteBatch,
@@ -1094,23 +1115,24 @@ pub fn save_outgoing_tx_to_wallet(
 ) {
     match get_outgoing_txs(db) {
         Ok(mut outgoing_txs) => {
-            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            outgoing_txs.push(outgoing_tx);
             let store = serialize(&outgoing_txs).unwrap();
             batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
         }
         Err(_) => {
-            let mut outgoing_txs = BTreeMap::new();
-            outgoing_txs.insert(outgoing_tx.0, outgoing_tx.1);
+            let mut outgoing_txs = Vec::new();
+            outgoing_txs.push(outgoing_tx);
             let store = serialize(&outgoing_txs).unwrap();
             batch.put_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY, &store);
         }
     }
 }
 
-pub fn get_outgoing_txs(db: &SimpleDb) -> Result<BTreeMap<String, Transaction>> {
+/// Gets existing outgoing transactions in wallet
+pub fn get_outgoing_txs(db: &SimpleDb) -> Result<Vec<(String, Transaction)>> {
     let store = db.get_cf(DB_COL_DEFAULT, OUTGOING_TXS_KEY)?;
     let store = store.ok_or(WalletDbError::OutgoingTxMissingError)?;
-    let outgoing_tx: BTreeMap<String, Transaction> = deserialize(&store)?;
+    let outgoing_tx: Vec<(String, Transaction)> = deserialize(&store)?;
 
     Ok(outgoing_tx)
 }
@@ -1507,15 +1529,15 @@ mod tests {
         .unwrap();
 
         // Unlinked keys and transactions
-        let (_key_addr_unused, _) = wallet.generate_payment_address().await;
+        let (_key_addr_unused, _) = wallet.generate_payment_address();
         wallet
             .save_transaction_to_wallet(out_p_non_pay, key_addr_non_pay)
             .await
             .unwrap();
 
         // Store payments
-        let (key_addr1, _) = wallet.generate_payment_address().await;
-        let (key_addr2, _) = wallet.generate_payment_address().await;
+        let (key_addr1, _) = wallet.generate_payment_address();
+        let (key_addr2, _) = wallet.generate_payment_address();
         let stored_usable = wallet
             .save_usable_payments_to_wallet(
                 vec![
@@ -1532,8 +1554,8 @@ mod tests {
 
         // Pay out
         let (tx_cons, fetched_amount, tx_used) =
-            wallet.fetch_inputs_for_payment(amount_out).await.unwrap();
-        let tx_ins = wallet.consume_inputs_for_payment(tx_cons, tx_used).await;
+            wallet.fetch_inputs_for_payment(amount_out).unwrap();
+        let tx_ins = wallet.consume_inputs_for_payment(tx_cons, tx_used);
 
         // clean up db
         let (destroyed_keys, destroyed_txs) =

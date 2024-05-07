@@ -1,8 +1,7 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::interfaces::{
-    MempoolRequest, NodeType, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response,
-    UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
+    MempoolRequest, NodeType, PaymentResponse, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response, UserApi, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
@@ -24,8 +23,7 @@ use tw_chain::primitives::block::Block;
 use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
 use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
 use tw_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
-    construct_tx_core, construct_tx_ins_address, update_input_signatures, ReceiverInfo,
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_tx_core, construct_tx_hash, construct_tx_ins_address, update_input_signatures, ReceiverInfo
 };
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
@@ -125,7 +123,7 @@ pub struct UserNode {
     node: Node,
     wallet_db: WalletDb,
     local_events: LocalEventChannel,
-    threaded_calls: ThreadedCallChannel<UserNode>,
+    threaded_calls: ThreadedCallChannel<dyn UserApi>,
     ui_feedback_tx: Option<mpsc::Sender<Rs2JsMsg>>,
     mempool_addr: SocketAddr,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
@@ -340,44 +338,32 @@ impl UserNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Sent startup requests on reconnection",
-            }) => debug!("Sent startup requests on reconnection"),
+                reason,
+            }) if reason ==  "Sent startup requests on reconnection" => debug!("Sent startup requests on reconnection"),
             Ok(Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
-            }) => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => error!("Failed to send startup requests on reconnection"),
             Ok(Response {
                 success: true,
-                reason: "Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Shutdown" => {
                 warn!("Shutdown now");
                 try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Exit).await;
                 return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
-                reason: "Donation Requested",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Request Payment Address",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Payment transaction received",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Item asset create transaction ready",
-            }) => {
+                reason,
+            }) if reason == "Item asset create transaction ready" => {
                 self.send_next_payment_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
             Ok(Response {
                 success: true,
-                reason: "Received item-based payment request",
-            }) => {
+                reason,
+            }) if reason == "Received item-based payment request" => {
                 self.send_rb_payment_response().await.unwrap();
                 self.send_next_rb_transaction_to_destinations(self.mempool_address())
                     .await
@@ -385,100 +371,56 @@ impl UserNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received item-based payment response",
-            }) => {
+                reason,
+            }) if reason == "Received item-based payment response" => {
                 self.send_next_rb_transaction_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
             Ok(Response {
                 success: true,
-                reason: "New address ready to be sent",
-            }) => {
+                reason,
+            }) if reason == "New address ready to be sent" => {
                 debug!("Sending new payment address");
                 self.send_address_to_trading_peer().await.unwrap();
             }
             Ok(Response {
                 success: true,
-                reason: "New address generated",
-            }) => {
+                reason,
+            }) if reason == "New address generated" => {
                 debug!("New address generated");
             }
             Ok(Response {
                 success: true,
-                reason: "Addresses deleted",
-            }) => {
+                reason,
+            }) if reason == "Addresses deleted" => {
                 debug!("Addresses deleted");
             }
             Ok(Response {
                 success: true,
-                reason: "Next payment transaction ready",
-            }) => {
+                reason,
+            }) if reason == "Next payment transaction ready" => {
                 self.send_next_payment_to_destinations(self.mempool_address())
                     .await
                     .unwrap();
             }
             Ok(Response {
-                success: false,
-                reason: "Insufficient funds for payment",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Ignore unexpected transaction",
-            }) => {}
-            Ok(Response {
                 success: true,
-                reason: "Block mining notified",
-            }) => {
+                reason,
+            }) if reason == "Block mining notified" => {
                 self.process_mining_notified().await;
             }
             Ok(Response {
                 success: true,
-                reason: "Request UTXO set",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Received UTXO set",
-            }) => {
+                reason,
+            }) if reason == "Received UTXO set" => {
                 self.update_running_total().await;
             }
             Ok(Response {
                 success: true,
-                reason: "Node is connected",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Node is disconnected",
-            }) => {}
-            Ok(Response {
-                success: true, // Not always an error
-                reason: "Node is disconnected",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Connected to mempool",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Disconnected from mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Failed to connect to mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Failed to disconnect from mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Already disconnected from mempool",
-            }) => {}
-            Ok(Response {
-                success: true,
                 reason,
             }) => {
-                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+                trace!("Unknown response: {:?}", reason);
             }
             Ok(Response {
                 success: false,
@@ -521,7 +463,7 @@ impl UserNode {
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: reason.to_string(),
                 }))
             }
         }
@@ -538,7 +480,7 @@ impl UserNode {
     }
 
     /// Threaded call channel.
-    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<UserNode> {
+    pub fn threaded_call_tx(&self) -> &ThreadedCallSender<dyn UserApi> {
         &self.threaded_calls.tx
     }
 
@@ -567,19 +509,19 @@ impl UserNode {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
-                reason,
+                reason: reason.to_string(),
             }),
             LocalEvent::ReconnectionComplete => {
                 if let Err(err) = self.send_startup_requests().await {
                     error!("Failed to send startup requests on reconnect: {}", err);
                     return Some(Response {
                         success: false,
-                        reason: "Failed to send startup requests on reconnection",
+                        reason: "Failed to send startup requests on reconnection".to_string(),
                     });
                 }
                 Some(Response {
                     success: true,
-                    reason: "Sent startup requests on reconnection",
+                    reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
             LocalEvent::CoordinatedShutdown(_) => None,
@@ -644,8 +586,15 @@ impl UserNode {
                 Some(self.receive_payment_transaction(transaction).await)
             }
             SendPaymentAddress { address } => {
-                self.process_pending_payment_transactions(peer, address)
-                    .await
+                let resp = self.process_pending_payment_transactions(peer, address);
+
+                return match resp {
+                    Some(resp) => Some(Response {
+                        success: resp.success,
+                        reason: resp.reason,
+                    }),
+                    None => None,
+                };
             }
             SendRbPaymentRequest {
                 rb_payment_request_data,
@@ -694,15 +643,18 @@ impl UserNode {
             } => {
                 self.request_payment_address_for_peer(payment_peer, amount, locktime)
                     .await
-            }
+            },
             MakePayment {
                 address,
                 amount,
                 locktime,
-            } => Some(
-                self.make_payment_transactions(None, address, amount, locktime)
-                    .await,
-            ),
+            } => {
+                let resp = self.make_payment_transactions(None, address, amount, locktime);
+                return Some(Response {
+                    success: resp.success,
+                    reason: resp.reason,
+                });
+            },
             SendCreateItemRequest {
                 item_amount,
                 genesis_hash_spec,
@@ -716,16 +668,17 @@ impl UserNode {
                 amount,
                 excess_address,
                 locktime,
-            } => Some(
-                self.make_payment_transactions_provided_excess(
+            } => {
+                let resp = self.make_payment_transactions_provided_excess(
                     None,
                     address,
                     amount,
                     Some(excess_address),
                     locktime,
-                )
-                .await,
-            ),
+                );
+
+                return Some(Response { success: resp.success, reason: resp.reason })
+            },
             GenerateNewAddress => Some(self.generate_new_address().await),
             GetConnectionStatus => Some(self.receive_connection_status_request().await),
             ConnectToMempool => Some(self.handle_connect_to_mempool().await),
@@ -744,6 +697,18 @@ impl UserNode {
                 )
                 .await,
             ),
+            SendNextPayment => {
+                match self.send_next_payment_to_destinations(self.mempool_address()).await {
+                    Ok(_) => Some(Response {
+                        success: true,
+                        reason: "Next payment transaction sent".to_string(),
+                    }),
+                    Err(e) => Some(Response {
+                        success: false,
+                        reason: format!("Failed to send next payment transaction: {:?}", e),
+                    }),
+                }
+            },
         }
     }
 
@@ -759,7 +724,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Addresses deleted",
+            reason: "Addresses deleted".to_string(),
         }
     }
 
@@ -770,7 +735,7 @@ impl UserNode {
         if join_handles.is_empty() {
             return Response {
                 success: false,
-                reason: "Already disconnected from mempool",
+                reason: "Already disconnected from mempool".to_string(),
             };
         }
         for join_handle in join_handles {
@@ -778,7 +743,7 @@ impl UserNode {
                 error!("Failed to disconnect from mempool: {}", err);
                 return Response {
                     success: false,
-                    reason: "Failed to disconnect from mempool",
+                    reason: "Failed to disconnect from mempool".to_string(),
                 };
             }
         }
@@ -791,7 +756,7 @@ impl UserNode {
         .await;
         Response {
             success: true,
-            reason: "Disconnected from mempool",
+            reason: "Disconnected from mempool".to_string(),
         }
     }
 
@@ -802,14 +767,14 @@ impl UserNode {
             error!("Failed to connect to mempool: {e:?}");
             return Response {
                 success: false,
-                reason: "Failed to connect to mempool",
+                reason: "Failed to connect to mempool".to_string(),
             };
         }
         if let Err(e) = self.send_block_notification_request().await {
             error!("Failed to send startup requests to mempool: {e:?}");
             return Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
+                reason: "Failed to send startup requests on reconnection".to_string(),
             };
         }
         try_send_to_ui(
@@ -821,7 +786,7 @@ impl UserNode {
         .await;
         Response {
             success: true,
-            reason: "Connected to mempool",
+            reason: "Connected to mempool".to_string(),
         }
     }
 
@@ -837,7 +802,7 @@ impl UserNode {
             .await;
             return Response {
                 success: true,
-                reason: "Node is disconnected",
+                reason: "Node is disconnected".to_string(),
             };
         }
         try_send_to_ui(
@@ -849,7 +814,7 @@ impl UserNode {
         .await;
         Response {
             success: true,
-            reason: "Node is connected",
+            reason: "Node is connected".to_string(),
         }
     }
 
@@ -865,7 +830,7 @@ impl UserNode {
 
         Some(Response {
             success: true,
-            reason: "Shutdown",
+            reason: "Shutdown".to_string(),
         })
     }
     pub fn get_next_payment_transaction(&self) -> Option<(Option<SocketAddr>, Transaction)> {
@@ -962,7 +927,7 @@ impl UserNode {
 
         Some(Response {
             success: true,
-            reason: "Request UTXO set",
+            reason: "Request UTXO set".to_string(),
         })
     }
 
@@ -981,7 +946,7 @@ impl UserNode {
             .ok()?;
         Some(Response {
             success: true,
-            reason: "Donation Requested",
+            reason: "Donation Requested".to_string(),
         })
     }
 
@@ -1003,7 +968,7 @@ impl UserNode {
             .ok()?;
         Some(Response {
             success: true,
-            reason: "Request Payment Address",
+            reason: "Request Payment Address".to_string(),
         })
     }
 
@@ -1020,7 +985,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Payment transaction received",
+            reason: "Payment transaction received".to_string(),
         }
     }
 
@@ -1030,11 +995,11 @@ impl UserNode {
     ///
     /// * `peer`    - Peer recieving the payment.
     /// * `address` - Address to assign the payment transaction to
-    pub async fn process_pending_payment_transactions(
+    pub fn process_pending_payment_transactions(
         &mut self,
         peer: SocketAddr,
         address: String,
-    ) -> Option<Response> {
+    ) -> Option<PaymentResponse> {
         let (amount, locktime) = match (
             self.pending_payments.0.remove(&peer),
             self.pending_payments.1,
@@ -1042,16 +1007,17 @@ impl UserNode {
             (Some(PendingPayment { amount, locktime }), _) => (amount, locktime),
             (_, AutoDonate::Enabled(amount)) => (amount, None),
             _ => {
-                return Some(Response {
+                return Some(PaymentResponse {
                     success: false,
-                    reason: "Ignore unexpected transaction",
+                    reason: "Ignore unexpected transaction".to_string(),
+                    tx_hash: "".to_string(),
+                    tx: None,
                 })
             }
         };
 
         Some(
-            self.make_payment_transactions(Some(peer), address, amount, locktime)
-                .await,
+            self.make_payment_transactions(Some(peer), address, amount, locktime),
         )
     }
 
@@ -1065,39 +1031,43 @@ impl UserNode {
     /// * `amount`  - Price/amount paid
     /// * `excess_address` - Address to assign the excess to
     /// * `locktime` - Locktime for transaction
-    pub async fn make_payment_transactions_provided_excess(
+    pub fn make_payment_transactions_provided_excess(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
         excess_address: Option<String>,
         locktime: Option<u64>,
-    ) -> Response {
+    ) -> PaymentResponse {
         let tx_out = TxOut::new_token_amount(address, amount, locktime);
         let asset_required = Asset::Token(amount);
         let (tx_ins, tx_outs) = if let Ok(value) = self
             .wallet_db
             .fetch_tx_ins_and_tx_outs_provided_excess(asset_required, vec![tx_out], excess_address)
-            .await
         {
             value
         } else {
-            return Response {
+            return PaymentResponse {
                 success: false,
-                reason: "Insufficient funds for payment",
+                reason: "Insufficient funds for payment".to_string(),
+                tx_hash: "".to_string(),
+                tx: None,
             };
         };
 
         let key_material = self.wallet_db.get_key_material(&tx_ins);
         let final_tx_ins = update_input_signatures(&tx_ins, &tx_outs, &key_material);
         let payment_tx = construct_tx_core(final_tx_ins, tx_outs, None);
+        let tx_hash = construct_tx_hash(&payment_tx);
 
         self.wallet_db.set_last_construct_tx(payment_tx.clone());
-        self.next_payment = Some((peer, payment_tx));
+        self.next_payment = Some((peer, payment_tx.clone()));
 
-        Response {
+        PaymentResponse {
             success: true,
-            reason: "Next payment transaction ready",
+            reason: "Payment transaction pending".to_string(),
+            tx_hash,
+            tx: Some(payment_tx),
         }
     }
 
@@ -1126,7 +1096,7 @@ impl UserNode {
         } else {
             return Response {
                 success: false,
-                reason: "Insufficient funds for payment",
+                reason: "Insufficient funds for payment".to_string(),
             };
         };
         let key_material = self.wallet_db.get_key_material(&tx_ins);
@@ -1136,7 +1106,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Next payment transaction ready",
+            reason: "Next payment transaction ready".to_string(),
         }
     }
 
@@ -1148,15 +1118,14 @@ impl UserNode {
     /// * `address` - Address to assign the payment transaction to
     /// * `amount`  - Price/amount paid
     /// * `locktime` - Locktime for transaction
-    pub async fn make_payment_transactions(
+    pub fn make_payment_transactions(
         &mut self,
         peer: Option<SocketAddr>,
         address: String,
         amount: TokenAmount,
         locktime: Option<u64>,
-    ) -> Response {
+    ) -> PaymentResponse {
         self.make_payment_transactions_provided_excess(peer, address, amount, None, locktime)
-            .await
     }
 
     /// Sends a payment transaction to the receiving party
@@ -1223,7 +1192,7 @@ impl UserNode {
     /// Sends a payment address from a request
     pub async fn send_address_to_trading_peer(&mut self) -> Result<()> {
         let peer = self.trading_peer.take().unwrap();
-        let (address, _) = self.wallet_db.generate_payment_address().await;
+        let (address, _) = self.wallet_db.generate_payment_address();
         debug!("Address to send: {:?}", address);
 
         self.node
@@ -1274,12 +1243,12 @@ impl UserNode {
             .await;
             Response {
                 success: true,
-                reason: "Block mining notified",
+                reason: "Block mining notified".to_string(),
             }
         } else {
             Response {
                 success: false,
-                reason: "Invalid block mining notifier",
+                reason: "Invalid block mining notifier".to_string(),
             }
         }
     }
@@ -1365,17 +1334,17 @@ impl UserNode {
 
     /// Generate a new payment address
     pub async fn generate_new_address(&mut self) -> Response {
-        let _ = self.wallet_db.generate_payment_address().await;
+        let _ = self.wallet_db.generate_payment_address();
         Response {
             success: true,
-            reason: "New address generated",
+            reason: "New address generated".to_string(),
         }
     }
 
     #[cfg(test)]
     /// Generate a new payment address
     pub async fn generate_static_address_for_miner(&mut self) -> String {
-        let (addr, _) = self.wallet_db.generate_payment_address().await;
+        let (addr, _) = self.wallet_db.generate_payment_address();
         addr
     }
 
@@ -1390,7 +1359,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "New address ready to be sent",
+            reason: "New address ready to be sent".to_string(),
         }
     }
 
@@ -1412,13 +1381,12 @@ impl UserNode {
         sender_asset: Asset,
         genesis_hash: Option<String>, /* genesis_hash of Item asset to receive */
     ) -> Result<()> {
-        let (sender_address, _) = self.wallet_db.generate_payment_address().await;
+        let (sender_address, _) = self.wallet_db.generate_payment_address();
         let sender_half_druid = generate_half_druid();
 
         let (tx_ins, tx_outs) = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
-            .await?;
+            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new()).unwrap();
 
         let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
             sender_asset,
@@ -1471,7 +1439,7 @@ impl UserNode {
         rb_payment_request_data: RbPaymentRequestData,
     ) -> Response {
         let receiver_half_druid = generate_half_druid();
-        let (receiver_address, _) = self.wallet_db.generate_payment_address().await;
+        let (receiver_address, _) = self.wallet_db.generate_payment_address();
         let asset_required = Asset::item(
             1,
             rb_payment_request_data.sender_drs_tx_expectation.clone(),
@@ -1479,15 +1447,14 @@ impl UserNode {
         );
         let tx_ins_and_outs = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs(asset_required, Vec::new())
-            .await;
+            .fetch_tx_ins_and_tx_outs(asset_required, Vec::new());
 
         let (tx_ins, tx_outs) = if let Ok(value) = tx_ins_and_outs {
             value
         } else {
             return Response {
                 success: false,
-                reason: "Insufficient funds for payment",
+                reason: "Insufficient funds for payment".to_string(),
             };
         };
 
@@ -1503,7 +1470,7 @@ impl UserNode {
 
         Response {
             success: true,
-            reason: "Received item-based payment request",
+            reason: "Received item-based payment request".to_string(),
         }
     }
 
@@ -1532,7 +1499,7 @@ impl UserNode {
         }
         Response {
             success: true,
-            reason: "Received item-based payment response",
+            reason: "Received item-based payment response".to_string(),
         }
     }
 
@@ -1547,7 +1514,7 @@ impl UserNode {
             public_key,
             secret_key,
             address_version: _,
-        } = self.wallet_db.generate_payment_address().await.1;
+        } = self.wallet_db.generate_payment_address().1;
 
         let block_num = self.last_block_notified.header.b_num;
         let item_asset_tx = construct_item_create_tx(
@@ -1563,7 +1530,7 @@ impl UserNode {
         self.next_payment = Some((None, item_asset_tx));
 
         Response {
-            reason: "Item asset create transaction ready",
+            reason: "Item asset create transaction ready".to_string(),
             success: true,
         }
     }
@@ -1576,6 +1543,16 @@ impl UserNode {
     /// Get `Node` member as mutable (useful to reach comms)
     pub fn get_node_mut(&mut self) -> &mut Node {
         &mut self.node
+    }
+}
+
+impl UserApi for UserNode {
+    fn make_payment(&mut self,
+        address: String,
+        amount: TokenAmount,
+        locktime: Option<u64>,
+    ) -> PaymentResponse {
+        self.make_payment_transactions(None, address, amount, locktime)
     }
 }
 
@@ -1624,7 +1601,7 @@ impl Transactor for UserNode {
 
         Response {
             success: true,
-            reason: "Received UTXO set",
+            reason: "Received UTXO set".to_string(),
         }
     }
     async fn update_running_total(&mut self) {
@@ -1639,6 +1616,8 @@ impl Transactor for UserNode {
         let addr_diff: BTreeSet<_> = known_addresses.into_iter().collect();
         let new_addresses: Vec<String> = utxo_addresses.difference(&addr_diff).cloned().collect();
         let reset_db = new_addresses.is_empty();
+
+        debug!("Reset DB: {}", reset_db);
 
         let b_num = self.last_block_notified.header.b_num;
         self.wallet_db

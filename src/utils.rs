@@ -386,8 +386,8 @@ pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
 pub async fn create_and_save_fake_to_wallet(
     wallet_db: &mut WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (final_address, address_keys) = wallet_db.generate_payment_address().await;
-    let (receiver_addr, _) = wallet_db.generate_payment_address().await;
+    let (final_address, address_keys) = wallet_db.generate_payment_address();
+    let (receiver_addr, _) = wallet_db.generate_payment_address();
 
     let (t_hash, _payment_tx) = create_valid_transaction(
         "00000",

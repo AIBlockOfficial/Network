@@ -5,7 +5,7 @@ use crate::api::utils::{
 };
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::MempoolApi;
+use crate::interfaces::{UserApi, MempoolApi};
 use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
@@ -447,6 +447,7 @@ pub fn make_payment(
     dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -457,13 +458,14 @@ pub fn make_payment(
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(with_node_component(node))
+        .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, db, node, pi, cache| {
+        .and_then(move |call_id: String, db, node, tc, pi, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_make_payment(db, node, pi, route, call_id),
+                handlers::post_make_payment(db, node, tc, pi, route, call_id),
             )
         })
         .with(post_cors())
@@ -829,6 +831,7 @@ pub fn user_node_routes(
     routes_pow_info: RoutesPoWInfo,
     db: WalletDb,
     node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
@@ -852,6 +855,7 @@ pub fn user_node_routes(
         dp,
         db.clone(),
         node.clone(),
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -1177,6 +1181,7 @@ pub fn miner_node_with_user_routes(
     current_block: CurrentBlockWithMutex,
     db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
     user_node: Node, /* Additional User `Node` */
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
@@ -1194,6 +1199,7 @@ pub fn miner_node_with_user_routes(
         dp,
         db.clone(),
         user_node.clone(),
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

@@ -11,7 +11,7 @@ use crate::db_utils::SimpleDb;
 use crate::interfaces::{
     node_type_as_str, AddressesWithOutPoints, BlockchainItem, BlockchainItemMeta,
     BlockchainItemType, DebugData, DruidPool, MempoolApi, MineApiRequest, MineRequest, NodeType,
-    OutPointData, StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    OutPointData, StoredSerializingBlock, UserApi, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::mempool::MempoolError;
 use crate::miner::{BlockPoWReceived, CurrentBlockWithMutex};
@@ -252,7 +252,7 @@ pub async fn get_payment_address(
     call_id: String,
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
-    let (address, _) = wallet_db.generate_payment_address().await;
+    let (address, _) = wallet_db.generate_payment_address();
     r.into_ok(
         "New payment address generated",
         json_serialize_embed(address),
@@ -486,7 +486,7 @@ pub async fn post_import_keypairs(
     }
 
     for (addr, address_set) in key_pairs_converted.into_iter() {
-        match db.save_address_to_wallet(addr, address_set).await {
+        match db.save_address_to_wallet(addr, address_set) {
             Ok(_) => {}
             Err(_e) => {
                 return r.into_err_with_data(
@@ -533,6 +533,7 @@ pub async fn post_import_keypairs(
 pub async fn post_make_payment(
     db: WalletDb,
     peer: Node,
+    mut threaded_calls: ThreadedCallSender<dyn UserApi>,
     encapsulated_data: EncapsulatedPayment,
     route: &'static str,
     call_id: String,
@@ -546,25 +547,29 @@ pub async fn post_make_payment(
 
     let r = CallResponse::new(route, &call_id);
 
-    let request = match db.test_passphrase(passphrase).await {
-        Ok(_) => UserRequest::UserApi(UserApiRequest::MakePayment {
-            address: address.clone(),
-            amount,
-            locktime,
-        }),
-        Err(e) => {
-            return wallet_db_error(e, r);
-        }
+    if let Err(e) = db.test_passphrase(passphrase).await {
+        return wallet_db_error(e, r);
     };
 
+    let response = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| {
+            c.make_payment(address, amount, locktime)
+        },
+        "Cannot fetch UTXO balance",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    let request = UserRequest::UserApi(UserApiRequest::SendNextPayment);
     if let Err(e) = peer.inject_next_event(peer.local_address(), request) {
         error!("route:make_payment error: {:?}", e);
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
 
-    r.into_ok(
+    r.into_progress(
         "Payment processing",
-        json_serialize_embed(construct_make_payment_map(address, amount)),
+        json_serialize_embed(response),
     )
 }
 
@@ -960,7 +965,7 @@ pub async fn pause_nodes(
         return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
     }
 
-    r.into_ok(res.reason, json_serialize_embed("null"))
+    r.into_ok(&res.reason, json_serialize_embed("null"))
 }
 
 //POST resume nodes in a coordinated manner
@@ -984,7 +989,7 @@ pub async fn resume_nodes(
         return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
     }
 
-    r.into_ok(res.reason, json_serialize_embed("null"))
+    r.into_ok(&res.reason, json_serialize_embed("null"))
 }
 
 //POST update a mempool node's config, sharing it to all other peers
@@ -1009,7 +1014,7 @@ pub async fn update_shared_config(
         return r.into_err_internal(ApiErrorType::Generic(res.reason.to_owned()));
     }
 
-    r.into_ok(res.reason, json_serialize_embed("null"))
+    r.into_ok(&res.reason, json_serialize_embed("null"))
 }
 
 //======= Helpers =======//

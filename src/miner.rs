@@ -4,8 +4,7 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::INTERNAL_TX_LIMIT;
 use crate::db_utils;
 use crate::interfaces::{
-    BlockchainItem, MempoolRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
-    ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
+    BlockchainItem, MempoolRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
@@ -407,24 +406,24 @@ impl MinerNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Sent startup requests on reconnection",
-            }) => debug!("Sent startup requests on reconnection"),
+                reason,
+            }) if reason == "Sent startup requests on reconnection" => debug!("Sent startup requests on reconnection"),
             Ok(Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
-            }) => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => error!("Failed to send startup requests on reconnection"),
             Ok(Response {
                 success: true,
-                reason: "Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Shutdown" => {
                 warn!("Shutdown now");
                 try_send_to_ui(self.ui_feedback_tx.as_ref(), Rs2JsMsg::Exit).await;
                 return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
-                reason: "Blockchain item received",
-            }) => {
+                reason,
+            }) if reason == "Blockchain item received" => {
                 if let Some((key, item, peer)) = self.blockchain_item_received.as_ref() {
                     log_received_blockchain_item(key, item, peer);
                 } else {
@@ -433,94 +432,54 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Received random number successfully",
-            }) => {
+                reason,
+            }) if reason == "Received random number successfully" => {
                 info!("RANDOM NUMBER RECEIVED: {:?}", self.rand_num);
             }
             Ok(Response {
                 success: true,
-                reason: "Partition PoW complete",
-            }) => {
+                reason
+            }) if reason == "Partition PoW complete" => {
                 if self.process_found_partition_pow().await {
                     info!("Partition Pow found and sent");
                 }
             }
             Ok(Response {
                 success: true,
-                reason: "Pre-block received successfully",
-            }) => {
+                reason,
+            }) if reason == "Pre-block received successfully" => {
                 info!("PRE-BLOCK RECEIVED");
             }
             Ok(Response {
                 success: true,
-                reason: "Block is valid",
-            }) => {
+                reason,
+            }) if reason == "Block is valid" => {
                 info!("MERKLE ROOT VALID");
             }
             Ok(Response {
                 success: false,
-                reason: "Block is not valid",
-            }) => {
+                reason,
+            }) if reason == "Block is not valid" => {
                 info!("MERKLE ROOT INVALID");
             }
             Ok(Response {
                 success: true,
-                reason: "Block PoW complete",
-            }) => {
+                reason,
+            }) if reason == "Block PoW complete" => {
                 if self.process_found_block_pow().await {
                     info!("Block PoW found and sent");
                 }
             }
             Ok(Response {
                 success: true,
-                reason: "Received UTXO set",
-            }) => {
+                reason,
+            }) if reason == "Received UTXO set" => {
                 self.update_running_total().await;
             }
             Ok(Response {
                 success: true,
-                reason: "Node is not mining",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Node is mining",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Node is connected",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Node is disconnected",
-            }) => {}
-            Ok(Response {
-                success: true, // Not always an error
-                reason: "Node is disconnected",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Connected to mempool",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Disconnected from mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Failed to connect to mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Failed to disconnect from mempool",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Already disconnected from mempool",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Initiate pause node",
-            }) => {
+                reason,
+            }) if reason == "Initiate pause node" => {
                 info!("Initiate pause node");
                 if let Err(e) = self
                     .node
@@ -532,39 +491,19 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Static miner address set",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Node is paused",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Node is resumed",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Received miner removed ack from non-mempool peer",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Sent UTXO Request",
-            }) => {
+                reason,
+            }) if reason == "Sent UTXO Request" => {
                 debug!("Sent UTXO Request for wallet update")
             }
             Ok(Response {
                 success: false,
-                reason: "Received miner unauthorized notification from non-mempool peer",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Miner not authorized",
-            }) => return ResponseResult::Exit,
+                reason,
+            }) if reason == "Miner not authorized" => return ResponseResult::Exit,
             Ok(Response {
                 success: true,
                 reason,
             }) => {
-                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+                debug!("Unknown response type: {:?}", reason);
             }
             Ok(Response {
                 success: false,
@@ -601,13 +540,13 @@ impl MinerNode {
                     self.wait_partition_task = false;
                     return Some(Ok(Response {
                         success: true,
-                        reason: "Partition PoW complete",
+                        reason: "Partition PoW complete".to_string(),
                     }));
                 }
                 _ = self.mining_block_task.wait(), if !self.wait_partition_task => {
                     return Some(Ok(Response {
                         success: true,
-                        reason: "Block PoW complete",
+                        reason: "Block PoW complete".to_string(),
                     }));
                 }
                 Some(event) = self.local_events.rx.recv() => {
@@ -620,7 +559,7 @@ impl MinerNode {
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: reason.to_string(),
                 }))
             }
         }
@@ -635,19 +574,19 @@ impl MinerNode {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
-                reason,
+                reason: reason.to_string(),
             }),
             LocalEvent::ReconnectionComplete => {
                 if let Err(err) = self.send_startup_requests().await {
                     error!("Failed to send startup requests on reconnect: {}", err);
                     return Some(Response {
                         success: false,
-                        reason: "Failed to send startup requests on reconnection",
+                        reason: "Failed to send startup requests on reconnection".to_string(),
                     });
                 }
                 Some(Response {
                     success: true,
-                    reason: "Sent startup requests on reconnection",
+                    reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
             LocalEvent::CoordinatedShutdown(_) => None,
@@ -774,7 +713,7 @@ impl MinerNode {
                 .ok()
                 .map(|_| Response {
                     success: true,
-                    reason: "Sent UTXO Request",
+                    reason: "Sent UTXO Request".to_string(),
                 }),
             MineApiRequest::SetStaticMinerAddress { address } => {
                 Some(self.handle_set_static_miner_address(address).await)
@@ -788,7 +727,7 @@ impl MinerNode {
 
         Response {
             success: true,
-            reason: "Static miner address set",
+            reason: "Static miner address set".to_string(),
         }
     }
 
@@ -824,12 +763,12 @@ impl MinerNode {
             .await;
             Response {
                 success: false,
-                reason: "Miner not authorized",
+                reason: "Miner not authorized".to_string(),
             }
         } else {
             Response {
                 success: false,
-                reason: "Received miner unauthorized notification from non-mempool peer",
+                reason: "Received miner unauthorized notification from non-mempool peer".to_string(),
             }
         }
     }
@@ -847,12 +786,12 @@ impl MinerNode {
             .await;
             Response {
                 success: true,
-                reason: "Node is paused",
+                reason: "Node is paused".to_string(),
             }
         } else {
             Response {
                 success: false,
-                reason: "Received miner removed ack from non-mempool peer",
+                reason: "Received miner removed ack from non-mempool peer".to_string(),
             }
         }
     }
@@ -864,7 +803,7 @@ impl MinerNode {
         if join_handles.is_empty() {
             return Response {
                 success: false,
-                reason: "Already disconnected from mempool",
+                reason: "Already disconnected from mempool".to_string(),
             };
         }
         for join_handle in join_handles {
@@ -872,7 +811,7 @@ impl MinerNode {
                 error!("Failed to disconnect from mempool: {}", err);
                 return Response {
                     success: false,
-                    reason: "Failed to disconnect from mempool",
+                    reason: "Failed to disconnect from mempool".to_string(),
                 };
             }
         }
@@ -885,7 +824,7 @@ impl MinerNode {
         .await;
         Response {
             success: true,
-            reason: "Disconnected from mempool",
+            reason: "Disconnected from mempool".to_string(),
         }
     }
 
@@ -896,7 +835,7 @@ impl MinerNode {
             error!("Failed to connect to mempool: {e:?}");
             return Response {
                 success: false,
-                reason: "Failed to connect to mempool",
+                reason: "Failed to connect to mempool".to_string(),
             };
         }
         try_send_to_ui(
@@ -910,7 +849,7 @@ impl MinerNode {
         // because we don't necessarily want to start mining
         Response {
             success: true,
-            reason: "Connected to mempool",
+            reason: "Connected to mempool".to_string(),
         }
     }
 
@@ -927,7 +866,7 @@ impl MinerNode {
 
             return Response {
                 success: false,
-                reason: "Node is disconnected",
+                reason: "Node is disconnected".to_string(),
             };
         }
 
@@ -938,7 +877,7 @@ impl MinerNode {
             // Pause mining
             Response {
                 success: true,
-                reason: "Initiate pause node",
+                reason: "Initiate pause node".to_string(),
             }
         } else {
             // Resume mining
@@ -953,7 +892,7 @@ impl MinerNode {
                 .await;
                 return Response {
                     success: false,
-                    reason: "Failed to send startup requests on reconnection",
+                    reason: "Failed to send startup requests on reconnection".to_string(),
                 };
             }
             *self.pause_node.write().await = false;
@@ -966,7 +905,7 @@ impl MinerNode {
             .await;
             Response {
                 success: true,
-                reason: "Node is resumed",
+                reason: "Node is resumed".to_string(),
             }
         }
     }
@@ -983,7 +922,7 @@ impl MinerNode {
             .await;
             return Response {
                 success: true,
-                reason: "Node is not mining",
+                reason: "Node is not mining".to_string(),
             };
         }
         try_send_to_ui(
@@ -995,7 +934,7 @@ impl MinerNode {
         .await;
         Response {
             success: true,
-            reason: "Node is mining",
+            reason: "Node is mining".to_string(),
         }
     }
 
@@ -1011,7 +950,7 @@ impl MinerNode {
             .await;
             return Response {
                 success: true,
-                reason: "Node is disconnected",
+                reason: "Node is disconnected".to_string(),
             };
         }
         try_send_to_ui(
@@ -1023,7 +962,7 @@ impl MinerNode {
         .await;
         Response {
             success: true,
-            reason: "Node is connected",
+            reason: "Node is connected".to_string(),
         }
     }
 
@@ -1039,7 +978,7 @@ impl MinerNode {
 
         Some(Response {
             success: true,
-            reason: "Shutdown",
+            reason: "Shutdown".to_string(),
         })
     }
 
@@ -1107,11 +1046,11 @@ impl MinerNode {
         match (process_rnd, process_block) {
             (true, false) => Some(Response {
                 success: true,
-                reason: "Received random number successfully",
+                reason: "Received random number successfully".to_string(),
             }),
             (_, true) => Some(Response {
                 success: true,
-                reason: "Pre-block received successfully",
+                reason: "Pre-block received successfully".to_string(),
             }),
             (false, false) => None,
         }
@@ -1213,12 +1152,12 @@ impl MinerNode {
         if valid {
             Some(Response {
                 success: true,
-                reason: "Block is valid",
+                reason: "Block is valid".to_string(),
             })
         } else {
             Some(Response {
                 success: false,
-                reason: "Block is not valid",
+                reason: "Block is not valid".to_string(),
             })
         }
     }
@@ -1718,7 +1657,7 @@ impl MinerInterface for MinerNode {
             Some((key, item, peer)).filter(|(_, i, _)| !i.data.is_empty());
         Response {
             success: true,
-            reason: "Blockchain item received",
+            reason: "Blockchain item received".to_string(),
         }
     }
 }
@@ -1771,7 +1710,7 @@ impl Transactor for MinerNode {
 
         Response {
             success: true,
-            reason: "Received UTXO set",
+            reason: "Received UTXO set".to_string(),
         }
     }
 
@@ -1803,7 +1742,7 @@ async fn load_mining_address(wallet_db: &WalletDb) -> Result<Option<String>> {
 
 /// Generate mining address storing it in wallet
 async fn generate_mining_address(wallet_db: &mut WalletDb) -> String {
-    let addr: String = wallet_db.generate_payment_address().await.0;
+    let addr: String = wallet_db.generate_payment_address().0;
     let ser_addr = serialize(&addr).unwrap();
     wallet_db.set_db_value(MINING_ADDRESS_KEY, ser_addr).await;
     addr

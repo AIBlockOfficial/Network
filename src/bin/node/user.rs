@@ -23,6 +23,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
+    let threaded_calls_tx = node.threaded_call_tx().clone();
     let api_inputs = node.api_inputs();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
@@ -62,6 +63,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // Warp API
     let warp_handle = tokio::spawn({
         let (db, node, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
+        let threaded_calls_tx = threaded_calls_tx;
 
         info!("Warp API started on port {:?}", api_addr.port());
         info!("");
@@ -70,7 +72,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::user_node_routes(api_keys, api_pow_info, db, node));
+            let serve = warp::serve(routes::user_node_routes(api_keys, api_pow_info, db, node, threaded_calls_tx));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()

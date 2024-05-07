@@ -2,8 +2,7 @@
 
 use aiblock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
 use aiblock_network::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
-    ResponseResult,
+    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections, ResponseResult
 };
 use aiblock_network::{MinerNode, UserNode};
 use clap::{App, Arg, ArgMatches};
@@ -73,6 +72,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
             let (user_node_conn, user_addrs_to_connect, user_expected_connected_addrs) =
                 user_node.connect_info_peers();
             let user_local_event_tx = user_node.local_event_tx().clone();
+            let threaded_calls_tx = user_node.threaded_call_tx().clone();
 
             // PERMANENT CONNEXION/DISCONNECTION HANDLING
             let (
@@ -121,6 +121,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
             // User / Miner combined warp API
             let warp_handle = tokio::spawn({
+                let threaded_calls_tx = threaded_calls_tx;
                 let (
                     (db, user_node, api_addr, api_tls, api_keys, api_pow_info),
                     (_, miner_node, _, _, _, current_block, _),
@@ -139,6 +140,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                         current_block,
                         db,
                         miner_node,
+                        threaded_calls_tx,
                         user_node,
                     ));
                     if let Some(api_tls) = api_tls {
