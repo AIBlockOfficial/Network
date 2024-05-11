@@ -1031,7 +1031,7 @@ impl MinerNode {
         b_num: u64,
     ) -> Option<Response> {
         let process_rnd = self
-            .receive_random_number(peer, pow_info, rand_num, win_coinbases)
+            .receive_random_number(peer, pow_info, rand_num, win_coinbases, b_num)
             .await;
         let process_block = if let Some(pre_block) = pre_block {
             self.receive_pre_block(peer, pre_block, reward).await
@@ -1041,7 +1041,7 @@ impl MinerNode {
 
         self.wallet_db.filter_locked_coinbase(b_num).await;
         // TODO: should we check even if coinbase was not committed?
-        self.check_for_threshold_and_send_aggregation_tx().await;
+        self.check_for_threshold_and_send_aggregation_tx(b_num).await;
 
         match (process_rnd, process_block) {
             (true, false) => Some(Response {
@@ -1068,6 +1068,7 @@ impl MinerNode {
         pow_info: PowInfo,
         rand_num: Vec<u8>,
         win_coinbases: Vec<String>,
+        b_num: u64,
     ) -> bool {
         if peer != self.mempool_address() {
             return false;
@@ -1080,7 +1081,7 @@ impl MinerNode {
 
         // Commit our previous winnings if present
         if self.is_current_coinbase_found(&win_coinbases) {
-            self.commit_found_coinbase().await;
+            self.commit_found_coinbase(b_num).await;
         }
 
         self.start_generate_partition_pow(peer, pow_info, rand_num)
@@ -1329,7 +1330,7 @@ impl MinerNode {
     }
 
     /// Commit our winning mining tx to wallet
-    async fn commit_found_coinbase(&mut self) {
+    async fn commit_found_coinbase(&mut self, b_num: u64) {
         trace!("Committing our latest winning");
         self.current_payment_address = Some(
             self.get_static_miner_address()
@@ -1349,14 +1350,6 @@ impl MinerNode {
         for (_, asset, _, _) in &payments {
             assets_won.add_assign(asset);
         }
-
-        let b_num = self
-            .current_block
-            .lock()
-            .await
-            .as_ref()
-            .map(|c| c.block.b_num)
-            .unwrap_or_default();
 
         debug!(
             "WON {:?} TOKENS FOR MINING ROUND {:?}",
@@ -1384,7 +1377,7 @@ impl MinerNode {
 
     /// Checks and aggregates all the winnings into a single address if the number of addresses stored
     /// breaches the set threshold `MAX_NO_OF_WINNINGS_HELD`
-    async fn check_for_threshold_and_send_aggregation_tx(&mut self) {
+    async fn check_for_threshold_and_send_aggregation_tx(&mut self, b_num: u64) {
         let address_aggregation_limit = self.address_aggregation_limit.unwrap_or(INTERNAL_TX_LIMIT);
 
         match self.aggregation_status.clone() {
@@ -1451,14 +1444,6 @@ impl MinerNode {
 
                     // TODO: Should we update the wallet DB here, or only once we've got confirmation
                     // from mempool node through received UTXO set?
-                    let b_num = self
-                        .current_block
-                        .lock()
-                        .await
-                        .as_ref()
-                        .map(|c| c.block.b_num)
-                        .unwrap_or_default();
-
                     self.wallet_db
                         .store_payment_transaction(aggregating_tx, b_num)
                         .await;
