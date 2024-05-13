@@ -107,7 +107,7 @@ pub struct AutoGenTx {
     tx_max_count: usize,
 }
 
-/// info for a pending paiment
+/// info for a pending payment
 #[derive(Debug)]
 pub struct PendingPayment {
     amount: TokenAmount,
@@ -640,6 +640,7 @@ impl UserNode {
 
         match req {
             UpdateWalletFromUtxoSet { address_list } => {
+                info!("Update wallet from UTXO set");
                 self.request_utxo_set_for_wallet_update(address_list).await
             }
             RequestDonation { paying_peer } => self.request_donation_from_peer(paying_peer).await,
@@ -934,6 +935,8 @@ impl UserNode {
     ) -> Option<Response> {
         let mempool_addr = self.mempool_address();
 
+        info!("Requesting UTXO set for wallet update");
+
         self.send_request_utxo_set(address_list, mempool_addr, NodeType::User)
             .await
             .ok()?;
@@ -1002,7 +1005,7 @@ impl UserNode {
         }
     }
 
-    /// Process pending paiment transaction with received address
+    /// Process pending payment transaction with received address
     ///
     /// ### Arguments
     ///

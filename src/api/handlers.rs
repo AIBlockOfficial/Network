@@ -442,7 +442,7 @@ pub async fn get_issued_supply(
     )
 }
 
-/// GET The total token supply in the system
+/// GET The total supply of the token
 pub async fn get_total_supply(
     route: &'static str,
     call_id: String,
@@ -455,7 +455,7 @@ pub async fn get_total_supply(
     )
 }
 
-/// GET The last constructed transaction
+/// GET All outgoing payments from this node
 pub async fn get_outgoing_txs(
     route: &'static str,
     db: WalletDb,
@@ -548,7 +548,7 @@ pub async fn post_import_keypairs(
                 );
             }
         }
-    }
+    } 
 
     match peer.get_node_type() {
         NodeType::Miner => {

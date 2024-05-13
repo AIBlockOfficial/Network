@@ -1,6 +1,7 @@
 //! App to run a user node.
 
 use aiblock_network::configurations::UserNodeConfig;
+use aiblock_network::interfaces::{UserApiRequest, UserRequest, UtxoFetchType};
 use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult, UserNode,
@@ -9,6 +10,7 @@ use clap::{App, Arg, ArgMatches};
 use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tokio::time::{self, Duration};
 use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
@@ -25,6 +27,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let local_event_tx = node.local_event_tx().clone();
     let threaded_calls_tx = node.threaded_call_tx().clone();
     let api_inputs = node.api_inputs();
+    let peer_node = node.get_node().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
@@ -63,7 +66,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // Warp API
     let warp_handle = tokio::spawn({
         let (db, node, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
-        let threaded_calls_tx = threaded_calls_tx;
+        let threaded_calls_tx = threaded_calls_tx.clone();
 
         info!("Warp API started on port {:?}", api_addr.port());
         info!("");
@@ -92,16 +95,34 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         }
     });
 
-    let (main_result, warp_result, conn, disconn) = tokio::join!(
+    let update_handle = tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(2));
+
+        loop {
+            interval.tick().await;
+            info!("Updating running total in loop");
+            let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+                address_list: UtxoFetchType::AnyOf(vec![]),
+            });
+        
+            if let Err(e) = peer_node.inject_next_event(peer_node.local_address(), request) {
+                info!("route:update_running_total error: {:?}", e);
+            }
+        }
+    });
+
+    let (main_result, warp_result, conn, disconn, update_result) = tokio::join!(
         main_loop_handle,
         warp_handle,
         conn_loop_handle,
-        disconn_loop_handle
+        disconn_loop_handle,
+        update_handle
     );
     main_result.unwrap();
     warp_result.unwrap();
     conn.unwrap();
     disconn.unwrap();
+    update_result.unwrap();
 }
 
 pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
