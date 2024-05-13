@@ -1190,6 +1190,7 @@ async fn init_mempool(
         mempool_miner_whitelist: config.mempool_miner_whitelist.clone(),
         peer_limit: config.peer_limit,
         initial_issuances: config.initial_issuances.clone(),
+        tx_status_lifetime: 600000,
     };
     let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Mempool {}", info);
@@ -1355,7 +1356,7 @@ fn check_timeout<E>(
 ) -> Result<Option<Result<Response, E>>, String> {
     if let Some(Ok(Response {
         success: true,
-        reason: _
+        reason: _,
     })) = response
     {
         Err("Test timeout elapsed".to_owned())

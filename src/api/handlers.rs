@@ -20,12 +20,12 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
+use serde::de::{Error, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::{fmt, str};
 use std::sync::{Arc, Mutex};
-use serde::de::{Error, SeqAccess, Visitor};
+use std::{fmt, str};
 use tracing::{debug, error};
 use tw_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
 use tw_chain::crypto::sign_ed25519::{PublicKey, Signature};
@@ -110,8 +110,14 @@ impl PrettyStackEntry {
     fn to_internal(self) -> Result<StackEntry, StringError> {
         match self {
             Self::Op(op) => Ok(StackEntry::Op(op)),
-            Self::Signature(data) => Ok(StackEntry::Signature(Signature::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice()).ok_or(StringError(String::default()))?)),
-            Self::PubKey(data) => Ok(StackEntry::PubKey(PublicKey::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice()).ok_or(StringError(String::default()))?)),
+            Self::Signature(data) => Ok(StackEntry::Signature(
+                Signature::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice())
+                    .ok_or(StringError(String::default()))?,
+            )),
+            Self::PubKey(data) => Ok(StackEntry::PubKey(
+                PublicKey::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice())
+                    .ok_or(StringError(String::default()))?,
+            )),
             Self::Num(val) => Ok(StackEntry::Num(val)),
             Self::Bytes(data) => Ok(StackEntry::Bytes(data)),
         }
@@ -599,9 +605,7 @@ pub async fn post_make_payment(
 
     let response = make_api_threaded_call(
         &mut threaded_calls,
-        move |c| {
-            c.make_payment(address, amount, locktime)
-        },
+        move |c| c.make_payment(address, amount, locktime),
         "Cannot fetch UTXO balance",
     )
     .await
@@ -613,10 +617,7 @@ pub async fn post_make_payment(
         return r.into_err_internal(ApiErrorType::CannotAccessUserNode);
     }
 
-    r.into_progress(
-        "Payment processing",
-        json_serialize_embed(response),
-    )
+    r.into_progress("Payment processing", json_serialize_embed(response))
 }
 
 ///Post make a new payment from the connected wallet using an ip address
@@ -903,6 +904,26 @@ pub async fn post_create_transactions(
     r.into_ok("Transaction(s) processing", json_serialize_embed(ctx_map))
 }
 
+/// Get the status of a transaction on the mempool node
+pub async fn post_transaction_status(
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    data: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let status = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_transaction_status(data),
+        "Cannot access Mempool Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok("Transaction(s) status", json_serialize_embed(status))
+}
+
 /// Serialize transactions to binary without submitting to mempool node
 pub async fn post_serialize_transactions(
     data: Vec<CreateTransaction>,
@@ -917,14 +938,20 @@ pub async fn post_serialize_transactions(
         .map(|res| {
             let tx = res?;
             match bincode::serialize(&tx) {
-                Ok(bytes) => Ok(JsonSerializedTransaction{ txn_hash_hex: construct_tx_hash(&tx), txn_hex: hex::encode(bytes) }),
-                Err(msg) => Err(StringError(msg.to_string()))
+                Ok(bytes) => Ok(JsonSerializedTransaction {
+                    txn_hash_hex: construct_tx_hash(&tx),
+                    txn_hex: hex::encode(bytes),
+                }),
+                Err(msg) => Err(StringError(msg.to_string())),
             }
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
 
-    r.into_ok("Transaction(s) serialized", json_serialize_embed(serialized_transactions))
+    r.into_ok(
+        "Transaction(s) serialized",
+        json_serialize_embed(serialized_transactions),
+    )
 }
 
 /// Deserialize transactions from binary without submitting to mempool node
@@ -941,7 +968,10 @@ pub async fn post_deserialize_transactions(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
 
-    r.into_ok("Transaction(s) deserialized", json_serialize_embed(deserialized_transactions))
+    r.into_ok(
+        "Transaction(s) deserialized",
+        json_serialize_embed(deserialized_transactions),
+    )
 }
 
 // POST to change wallet passphrase
@@ -1125,7 +1155,10 @@ pub fn with_opt_field<T>(field: Option<T>, e: &str) -> Result<T, StringError> {
 }
 
 /// Deserializer for hex strings which accepts both hex string literals and arrays of bytes.
-fn hex_string_or_bytes<'de, D>(deserializer: D) -> Result<String, D::Error> where D: Deserializer<'de> {
+fn hex_string_or_bytes<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
     struct HexStringOrBytes();
 
     impl<'de> Visitor<'de> for HexStringOrBytes {
@@ -1135,14 +1168,20 @@ fn hex_string_or_bytes<'de, D>(deserializer: D) -> Result<String, D::Error> wher
             formatter.write_str("hex string or byte array")
         }
 
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> where E: Error {
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: Error,
+        {
             // Validate that the hex string can be decoded
             hex::decode(value).map_err(E::custom)?;
 
             Ok(value.to_owned())
         }
 
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
             let mut elts = Vec::new();
             while let Some(elt) = seq.next_element::<u8>()? {
                 elts.push(elt);
@@ -1173,9 +1212,12 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
             let tx_in = match script_signature {
                 CreateTxInScript::stack(stack) => TxIn {
                     previous_out: Some(previous_out),
-                    script_signature: Script::from(stack.into_iter()
-                        .map(PrettyStackEntry::to_internal)
-                        .collect::<Result<Vec<_>, _>>()?),
+                    script_signature: Script::from(
+                        stack
+                            .into_iter()
+                            .map(PrettyStackEntry::to_internal)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ),
                 },
                 CreateTxInScript::Pay2PkH {
                     signable_data,
@@ -1184,12 +1226,12 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                     address_version,
                 } => {
                     let final_signable_data = if let Some(sd) = signable_data {
-                    sd
-                } else {
-                    "".to_string()
-                };
+                        sd
+                    } else {
+                        "".to_string()
+                    };
 
-                let signature =
+                    let signature =
                         with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
                     let public_key =
                         with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
@@ -1203,7 +1245,7 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
                             address_version,
                         ),
                     }
-                },
+                }
             };
 
             tx_ins.push(tx_in);
@@ -1243,9 +1285,13 @@ fn from_transaction(tx: Transaction) -> CreateTransaction {
             //TODO: determine if the transaction is P2PKH or something else (?)
             tx_ins.push(CreateTxIn {
                 previous_out: i.previous_out,
-                script_signature: Some(CreateTxInScript::stack(i.script_signature.stack.into_iter()
-                    .map(PrettyStackEntry::from_internal)
-                    .collect::<Vec<_>>())),
+                script_signature: Some(CreateTxInScript::stack(
+                    i.script_signature
+                        .stack
+                        .into_iter()
+                        .map(PrettyStackEntry::from_internal)
+                        .collect::<Vec<_>>(),
+                )),
             });
         }
         tx_ins

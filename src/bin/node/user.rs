@@ -72,7 +72,13 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::user_node_routes(api_keys, api_pow_info, db, node, threaded_calls_tx));
+            let serve = warp::serve(routes::user_node_routes(
+                api_keys,
+                api_pow_info,
+                db,
+                node,
+                threaded_calls_tx,
+            ));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()

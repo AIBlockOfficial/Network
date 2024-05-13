@@ -21,7 +21,7 @@ hex = "0.4.2"
 merkletree = "0.23.0"
 merkle-log = "0.0.3"
 moka = { version = "0.8.1", features = ["future"] }
-tw_chain = "1.1.1"
+tw_chain = "1.1.2"
 keccak_prime = "0.1.0"
 protobuf = "2.6.0"
 raft = { git = "https://github.com/ABlockOfficial/raft-rs", branch = "0.5.1" }
