@@ -9,7 +9,7 @@ use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
     MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
     MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, TxStatus,
-    UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
+    TxStatusType, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::mempool_raft::{
     CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
@@ -20,9 +20,10 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig, create_socket_addr,
-    format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
+    format_parition_pow_address, generate_pow_random_num, get_timestamp_now,
+    is_timestamp_difference_greater, to_api_keys, to_route_pow_infos, validate_pow_block,
+    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult, RoutesPoWInfo, StringError,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -164,6 +165,7 @@ pub struct MempoolNode {
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, NodeType, UtxoSet)>,
     tx_status_list: BTreeMap<String, TxStatus>,
+    tx_status_lifetime: i64,
     api_info: (
         SocketAddr,
         Option<TlsPrivateInfo>,
@@ -271,6 +273,7 @@ impl MempoolNode {
             fetched_utxo_set: None,
             init_issuances,
             tx_status_list: Default::default(),
+            tx_status_lifetime: config.tx_status_lifetime,
         }
         .load_local_db()
     }
@@ -493,6 +496,7 @@ impl MempoolNode {
         transactions: BTreeMap<String, Transaction>,
     ) -> Vec<(bool, BTreeMap<String, Transaction>)> {
         let mut ready_txs = Vec::new();
+
         for (tx_hash, tx) in transactions {
             if let Some(druid_info) = tx.druid_info.clone() {
                 let druid = druid_info.druid;
@@ -510,23 +514,13 @@ impl MempoolNode {
                     let valid = druid_expectations_are_met(&druid, droplet.txs.values())
                         && check_druid_participants(droplet);
                     ready_txs.push((valid, droplet.txs.clone()));
+
                     // TODO: Implement time-based removal?
                     self.druid_pool.remove(&druid);
                 }
             }
         }
         ready_txs
-    }
-
-    pub fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
-        tx_hashes
-            .into_iter()
-            .map(|tx_hash| {
-                self.node_raft
-                    .get_committed_item(&tx_hash)
-                    .map(|item| item.clone())
-            })
-            .collect()
     }
 
     /// Returns the mining block from the node_raft
@@ -572,7 +566,7 @@ impl MempoolNode {
     }
 
     /// Return closure use to validate a transaction
-    fn transactions_validator(&self) -> impl Fn(&Transaction) -> bool + '_ {
+    fn transactions_validator(&mut self) -> impl Fn(&Transaction) -> (bool, String) + '_ {
         let utxo_set = self.node_raft.get_committed_utxo_set();
         let lock_expired = self
             .node_raft
@@ -586,25 +580,34 @@ impl MempoolNode {
 
         move |tx| {
             if tx.is_create_tx() {
-                return tx_has_valid_create_script(
+                let is_valid = tx_has_valid_create_script(
                     &tx.inputs[0].script_signature,
                     &tx.outputs[0].value,
                 );
+
+                return match is_valid {
+                    true => (true, "Create script is valid".to_string()),
+                    false => (false, "Create script is invalid".to_string()),
+                };
             }
 
-            !tx.is_coinbase()
-                && tx_is_valid(tx, b_num, |v| {
-                    utxo_set
-                        .get(v)
-                        // .filter(|_| !sanction_list.contains(&v.t_hash))
-                        .filter(|tx_out| lock_expired >= tx_out.locktime)
-                })
+            let (is_valid, validity_info) = tx_is_valid(tx, b_num, |v| {
+                utxo_set
+                    .get(v)
+                    // .filter(|_| !sanction_list.contains(&v.t_hash))
+                    .filter(|tx_out| lock_expired >= tx_out.locktime)
+            });
+
+            (!tx.is_coinbase() && is_valid, validity_info)
         }
     }
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
+
+        // Flush stale tx status
+        self.flush_stale_tx_status();
 
         info!("");
         info!("Proposing timestamp next");
@@ -2228,6 +2231,96 @@ impl MempoolNode {
         &self.node
     }
 
+    /// Updates the status of a particular transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx` - Transaction to update status for
+    /// * `status` - The transaction status
+    /// * `additional_info` - Additional information about the transaction
+    pub fn update_tx_status(
+        &mut self,
+        tx: &Transaction,
+        status: TxStatusType,
+        additional_info: String,
+    ) {
+        let tx_hash = construct_tx_hash(tx);
+        let current_entry = self.tx_status_list.get(&tx_hash);
+        let timestamp = if let Some(entry) = current_entry {
+            entry.timestamp
+        } else {
+            get_timestamp_now()
+        };
+        let tx_status = TxStatus {
+            additional_info,
+            status,
+            timestamp,
+        };
+
+        self.tx_status_list.insert(tx_hash, tx_status);
+    }
+
+    /// Constructs a transaction status with validation information
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx` - Transaction to construct status for
+    pub fn construct_tx_status(&mut self, tx: &Transaction) -> (TxStatusType, String) {
+        let tx_validator = self.transactions_validator();
+        let (is_valid, mut validation_info) = tx_validator(&tx);
+        let mut status = TxStatusType::Confirmed;
+
+        if !is_valid {
+            status = TxStatusType::Rejected;
+        }
+
+        if tx.druid_info.is_some() {
+            status = TxStatusType::Pending;
+            validation_info = "DRUID transaction valid. Awaiting settlement".to_owned();
+        }
+
+        (status, validation_info)
+    }
+
+    /// Flushes transaction statuses if their lifetimes have expired
+    pub fn flush_stale_tx_status(&mut self) {
+        let stale_txs = self
+            .tx_status_list
+            .iter()
+            .filter(|(_, status)| {
+                is_timestamp_difference_greater(
+                    status.timestamp as u64,
+                    get_timestamp_now() as u64,
+                    self.tx_status_lifetime as u64,
+                )
+            })
+            .map(|(tx_hash, _)| tx_hash.clone())
+            .collect::<Vec<String>>();
+
+        debug!("Flushing stale transaction statuses: {:?}", stale_txs);
+
+        for tx_hash in stale_txs {
+            self.tx_status_list.remove(&tx_hash);
+        }
+    }
+
+    /// Retrieves the status for a list of transactions
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_hashes` - List of transaction hashes to retrieve status for
+    pub fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
+        let mut tx_status = BTreeMap::new();
+
+        for tx_hash in tx_hashes {
+            if let Some(status) = self.tx_status_list.get(&tx_hash) {
+                tx_status.insert(tx_hash, status.clone());
+            }
+        }
+
+        tx_status
+    }
+
     /// Receive incoming transactions
     ///
     /// ### Arguments
@@ -2237,6 +2330,12 @@ impl MempoolNode {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
             let reason = "Transaction pool for this mempool node is full".to_owned();
+
+            // Update transaction status
+            for tx in transactions {
+                self.update_tx_status(&tx, TxStatusType::Rejected, reason.clone());
+            }
+
             return Response {
                 success: false,
                 reason,
@@ -2246,13 +2345,20 @@ impl MempoolNode {
         let (valid_dde_txs, valid_txs): (BTreeMap<_, _>, BTreeMap<_, _>) = {
             let tx_validator = self.transactions_validator();
             transactions
+                .clone()
                 .into_iter()
-                .filter(|tx| tx_validator(tx))
+                .filter(|tx| tx_validator(tx).0)
                 .map(|tx| (construct_tx_hash(&tx), tx))
                 .partition(|tx| tx.1.druid_info.is_some())
         };
 
         let total_valid_txs_len = valid_txs.len() + valid_dde_txs.len();
+
+        // Update transaction status after initial validation
+        for tx in transactions {
+            let (status, validation_info) = self.construct_tx_status(&tx);
+            self.update_tx_status(&tx, status, validation_info);
+        }
 
         // No valid transactions (normal or DDE) provided
         if total_valid_txs_len == 0 {
@@ -2271,11 +2377,21 @@ impl MempoolNode {
         let ready_dde_txs = self.validate_dde_txs(valid_dde_txs);
         let mut invalid_dde_txs_len = 0;
         for (valid, ready) in ready_dde_txs {
+            let mut status = TxStatusType::Confirmed;
+            let mut validation_info = Default::default();
+
             if !valid {
                 invalid_dde_txs_len += 1;
-                continue;
+                status = TxStatusType::Rejected;
+                validation_info = "DRUID trade expectations not met".to_owned();
+            } else {
+                self.node_raft.append_to_tx_druid_pool(ready.clone());
             }
-            self.node_raft.append_to_tx_druid_pool(ready);
+
+            // Update transaction status for each transaction
+            for tx in ready.iter() {
+                self.update_tx_status(&tx.1, status.clone(), validation_info.clone());
+            }
         }
 
         // Some txs are invalid or some DDE txs are ready to execute but fail to validate

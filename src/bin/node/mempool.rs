@@ -194,6 +194,13 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("tx_status_lifetime")
+                .long("tx_status_lifetime")
+                .env("TX_STATUS_LIFETIME")
+                .help("The lifetime of a transaction status in milliseconds. Defaults to 10 minutes (600000).")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("enable_pipeline_reset")
                 .long("enable_pipeline_reset")
                 .help(
@@ -237,6 +244,8 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings.set_default("mempool_node_idx", 0).unwrap();
     settings.set_default("mempool_raft", 0).unwrap();
 
+    settings.set_default("tx_status_lifetime", 600000).unwrap();
+
     settings
         .set_default("mempool_raft_tick_timeout", 10)
         .unwrap();
@@ -269,6 +278,12 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .merge(config::File::with_name(miner_white_list_file))
         .unwrap();
+
+    if let Some(tx_status_lifetime) = matches.value_of("tx_status_lifetime") {
+        settings
+            .set("tx_status_lifetime", tx_status_lifetime)
+            .unwrap();
+    }
 
     if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
         settings.set("peer_limit", 1000).unwrap();

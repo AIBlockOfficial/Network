@@ -158,6 +158,8 @@ pub struct MempoolNodeConfig {
     pub peer_limit: usize,
     /// Initial issuances
     pub initial_issuances: Vec<InitialIssuance>,
+    /// Lifetime of a transaction's status in seconds
+    pub tx_status_lifetime: i64,
 }
 
 /// Configuration option for a mempool node that can be shared across peers

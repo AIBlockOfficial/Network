@@ -1,7 +1,8 @@
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, TlsPrivateInfo, UserAutoGenTxSetup, UserNodeConfig};
 use crate::interfaces::{
-    MempoolRequest, NodeType, PaymentResponse, RbPaymentData, RbPaymentRequestData, RbPaymentResponseData, Response, UserApi, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet
+    MempoolRequest, NodeType, PaymentResponse, RbPaymentData, RbPaymentRequestData,
+    RbPaymentResponseData, Response, UserApi, UserApiRequest, UserRequest, UtxoFetchType, UtxoSet,
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transaction_gen::{PendingMap, TransactionGen};
@@ -23,7 +24,9 @@ use tw_chain::primitives::block::Block;
 use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
 use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction, TxIn, TxOut};
 use tw_chain::utils::transaction_utils::{
-    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx, construct_tx_core, construct_tx_hash, construct_tx_ins_address, update_input_signatures, ReceiverInfo
+    construct_item_create_tx, construct_rb_payments_send_tx, construct_rb_receive_payment_tx,
+    construct_tx_core, construct_tx_hash, construct_tx_ins_address, update_input_signatures,
+    ReceiverInfo,
 };
 
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
@@ -339,11 +342,15 @@ impl UserNode {
             Ok(Response {
                 success: true,
                 reason,
-            }) if reason ==  "Sent startup requests on reconnection" => debug!("Sent startup requests on reconnection"),
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
                 reason,
-            }) if reason == "Failed to send startup requests on reconnection" => error!("Failed to send startup requests on reconnection"),
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: true,
                 reason,
@@ -643,7 +650,7 @@ impl UserNode {
             } => {
                 self.request_payment_address_for_peer(payment_peer, amount, locktime)
                     .await
-            },
+            }
             MakePayment {
                 address,
                 amount,
@@ -654,7 +661,7 @@ impl UserNode {
                     success: resp.success,
                     reason: resp.reason,
                 });
-            },
+            }
             SendCreateItemRequest {
                 item_amount,
                 genesis_hash_spec,
@@ -677,8 +684,11 @@ impl UserNode {
                     locktime,
                 );
 
-                return Some(Response { success: resp.success, reason: resp.reason })
-            },
+                return Some(Response {
+                    success: resp.success,
+                    reason: resp.reason,
+                });
+            }
             GenerateNewAddress => Some(self.generate_new_address().await),
             GetConnectionStatus => Some(self.receive_connection_status_request().await),
             ConnectToMempool => Some(self.handle_connect_to_mempool().await),
@@ -698,7 +708,10 @@ impl UserNode {
                 .await,
             ),
             SendNextPayment => {
-                match self.send_next_payment_to_destinations(self.mempool_address()).await {
+                match self
+                    .send_next_payment_to_destinations(self.mempool_address())
+                    .await
+                {
                     Ok(_) => Some(Response {
                         success: true,
                         reason: "Next payment transaction sent".to_string(),
@@ -708,7 +721,7 @@ impl UserNode {
                         reason: format!("Failed to send next payment transaction: {:?}", e),
                     }),
                 }
-            },
+            }
         }
     }
 
@@ -1016,9 +1029,7 @@ impl UserNode {
             }
         };
 
-        Some(
-            self.make_payment_transactions(Some(peer), address, amount, locktime),
-        )
+        Some(self.make_payment_transactions(Some(peer), address, amount, locktime))
     }
 
     /// Process specified payment with a provided excess address,
@@ -1386,7 +1397,8 @@ impl UserNode {
 
         let (tx_ins, tx_outs) = self
             .wallet_db
-            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new()).unwrap();
+            .fetch_tx_ins_and_tx_outs(sender_asset.clone(), Vec::new())
+            .unwrap();
 
         let (rb_payment_data, rb_payment_request_data) = make_rb_payment_send_tx_and_request(
             sender_asset,
@@ -1547,7 +1559,8 @@ impl UserNode {
 }
 
 impl UserApi for UserNode {
-    fn make_payment(&mut self,
+    fn make_payment(
+        &mut self,
         address: String,
         amount: TokenAmount,
         locktime: Option<u64>,

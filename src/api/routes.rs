@@ -5,7 +5,7 @@ use crate::api::utils::{
 };
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::{UserApi, MempoolApi};
+use crate::interfaces::{MempoolApi, UserApi};
 use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
@@ -1125,6 +1125,13 @@ pub fn mempool_node_routes(
         cache.clone(),
     ))
     .or(issued_supply(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(transaction_status(
         dp,
         threaded_calls.clone(),
         routes_pow_info.clone(),

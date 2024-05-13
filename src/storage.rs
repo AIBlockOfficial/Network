@@ -319,11 +319,15 @@ impl StorageNode {
             Ok(Response {
                 success: true,
                 reason,
-            }) if reason == "Sent startup requests on reconnection" => debug!("Sent startup requests on reconnection"),
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
-                reason
-            }) if reason == "Failed to send startup requests on reconnection" => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: true,
                 reason,

@@ -21,7 +21,7 @@ use std::future::Future;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
@@ -1246,6 +1246,31 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
 pub fn get_timestamp_now() -> i64 {
     let now = Utc::now();
     now.timestamp()
+}
+
+/// Check if the difference between two timestamps is greater than a given difference in milliseconds
+///
+/// ### Arguments
+///
+/// * `timestamp1` - First timestamp
+/// * `timestamp2` - Second timestamp
+/// * `difference_in_millis` - Difference in milliseconds
+pub fn is_timestamp_difference_greater(
+    timestamp1: u64,
+    timestamp2: u64,
+    difference_in_millis: u64,
+) -> bool {
+    let time1 = UNIX_EPOCH + Duration::from_secs(timestamp1);
+    let time2 = UNIX_EPOCH + Duration::from_secs(timestamp2);
+
+    // Calculate the absolute difference in durations
+    let duration_difference = if time1 > time2 {
+        time1.duration_since(time2).unwrap()
+    } else {
+        time2.duration_since(time1).unwrap()
+    };
+
+    duration_difference > Duration::from_millis(difference_in_millis)
 }
 
 /// Attempt to send a message to the UI

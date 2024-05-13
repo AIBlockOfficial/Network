@@ -11,7 +11,7 @@ use crate::constants::FUND_KEY;
 use crate::db_utils::{new_db, SimpleDb};
 use crate::interfaces::{
     BlockchainItemMeta, DruidDroplet, DruidPool, MempoolApi, MempoolApiRequest, NodeType, Response,
-    StoredSerializingBlock, UserApiRequest, UserRequest, UtxoFetchType,
+    StoredSerializingBlock, TxStatus, UserApiRequest, UserRequest, UtxoFetchType,
 };
 use crate::mempool::MempoolError;
 use crate::storage::{put_named_last_block_to_block_chain, put_to_block_chain, DB_SPEC};
@@ -131,10 +131,18 @@ impl MempoolApi for MempoolTest {
     }
 
     // TODO: Implement over this placeholder
-    fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, crate::interfaces::TxStatus> {
+    fn get_transaction_status(
+        &self,
+        tx_hashes: Vec<String>,
+    ) -> BTreeMap<String, crate::interfaces::TxStatus> {
         let mut tx_status = BTreeMap::new();
         for tx_hash in tx_hashes {
-            tx_status.insert(tx_hash, crate::interfaces::TxStatus::Confirmed);
+            let tx_status_type = TxStatus {
+                status: crate::interfaces::TxStatusType::Confirmed,
+                additional_info: "".to_string(),
+                timestamp: 0,
+            };
+            tx_status.insert(tx_hash, tx_status_type);
         }
         tx_status
     }
@@ -1964,13 +1972,8 @@ async fn test_post_serialize_transactions_common(address_version: Option<u64>) {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::serialize_transactions(
-        &mut dp(),
-        Default::default(),
-        ks,
-        cache,
-    )
-    .recover(handle_rejection);
+    let filter = routes::serialize_transactions(&mut dp(), Default::default(), ks, cache)
+        .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -1982,12 +1985,17 @@ async fn test_post_serialize_transactions_common(address_version: Option<u64>) {
         None => "0100000000000000012000000000000000313362643333353162373862656232643064616466323035386463633932366300000000080000000000000004000000400000000000000032656335333833323233373964343534326166366137363062306433353233383562396235333238366431343361373630313836356231653731333462636564010000004000000000000000505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f0200000020000000000000005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c000000002300000000000000500000000400000040000000000000003534323365366264383438653063653563643739346535353233356332333133386438383333363333636432643764653766346131303933353137383435376200000000350000000000000053000000010000000000000000000000010000000000000000000000000000000120000000000000003030303835333665336435613133653334373236326235303233393633303030010000000000000001000000000000000000000001000000000000000000000000000000012000000000000000303030383533366533643561313365333437323632623530323339363330303000",
         _ => Default::default()
     };
-    let expected_response_hash = construct_tx_hash(&bincode::deserialize::<Transaction>(hex::decode(expected_response_body).unwrap().as_slice()).unwrap());
-    
+    let expected_response_hash = construct_tx_hash(
+        &bincode::deserialize::<Transaction>(
+            hex::decode(expected_response_body).unwrap().as_slice(),
+        )
+        .unwrap(),
+    );
+
     let expected_response_body = format!(
         "{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) serialized\",\"route\":\"serialize_transactions\",\"content\":[{{\"txn_hash_hex\":\"{}\",\"txn_hex\":\"{}\"}}]}}", 
         expected_response_hash, expected_response_body);
-    
+
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
         (success_json(), expected_response_body.as_str())
@@ -2025,29 +2033,32 @@ async fn test_post_deserialize_transactions_common(address_version: Option<u64>)
     let signature = raw_signature;
     let public_key = COMMON_PUB_KEY;
 
-    let json_body = vec![hex::encode(serialize(&Transaction {
-        inputs: vec![TxIn {
-            previous_out: Some(previous_out.clone()),
-            script_signature: Script::pay2pkh(
-                signable_data,
-                signature.to_owned(),
-                PublicKey::from_slice(&hex::decode(public_key).unwrap()).unwrap(),
-                address_version,
-            ),
-        }],
-        outputs: vec![TxOut {
-            value: Asset::Token(TokenAmount(1)),
-            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
-            locktime: 0,
-        }],
-        fees: vec![TxOut {
-            value: Asset::Token(TokenAmount(1)),
-            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
-            locktime: 0,
-        }],
-        version: 1,
-        druid_info: None,
-    }).unwrap())];
+    let json_body = vec![hex::encode(
+        serialize(&Transaction {
+            inputs: vec![TxIn {
+                previous_out: Some(previous_out.clone()),
+                script_signature: Script::pay2pkh(
+                    signable_data,
+                    signature.to_owned(),
+                    PublicKey::from_slice(&hex::decode(public_key).unwrap()).unwrap(),
+                    address_version,
+                ),
+            }],
+            outputs: vec![TxOut {
+                value: Asset::Token(TokenAmount(1)),
+                script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+                locktime: 0,
+            }],
+            fees: vec![TxOut {
+                value: Asset::Token(TokenAmount(1)),
+                script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+                locktime: 0,
+            }],
+            version: 1,
+            druid_info: None,
+        })
+        .unwrap(),
+    )];
 
     let request = warp::test::request()
         .method("POST")
@@ -2062,13 +2073,8 @@ async fn test_post_deserialize_transactions_common(address_version: Option<u64>)
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
-    let filter = routes::deserialize_transactions(
-        &mut dp(),
-        Default::default(),
-        ks,
-        cache,
-    )
-    .recover(handle_rejection);
+    let filter = routes::deserialize_transactions(&mut dp(), Default::default(), ks, cache)
+        .recover(handle_rejection);
     let res = request.reply(&filter).await;
 
     //
@@ -2084,7 +2090,7 @@ async fn test_post_deserialize_transactions_common(address_version: Option<u64>)
     let expected_response_body = format!(
         "{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) deserialized\",\"route\":\"deserialize_transactions\",\"content\":[{}]}}",
         expected_response_body);
-    
+
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
         (success_json(), expected_response_body.as_str())

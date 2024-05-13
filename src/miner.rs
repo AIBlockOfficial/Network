@@ -4,7 +4,8 @@ use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
 use crate::constants::INTERNAL_TX_LIMIT;
 use crate::db_utils;
 use crate::interfaces::{
-    BlockchainItem, MempoolRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo, ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet
+    BlockchainItem, MempoolRequest, MineApiRequest, MineRequest, MinerInterface, NodeType, PowInfo,
+    ProofOfWork, Response, Rs2JsMsg, StorageRequest, UtxoFetchType, UtxoSet,
 };
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::transactor::Transactor;
@@ -38,7 +39,9 @@ use tracing_futures::Instrument;
 use tw_chain::primitives::asset::{Asset, TokenAmount};
 use tw_chain::primitives::block::{self, BlockHeader};
 use tw_chain::primitives::transaction::Transaction;
-use tw_chain::utils::transaction_utils::{construct_tx_core, construct_tx_hash, update_input_signatures};
+use tw_chain::utils::transaction_utils::{
+    construct_tx_core, construct_tx_hash, update_input_signatures,
+};
 
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
@@ -407,11 +410,15 @@ impl MinerNode {
             Ok(Response {
                 success: true,
                 reason,
-            }) if reason == "Sent startup requests on reconnection" => debug!("Sent startup requests on reconnection"),
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
                 reason,
-            }) if reason == "Failed to send startup requests on reconnection" => error!("Failed to send startup requests on reconnection"),
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: true,
                 reason,
@@ -438,7 +445,7 @@ impl MinerNode {
             }
             Ok(Response {
                 success: true,
-                reason
+                reason,
             }) if reason == "Partition PoW complete" => {
                 if self.process_found_partition_pow().await {
                     info!("Partition Pow found and sent");
@@ -768,7 +775,8 @@ impl MinerNode {
         } else {
             Response {
                 success: false,
-                reason: "Received miner unauthorized notification from non-mempool peer".to_string(),
+                reason: "Received miner unauthorized notification from non-mempool peer"
+                    .to_string(),
             }
         }
     }
@@ -1041,7 +1049,8 @@ impl MinerNode {
 
         self.wallet_db.filter_locked_coinbase(b_num).await;
         // TODO: should we check even if coinbase was not committed?
-        self.check_for_threshold_and_send_aggregation_tx(b_num).await;
+        self.check_for_threshold_and_send_aggregation_tx(b_num)
+            .await;
 
         match (process_rnd, process_block) {
             (true, false) => Some(Response {

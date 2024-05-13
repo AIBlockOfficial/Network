@@ -89,6 +89,7 @@ impl TransactionResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TxStatus {
     pub status: TxStatusType,
+    pub timestamp: i64,
     pub additional_info: String,
 }
 
@@ -927,7 +928,7 @@ impl fmt::Debug for UserRequest {
             UserApi(DeleteAddresses { .. }) => write!(f, "DeleteAddresses"),
             UserApi(MergeAddresses { .. }) => write!(f, "MergeAddresses"),
             UserApi(SendNextPayment) => write!(f, "SendNextPayment"),
-            
+
             SendAddressRequest { .. } => write!(f, "SendAddressRequest"),
             SendPaymentAddress { .. } => write!(f, "SendPaymentAddress"),
             SendPaymentTransaction { .. } => write!(f, "SendPaymentTransaction"),
@@ -938,7 +939,6 @@ impl fmt::Debug for UserRequest {
             SendUtxoSet { .. } => write!(f, "SendUtxoSet"),
             BlockMining { .. } => write!(f, "BlockMining"),
             Closing => write!(f, "Closing"),
-
         }
     }
 }
