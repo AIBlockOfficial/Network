@@ -4,6 +4,10 @@ on:
   pull_request:
     branches: ["*"]
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   integration-tests:
     name: Integration tests
