@@ -1822,6 +1822,8 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     let signature = hex::encode(raw_signature.as_ref());
     let public_key = COMMON_PUB_KEY.to_owned();
 
+    println!("raw_signature: {}", hex::encode(raw_signature.as_ref()));
+
     let json_body = vec![CreateTransaction {
         inputs: vec![CreateTxIn {
             previous_out: Some(previous_out.clone()),
@@ -1882,6 +1884,201 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     assert_eq!(
         ((res.status(), res.headers().clone()), from_utf8(res.body())),
         (success_json(), expected_response_body)
+    );
+}
+
+/// Test POST serialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_serialize_transactions() {
+    test_post_serialize_transactions_common(None).await;
+}
+
+/// Test POST serialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_serialize_transactions_v0() {
+    test_post_serialize_transactions_common(Some(NETWORK_VERSION_V0)).await;
+}
+
+/// Test POST serialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_serialize_transactions_temp() {
+    test_post_serialize_transactions_common(Some(NETWORK_VERSION_TEMP)).await;
+}
+
+async fn test_post_serialize_transactions_common(address_version: Option<u64>) {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
+    let signable_data = construct_tx_in_signable_hash(&previous_out);
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
+    let raw_signature = sign::sign_detached(signable_data.as_bytes(), &secret_key);
+    let signature = hex::encode(raw_signature.as_ref());
+    let public_key = COMMON_PUB_KEY.to_owned();
+
+    let json_body = vec![CreateTransaction {
+        inputs: vec![CreateTxIn {
+            previous_out: Some(previous_out.clone()),
+            script_signature: Some(CreateTxInScript::Pay2PkH {
+                signable_data: Some(signable_data),
+                signature,
+                public_key,
+                address_version,
+            }),
+        }],
+        outputs: vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            locktime: 0,
+        }],
+        fees: Some(vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            locktime: 0,
+        }]),
+        version: 1,
+        druid_info: None,
+    }];
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/serialize_transactions")
+        .header("Content-Type", "application/json")
+        .header("x-cache-id", COMMON_REQ_ID)
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let ks = to_api_keys(Default::default());
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+
+    let filter = routes::serialize_transactions(
+        &mut dp(),
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected_response_body = match address_version {
+        Some(NETWORK_VERSION_V0) => "0100000000000000012000000000000000313362643333353162373862656232643064616466323035386463633932366300000000080000000000000004000000400000000000000032656335333833323233373964343534326166366137363062306433353233383562396235333238366431343361373630313836356231653731333462636564010000004000000000000000505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f0200000020000000000000005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c00000000230000000000000051000000040000002000000000000000313362643333353162373862656232643064616466323035386463633932366300000000350000000000000053000000010000000000000000000000010000000000000000000000000000000120000000000000003030303835333665336435613133653334373236326235303233393633303030010000000000000001000000000000000000000001000000000000000000000000000000012000000000000000303030383533366533643561313365333437323632623530323339363330303000",
+        Some(NETWORK_VERSION_TEMP) => "0100000000000000012000000000000000313362643333353162373862656232643064616466323035386463633932366300000000080000000000000004000000400000000000000032656335333833323233373964343534326166366137363062306433353233383562396235333238366431343361373630313836356231653731333462636564010000004000000000000000505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f0200000020000000000000005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c000000002300000000000000520000000400000040000000000000003663366236653865396466386336336432326439656236383762393637316464316365356438396631393562623233313665316231343434383438636432623300000000350000000000000053000000010000000000000000000000010000000000000000000000000000000120000000000000003030303835333665336435613133653334373236326235303233393633303030010000000000000001000000000000000000000001000000000000000000000000000000012000000000000000303030383533366533643561313365333437323632623530323339363330303000",
+        None => "0100000000000000012000000000000000313362643333353162373862656232643064616466323035386463633932366300000000080000000000000004000000400000000000000032656335333833323233373964343534326166366137363062306433353233383562396235333238366431343361373630313836356231653731333462636564010000004000000000000000505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f0200000020000000000000005371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c000000002300000000000000500000000400000040000000000000003534323365366264383438653063653563643739346535353233356332333133386438383333363333636432643764653766346131303933353137383435376200000000350000000000000053000000010000000000000000000000010000000000000000000000000000000120000000000000003030303835333665336435613133653334373236326235303233393633303030010000000000000001000000000000000000000001000000000000000000000000000000012000000000000000303030383533366533643561313365333437323632623530323339363330303000",
+        _ => Default::default()
+    };
+    let expected_response_hash = construct_tx_hash(&bincode::deserialize::<Transaction>(hex::decode(expected_response_body).unwrap().as_slice()).unwrap());
+    
+    let expected_response_body = format!(
+        "{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) serialized\",\"route\":\"serialize_transactions\",\"content\":[{{\"txn_hash_hex\":\"{}\",\"txn_hex\":\"{}\"}}]}}", 
+        expected_response_hash, expected_response_body);
+    
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), expected_response_body.as_str())
+    );
+}
+
+/// Test POST deserialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_deserialize_transactions() {
+    test_post_deserialize_transactions_common(None).await;
+}
+
+/// Test POST deserialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_deserialize_transactions_v0() {
+    test_post_deserialize_transactions_common(Some(NETWORK_VERSION_V0)).await;
+}
+
+/// Test POST deserialize_transactions successfully
+#[tokio::test(flavor = "current_thread")]
+async fn test_post_deserialize_transactions_temp() {
+    test_post_deserialize_transactions_common(Some(NETWORK_VERSION_TEMP)).await;
+}
+
+async fn test_post_deserialize_transactions_common(address_version: Option<u64>) {
+    let _ = tracing_log_try_init();
+
+    //
+    // Arrange
+    //
+    let previous_out = OutPoint::new(COMMON_PUB_ADDR.to_owned(), 0);
+    let signable_data = construct_tx_in_signable_hash(&previous_out);
+    let secret_key = decode_secret_key(COMMON_SEC_KEY).unwrap();
+    let raw_signature = sign::sign_detached(signable_data.as_bytes(), &secret_key);
+    let signature = raw_signature;
+    let public_key = COMMON_PUB_KEY;
+
+    let json_body = vec![hex::encode(serialize(&Transaction {
+        inputs: vec![TxIn {
+            previous_out: Some(previous_out.clone()),
+            script_signature: Script::pay2pkh(
+                signable_data,
+                signature.to_owned(),
+                PublicKey::from_slice(&hex::decode(public_key).unwrap()).unwrap(),
+                address_version,
+            ),
+        }],
+        outputs: vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            locktime: 0,
+        }],
+        fees: vec![TxOut {
+            value: Asset::Token(TokenAmount(1)),
+            script_public_key: Some(COMMON_ADDRS[0].to_owned()),
+            locktime: 0,
+        }],
+        version: 1,
+        druid_info: None,
+    }).unwrap())];
+
+    let request = warp::test::request()
+        .method("POST")
+        .path("/deserialize_transactions")
+        .header("Content-Type", "application/json")
+        .header("x-cache-id", COMMON_REQ_ID)
+        .json(&json_body.clone());
+
+    //
+    // Act
+    //
+    let ks = to_api_keys(Default::default());
+    let cache = create_new_cache(CACHE_LIVE_TIME);
+
+    let filter = routes::deserialize_transactions(
+        &mut dp(),
+        Default::default(),
+        ks,
+        cache,
+    )
+    .recover(handle_rejection);
+    let res = request.reply(&filter).await;
+
+    //
+    // Assert
+    //
+    let expected_response_body = match address_version {
+        Some(NETWORK_VERSION_V0) => "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"2ec538322379d4542af6a760b0d352385b9b53286d143a7601865b1e7134bced\"},{\"Signature\":\"505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f\"},{\"PubKey\":\"5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c\"},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256_V0\"},{\"Bytes\":\"13bd3351b78beb2d0dadf2058dcc926c\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"version\":1,\"fees\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"druid_info\":null}",
+        Some(NETWORK_VERSION_TEMP) => "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"2ec538322379d4542af6a760b0d352385b9b53286d143a7601865b1e7134bced\"},{\"Signature\":\"505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f\"},{\"PubKey\":\"5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c\"},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256_TEMP\"},{\"Bytes\":\"6c6b6e8e9df8c63d22d9eb687b9671dd1ce5d89f195bb2316e1b1444848cd2b3\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"version\":1,\"fees\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"druid_info\":null}",
+        None => "{\"inputs\":[{\"previous_out\":{\"t_hash\":\"13bd3351b78beb2d0dadf2058dcc926c\",\"n\":0},\"script_signature\":{\"stack\":[{\"Bytes\":\"2ec538322379d4542af6a760b0d352385b9b53286d143a7601865b1e7134bced\"},{\"Signature\":\"505acb926928d876fd24451812d68d88be0e6f4900d943a081895b7ed34b9f4e96236b30cfec1ccdf9c28420725dbb3df81b3431fec4f2d733432db888e8440f\"},{\"PubKey\":\"5371832122a8e804fa3520ec6861c3fa554a7f6fb617e6f0768452090207e07c\"},{\"Op\":\"OP_DUP\"},{\"Op\":\"OP_HASH256\"},{\"Bytes\":\"5423e6bd848e0ce5cd794e55235c23138d8833633cd2d7de7f4a10935178457b\"},{\"Op\":\"OP_EQUALVERIFY\"},{\"Op\":\"OP_CHECKSIG\"}]}}],\"outputs\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"version\":1,\"fees\":[{\"value\":{\"Token\":1},\"locktime\":0,\"script_public_key\":\"0008536e3d5a13e347262b5023963000\"}],\"druid_info\":null}",
+        _ => Default::default()
+    };
+
+    let expected_response_body = format!(
+        "{{\"id\":\"2ae7bc9cba924e3cb73c0249893078d7\",\"status\":\"Success\",\"reason\":\"Transaction(s) deserialized\",\"route\":\"deserialize_transactions\",\"content\":[{}]}}",
+        expected_response_body);
+    
+    assert_eq!(
+        ((res.status(), res.headers().clone()), from_utf8(res.body())),
+        (success_json(), expected_response_body.as_str())
     );
 }
 

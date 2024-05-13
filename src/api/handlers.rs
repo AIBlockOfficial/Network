@@ -3,7 +3,7 @@ use crate::api::responses::{
     json_embed, json_embed_block, json_embed_transaction, json_serialize_embed, APIAsset,
     APICreateResponseContent, CallResponse, JsonReply,
 };
-use crate::api::utils::map_string_err;
+use crate::api::utils::{map_string_err, map_to_string_err};
 use crate::comms_handler::Node;
 use crate::configurations::MempoolNodeSharedConfig;
 use crate::constants::LAST_BLOCK_HASH_KEY;
@@ -20,18 +20,20 @@ use crate::threaded_call::{self, ThreadedCallSender};
 use crate::utils::{decode_pub_key, decode_signature, StringError};
 use crate::wallet::{AddressStore, AddressStoreHex, WalletDb, WalletDbError};
 use crate::Response;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::str;
+use std::{fmt, str};
 use std::sync::{Arc, Mutex};
+use serde::de::{Error, SeqAccess, Visitor};
 use tracing::{debug, error};
 use tw_chain::constants::{D_DISPLAY_PLACES, TOTAL_TOKENS};
-use tw_chain::crypto::sign_ed25519::PublicKey;
+use tw_chain::crypto::sign_ed25519::{PublicKey, Signature};
 use tw_chain::primitives::asset::{Asset, ItemAsset, TokenAmount};
 use tw_chain::primitives::druid::DdeValues;
 use tw_chain::primitives::transaction::{GenesisTxHashSpec, OutPoint, Transaction, TxIn, TxOut};
 use tw_chain::script::lang::Script;
+use tw_chain::script::{OpCodes, StackEntry};
 use tw_chain::utils::transaction_utils::{construct_address_for, construct_tx_hash};
 use warp::hyper::StatusCode;
 
@@ -94,9 +96,45 @@ pub struct CreateItemAssetDataUser {
     pub metadata: Option<String>,
 }
 
+/// Stack entry enum which stores Signature and PubKey items as hex strings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PrettyStackEntry {
+    Op(OpCodes),
+    Signature(#[serde(deserialize_with = "hex_string_or_bytes")] String),
+    PubKey(#[serde(deserialize_with = "hex_string_or_bytes")] String),
+    Num(usize),
+    Bytes(#[serde(deserialize_with = "hex_string_or_bytes")] String),
+}
+
+impl PrettyStackEntry {
+    fn to_internal(self) -> Result<StackEntry, StringError> {
+        match self {
+            Self::Op(op) => Ok(StackEntry::Op(op)),
+            Self::Signature(data) => Ok(StackEntry::Signature(Signature::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice()).ok_or(StringError(String::default()))?)),
+            Self::PubKey(data) => Ok(StackEntry::PubKey(PublicKey::from_slice(hex::decode(data).map_err(map_to_string_err)?.as_slice()).ok_or(StringError(String::default()))?)),
+            Self::Num(val) => Ok(StackEntry::Num(val)),
+            Self::Bytes(data) => Ok(StackEntry::Bytes(data)),
+        }
+    }
+
+    fn from_internal(entry: StackEntry) -> Self {
+        match entry {
+            StackEntry::Op(op) => Self::Op(op),
+            StackEntry::Signature(signature) => Self::Signature(hex::encode(signature.as_ref())),
+            StackEntry::PubKey(pubkey) => Self::PubKey(hex::encode(pubkey.as_ref())),
+            StackEntry::Num(val) => Self::Num(val),
+            StackEntry::Bytes(data) => Self::Bytes(data),
+        }
+    }
+}
+
 /// Information needed for the creaion of TxIn script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CreateTxInScript {
+    #[allow(non_camel_case_types)]
+    //unfortunately, this has to be lower-case in order to ensure that we can deserialize the JSON
+    // format returned by /transactions_by_key and similar API routes
+    stack(Vec<PrettyStackEntry>),
     Pay2PkH {
         /// Data to sign
         signable_data: Option<String>,
@@ -130,6 +168,14 @@ pub struct CreateTransaction {
     pub fees: Option<Vec<TxOut>>,
     pub druid_info: Option<DdeValues>,
 }
+
+/// A Transaction which has been serialized to JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonSerializedTransaction {
+    pub txn_hash_hex: String,
+    pub txn_hex: String,
+}
+
 /// Struct received from client to change passphrase
 ///
 /// Entries will be encrypted with TLS
@@ -857,6 +903,47 @@ pub async fn post_create_transactions(
     r.into_ok("Transaction(s) processing", json_serialize_embed(ctx_map))
 }
 
+/// Serialize transactions to binary without submitting to mempool node
+pub async fn post_serialize_transactions(
+    data: Vec<CreateTransaction>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let serialized_transactions = data
+        .into_iter()
+        .map(to_transaction)
+        .map(|res| {
+            let tx = res?;
+            match bincode::serialize(&tx) {
+                Ok(bytes) => Ok(JsonSerializedTransaction{ txn_hash_hex: construct_tx_hash(&tx), txn_hex: hex::encode(bytes) }),
+                Err(msg) => Err(StringError(msg.to_string()))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
+
+    r.into_ok("Transaction(s) serialized", json_serialize_embed(serialized_transactions))
+}
+
+/// Deserialize transactions from binary without submitting to mempool node
+pub async fn post_deserialize_transactions(
+    data: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let deserialized_transactions = data
+        .into_iter()
+        .map(from_hex_transaction)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| map_string_err(r.clone(), e, StatusCode::BAD_REQUEST))?;
+
+    r.into_ok("Transaction(s) deserialized", json_serialize_embed(deserialized_transactions))
+}
+
 // POST to change wallet passphrase
 pub async fn post_change_wallet_passphrase(
     mut db: WalletDb,
@@ -1037,6 +1124,36 @@ pub fn with_opt_field<T>(field: Option<T>, e: &str) -> Result<T, StringError> {
     field.ok_or_else(|| StringError(e.to_owned()))
 }
 
+/// Deserializer for hex strings which accepts both hex string literals and arrays of bytes.
+fn hex_string_or_bytes<'de, D>(deserializer: D) -> Result<String, D::Error> where D: Deserializer<'de> {
+    struct HexStringOrBytes();
+
+    impl<'de> Visitor<'de> for HexStringOrBytes {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("hex string or byte array")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> where E: Error {
+            // Validate that the hex string can be decoded
+            hex::decode(value).map_err(E::custom)?;
+
+            Ok(value.to_owned())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
+            let mut elts = Vec::new();
+            while let Some(elt) = seq.next_element::<u8>()? {
+                elts.push(elt);
+            }
+            Ok(hex::encode(elts))
+        }
+    }
+
+    deserializer.deserialize_any(HexStringOrBytes())
+}
+
 /// Create a `Transaction` from a `CreateTransaction`
 pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringError> {
     let CreateTransaction {
@@ -1053,34 +1170,40 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
             let previous_out = with_opt_field(i.previous_out, "Invalid previous_out")?;
             let script_signature = with_opt_field(i.script_signature, "Invalid script_signature")?;
 
-            let tx_in = {
-                let CreateTxInScript::Pay2PkH {
+            let tx_in = match script_signature {
+                CreateTxInScript::stack(stack) => TxIn {
+                    previous_out: Some(previous_out),
+                    script_signature: Script::from(stack.into_iter()
+                        .map(PrettyStackEntry::to_internal)
+                        .collect::<Result<Vec<_>, _>>()?),
+                },
+                CreateTxInScript::Pay2PkH {
                     signable_data,
                     signature,
                     public_key,
                     address_version,
-                } = script_signature;
-
-                let final_signable_data = if let Some(sd) = signable_data {
+                } => {
+                    let final_signable_data = if let Some(sd) = signable_data {
                     sd
                 } else {
                     "".to_string()
                 };
 
                 let signature =
-                    with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
-                let public_key =
-                    with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
+                        with_opt_field(decode_signature(&signature).ok(), "Invalid signature")?;
+                    let public_key =
+                        with_opt_field(decode_pub_key(&public_key).ok(), "Invalid public_key")?;
 
-                TxIn {
-                    previous_out: Some(previous_out),
-                    script_signature: Script::pay2pkh(
-                        final_signable_data,
-                        signature,
-                        public_key,
-                        address_version,
-                    ),
-                }
+                    TxIn {
+                        previous_out: Some(previous_out),
+                        script_signature: Script::pay2pkh(
+                            final_signable_data,
+                            signature,
+                            public_key,
+                            address_version,
+                        ),
+                    }
+                },
             };
 
             tx_ins.push(tx_in);
@@ -1095,6 +1218,46 @@ pub fn to_transaction(data: CreateTransaction) -> Result<Transaction, StringErro
         fees: fees.unwrap_or_default(),
         druid_info,
     })
+}
+
+/// Create a `CreateTransaction` from a hex string representing a serialized `Transaction`
+fn from_hex_transaction(data: String) -> Result<CreateTransaction, StringError> {
+    let bytes = hex::decode(data).map_err(map_to_string_err)?;
+    let tx = bincode::deserialize::<Transaction>(bytes.as_slice()).map_err(map_to_string_err)?;
+    Ok(from_transaction(tx))
+}
+
+/// Create a `CreateTransaction` from a hex string representing a serialized `Transaction`
+fn from_transaction(tx: Transaction) -> CreateTransaction {
+    let Transaction {
+        inputs,
+        outputs,
+        version,
+        fees,
+        druid_info,
+    } = tx;
+
+    let inputs = {
+        let mut tx_ins = Vec::new();
+        for i in inputs {
+            //TODO: determine if the transaction is P2PKH or something else (?)
+            tx_ins.push(CreateTxIn {
+                previous_out: i.previous_out,
+                script_signature: Some(CreateTxInScript::stack(i.script_signature.stack.into_iter()
+                    .map(PrettyStackEntry::from_internal)
+                    .collect::<Vec<_>>())),
+            });
+        }
+        tx_ins
+    };
+
+    CreateTransaction {
+        inputs,
+        outputs,
+        version,
+        fees: Some(fees),
+        druid_info,
+    }
 }
 
 /// Fetches JSON blocks.

@@ -700,6 +700,52 @@ pub fn create_transactions(
         .with(post_cors())
 }
 
+// POST serialize transactions
+pub fn serialize_transactions(
+    dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
+    let route = "serialize_transactions";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_serialize_transactions(info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST deserialize transactions
+pub fn deserialize_transactions(
+    dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
+    let route = "deserialize_transactions";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_deserialize_transactions(info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 // POST check for address presence
 pub fn blocks_by_tx_hashes(
     dp: &mut DbgPaths,
@@ -925,6 +971,18 @@ pub fn user_node_routes(
     //     api_keys.clone(),
     //     cache.clone(),
     // ))
+    .or(serialize_transactions(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(deserialize_transactions(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(debug_data(
         dp_vec,
         node,
