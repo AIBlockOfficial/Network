@@ -523,6 +523,31 @@ pub fn request_donation(
         .with(post_cors())
 }
 
+// POST transaction status
+pub fn transaction_status(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "transaction_status";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_transaction_status(tc, info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 // POST update running total
 pub fn update_running_total(
     dp: &mut DbgPaths,

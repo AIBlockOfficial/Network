@@ -130,6 +130,15 @@ impl MempoolApi for MempoolTest {
         }
     }
 
+    // TODO: Implement over this placeholder
+    fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, crate::interfaces::TxStatus> {
+        let mut tx_status = BTreeMap::new();
+        for tx_hash in tx_hashes {
+            tx_status.insert(tx_hash, crate::interfaces::TxStatus::Confirmed);
+        }
+        tx_status
+    }
+
     fn resume_nodes(&mut self) -> Response {
         let reason: String = "".to_string();
 

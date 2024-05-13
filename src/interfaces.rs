@@ -85,6 +85,20 @@ impl TransactionResponse {
     }
 }
 
+/// The status of a transaction as per the mempool
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TxStatus {
+    pub status: TxStatusType,
+    pub additional_info: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TxStatusType {
+    Pending,
+    Confirmed,
+    Rejected,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionResponseMeta {
     pub block_num: u64,
@@ -756,6 +770,9 @@ pub trait MempoolApi {
 
     /// Get pending DRUID pool
     fn get_pending_druid_pool(&self) -> &DruidPool;
+
+    /// Get the status of transaction/s
+    fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus>;
 
     /// Receives transactions to be bundled into blocks
     ///

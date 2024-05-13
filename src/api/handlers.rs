@@ -903,6 +903,27 @@ pub async fn post_create_transactions(
     r.into_ok("Transaction(s) processing", json_serialize_embed(ctx_map))
 }
 
+/// Get the status of a transaction on the mempool node
+pub async fn post_transaction_status(
+    mut threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    data: Vec<String>,
+    route: &'static str,
+    call_id: String,
+) -> Result<JsonReply, JsonReply> {
+    let r = CallResponse::new(route, &call_id);
+
+    let status = make_api_threaded_call(
+        &mut threaded_calls,
+        move |c| c.get_transaction_status(data),
+        "Cannot access Mempool Node",
+    )
+    .await
+    .map_err(|e| map_string_err(r.clone(), e, StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    r.into_ok("Transaction(s) status", json_serialize_embed(status))
+
+}
+
 /// Serialize transactions to binary without submitting to mempool node
 pub async fn post_serialize_transactions(
     data: Vec<CreateTransaction>,

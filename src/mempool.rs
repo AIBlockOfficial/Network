@@ -8,8 +8,8 @@ use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
     MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
-    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet, WinningPoWInfo,
+    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, TxStatus,
+    UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::mempool_raft::{
     CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
@@ -163,6 +163,7 @@ pub struct MempoolNode {
     coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, NodeType, UtxoSet)>,
+    tx_status_list: BTreeMap<String, TxStatus>,
     api_info: (
         SocketAddr,
         Option<TlsPrivateInfo>,
@@ -269,6 +270,7 @@ impl MempoolNode {
             api_info,
             fetched_utxo_set: None,
             init_issuances,
+            tx_status_list: Default::default(),
         }
         .load_local_db()
     }
@@ -514,6 +516,17 @@ impl MempoolNode {
             }
         }
         ready_txs
+    }
+
+    pub fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
+        tx_hashes
+            .into_iter()
+            .map(|tx_hash| {
+                self.node_raft
+                    .get_committed_item(&tx_hash)
+                    .map(|item| item.clone())
+            })
+            .collect()
     }
 
     /// Returns the mining block from the node_raft
@@ -2384,6 +2397,10 @@ impl MempoolApi for MempoolNode {
             mempool_partition_full_size: self.node_raft.get_mempool_partition_full_size(),
             mempool_miner_whitelist: self.node_raft.get_mempool_miner_whitelist(),
         }
+    }
+
+    fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
+        self.get_transaction_status(tx_hashes)
     }
 
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
