@@ -899,6 +899,7 @@ pub enum UserRequest {
     /// Process received utxo set
     SendUtxoSet {
         utxo_set: UtxoSet,
+        b_num: u64,
     },
     /// Process received block being mined
     BlockMining {

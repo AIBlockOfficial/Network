@@ -587,7 +587,11 @@ impl UserNode {
 
         match req {
             UserApi(req) => self.handle_api_request(peer, req).await,
-            SendUtxoSet { utxo_set } => Some(self.receive_utxo_set(utxo_set)),
+            SendUtxoSet { utxo_set, b_num } => {
+                self.last_block_notified.header.b_num = b_num;
+
+                return Some(self.receive_utxo_set(utxo_set));
+            }
             SendAddressRequest => Some(self.receive_payment_address_request(peer)),
             SendPaymentTransaction { transaction } => {
                 Some(self.receive_payment_transaction(transaction).await)
@@ -641,6 +645,7 @@ impl UserNode {
         match req {
             UpdateWalletFromUtxoSet { address_list } => {
                 info!("Update wallet from UTXO set");
+                info!("Address list: {:?}", address_list);
                 self.request_utxo_set_for_wallet_update(address_list).await
             }
             RequestDonation { paying_peer } => self.request_donation_from_peer(paying_peer).await,
@@ -1636,6 +1641,8 @@ impl Transactor for UserNode {
         debug!("Reset DB: {}", reset_db);
 
         let b_num = self.last_block_notified.header.b_num;
+        debug!("Current block number: {}", b_num);
+
         self.wallet_db
             .save_usable_payments_to_wallet(payments, b_num, reset_db)
             .await

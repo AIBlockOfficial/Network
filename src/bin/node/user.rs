@@ -11,7 +11,20 @@ use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::time::{self, Duration};
-use tracing::info;
+use tracing::{info, trace, warn};
+
+//================== BIN CONSTANTS ==================//
+
+/// Interval between requested UTXO realignment, in seconds
+const UTXO_REALIGN_INTERVAL: u64 = 30;
+
+/// Default user API port
+const DEFAULT_USER_API_PORT: i64 = 3000;
+
+/// Default peer limit
+const DEFAULT_PEER_LIMIT: i64 = 1000;
+
+//===================================================//
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
@@ -28,6 +41,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let threaded_calls_tx = node.threaded_call_tx().clone();
     let api_inputs = node.api_inputs();
     let peer_node = node.get_node().clone();
+    let wallet_db = node.get_wallet_db().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
@@ -95,18 +109,21 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         }
     });
 
+    // Rolling update of the running total
     let update_handle = tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(2));
+        let mut interval = time::interval(Duration::from_secs(UTXO_REALIGN_INTERVAL));
 
         loop {
             interval.tick().await;
-            info!("Updating running total in loop");
+            trace!("Updating running total in loop");
+            let known_addresses = wallet_db.get_known_addresses();
+
             let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
-                address_list: UtxoFetchType::AnyOf(vec![]),
+                address_list: UtxoFetchType::AnyOf(known_addresses),
             });
-        
+
             if let Err(e) = peer_node.inject_next_event(peer_node.local_address(), request) {
-                info!("route:update_running_total error: {:?}", e);
+                warn!("route:update_running_total error: {:?}", e);
             }
         }
     });
@@ -237,7 +254,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("user_api_port", 3000).unwrap();
+    settings
+        .set_default("user_api_port", DEFAULT_USER_API_PORT)
+        .unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("user_mempool_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
@@ -263,7 +282,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
 
     if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
-        settings.set("peer_limit", 1000).unwrap();
+        settings.set("peer_limit", DEFAULT_PEER_LIMIT).unwrap();
     }
 
     // If index is passed, take note of the index to set address later

@@ -548,7 +548,7 @@ pub async fn post_import_keypairs(
                 );
             }
         }
-    } 
+    }
 
     match peer.get_node_type() {
         NodeType::Miner => {
