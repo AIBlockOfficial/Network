@@ -16,7 +16,7 @@ use tracing::{info, trace, warn};
 //================== BIN CONSTANTS ==================//
 
 /// Interval between requested UTXO realignment, in seconds
-const UTXO_REALIGN_INTERVAL: u64 = 30;
+const UTXO_REALIGN_INTERVAL: u64 = 120;
 
 /// Default user API port
 const DEFAULT_USER_API_PORT: i64 = 3000;
