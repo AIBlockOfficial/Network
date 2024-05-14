@@ -667,7 +667,7 @@ fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
     validate_pow_for_diff(MINING_DIFFICULTY, pow)
 }
 
-/// Get the paiment info from the given transactions
+/// Get the payment info from the given transactions
 ///
 /// ### Arguments
 ///
@@ -679,7 +679,7 @@ pub fn get_payments_for_wallet<'a>(
     get_payments_for_wallet_from_utxo(utxo_iterator)
 }
 
-/// Get the paiment info from the given UTXO set/subset
+/// Get the payment info from the given UTXO set/subset
 ///
 /// ### Arguments
 ///

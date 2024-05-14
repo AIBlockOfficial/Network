@@ -651,8 +651,13 @@ impl MempoolNode {
                         .await?
                 }
                 NodeType::User => {
+                    let b_num = self
+                        .node_raft
+                        .get_committed_current_block_num()
+                        .unwrap_or_default();
+
                     self.node
-                        .send(peer, UserRequest::SendUtxoSet { utxo_set })
+                        .send(peer, UserRequest::SendUtxoSet { utxo_set, b_num })
                         .await?
                 }
                 _ => {
@@ -2457,7 +2462,6 @@ impl MempoolInterface for MempoolNode {
         node_type: NodeType,
     ) -> Response {
         self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((peer, node_type, self.get_committed_utxo_set_to_send())),
             UtxoFetchType::AnyOf(addresses) => {
                 let utxo_set = self.get_committed_utxo_set();
                 let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
@@ -2473,6 +2477,7 @@ impl MempoolInterface for MempoolNode {
                     .collect();
                 Some((peer, node_type, utxo_subset))
             }
+            _ => None,
         };
         Response {
             success: true,
