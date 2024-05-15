@@ -2200,9 +2200,7 @@ impl MempoolNode {
         // NB: This vote requires a unanimous_majority vote
         //
         // TODO: Apply the same logic to any other pipeline stages that might get stuck
-        if disconnected_participants.len() == mining_participants.len() {
-            self.current_trigger_messages_count += 1;
-        }
+        self.current_trigger_messages_count += 1;
 
         info!(
             "Current trigger messages count: {:?}",
