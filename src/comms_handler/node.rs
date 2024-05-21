@@ -1059,7 +1059,15 @@ impl Node {
             peer.peer_type = Some(peer_type);
 
             if let Some(notify) = peer.notify_handshake_response.0.take() {
-                notify.send(()).unwrap();
+                match notify.send(()) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        return Err(CommsError::PeerInvalidState(PeerInfo {
+                            node_type: Some(peer_type),
+                            address: Some(peer_addr),
+                        }));
+                    }
+                }
             }
         }
 
