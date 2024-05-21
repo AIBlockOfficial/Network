@@ -1067,7 +1067,6 @@ impl Node {
                             address: Some(peer_addr),
                         }));
                     }
-                
                 }
             }
         }
