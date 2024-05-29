@@ -5,6 +5,7 @@
 
 mod active_raft;
 mod api;
+mod asert;
 mod block_pipeline;
 pub mod comms_handler;
 pub mod configurations;

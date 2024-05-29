@@ -1,4 +1,5 @@
 use crate::active_raft::ActiveRaft;
+use crate::asert::calculate_asert_target;
 use crate::block_pipeline::{
     MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineItem, MiningPipelinePhaseChange,
     MiningPipelineStatus, Participants, PipelineEventInfo,
@@ -296,11 +297,16 @@ impl MempoolRaft {
         let first_raft_peer = config.mempool_node_idx == 0 || !raft_active.use_raft();
         let peers_len = raft_active.peers_len();
 
+        let activation_height_asert = config
+            .activation_height_asert
+            .unwrap_or(crate::constants::ACTIVATION_HEIGHT_ASERT);
+
         let consensused = MempoolConsensused::default()
             .with_peers_len(peers_len)
             .with_partition_full_size(config.mempool_partition_full_size)
             .with_unicorn_fixed_param(config.mempool_unicorn_fixed_param.clone())
             .with_initial_issuances(config.initial_issuances.clone())
+            .with_activation_height_asert(activation_height_asert)
             .init_block_pipeline_status();
         let local_initial_proposal = Some(InitialProposal::PendingItem {
             item: MempoolRaftItem::FirstBlock(utxo_set),
@@ -503,6 +509,10 @@ impl MempoolRaft {
             None
         } else {
             // Non empty snapshot
+            // [AM] looks like this is where restored snapshots may be patched
+            // before they are applied.
+            // consider patching in the ASERT activation block height,
+            // and whether to patch in the UNICORN fixed parameters too.
             warn!("apply_snapshot called self.consensused updated");
             self.consensused = deserialize(&consensused_ser).unwrap();
             self.set_ignore_dedeup_b_num_less_than_current();
@@ -1194,6 +1204,14 @@ impl MempoolConsensused {
         self
     }
 
+    /// Specify the height at which the ASERT algorithm activates
+    pub fn with_activation_height_asert(mut self, height: u64) -> Self {
+        self.block_pipeline = self
+            .block_pipeline
+            .with_activation_height_asert(height);
+        self
+    }
+
     /// Initialize block pipeline
     pub fn init_block_pipeline_status(mut self) -> Self {
         let extra = PipelineEventInfo {
@@ -1466,6 +1484,23 @@ impl MempoolConsensused {
     async fn update_block_header(&mut self, block: &mut Block) {
         let previous_hash = std::mem::take(&mut self.tx_current_block_previous_hash).unwrap();
         let b_num = self.block_pipeline.current_block_num().unwrap();
+
+        // [AM] DAA selection
+        // this is a LESS THAN not a LESS THAN OR EQUAL.
+        // the block where b_num == the activation height triggers
+        // an internal counter in the block pipeline. we can only
+        // use ASERT from the block AFTER the block that started
+        // the counter.
+        if self.block_pipeline.get_activation_height_asert() < b_num {
+
+            let target = calculate_asert_target(
+                self.block_pipeline.get_activation_height_asert(),
+                b_num,
+                self.block_pipeline.get_asert_winning_hashes_count(),
+            );
+            
+            block.header.difficulty = target.into_array().to_vec();
+        }
 
         block.header.previous_hash = Some(previous_hash);
         block.header.timestamp = self.timestamp;
@@ -2121,6 +2156,7 @@ mod test {
             sub_peer_limit: 1000,
             initial_issuances: Default::default(),
             tx_status_lifetime: 600000,
+            activation_height_asert: None,
         };
         let mut node = MempoolRaft::new(&mempool_config, Default::default()).await;
         node.set_key_run(0);

@@ -26,3 +26,4 @@ src/bin/tls_data/
 
 mempool_seed.json
 
+/*.sh
