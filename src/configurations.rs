@@ -160,6 +160,8 @@ pub struct MempoolNodeConfig {
     pub initial_issuances: Vec<InitialIssuance>,
     /// Lifetime of a transaction's status in seconds
     pub tx_status_lifetime: i64,
+    /// Activation height for ASERT DAA
+    pub activation_height_asert: Option<u64>,
 }
 
 /// Configuration option for a mempool node that can be shared across peers
@@ -206,6 +208,8 @@ pub struct StorageNodeConfig {
     pub backup_restore: Option<bool>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Activation height for ASERT DAA
+    pub activation_height_asert: Option<u64>,
 }
 
 /// Configuration option for a storage node
@@ -243,6 +247,8 @@ pub struct MinerNodeConfig {
     pub peer_limit: usize,
     /// Aggregation limit
     pub address_aggregation_limit: Option<usize>,
+    /// Activation height for ASERT DAA
+    pub activation_height_asert: Option<u64>,
 }
 
 /// Configuration option for a user node

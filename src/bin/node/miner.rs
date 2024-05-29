@@ -559,8 +559,8 @@ fn configuration(
     settings: (config::Config, Option<config::Config>),
 ) -> (MinerNodeConfig, Option<UserNodeConfig>) {
     (
-        settings.0.try_into::<MinerNodeConfig>().unwrap(),
-        settings.1.map(|v| v.try_into::<UserNodeConfig>().unwrap()),
+        settings.0.try_into().unwrap(),
+        settings.1.map(|v| v.try_into().unwrap())
     )
 }
 

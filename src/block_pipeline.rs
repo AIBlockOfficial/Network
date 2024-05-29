@@ -6,7 +6,7 @@ use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, Unico
 use keccak_prime::fortuna::Fortuna;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::net::SocketAddr;
 use tracing::log::{debug, info};
@@ -125,6 +125,50 @@ pub struct MiningPipelineInfo {
     current_reward: TokenAmount,
     /// Proposed keys for current mining pipeline cycle
     proposed_keys: BTreeSet<RaftContextKey>,
+    
+    /// [AM] The total number of hashes since ASERT activation
+    #[serde(default)]
+    asert_winning_hashes_count: u64,
+    
+    /// [AM] the block height at which ASERT activates
+    //
+    // note: this data structure has a subtly complex interaction between:
+    //       - new fields being added (schema migrations)
+    //       - values for those fields being set via configuration
+    //       - raft snapshotting
+    //
+    //       the default here will result in the activation height being
+    //       set to the hard-coded main network activation height, however
+    //       for testnets and local runs, this is overridable in configuration.
+    //       because of this default, the fact that this configuration is
+    //       almost certainly lost when a snapshot created before these fields
+    //       were added to the struct is restored is annoying.
+    //
+    //       it is at least safe for mainnet.
+    //
+    //       this may be frustrating to debug without this code comment because
+    //       it will work until it doesn't. running locally, blowing away the
+    //       database between runs, the config value will be passed in, and it
+    //       will make it into future snapshots, so even restored snapshots
+    //       will behave themselves.
+    //
+    //       this quirk will only manifest when restoring a snapshot that was
+    //       created from a version of this struct without this field, as the
+    //       field value will be defaulted to the ACTIVATION_HEIGHT_ASERT
+    //       constant, and not the value from configuration.
+    //
+    //       as an aside, it appears that `unicorn_info` has the same issue,
+    //       although there may not be any instances of a raft snapshot without
+    //       unicorn parameters out there in the wild. if the unicorn parameters
+    //       are ever changed (through configuration) then it's unlikely that
+    //       the change will be applied to an instance that restores from
+    //       snapshot.
+    #[serde(default = "activation_height_asert")]
+    activation_height_asert: u64,
+}
+
+const fn activation_height_asert() -> u64 {
+    crate::constants::ACTIVATION_HEIGHT_ASERT
 }
 
 pub struct MiningPipelineInfoImport {
@@ -142,6 +186,22 @@ impl MiningPipelineInfo {
             security: unicorn_fixed_info.security,
         };
         self
+    }
+
+    /// Specify the height at which the ASERT algorithm activates
+    pub fn with_activation_height_asert(mut self, height: u64) -> Self {
+        self.activation_height_asert = height;
+        self
+    }
+
+    /// Returns the number of winning hashes submitted since the ASERT DAA activated
+    pub fn get_asert_winning_hashes_count(&self) -> u64 {
+        self.asert_winning_hashes_count
+    }
+
+    /// Returns the height at which the ASERT DAA activated, or will activate
+    pub fn get_activation_height_asert(&self) -> u64 {
+        self.activation_height_asert
     }
 
     /// Gets the current reward for a given block
@@ -451,8 +511,25 @@ impl MiningPipelineInfo {
 
     /// Selects a winning miner from the list via UNICORN and move to halted state
     pub fn start_winning_pow_halted(&mut self) {
+        
         let all_winning_pow = std::mem::take(&mut self.all_winning_pow);
         let _timeouts = std::mem::take(&mut self.current_phase_timeout_peer_ids);
+
+        // [AM] we need to track the number of solutions since the activation block
+        // as this is an input to the mapping function between target-solutions-per-block
+        // and the ASERT algorithm's understanding of target-block-interval.
+        if let Some(b_num) = self.current_block_num {
+            // greater-than-or-equal, greater-than?
+            // anchor block is at the activation height.
+            // the first block to use ASERT is the one that immediately follows the anchor block.
+            // therefore, we collect metrics from the anchor block.
+            if b_num >= self.activation_height_asert {
+                self.asert_winning_hashes_count += u64::try_from(all_winning_pow.len()).unwrap_or(crate::constants::ASERT_TARGET_HASHES_PER_BLOCK);
+            }
+        }
+        else {
+            panic!("[AM] we've hooked the wrong place; we need the block number and the number of winning hashes in the same place at the same time");
+        }
 
         self.winning_pow = self
             .get_unicorn_item(WINNING_MINER_UN, &all_winning_pow)
