@@ -29,6 +29,8 @@ use tokio::time::Instant;
 use tracing::{info, trace, warn};
 use trust_dns_resolver::TokioAsyncResolver;
 use tw_chain::constants::TOTAL_TOKENS;
+use serde::Deserialize;
+use bincode::{self, Error as BincodeError};
 use tw_chain::crypto::sha3_256;
 use tw_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use tw_chain::primitives::transaction::GenesisTxHashSpec;
@@ -582,6 +584,15 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(&pow.nonce);
 
     validate_pow_leading_zeroes(&pow_body).is_some()
+}
+
+/// Will attempt deserialization of a given byte array using bincode
+/// 
+/// ### Arguments
+/// 
+/// * `data`    - Byte array to attempt deserialization on
+pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, BincodeError> {
+    bincode::deserialize(data)
 }
 
 /// Generate Proof of Work for a block with a mining transaction

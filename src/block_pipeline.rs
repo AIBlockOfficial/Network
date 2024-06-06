@@ -41,6 +41,7 @@ pub enum MiningPipelineItem {
     ResetPipeline,
 }
 
+
 /// Participants collection (unsorted: given order, and lookup collection)
 #[derive(Default, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Participants {
@@ -167,6 +168,43 @@ pub struct MiningPipelineInfo {
     activation_height_asert: u64,
 }
 
+/// A dirty patch to enable continuation of mining off of pre-difficulty snapshots
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MiningPipelineInfoPreDifficulty {
+    /// Participants for intake phase
+    participants_intake: BTreeMap<u64, Participants>,
+    /// Participants during actual mining
+    participants_mining: BTreeMap<u64, Participants>,
+    /// Empty Participants collection
+    empty_participants: Participants,
+    /// The last round winning hashes
+    last_winning_hashes: BTreeSet<String>,
+    /// The wining PoWs for selection
+    all_winning_pow: Vec<(SocketAddr, WinningPoWInfo)>,
+    /// The unicorn info for the selections
+    unicorn_info: UnicornInfo,
+    /// The selected wining PoW
+    winning_pow: Option<(SocketAddr, WinningPoWInfo)>,
+    /// The current status
+    mining_pipeline_status: MiningPipelineStatus,
+    /// The timeout ids
+    current_phase_timeout_peer_ids: BTreeSet<u64>,
+    /// The timeout ids for a forceful pipeline change
+    current_phase_reset_pipeline_peer_ids: BTreeSet<u64>,
+    /// Fixed info for unicorn generation
+    unicorn_fixed_param: UnicornFixedParam,
+    /// Index of the last block,
+    current_block_num: Option<u64>,
+    /// Current block ready to mine (consensused).
+    current_block: Option<Block>,
+    /// All transactions present in current_block (consensused).
+    current_block_tx: BTreeMap<String, Transaction>,
+    /// The current reward for a given mempool node
+    current_reward: TokenAmount,
+    /// Proposed keys for current mining pipeline cycle
+    proposed_keys: BTreeSet<RaftContextKey>,
+}
+
 const fn activation_height_asert() -> u64 {
     crate::constants::ACTIVATION_HEIGHT_ASERT
 }
@@ -175,6 +213,33 @@ pub struct MiningPipelineInfoImport {
     pub unicorn_fixed_param: UnicornFixedParam,
     pub current_block_num: Option<u64>,
     pub current_block: Option<Block>,
+    pub asert_winning_hashes_count: u64,
+    pub activation_height_asert: u64,
+}
+
+impl From<MiningPipelineInfoPreDifficulty> for MiningPipelineInfo {
+    fn from(value: MiningPipelineInfoPreDifficulty) -> Self {
+        Self {
+            unicorn_fixed_param: value.unicorn_fixed_param,
+            current_block_num: value.current_block_num,
+            current_block: value.current_block,
+            participants_intake: value.participants_intake,
+            participants_mining: value.participants_mining,
+            empty_participants: value.empty_participants,
+            last_winning_hashes: value.last_winning_hashes,
+            all_winning_pow: value.all_winning_pow,
+            unicorn_info: value.unicorn_info,
+            winning_pow: value.winning_pow,
+            mining_pipeline_status: value.mining_pipeline_status,
+            current_phase_timeout_peer_ids: value.current_phase_timeout_peer_ids,
+            current_phase_reset_pipeline_peer_ids: value.current_phase_reset_pipeline_peer_ids,
+            current_block_tx: value.current_block_tx,
+            current_reward: value.current_reward,
+            proposed_keys: value.proposed_keys,
+            asert_winning_hashes_count: 0,
+            activation_height_asert: activation_height_asert(),
+        }
+    }
 }
 
 impl MiningPipelineInfo {
@@ -634,12 +699,16 @@ impl MiningPipelineInfo {
             unicorn_fixed_param,
             current_block_num,
             current_block,
+            activation_height_asert,
+            asert_winning_hashes_count
         } = value;
 
         Self {
             unicorn_fixed_param,
             current_block_num,
             current_block,
+            activation_height_asert,
+            asert_winning_hashes_count,
             ..Default::default()
         }
     }
@@ -650,6 +719,8 @@ impl MiningPipelineInfo {
             unicorn_fixed_param: self.unicorn_fixed_param,
             current_block_num: self.current_block_num,
             current_block: self.current_block,
+            activation_height_asert: self.activation_height_asert,
+            asert_winning_hashes_count: self.asert_winning_hashes_count
         }
     }
 }
