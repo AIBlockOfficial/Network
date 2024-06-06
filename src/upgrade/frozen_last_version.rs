@@ -723,6 +723,8 @@ pub mod convert {
             miner_whitelist: Default::default(), // Will require sensible conversion on next upgrade
             init_issuances: Default::default(),  // Will require sensible conversion on next upgrade
             special_handling,
+            activation_height_asert: 0,
+            asert_winning_hashes_count: 0,
         }
     }
 

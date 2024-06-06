@@ -2,7 +2,7 @@ use crate::active_raft::ActiveRaft;
 use crate::asert::calculate_asert_target;
 use crate::block_pipeline::{
     MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineItem, MiningPipelinePhaseChange,
-    MiningPipelineStatus, Participants, PipelineEventInfo,
+    MiningPipelineStatus, Participants, PipelineEventInfo, MiningPipelineInfoPreDifficulty,
 };
 use crate::configurations::{MempoolNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, COINBASE_MATURITY, DB_PATH, TX_POOL_LIMIT};
@@ -13,10 +13,9 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now,
-    get_total_coinbase_tokens, make_utxo_set_from_seed, BackupCheck, UtxoReAlignCheck,
+    calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now, get_total_coinbase_tokens, make_utxo_set_from_seed, try_deserialize, BackupCheck, UtxoReAlignCheck
 };
-use bincode::{deserialize, serialize};
+use bincode::serialize;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
@@ -139,6 +138,54 @@ pub struct MempoolConsensusedRuntimeData {
     pub mining_api_keys: BTreeMap<SocketAddr, String>,
 }
 
+/// This is a dirty patch to enable the import of consensus snapshots 
+/// from before the introduction of the difficulty function for mining
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MempoolConsensusedPreDifficulty {
+    /// Sufficient majority
+    unanimous_majority: usize,
+    /// Sufficient majority
+    sufficient_majority: usize,
+    /// Number of miners
+    partition_full_size: usize,
+    /// Committed transaction pool.
+    tx_pool: BTreeMap<String, Transaction>,
+    /// Committed DRUID transactions.
+    tx_druid_pool: Vec<BTreeMap<String, Transaction>>,
+    /// Header to use for next block if ready to generate.
+    tx_current_block_previous_hash: Option<String>,
+    /// The very first block to consensus.
+    initial_utxo_txs: Option<BTreeMap<String, Transaction>>,
+    /// UTXO set containing the valid transaction to use as previous input hashes.
+    utxo_set: TrackedUtxoSet,
+    /// Accumulating block:
+    /// Requires majority of mempool node votes for normal blocks.
+    /// Requires unanimous vote for first block.
+    current_block_stored_info: BTreeMap<Vec<u8>, (AccumulatingBlockStoredInfo, BTreeSet<u64>)>,
+    /// Coordinated commands sent through RAFT
+    /// Requires unanimous vote
+    current_raft_coordinated_cmd_stored_info: BTreeMap<CoordinatedCommand, BTreeSet<u64>>,
+    /// The last commited raft index.
+    last_committed_raft_idx_and_term: (u64, u64),
+    /// The current circulation of tokens
+    current_issuance: TokenAmount,
+    /// The block pipeline
+    block_pipeline: MiningPipelineInfoPreDifficulty,
+    /// The last mining rewards.
+    last_mining_transaction_hashes: Vec<String>,
+    /// Special handling for processing blocks.
+    special_handling: Option<SpecialHandling>,
+    /// Whitelisted miner nodes.
+    miner_whitelist: MinerWhitelist,
+    /// Timestamp for the current block
+    timestamp: i64,
+    /// Runtime data that does not get stored to disk
+    #[serde(skip)]
+    runtime_data: MempoolConsensusedRuntimeData,
+    /// Initial issuances
+    init_issuances: Vec<InitialIssuance>,
+}
+
 /// All fields that are consensused between the RAFT group.
 /// These fields need to be written and read from a committed log event.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -201,6 +248,8 @@ pub struct MempoolConsensusedImport {
     pub special_handling: Option<SpecialHandling>,
     pub miner_whitelist: MinerWhitelist,
     pub init_issuances: Vec<InitialIssuance>,
+    pub activation_height_asert: u64,
+    pub asert_winning_hashes_count: u64
 }
 
 /// Consensused Mempool fields and consensus management.
@@ -514,7 +563,33 @@ impl MempoolRaft {
             // consider patching in the ASERT activation block height,
             // and whether to patch in the UNICORN fixed parameters too.
             warn!("apply_snapshot called self.consensused updated");
-            self.consensused = deserialize(&consensused_ser).unwrap();
+
+            let consensus_check: Result<MempoolConsensused, _> = try_deserialize(&consensused_ser);
+            
+            // Handle the case where the snapshot is from a previous version
+            self.consensused = match consensus_check {
+                Ok(consensused) => consensused,
+                Err(e) => {
+                    warn!("Deserialization of consensus snapshot failed: {:?}", e);
+                    warn!("Attempting to deserialize as a previous version");
+
+                    let consensus_prediff: Result<MempoolConsensusedPreDifficulty, _> = try_deserialize(&consensused_ser);
+                    match consensus_prediff {
+                        Ok(consensused) => consensused.into(),
+                        Err(e) => {
+                            error!("Deserialization of consensus snapshot failed for previous difficulty: {:?}", e);
+                            error!("apply_snapshot deserialize error: {:?}", e);
+                            return None;
+                        }
+                    }
+                }
+            };
+
+            debug!(
+                "apply_snapshot called self.consensused updated: tx_current_block_num({:?})",
+                self.consensused.block_pipeline.current_block_num()
+            );
+
             self.set_ignore_dedeup_b_num_less_than_current();
             self.set_next_propose_transactions_timeout_at();
             self.set_next_propose_mining_event_timeout_at();
@@ -1138,6 +1213,56 @@ impl MempoolRaft {
     }
 }
 
+impl From<MempoolConsensusedPreDifficulty> for MempoolConsensused {
+    fn from(consensused: MempoolConsensusedPreDifficulty) -> Self {
+        let MempoolConsensusedPreDifficulty {
+            unanimous_majority,
+            sufficient_majority,
+            partition_full_size,
+            tx_pool,
+            tx_druid_pool,
+            tx_current_block_previous_hash,
+            initial_utxo_txs,
+            utxo_set,
+            current_block_stored_info,
+            current_raft_coordinated_cmd_stored_info,
+            last_committed_raft_idx_and_term,
+            current_issuance,
+            last_mining_transaction_hashes,
+            runtime_data,
+            special_handling,
+            miner_whitelist,
+            timestamp,
+            init_issuances,
+            block_pipeline
+        } = consensused;
+
+        let post_diff_block_pipeline: MiningPipelineInfo = block_pipeline.into();
+
+        Self {
+            unanimous_majority,
+            sufficient_majority,
+            partition_full_size,
+            tx_pool,
+            tx_druid_pool,
+            tx_current_block_previous_hash,
+            initial_utxo_txs,
+            utxo_set,
+            current_block_stored_info,
+            current_raft_coordinated_cmd_stored_info,
+            last_committed_raft_idx_and_term,
+            current_issuance,
+            block_pipeline: post_diff_block_pipeline,
+            last_mining_transaction_hashes,
+            runtime_data,
+            special_handling,
+            miner_whitelist,
+            timestamp,
+            init_issuances,
+        }
+    }
+}
+
 impl MempoolConsensused {
     /// Get runtime data
     pub fn get_runtime_data(&self) -> MempoolConsensusedRuntimeData {
@@ -1239,12 +1364,16 @@ impl MempoolConsensused {
             special_handling,
             miner_whitelist,
             init_issuances,
+            activation_height_asert,
+            asert_winning_hashes_count,
         } = consensused;
 
         let block_pipeline = MiningPipelineInfoImport {
             unicorn_fixed_param,
             current_block_num: tx_current_block_num,
             current_block,
+            activation_height_asert,
+            asert_winning_hashes_count
         };
         let timestamp = get_timestamp_now();
 
@@ -1291,6 +1420,8 @@ impl MempoolConsensused {
             miner_whitelist: self.miner_whitelist,
             special_handling,
             init_issuances: self.init_issuances,
+            activation_height_asert: block_pipeline.activation_height_asert,
+            asert_winning_hashes_count: block_pipeline.asert_winning_hashes_count,
         }
     }
 
