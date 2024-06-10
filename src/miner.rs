@@ -208,6 +208,7 @@ impl MinerNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.peer_limit,
             NodeType::Miner,
             disable_tcp_listener,
             false,

@@ -170,6 +170,7 @@ impl UserNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.peer_limit,
             NodeType::User,
             disable_tcp_listener,
             false,

@@ -1,7 +1,7 @@
-mempool_db_mode = {Test = 0}
-storage_db_mode = {Test = 0}
-miner_db_mode = {Test = 0}
-user_db_mode = {Test = 1000}
+mempool_db_mode = {Test = 1}
+storage_db_mode = {Test = 1}
+miner_db_mode = {Live = 1}
+user_db_mode = {Test = 1001}
 mempool_raft = 1
 storage_raft = 1
 mempool_partition_full_size = 2
@@ -30,9 +30,6 @@ address = "127.0.0.1:12330"
 
 [[storage_nodes]]
 address = "127.0.0.1:12331"
-
-[[miner_nodes]]
-address = "127.0.0.1:12340"
 
 [[miner_nodes]]
 address = "127.0.0.1:12341"

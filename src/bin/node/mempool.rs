@@ -289,6 +289,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("peer_limit", 1000).unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("sub_peer_limit") {
+        settings.set("sub_peer_limit", 1000).unwrap();
+    }
+
     if let Some(port) = matches.value_of("api_port") {
         settings.set("mempool_api_port", port).unwrap();
     }
