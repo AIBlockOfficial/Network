@@ -167,6 +167,7 @@ pub struct MinerNode {
     mining_api_key: Option<String>,
     blockchain_item_received: Option<(String, BlockchainItem, SocketAddr)>,
     api_info: (SocketAddr, Option<TlsPrivateInfo>, ApiKeys, RoutesPoWInfo),
+    activation_height_asert: u64,
 }
 
 impl MinerNode {
@@ -219,6 +220,10 @@ impl MinerNode {
         let mining_api_key = config.mining_api_key.clone();
         let address_aggregation_limit = config.address_aggregation_limit;
 
+        let activation_height_asert = config
+            .activation_height_asert
+            .unwrap_or(crate::constants::ACTIVATION_HEIGHT_ASERT);
+
         MinerNode {
             node,
             local_events: Default::default(),
@@ -242,6 +247,7 @@ impl MinerNode {
             mining_api_key,
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             address_aggregation_limit,
+            activation_height_asert,
         }
         .load_local_db()
         .await

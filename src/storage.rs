@@ -142,6 +142,7 @@ pub struct StorageNode {
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
+    activation_height_asert: u64,
 }
 
 impl StorageNode {
@@ -202,6 +203,10 @@ impl StorageNode {
             raft_peers.chain(mempool).collect()
         };
 
+        let activation_height_asert = config
+            .activation_height_asert
+            .unwrap_or(crate::constants::ACTIVATION_HEIGHT_ASERT);
+
         StorageNode {
             node,
             node_raft,
@@ -213,6 +218,7 @@ impl StorageNode {
             whitelisted: Default::default(),
             shutdown_group,
             blockchain_item_fetched: Default::default(),
+            activation_height_asert,
         }
         .load_local_db()
     }
@@ -959,7 +965,7 @@ impl StorageNode {
             self.resend_trigger_message().await;
             return None;
         };
-
+        
         if let Err(e) = construct_valid_block_pow_hash(&common.block) {
             debug!("Block received not added. PoW invalid: {}", e);
             return Some(Response {
