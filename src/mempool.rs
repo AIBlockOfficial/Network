@@ -8,8 +8,8 @@ use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::interfaces::{
     BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
     MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
-    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, UserRequest,
-    UtxoFetchType, UtxoSet, WinningPoWInfo,
+    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, TxStatus,
+    TxStatusType, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
 };
 use crate::mempool_raft::{
     CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
@@ -20,9 +20,10 @@ use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::utils::{
     apply_mining_tx, check_druid_participants, create_item_asset_tx_from_sig, create_socket_addr,
-    format_parition_pow_address, generate_pow_random_num, to_api_keys, to_route_pow_infos,
-    validate_pow_block, validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel,
-    LocalEventSender, ResponseResult, RoutesPoWInfo, StringError,
+    format_parition_pow_address, generate_pow_random_num, get_timestamp_now,
+    is_timestamp_difference_greater, to_api_keys, to_route_pow_infos, validate_pow_block,
+    validate_pow_for_address, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender,
+    ResponseResult, RoutesPoWInfo, StringError,
 };
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
@@ -163,6 +164,8 @@ pub struct MempoolNode {
     coordinated_shutdown: u64,
     shutdown_group: BTreeSet<SocketAddr>,
     fetched_utxo_set: Option<(SocketAddr, NodeType, UtxoSet)>,
+    tx_status_list: BTreeMap<String, TxStatus>,
+    tx_status_lifetime: i64,
     api_info: (
         SocketAddr,
         Option<TlsPrivateInfo>,
@@ -207,6 +210,7 @@ impl MempoolNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.sub_peer_limit,
             NodeType::Mempool,
             false,
             true,
@@ -236,6 +240,12 @@ impl MempoolNode {
             mempool_partition_full_size: config.mempool_partition_full_size,
             mempool_miner_whitelist: config.mempool_miner_whitelist,
         };
+
+        if config.sub_peer_limit > config.peer_limit {
+            return Err(MempoolError::ConfigError(
+                "Sub peer limit cannot be greater than peer limit",
+            ));
+        }
 
         MempoolNode {
             node,
@@ -269,6 +279,8 @@ impl MempoolNode {
             api_info,
             fetched_utxo_set: None,
             init_issuances,
+            tx_status_list: Default::default(),
+            tx_status_lifetime: config.tx_status_lifetime,
         }
         .load_local_db()
     }
@@ -491,6 +503,7 @@ impl MempoolNode {
         transactions: BTreeMap<String, Transaction>,
     ) -> Vec<(bool, BTreeMap<String, Transaction>)> {
         let mut ready_txs = Vec::new();
+
         for (tx_hash, tx) in transactions {
             if let Some(druid_info) = tx.druid_info.clone() {
                 let druid = druid_info.druid;
@@ -508,6 +521,7 @@ impl MempoolNode {
                     let valid = druid_expectations_are_met(&druid, droplet.txs.values())
                         && check_druid_participants(droplet);
                     ready_txs.push((valid, droplet.txs.clone()));
+
                     // TODO: Implement time-based removal?
                     self.druid_pool.remove(&druid);
                 }
@@ -559,7 +573,7 @@ impl MempoolNode {
     }
 
     /// Return closure use to validate a transaction
-    fn transactions_validator(&self) -> impl Fn(&Transaction) -> bool + '_ {
+    fn transactions_validator(&mut self) -> impl Fn(&Transaction) -> (bool, String) + '_ {
         let utxo_set = self.node_raft.get_committed_utxo_set();
         let lock_expired = self
             .node_raft
@@ -573,25 +587,34 @@ impl MempoolNode {
 
         move |tx| {
             if tx.is_create_tx() {
-                return tx_has_valid_create_script(
+                let is_valid = tx_has_valid_create_script(
                     &tx.inputs[0].script_signature,
                     &tx.outputs[0].value,
                 );
+
+                return match is_valid {
+                    true => (true, "Create script is valid".to_string()),
+                    false => (false, "Create script is invalid".to_string()),
+                };
             }
 
-            !tx.is_coinbase()
-                && tx_is_valid(tx, b_num, |v| {
-                    utxo_set
-                        .get(v)
-                        // .filter(|_| !sanction_list.contains(&v.t_hash))
-                        .filter(|tx_out| lock_expired >= tx_out.locktime)
-                })
+            let (is_valid, validity_info) = tx_is_valid(tx, b_num, |v| {
+                utxo_set
+                    .get(v)
+                    // .filter(|_| !sanction_list.contains(&v.t_hash))
+                    .filter(|tx_out| lock_expired >= tx_out.locktime)
+            });
+
+            (!tx.is_coinbase() && is_valid, validity_info)
         }
     }
 
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
+
+        // Flush stale tx status
+        self.flush_stale_tx_status();
 
         info!("");
         info!("Proposing timestamp next");
@@ -635,8 +658,13 @@ impl MempoolNode {
                         .await?
                 }
                 NodeType::User => {
+                    let b_num = self
+                        .node_raft
+                        .get_committed_current_block_num()
+                        .unwrap_or_default();
+
                     self.node
-                        .send(peer, UserRequest::SendUtxoSet { utxo_set })
+                        .send(peer, UserRequest::SendUtxoSet { utxo_set, b_num })
                         .await?
                 }
                 _ => {
@@ -654,100 +682,100 @@ impl MempoolNode {
         &mut self,
         response: Result<Response>,
     ) -> ResponseResult {
-        debug!("Response: {:?}", response);
+        // debug!("Response: {:?}", response);
 
         match response {
             Ok(Response {
                 success: true,
-                reason: "Received UTXO fetch request",
-            }) => {
+                reason,
+            }) if reason == "Received UTXO fetch request" => {
                 if let Err(e) = self.send_fetched_utxo_set().await {
                     error!("Requested UTXO set not sent {:?}", e);
                 }
             }
             Ok(Response {
                 success: true,
-                reason: "Received coordinated pause request",
-            }) => {
+                reason,
+            }) if reason == "Received coordinated pause request" => {
                 debug!("Received coordinated pause request");
             }
             Ok(Response {
                 success: true,
-                reason: "Node pause configuration set",
-            }) => {
+                reason,
+            }) if reason == "Node pause configuration set" => {
                 debug!("Node pause configuration set");
             }
             Ok(Response {
                 success: true,
-                reason: "Received coordinated resume request",
-            }) => {
+                reason,
+            }) if reason == "Received coordinated resume request" => {
                 debug!("Received coordinated resume request");
             }
             Ok(Response {
                 success: true,
-                reason: "Node resumed",
-            }) => {
+                reason,
+            }) if reason == "Node resumed" => {
                 warn!("NODE RESUMED");
             }
             Ok(Response {
                 success: true,
-                reason: "Received shared config",
-            }) => {
+                reason,
+            }) if reason == "Received shared config" => {
                 debug!("Shared config received");
             }
             Ok(Response {
                 success: true,
-                reason: "Shared config applied",
-            }) => {
+                reason,
+            }) if reason == "Shared config applied" => {
                 debug!("Shared config applied");
             }
             Ok(Response {
                 success: false,
-                reason: "No shared config to apply",
-            }) => {
+                reason,
+            }) if reason == "No shared config to apply" => {
                 warn!("No shared config to apply");
             }
             Ok(Response {
                 success: true,
-                reason: "Miner removal request received",
-            }) => {}
+                reason,
+            }) if reason == "Miner removal request received" => {}
             Ok(Response {
                 success: true,
-                reason: "Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Shutdown" => {
                 warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
-                reason: "Shutdown pending",
-            }) => {}
+                reason,
+            }) if reason == "Shutdown pending" => {}
             Ok(Response {
                 success: true,
-                reason: "Start coordinated shutdown",
-            }) => {}
+                reason,
+            }) if reason == "Start coordinated shutdown" => {}
             Ok(Response {
                 success: true,
-                reason: "Received partition request successfully",
-            }) => {}
+                reason,
+            }) if reason == "Received partition request successfully" => {}
             Ok(Response {
                 success: true,
-                reason: "Received first full partition request",
-            }) => {}
+                reason,
+            }) if reason == "Received first full partition request" => {}
             Ok(Response {
                 success: true,
-                reason: "Removing unauthorized miner",
-            }) => {}
+                reason,
+            }) if reason == "Removing unauthorized miner" => {}
             Ok(Response {
                 success: true,
-                reason: "Received PoW successfully",
-            }) => {
+                reason,
+            }) if reason == "Received PoW successfully" => {
                 debug!("Proposing winning PoW entry");
             }
             Ok(Response {
                 success: true,
-                reason: "Winning PoW intake open",
-            }) => {
+                reason,
+            }) if reason == "Winning PoW intake open" => {
                 debug!(
                     "Block and participants ready to mine: {:?}",
                     self.get_mining_block()
@@ -760,8 +788,8 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Pipeline halted",
-            }) => {
+                reason,
+            }) if reason == "Pipeline halted" => {
                 info!("Send Block to storage");
                 debug!("CURRENT MINED BLOCK: {:?}", self.current_mined_block);
                 if let Err(e) = self.send_block_to_storage().await {
@@ -770,8 +798,8 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Pipeline reset",
-            }) => {
+                reason,
+            }) if reason == "Pipeline reset" => {
                 warn!(
                     "Pipeline reset to :{:?}",
                     self.node_raft.get_mining_pipeline_status()
@@ -779,16 +807,16 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Sent runtime data to peer",
-            }) => {}
+                reason,
+            }) if reason == "Sent runtime data to peer" => {}
             Ok(Response {
                 success: false,
-                reason: "Failed to send runtime data to peer",
-            }) => {}
+                reason,
+            }) if reason == "Failed to send runtime data to peer" => {}
             Ok(Response {
                 success: true,
-                reason: "Received runtime data from peer",
-            }) => {
+                reason,
+            }) if reason == "Received runtime data from peer" => {
                 debug!("Received runtime data from peer");
                 if let Some(runtime_data) = self.received_runtime_data.take() {
                     let mining_api_keys = runtime_data.mining_api_keys.into_iter().collect();
@@ -801,18 +829,18 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: false,
-                reason: "Received runtime data from unknown peer",
-            }) => {}
+                reason,
+            }) if reason == "Received runtime data from unknown peer" => {}
             Ok(Response {
                 success: true,
-                reason: "Transactions added to tx pool",
-            }) => {
+                reason,
+            }) if reason == "Transactions added to tx pool" => {
                 debug!("Transactions received and processed successfully");
             }
             Ok(Response {
                 success: true,
-                reason: "First Block committed",
-            }) => {
+                reason,
+            }) if reason == "First Block committed" => {
                 // Only continue with the mining process if the node is not paused
                 if !self.is_paused().await {
                     debug!("First block ready to mine: {:?}", self.get_mining_block());
@@ -826,8 +854,8 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block committed",
-            }) => {
+                reason,
+            }) if reason == "Block committed" => {
                 // Only continue with the mining process if the node is not paused
                 if !self.is_paused().await {
                     debug!("Block ready to mine: {:?}", self.get_mining_block());
@@ -841,57 +869,61 @@ impl MempoolNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Block shutdown",
-            }) => {
+                reason,
+            }) if reason == "Block shutdown" => {
                 debug!("Block shutdown (not ready to mine)");
                 self.flood_closing_events().await.unwrap();
             }
             Ok(Response {
                 success: true,
-                reason: "Transactions committed",
-            }) => {
+                reason,
+            }) if reason == "Transactions committed" => {
                 debug!("Transactions ready to be used in next block");
             }
             Ok(Response {
                 success: true,
-                reason: "Received block stored",
-            }) => {
+                reason,
+            }) if reason == "Received block stored" => {
                 info!("Block info received from storage: ready to generate block");
             }
             Ok(Response {
                 success: true,
-                reason: "Snapshot applied",
-            }) => {
+                reason,
+            }) if reason == "Snapshot applied" => {
                 warn!("Snapshot applied");
             }
             Ok(Response {
                 success: true,
-                reason: "Received block notification",
-            }) => {}
+                reason,
+            }) if reason == "Received block notification" => {}
             Ok(Response {
                 success: true,
-                reason: "Partition PoW received successfully",
-            }) => {}
+                reason,
+            }) if reason == "Partition PoW received successfully" => {}
             Ok(Response {
                 success: true,
-                reason: "Sent startup requests on reconnection",
-            }) => debug!("Sent startup requests on reconnection"),
+                reason,
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
-            }) => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
-                reason: "Partition list complete",
-            }) => {}
+                reason,
+            }) if reason == "Partition list complete" => {}
             Ok(Response {
                 success: false,
-                reason: "PoW received is invalid",
-            }) => {}
+                reason,
+            }) if reason == "PoW received is invalid" => {}
             Ok(Response {
                 success: false,
-                reason: "Not block currently mined",
-            }) => {}
+                reason,
+            }) if reason == "Not block currently mined" => {}
             Ok(Response {
                 success: true,
                 reason,
@@ -973,7 +1005,7 @@ impl MempoolNode {
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: reason.to_string(),
                 }))
             }
         }
@@ -991,7 +1023,7 @@ impl MempoolNode {
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
-                    reason: "First Block committed",
+                    reason: "First Block committed".to_owned(),
                 }))
             }
             Some(CommittedItem::Block) => {
@@ -999,7 +1031,7 @@ impl MempoolNode {
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
-                    reason: "Block committed",
+                    reason: "Block committed".to_owned(),
                 }))
             }
             Some(CommittedItem::BlockShutdown) => {
@@ -1007,23 +1039,23 @@ impl MempoolNode {
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
-                    reason: "Block shutdown",
+                    reason: "Block shutdown".to_owned(),
                 }))
             }
             Some(CommittedItem::StartPhasePowIntake) => Some(Ok(Response {
                 success: true,
-                reason: "Winning PoW intake open",
+                reason: "Winning PoW intake open".to_owned(),
             })),
             Some(CommittedItem::StartPhaseHalted) => {
                 self.mining_block_mined();
                 Some(Ok(Response {
                     success: true,
-                    reason: "Pipeline halted",
+                    reason: "Pipeline halted".to_owned(),
                 }))
             }
             Some(CommittedItem::ResetPipeline) => Some(Ok(Response {
                 success: true,
-                reason: "Pipeline reset",
+                reason: "Pipeline reset".to_owned(),
             })),
             Some(CommittedItem::Transactions) => {
                 delete_local_transactions(
@@ -1032,7 +1064,7 @@ impl MempoolNode {
                 );
                 Some(Ok(Response {
                     success: true,
-                    reason: "Transactions committed",
+                    reason: "Transactions committed".to_owned(),
                 }))
             }
             Some(CommittedItem::Snapshot) => {
@@ -1042,7 +1074,7 @@ impl MempoolNode {
 
                 Some(Ok(Response {
                     success: true,
-                    reason: "Snapshot applied",
+                    reason: "Snapshot applied".to_owned(),
                 }))
             }
             Some(CommittedItem::CoordinatedCmd(cmd)) => self.handle_coordinated_cmd(cmd).await,
@@ -1059,26 +1091,26 @@ impl MempoolNode {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
-                reason,
+                reason: reason.to_string(),
             }),
             LocalEvent::ReconnectionComplete => {
                 if let Err(err) = self.send_startup_requests().await {
                     error!("Failed to send startup requests on reconnect: {}", err);
                     return Some(Response {
                         success: false,
-                        reason: "Failed to send startup requests on reconnection",
+                        reason: "Failed to send startup requests on reconnection".to_owned(),
                     });
                 }
                 Some(Response {
                     success: true,
-                    reason: "Sent startup requests on reconnection",
+                    reason: "Sent startup requests on reconnection".to_owned(),
                 })
             }
             LocalEvent::CoordinatedShutdown(shutdown) => {
                 self.coordinated_shutdown = shutdown;
                 Some(Response {
                     success: true,
-                    reason: "Start coordinated shutdown",
+                    reason: "Start coordinated shutdown".to_owned(),
                 })
             }
             LocalEvent::Ignore => None,
@@ -1210,14 +1242,14 @@ impl MempoolNode {
         {
             return Some(Response {
                 success: false,
-                reason: "Received runtime data from unknown peer",
+                reason: "Received runtime data from unknown peer".to_owned(),
             });
         }
 
         self.received_runtime_data = Some(runtime_data);
         Some(Response {
             success: true,
-            reason: "Received runtime data from peer",
+            reason: "Received runtime data from peer".to_owned(),
         })
     }
 
@@ -1229,13 +1261,13 @@ impl MempoolNode {
             error!("Failed to send runtime data to peer: {}", e);
             return Some(Response {
                 success: false,
-                reason: "Failed to send runtime data to peer",
+                reason: "Failed to send runtime data to peer".to_owned(),
             });
         }
 
         Some(Response {
             success: true,
-            reason: "Sent runtime data to peer",
+            reason: "Sent runtime data to peer".to_owned(),
         })
     }
 
@@ -1247,7 +1279,7 @@ impl MempoolNode {
         self.miner_removal_list.write().await.insert(peer);
         Some(Response {
             success: true,
-            reason: "Miner removal request received",
+            reason: "Miner removal request received".to_owned(),
         })
     }
 
@@ -1266,7 +1298,7 @@ impl MempoolNode {
                 warn!("Pausing node at b_num: {b_num}");
                 Some(Ok(Response {
                     success: true,
-                    reason: "Node pause configuration set",
+                    reason: "Node pause configuration set".to_owned(),
                 }))
             }
             CoordinatedCommand::ResumeNodes => {
@@ -1278,7 +1310,7 @@ impl MempoolNode {
                 *self.disable_trigger_messages.write().await = false;
                 Some(Ok(Response {
                     success: true,
-                    reason: "Node resumed",
+                    reason: "Node resumed".to_owned(),
                 }))
             }
             CoordinatedCommand::ApplySharedConfig => {
@@ -1286,12 +1318,12 @@ impl MempoolNode {
                     self.apply_shared_config(received_shared_config).await;
                     return Some(Ok(Response {
                         success: true,
-                        reason: "Shared config applied",
+                        reason: "Shared config applied".to_owned(),
                     }));
                 }
                 Some(Ok(Response {
                     success: false,
-                    reason: "No shared config to apply",
+                    reason: "No shared config to apply".to_owned(),
                 }))
             }
         }
@@ -1357,13 +1389,13 @@ impl MempoolNode {
         if !self.shutdown_group.is_empty() {
             return Some(Response {
                 success: true,
-                reason: "Shutdown pending",
+                reason: "Shutdown pending".to_owned(),
             });
         }
 
         Some(Response {
             success: true,
-            reason: "Shutdown",
+            reason: "Shutdown".to_owned(),
         })
     }
 
@@ -1429,7 +1461,7 @@ impl MempoolNode {
         }
         Some(Response {
             success: true,
-            reason: "Received coordinated pause request",
+            reason: "Received coordinated pause request".to_owned(),
         })
     }
 
@@ -1447,7 +1479,7 @@ impl MempoolNode {
         }
         Some(Response {
             success: true,
-            reason: "Received coordinated resume request",
+            reason: "Received coordinated resume request".to_owned(),
         })
     }
 
@@ -1475,7 +1507,7 @@ impl MempoolNode {
         self.received_shared_config = Some(shared_config);
         Some(Response {
             success: true,
-            reason: "Received shared config",
+            reason: "Received shared config".to_owned(),
         })
     }
 
@@ -1495,7 +1527,7 @@ impl MempoolNode {
 
         Response {
             success: true,
-            reason: "Received block notification",
+            reason: "Received block notification".to_owned(),
         }
     }
 
@@ -1559,7 +1591,7 @@ impl MempoolNode {
             }
             return Response {
                 success: true,
-                reason: "Removing unauthorized miner",
+                reason: "Removing unauthorized miner".to_owned(),
             };
         }
 
@@ -1583,12 +1615,12 @@ impl MempoolNode {
             self.node_raft.propose_initial_item().await;
             Response {
                 success: true,
-                reason: "Received first full partition request",
+                reason: "Received first full partition request".to_owned(),
             }
         } else {
             Response {
                 success: true,
-                reason: "Received partition request successfully",
+                reason: "Received partition request successfully".to_owned(),
             }
         }
     }
@@ -1616,7 +1648,7 @@ impl MempoolNode {
             (MiningPipelineStatus::Halted, _) => {
                 return Some(Response {
                     success: false,
-                    reason: "Partition list complete",
+                    reason: "Partition list complete".to_owned(),
                 });
             }
             _ => return None,
@@ -1628,7 +1660,7 @@ impl MempoolNode {
         if !valid_pow {
             return Some(Response {
                 success: false,
-                reason: "PoW received is invalid",
+                reason: "PoW received is invalid".to_owned(),
             });
         }
 
@@ -1642,7 +1674,7 @@ impl MempoolNode {
 
         Some(Response {
             success: true,
-            reason: "Partition PoW received successfully",
+            reason: "Partition PoW received successfully".to_owned(),
         })
     }
 
@@ -2031,7 +2063,7 @@ impl MempoolNode {
             trace!(?address, "Received outdated PoW");
             return Some(Response {
                 success: false,
-                reason: "Not block currently mined",
+                reason: "Not block currently mined".to_owned(),
             });
         };
 
@@ -2040,7 +2072,7 @@ impl MempoolNode {
         if !coinbase.is_coinbase() || coinbase.outputs[0].value.token_amount() != *coinbase_amount {
             return Some(Response {
                 success: false,
-                reason: "Coinbase transaction invalid",
+                reason: "Coinbase transaction invalid".to_owned(),
             });
         }
 
@@ -2050,7 +2082,7 @@ impl MempoolNode {
         if !validate_pow_block(&block_to_check) {
             return Some(Response {
                 success: false,
-                reason: "Invalid PoW for block",
+                reason: "Invalid PoW for block".to_owned(),
             });
         }
 
@@ -2077,7 +2109,7 @@ impl MempoolNode {
 
         Some(Response {
             success: true,
-            reason: "Received PoW successfully",
+            reason: "Received PoW successfully".to_owned(),
         })
     }
 
@@ -2095,7 +2127,7 @@ impl MempoolNode {
         if peer != self.storage_addr {
             return Some(Response {
                 success: false,
-                reason: "Received block stored not from our storage peer",
+                reason: "Received block stored not from our storage peer".to_owned(),
             });
         }
 
@@ -2110,7 +2142,7 @@ impl MempoolNode {
 
         Some(Response {
             success: true,
-            reason: "Received block stored",
+            reason: "Received block stored".to_owned(),
         })
     }
 
@@ -2211,6 +2243,96 @@ impl MempoolNode {
         &self.node
     }
 
+    /// Updates the status of a particular transaction
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx` - Transaction to update status for
+    /// * `status` - The transaction status
+    /// * `additional_info` - Additional information about the transaction
+    pub fn update_tx_status(
+        &mut self,
+        tx: &Transaction,
+        status: TxStatusType,
+        additional_info: String,
+    ) {
+        let tx_hash = construct_tx_hash(tx);
+        let current_entry = self.tx_status_list.get(&tx_hash);
+        let timestamp = if let Some(entry) = current_entry {
+            entry.timestamp
+        } else {
+            get_timestamp_now()
+        };
+        let tx_status = TxStatus {
+            additional_info,
+            status,
+            timestamp,
+        };
+
+        self.tx_status_list.insert(tx_hash, tx_status);
+    }
+
+    /// Constructs a transaction status with validation information
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx` - Transaction to construct status for
+    pub fn construct_tx_status(&mut self, tx: &Transaction) -> (TxStatusType, String) {
+        let tx_validator = self.transactions_validator();
+        let (is_valid, mut validation_info) = tx_validator(&tx);
+        let mut status = TxStatusType::Confirmed;
+
+        if !is_valid {
+            status = TxStatusType::Rejected;
+        }
+
+        if tx.druid_info.is_some() {
+            status = TxStatusType::Pending;
+            validation_info = "DRUID transaction valid. Awaiting settlement".to_owned();
+        }
+
+        (status, validation_info)
+    }
+
+    /// Flushes transaction statuses if their lifetimes have expired
+    pub fn flush_stale_tx_status(&mut self) {
+        let stale_txs = self
+            .tx_status_list
+            .iter()
+            .filter(|(_, status)| {
+                is_timestamp_difference_greater(
+                    status.timestamp as u64,
+                    get_timestamp_now() as u64,
+                    self.tx_status_lifetime as u64,
+                )
+            })
+            .map(|(tx_hash, _)| tx_hash.clone())
+            .collect::<Vec<String>>();
+
+        debug!("Flushing stale transaction statuses: {:?}", stale_txs);
+
+        for tx_hash in stale_txs {
+            self.tx_status_list.remove(&tx_hash);
+        }
+    }
+
+    /// Retrieves the status for a list of transactions
+    ///
+    /// ### Arguments
+    ///
+    /// * `tx_hashes` - List of transaction hashes to retrieve status for
+    pub fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
+        let mut tx_status = BTreeMap::new();
+
+        for tx_hash in tx_hashes {
+            if let Some(status) = self.tx_status_list.get(&tx_hash) {
+                tx_status.insert(tx_hash, status.clone());
+            }
+        }
+
+        tx_status
+    }
+
     /// Receive incoming transactions
     ///
     /// ### Arguments
@@ -2219,28 +2341,42 @@ impl MempoolNode {
     pub fn receive_transactions(&mut self, transactions: Vec<Transaction>) -> Response {
         let transactions_len = transactions.len();
         if !self.node_raft.tx_pool_can_accept(transactions_len) {
+            let reason = "Transaction pool for this mempool node is full".to_owned();
+
+            // Update transaction status
+            for tx in transactions {
+                self.update_tx_status(&tx, TxStatusType::Rejected, reason.clone());
+            }
+
             return Response {
                 success: false,
-                reason: "Transaction pool for this mempool node is full",
+                reason,
             };
         }
 
         let (valid_dde_txs, valid_txs): (BTreeMap<_, _>, BTreeMap<_, _>) = {
             let tx_validator = self.transactions_validator();
             transactions
+                .clone()
                 .into_iter()
-                .filter(|tx| tx_validator(tx))
+                .filter(|tx| tx_validator(tx).0)
                 .map(|tx| (construct_tx_hash(&tx), tx))
                 .partition(|tx| tx.1.druid_info.is_some())
         };
 
         let total_valid_txs_len = valid_txs.len() + valid_dde_txs.len();
 
+        // Update transaction status after initial validation
+        for tx in transactions {
+            let (status, validation_info) = self.construct_tx_status(&tx);
+            self.update_tx_status(&tx, status, validation_info);
+        }
+
         // No valid transactions (normal or DDE) provided
         if total_valid_txs_len == 0 {
             return Response {
                 success: false,
-                reason: "No valid transactions provided",
+                reason: "No valid transactions provided".to_owned(),
             };
         }
 
@@ -2253,11 +2389,21 @@ impl MempoolNode {
         let ready_dde_txs = self.validate_dde_txs(valid_dde_txs);
         let mut invalid_dde_txs_len = 0;
         for (valid, ready) in ready_dde_txs {
+            let mut status = TxStatusType::Confirmed;
+            let mut validation_info = Default::default();
+
             if !valid {
                 invalid_dde_txs_len += 1;
-                continue;
+                status = TxStatusType::Rejected;
+                validation_info = "DRUID trade expectations not met".to_owned();
+            } else {
+                self.node_raft.append_to_tx_druid_pool(ready.clone());
             }
-            self.node_raft.append_to_tx_druid_pool(ready);
+
+            // Update transaction status for each transaction
+            for tx in ready.iter() {
+                self.update_tx_status(&tx.1, status.clone(), validation_info.clone());
+            }
         }
 
         // Some txs are invalid or some DDE txs are ready to execute but fail to validate
@@ -2265,13 +2411,13 @@ impl MempoolNode {
         if (total_valid_txs_len < transactions_len) || invalid_dde_txs_len != 0 {
             return Response {
                 success: true,
-                reason: "Some transactions invalid. Adding valid transactions only",
+                reason: "Some transactions invalid. Adding valid transactions only".to_owned(),
             };
         }
 
         Response {
             success: true,
-            reason: "Transactions added to tx pool",
+            reason: "Transactions added to tx pool".to_owned(),
         }
     }
 
@@ -2323,7 +2469,6 @@ impl MempoolInterface for MempoolNode {
         node_type: NodeType,
     ) -> Response {
         self.fetched_utxo_set = match address_list {
-            UtxoFetchType::All => Some((peer, node_type, self.get_committed_utxo_set_to_send())),
             UtxoFetchType::AnyOf(addresses) => {
                 let utxo_set = self.get_committed_utxo_set();
                 let utxo_tracked_set = self.get_committed_utxo_tracked_set_to_send();
@@ -2339,31 +2484,32 @@ impl MempoolInterface for MempoolNode {
                     .collect();
                 Some((peer, node_type, utxo_subset))
             }
+            _ => None,
         };
         Response {
             success: true,
-            reason: "Received UTXO fetch request",
+            reason: "Received UTXO fetch request".to_owned(),
         }
     }
 
     fn partition(&self, _uuids: Vec<&'static str>) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_owned(),
         }
     }
 
     fn get_service_levels(&self) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_owned(),
         }
     }
 
     fn execute_contract(&self, _contract: Contract) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_owned(),
         }
     }
 
@@ -2379,6 +2525,10 @@ impl MempoolApi for MempoolNode {
             mempool_partition_full_size: self.node_raft.get_mempool_partition_full_size(),
             mempool_miner_whitelist: self.node_raft.get_mempool_miner_whitelist(),
         }
+    }
+
+    fn get_transaction_status(&self, tx_hashes: Vec<String>) -> BTreeMap<String, TxStatus> {
+        self.get_transaction_status(tx_hashes)
     }
 
     fn get_committed_utxo_tracked_set(&self) -> &TrackedUtxoSet {
@@ -2426,12 +2576,12 @@ impl MempoolApi for MempoolNode {
         {
             return Response {
                 success: false,
-                reason: "Failed to initiate coordinated pause",
+                reason: "Failed to initiate coordinated pause".to_owned(),
             };
         }
         Response {
             success: true,
-            reason: "Attempt coordinated node pause",
+            reason: "Attempt coordinated node pause".to_owned(),
         }
     }
 
@@ -2442,12 +2592,12 @@ impl MempoolApi for MempoolNode {
         {
             return Response {
                 success: false,
-                reason: "Failed to initiate coordinated resume",
+                reason: "Failed to initiate coordinated resume".to_owned(),
             };
         }
         Response {
             success: true,
-            reason: "Attempt coordinated node resume",
+            reason: "Attempt coordinated node resume".to_owned(),
         }
     }
 
@@ -2464,12 +2614,12 @@ impl MempoolApi for MempoolNode {
         {
             return Response {
                 success: false,
-                reason: "Failed to initiate sharing of config",
+                reason: "Failed to initiate sharing of config".to_owned(),
             };
         }
         Response {
             success: true,
-            reason: "Attempt send shared config",
+            reason: "Attempt send shared config".to_owned(),
         }
     }
 }

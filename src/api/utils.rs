@@ -3,7 +3,7 @@ use super::{
     handlers::DbgPaths,
     responses::{common_error_reply, json_serialize_embed, CallResponse, JsonReply},
 };
-use crate::utils::{ApiKeys, RoutesPoWInfo};
+use crate::utils::{ApiKeys, RoutesPoWInfo, StringError};
 use futures::Future;
 use moka::future::{Cache, CacheBuilder};
 use std::convert::Infallible;
@@ -35,6 +35,11 @@ pub fn warp_path(
 pub fn map_string_err<T: ToString>(r: CallResponse, e: T, s: StatusCode) -> JsonReply {
     r.into_err(s, ApiErrorType::Generic(e.to_string()))
         .unwrap_err() // Should panic if result is not Err
+}
+
+// Maps an error that implements `ToString` to JsonReply error for bad requests.
+pub fn map_to_string_err<T: ToString>(e: T) -> StringError {
+    StringError(e.to_string())
 }
 
 // Map API response from Result<JsonReply, JsonReply> to Result<warp::Reply, warp::Rejection>

@@ -3864,7 +3864,7 @@ async fn mempool_handle_event_for_node<E: Future<Output = &'static str> + Unpin>
     let addr = c.local_address();
     match c.handle_next_event(exit).await {
         Some(Ok(Response { success, reason }))
-            if success == success_val && reason_val.contains(&reason) =>
+            if success == success_val && reason_val.contains(&reason.as_str()) =>
         {
             info!("Mempool handle_next_event {} success ({})", reason, addr);
         }
@@ -4882,7 +4882,7 @@ fn block_and_partition_evt_in_miner_pow(
 fn panic_on_timeout<E>(response: &Result<Response, E>, tag: &str) {
     if let Ok(Response {
         success: true,
-        reason: "Test timeout elapsed",
+        reason: _,
     }) = response
     {
         panic!("Test timeout elapsed - {}", tag);

@@ -156,8 +156,12 @@ pub struct MempoolNodeConfig {
     pub mempool_miner_whitelist: MinerWhitelist,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Limit for the number of sub-peers (miners) this node can have
+    pub sub_peer_limit: usize,
     /// Initial issuances
     pub initial_issuances: Vec<InitialIssuance>,
+    /// Lifetime of a transaction's status in seconds
+    pub tx_status_lifetime: i64,
 }
 
 /// Configuration option for a mempool node that can be shared across peers

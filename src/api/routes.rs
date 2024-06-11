@@ -5,7 +5,7 @@ use crate::api::utils::{
 };
 use crate::comms_handler::Node;
 use crate::db_utils::SimpleDb;
-use crate::interfaces::MempoolApi;
+use crate::interfaces::{MempoolApi, UserApi};
 use crate::miner::CurrentBlockWithMutex;
 use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
@@ -447,6 +447,7 @@ pub fn make_payment(
     dp: &mut DbgPaths,
     db: WalletDb,
     node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
     cache: ReplyCache,
@@ -457,13 +458,14 @@ pub fn make_payment(
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(db))
         .and(with_node_component(node))
+        .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, db, node, pi, cache| {
+        .and_then(move |call_id: String, db, node, tc, pi, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
-                handlers::post_make_payment(db, node, pi, route, call_id),
+                handlers::post_make_payment(db, node, tc, pi, route, call_id),
             )
         })
         .with(post_cors())
@@ -516,6 +518,31 @@ pub fn request_donation(
                 call_id.clone(),
                 cache,
                 handlers::post_request_donation(node, info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST transaction status
+pub fn transaction_status(
+    dp: &mut DbgPaths,
+    threaded_calls: ThreadedCallSender<dyn MempoolApi>,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let route = "transaction_status";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(with_node_component(threaded_calls))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, tc, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_transaction_status(tc, info, route, call_id),
             )
         })
         .with(post_cors())
@@ -698,6 +725,52 @@ pub fn create_transactions(
         .with(post_cors())
 }
 
+// POST serialize transactions
+pub fn serialize_transactions(
+    dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
+    let route = "serialize_transactions";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_serialize_transactions(info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
+// POST deserialize transactions
+pub fn deserialize_transactions(
+    dp: &mut DbgPaths,
+    routes_pow: RoutesPoWInfo,
+    api_keys: ApiKeys,
+    cache: ReplyCache,
+) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
+    let route = "deserialize_transactions";
+    warp_path(dp, route)
+        .and(warp::post())
+        .and(auth_request(routes_pow, api_keys))
+        .and(warp::body::json())
+        .and(with_node_component(cache))
+        .and_then(move |call_id: String, info, cache| {
+            map_api_res_and_cache(
+                call_id.clone(),
+                cache,
+                handlers::post_deserialize_transactions(info, route, call_id),
+            )
+        })
+        .with(post_cors())
+}
+
 // POST check for address presence
 pub fn blocks_by_tx_hashes(
     dp: &mut DbgPaths,
@@ -829,6 +902,7 @@ pub fn user_node_routes(
     routes_pow_info: RoutesPoWInfo,
     db: WalletDb,
     node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
@@ -852,6 +926,7 @@ pub fn user_node_routes(
         dp,
         db.clone(),
         node.clone(),
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),
@@ -921,6 +996,18 @@ pub fn user_node_routes(
     //     api_keys.clone(),
     //     cache.clone(),
     // ))
+    .or(serialize_transactions(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(deserialize_transactions(
+        dp,
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
     .or(debug_data(
         dp_vec,
         node,
@@ -1038,6 +1125,13 @@ pub fn mempool_node_routes(
         cache.clone(),
     ))
     .or(issued_supply(
+        dp,
+        threaded_calls.clone(),
+        routes_pow_info.clone(),
+        api_keys.clone(),
+        cache.clone(),
+    ))
+    .or(transaction_status(
         dp,
         threaded_calls.clone(),
         routes_pow_info.clone(),
@@ -1177,6 +1271,7 @@ pub fn miner_node_with_user_routes(
     current_block: CurrentBlockWithMutex,
     db: WalletDb, /* Shared WalletDb */
     miner_node: Node,
+    threaded_calls: ThreadedCallSender<dyn UserApi>,
     user_node: Node, /* Additional User `Node` */
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let mut dp_vec = DbgPaths::new();
@@ -1194,6 +1289,7 @@ pub fn miner_node_with_user_routes(
         dp,
         db.clone(),
         user_node.clone(),
+        threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
         cache.clone(),

@@ -148,6 +148,7 @@ impl PreLaunchNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.peer_limit,
             NodeType::PreLaunch,
             false,
             false,
@@ -259,27 +260,27 @@ impl PreLaunchNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Sent startup requests on reconnection",
-            }) => debug!("Sent startup requests on reconnection"),
+                reason,
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
-            }) => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: true,
-                reason: "Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Shutdown" => {
                 warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
-                reason: "Shutdown pending",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Received Db Items",
-            }) => {
+                reason,
+            }) if reason == "Received Db Items" => {
                 info!("Received Db Items: Closing");
                 if self.flood_closing_events().await.unwrap() {
                     warn!("Flood closing event shutdown");
@@ -290,7 +291,7 @@ impl PreLaunchNode {
                 success: true,
                 reason,
             }) => {
-                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+                trace!("Unknown response: {:?}", reason);
             }
             Ok(Response {
                 success: false,
@@ -330,7 +331,7 @@ impl PreLaunchNode {
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: reason.to_string(),
                 }))
             }
         }
@@ -350,19 +351,19 @@ impl PreLaunchNode {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
-                reason,
+                reason: reason.to_string(),
             }),
             LocalEvent::ReconnectionComplete => {
                 if let Err(err) = self.send_startup_requests().await {
                     error!("Failed to send startup requests on reconnect: {}", err);
                     return Some(Response {
                         success: false,
-                        reason: "Failed to send startup requests on reconnection",
+                        reason: "Failed to send startup requests on reconnection".to_string(),
                     });
                 }
                 Some(Response {
                     success: true,
-                    reason: "Sent startup requests on reconnection",
+                    reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
             LocalEvent::CoordinatedShutdown(_) => None,
@@ -450,13 +451,13 @@ impl PreLaunchNode {
             error!("Received invalid item: {:?}", e);
             return Some(Response {
                 success: false,
-                reason: "Received Invalid Db Items",
+                reason: "Received Invalid Db Items".to_string(),
             });
         }
 
         Some(Response {
             success: true,
-            reason: "Received Db Items",
+            reason: "Received Db Items".to_string(),
         })
     }
 
@@ -473,13 +474,13 @@ impl PreLaunchNode {
         if !self.shutdown_group.is_empty() {
             return Some(Response {
                 success: true,
-                reason: "Shutdown pending",
+                reason: "Shutdown pending".to_string(),
             });
         }
 
         Some(Response {
             success: true,
-            reason: "Shutdown",
+            reason: "Shutdown".to_string(),
         })
     }
 

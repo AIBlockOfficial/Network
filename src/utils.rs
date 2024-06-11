@@ -21,7 +21,7 @@ use std::future::Future;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
@@ -386,8 +386,8 @@ pub fn get_sanction_addresses(path: String, jurisdiction: &str) -> Vec<String> {
 pub async fn create_and_save_fake_to_wallet(
     wallet_db: &mut WalletDb,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (final_address, address_keys) = wallet_db.generate_payment_address().await;
-    let (receiver_addr, _) = wallet_db.generate_payment_address().await;
+    let (final_address, address_keys) = wallet_db.generate_payment_address();
+    let (receiver_addr, _) = wallet_db.generate_payment_address();
 
     let (t_hash, _payment_tx) = create_valid_transaction(
         "00000",
@@ -667,7 +667,7 @@ fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
     validate_pow_for_diff(MINING_DIFFICULTY, pow)
 }
 
-/// Get the paiment info from the given transactions
+/// Get the payment info from the given transactions
 ///
 /// ### Arguments
 ///
@@ -679,7 +679,7 @@ pub fn get_payments_for_wallet<'a>(
     get_payments_for_wallet_from_utxo(utxo_iterator)
 }
 
-/// Get the paiment info from the given UTXO set/subset
+/// Get the payment info from the given UTXO set/subset
 ///
 /// ### Arguments
 ///
@@ -1246,6 +1246,31 @@ pub fn get_test_common_unicorn() -> UnicornFixedInfo {
 pub fn get_timestamp_now() -> i64 {
     let now = Utc::now();
     now.timestamp()
+}
+
+/// Check if the difference between two timestamps is greater than a given difference in milliseconds
+///
+/// ### Arguments
+///
+/// * `timestamp1` - First timestamp
+/// * `timestamp2` - Second timestamp
+/// * `difference_in_millis` - Difference in milliseconds
+pub fn is_timestamp_difference_greater(
+    timestamp1: u64,
+    timestamp2: u64,
+    difference_in_millis: u64,
+) -> bool {
+    let time1 = UNIX_EPOCH + Duration::from_secs(timestamp1);
+    let time2 = UNIX_EPOCH + Duration::from_secs(timestamp2);
+
+    // Calculate the absolute difference in durations
+    let duration_difference = if time1 > time2 {
+        time1.duration_since(time2).unwrap()
+    } else {
+        time2.duration_since(time1).unwrap()
+    };
+
+    duration_difference > Duration::from_millis(difference_in_millis)
 }
 
 /// Attempt to send a message to the UI

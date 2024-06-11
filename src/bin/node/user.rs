@@ -1,6 +1,7 @@
 //! App to run a user node.
 
 use aiblock_network::configurations::UserNodeConfig;
+use aiblock_network::interfaces::{UserApiRequest, UserRequest, UtxoFetchType};
 use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult, UserNode,
@@ -9,7 +10,21 @@ use clap::{App, Arg, ArgMatches};
 use config::{ConfigError, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tracing::info;
+use tokio::time::{self, Duration};
+use tracing::{info, trace, warn};
+
+//================== BIN CONSTANTS ==================//
+
+/// Interval between requested UTXO realignment, in seconds
+const UTXO_REALIGN_INTERVAL: u64 = 120;
+
+/// Default user API port
+const DEFAULT_USER_API_PORT: i64 = 3000;
+
+/// Default peer limit
+const DEFAULT_PEER_LIMIT: i64 = 1000;
+
+//===================================================//
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
@@ -23,7 +38,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
+    let threaded_calls_tx = node.threaded_call_tx().clone();
     let api_inputs = node.api_inputs();
+    let peer_node = node.get_node().clone();
+    let wallet_db = node.get_wallet_db().clone();
 
     // PERMANENT CONNEXION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
@@ -62,6 +80,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // Warp API
     let warp_handle = tokio::spawn({
         let (db, node, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
+        let threaded_calls_tx = threaded_calls_tx.clone();
 
         info!("Warp API started on port {:?}", api_addr.port());
         info!("");
@@ -70,7 +89,13 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         bind_address.set_port(api_addr.port());
 
         async move {
-            let serve = warp::serve(routes::user_node_routes(api_keys, api_pow_info, db, node));
+            let serve = warp::serve(routes::user_node_routes(
+                api_keys,
+                api_pow_info,
+                db,
+                node,
+                threaded_calls_tx,
+            ));
             if let Some(api_tls) = api_tls {
                 serve
                     .tls()
@@ -84,16 +109,37 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         }
     });
 
-    let (main_result, warp_result, conn, disconn) = tokio::join!(
+    // Rolling update of the running total
+    let update_handle = tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(UTXO_REALIGN_INTERVAL));
+
+        loop {
+            interval.tick().await;
+            trace!("Updating running total in loop");
+            let known_addresses = wallet_db.get_known_addresses();
+
+            let request = UserRequest::UserApi(UserApiRequest::UpdateWalletFromUtxoSet {
+                address_list: UtxoFetchType::AnyOf(known_addresses),
+            });
+
+            if let Err(e) = peer_node.inject_next_event(peer_node.local_address(), request) {
+                warn!("route:update_running_total error: {:?}", e);
+            }
+        }
+    });
+
+    let (main_result, warp_result, conn, disconn, update_result) = tokio::join!(
         main_loop_handle,
         warp_handle,
         conn_loop_handle,
-        disconn_loop_handle
+        disconn_loop_handle,
+        update_handle
     );
     main_result.unwrap();
     warp_result.unwrap();
     conn.unwrap();
     disconn.unwrap();
+    update_result.unwrap();
 }
 
 pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
@@ -208,7 +254,9 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
         .set_default("api_keys", Vec::<String>::new())
         .unwrap();
-    settings.set_default("user_api_port", 3000).unwrap();
+    settings
+        .set_default("user_api_port", DEFAULT_USER_API_PORT)
+        .unwrap();
     settings.set_default("user_api_use_tls", true).unwrap();
     settings.set_default("user_mempool_node_idx", 0).unwrap();
     settings.set_default("user_auto_donate", 0).unwrap();
@@ -234,7 +282,7 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         .unwrap();
 
     if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
-        settings.set("peer_limit", 1000).unwrap();
+        settings.set("peer_limit", DEFAULT_PEER_LIMIT).unwrap();
     }
 
     // If index is passed, take note of the index to set address later

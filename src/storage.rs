@@ -178,6 +178,7 @@ impl StorageNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.peer_limit,
             NodeType::Storage,
             false,
             false,
@@ -318,31 +319,35 @@ impl StorageNode {
         match response {
             Ok(Response {
                 success: true,
-                reason: "Sent startup requests on reconnection",
-            }) => debug!("Sent startup requests on reconnection"),
+                reason,
+            }) if reason == "Sent startup requests on reconnection" => {
+                debug!("Sent startup requests on reconnection")
+            }
             Ok(Response {
                 success: false,
-                reason: "Failed to send startup requests on reconnection",
-            }) => error!("Failed to send startup requests on reconnection"),
+                reason,
+            }) if reason == "Failed to send startup requests on reconnection" => {
+                error!("Failed to send startup requests on reconnection")
+            }
             Ok(Response {
                 success: true,
-                reason: "Blockchain item fetched from storage",
-            }) => {
+                reason,
+            }) if reason == "Blockchain item fetched from storage" => {
                 if let Err(e) = self.send_blockchain_item().await {
                     error!("Blockchain item not sent {:?}", e);
                 }
             }
             Ok(Response {
                 success: true,
-                reason: "Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Shutdown" => {
                 warn!("Shutdown now");
                 return ResponseResult::Exit;
             }
             Ok(Response {
                 success: true,
-                reason: "Mempool Shutdown",
-            }) => {
+                reason,
+            }) if reason == "Mempool Shutdown" => {
                 debug!("Mempool shutdown");
                 if self.flood_closing_events().await.unwrap() {
                     warn!("Flood closing event shutdown");
@@ -351,16 +356,8 @@ impl StorageNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Shutdown pending",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Block received to be added",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Block complete stored",
-            }) => {
+                reason,
+            }) if reason == "Block complete stored" => {
                 info!("Block stored: Send to mempool");
                 if let Err(e) = self.send_stored_block().await {
                     error!("Block stored not sent {:?}", e);
@@ -368,45 +365,29 @@ impl StorageNode {
             }
             Ok(Response {
                 success: true,
-                reason: "Snapshot applied",
-            }) => {
+                reason,
+            }) if reason == "Snapshot applied" => {
                 warn!("Snapshot applied");
             }
             Ok(Response {
                 success: true,
-                reason: "Snapshot applied: Fetch missing blocks",
-            }) => {
+                reason,
+            }) if reason == "Snapshot applied: Fetch missing blocks" => {
                 warn!("Snapshot applied: Fetch missing blocks");
             }
             Ok(Response {
                 success: true,
-                reason: "Catch up stored blocks",
-            }) => {
+                reason,
+            }) if reason == "Catch up stored blocks" => {
                 if let Err(e) = self.catchup_fetch_blockchain_item().await {
                     error!("Resend block stored failed {:?}", e);
                 }
             }
             Ok(Response {
                 success: true,
-                reason: "Blockchain item received",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Blockchain item received: Block stored",
-            }) => {}
-            Ok(Response {
-                success: true,
-                reason: "Blockchain item received: Block stored(Done)",
-            }) => {}
-            Ok(Response {
-                success: false,
-                reason: "Blockchain item received: Block failed",
-            }) => {}
-            Ok(Response {
-                success: true,
                 reason,
             }) => {
-                error!("UNHANDLED RESPONSE TYPE: {:?}", reason);
+                debug!("Unknown response type: {:?}", reason);
             }
             Ok(Response {
                 success: false,
@@ -465,7 +446,7 @@ impl StorageNode {
                     }
                     return Some(Ok(Response {
                         success: true,
-                        reason: "Catch up stored blocks",
+                        reason: "Catch up stored blocks".to_string(),
                     }))
                 }
                 Some(event) = self.local_events.rx.recv(), if ready => {
@@ -475,7 +456,7 @@ impl StorageNode {
                 }
                 reason = &mut *exit => return Some(Ok(Response {
                     success: true,
-                    reason,
+                    reason: reason.to_string(),
                 }))
             }
         }
@@ -490,19 +471,19 @@ impl StorageNode {
         match event {
             LocalEvent::Exit(reason) => Some(Response {
                 success: true,
-                reason,
+                reason: reason.to_string(),
             }),
             LocalEvent::ReconnectionComplete => {
                 if let Err(err) = self.send_startup_requests().await {
                     error!("Failed to send startup requests on reconnect: {}", err);
                     return Some(Response {
                         success: false,
-                        reason: "Failed to send startup requests on reconnection",
+                        reason: "Failed to send startup requests on reconnection".to_string(),
                     });
                 }
                 Some(Response {
                     success: true,
-                    reason: "Sent startup requests on reconnection",
+                    reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
             LocalEvent::CoordinatedShutdown(_) => None,
@@ -535,7 +516,7 @@ impl StorageNode {
                 self.backup_persistent_dbs().await;
                 Some(Ok(Response {
                     success: true,
-                    reason: "Block complete stored",
+                    reason: "Block complete stored".to_string(),
                 }))
             }
             Some(CommittedItem::Snapshot) => {
@@ -548,13 +529,13 @@ impl StorageNode {
                         );
                         return Some(Ok(Response {
                             success: true,
-                            reason: "Snapshot applied: Fetch missing blocks",
+                            reason: "Snapshot applied: Fetch missing blocks".to_string(),
                         }));
                     }
                 }
                 Some(Ok(Response {
                     success: true,
-                    reason: "Snapshot applied",
+                    reason: "Snapshot applied".to_string(),
                 }))
             }
             None => None,
@@ -944,20 +925,20 @@ impl StorageNode {
         if peer == self.mempool_addr {
             return Some(Response {
                 success: true,
-                reason: "Mempool Shutdown",
+                reason: "Mempool Shutdown".to_string(),
             });
         }
 
         if !self.shutdown_group.is_empty() {
             return Some(Response {
                 success: true,
-                reason: "Shutdown pending",
+                reason: "Shutdown pending".to_string(),
             });
         }
 
         Some(Response {
             success: true,
-            reason: "Shutdown",
+            reason: "Shutdown".to_string(),
         })
     }
 
@@ -983,7 +964,7 @@ impl StorageNode {
             debug!("Block received not added. PoW invalid: {}", e);
             return Some(Response {
                 success: false,
-                reason: "Block received not added. PoW invalid",
+                reason: "Block received not added. PoW invalid".to_string(),
             });
         }
 
@@ -999,7 +980,7 @@ impl StorageNode {
 
         Some(Response {
             success: true,
-            reason: "Block received to be added",
+            reason: "Block received to be added".to_string(),
         })
     }
 
@@ -1043,7 +1024,7 @@ impl StorageInterface for StorageNode {
         self.blockchain_item_fetched = Some((key, item, peer));
         Response {
             success: true,
-            reason: "Blockchain item fetched from storage",
+            reason: "Blockchain item fetched from storage".to_string(),
         }
     }
 
@@ -1083,7 +1064,7 @@ impl StorageInterface for StorageNode {
                     info!("{}(b_num = {})", reason, b_num);
                     Response {
                         success: true,
-                        reason,
+                        reason: reason.to_string(),
                     }
                 }
                 Err(e) => {
@@ -1093,7 +1074,7 @@ impl StorageInterface for StorageNode {
                     );
                     Response {
                         success: false,
-                        reason: "Blockchain item received: Block failed",
+                        reason: "Blockchain item received: Block failed".to_string(),
                     }
                 }
             }
@@ -1104,7 +1085,7 @@ impl StorageInterface for StorageNode {
 
             Response {
                 success: true,
-                reason: "Blockchain item received",
+                reason: "Blockchain item received".to_string(),
             }
         }
     }
@@ -1112,7 +1093,7 @@ impl StorageInterface for StorageNode {
     fn get_history(&self, _start_time: &u64, _end_time: &u64) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_string(),
         }
     }
 
@@ -1121,28 +1102,28 @@ impl StorageInterface for StorageNode {
 
         Response {
             success: true,
-            reason: "Address added to whitelist",
+            reason: "Address added to whitelist".to_string(),
         }
     }
 
     fn get_unicorn_table(&self, _n_last_items: Option<u64>) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_string(),
         }
     }
 
     fn receive_pow(&self, _pow: ProofOfWork) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_string(),
         }
     }
 
     fn receive_contracts(&self, _contract: Contract) -> Response {
         Response {
             success: false,
-            reason: "Not implemented yet",
+            reason: "Not implemented yet".to_string(),
         }
     }
 }

@@ -106,6 +106,16 @@ impl<'a> CallResponse<'a> {
     pub fn into_ok(self, reason: &str, data: JsonReply) -> Result<JsonReply, JsonReply> {
         Ok(common_success_reply(self.call_id, self.route, reason, data))
     }
+
+    pub fn into_progress(self, reason: &str, data: JsonReply) -> Result<JsonReply, JsonReply> {
+        Ok(common_reply(
+            self.call_id,
+            APIResponseStatus::InProgress,
+            reason,
+            self.route,
+            data,
+        ))
+    }
 }
 
 #[derive(Default, Debug, Serialize)]

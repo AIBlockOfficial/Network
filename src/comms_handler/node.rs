@@ -147,10 +147,14 @@ pub struct Node {
     tcp_tls_connector: Arc<RwLock<TcpTlsConnector>>,
     /// List of all connected peers.
     pub(crate) peers: Arc<RwLock<PeerList>>,
+    /// List of sub peers (currently only relevant to Mempool).
+    sub_peers: Arc<RwLock<HashSet<SocketAddr>>>,
     /// Node type.
     node_type: NodeType,
     /// The max number of peers this node should handle.
     peer_limit: usize,
+    /// The max number of sub peers this node should handle (currently only relevant to Mempool).
+    sub_peer_limit: usize,
     /// Tracing context.
     span: Span,
     /// Channel to transmit incoming frames and events from peers.
@@ -217,6 +221,7 @@ impl Node {
     pub async fn new(
         config: &TcpTlsConfig,
         peer_limit: usize,
+        sub_peer_limit: usize,
         node_type: NodeType,
         disable_listening: bool,
         send_heartbeat_messages: bool,
@@ -224,6 +229,7 @@ impl Node {
         Self::new_with_version(
             config,
             peer_limit,
+            sub_peer_limit,
             node_type,
             NETWORK_VERSION,
             disable_listening,
@@ -243,6 +249,7 @@ impl Node {
     pub async fn new_with_version(
         config: &TcpTlsConfig,
         peer_limit: usize,
+        sub_peer_limit: usize,
         node_type: NodeType,
         network_version: u32,
         disable_listening: bool,
@@ -265,7 +272,9 @@ impl Node {
             tcp_tls_connector: Arc::new(RwLock::new(tcp_tls_connector)),
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
+            sub_peers: Arc::new(RwLock::new(HashSet::with_capacity(sub_peer_limit))),
             peer_limit,
+            sub_peer_limit,
             span,
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -983,6 +992,7 @@ impl Node {
             }));
         }
 
+        // Check for duplicate peers
         let mut all_peers = self.peers.write().await;
         if all_peers.contains_key(&peer_in_addr) {
             return Err(CommsError::PeerDuplicate(PeerInfo {
@@ -991,12 +1001,27 @@ impl Node {
             }));
         }
 
+        // Check whether peer is already connected to us
         let peer = all_peers
             .get_mut(&peer_out_addr)
             .ok_or(CommsError::PeerNotFound(PeerInfo {
                 node_type: None,
                 address: Some(peer_out_addr),
             }))?;
+
+        // Check if the peer is a miner and we are a mempool
+        let mut sub_peers = self.sub_peers.write().await;
+        if self.node_type == NodeType::Mempool && peer_type == NodeType::Miner {
+            debug!("Current sub-peers: {:?}", sub_peers);
+            debug!("Sub-peer limit: {:?}", self.sub_peer_limit);
+
+            if sub_peers.len() + 1 > self.sub_peer_limit {
+                all_peers.remove_entry(&peer_in_addr);
+                return Err(CommsError::PeerListFull);
+            } else {
+                sub_peers.insert(peer_in_addr);
+            }
+        }
 
         // We only do DNS validation on mempool and storage nodes
         if self.node_type == NodeType::Mempool || self.node_type == NodeType::Storage {
@@ -1059,7 +1084,15 @@ impl Node {
             peer.peer_type = Some(peer_type);
 
             if let Some(notify) = peer.notify_handshake_response.0.take() {
-                notify.send(()).unwrap();
+                match notify.send(()) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        return Err(CommsError::PeerInvalidState(PeerInfo {
+                            node_type: Some(peer_type),
+                            address: Some(peer_addr),
+                        }));
+                    }
+                }
             }
         }
 
@@ -1374,6 +1407,7 @@ mod test {
         let tcp_tls_config = get_common_tls_config();
         Node::new_with_version(
             &tcp_tls_config,
+            peer_limit,
             peer_limit,
             NodeType::Mempool,
             network_version,
