@@ -148,6 +148,7 @@ impl PreLaunchNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.peer_limit,
             NodeType::PreLaunch,
             false,
             false,

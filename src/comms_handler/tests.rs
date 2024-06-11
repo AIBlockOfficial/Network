@@ -586,9 +586,16 @@ async fn create_config_mempool_nodes(configs: Vec<TcpTlsConfig>, peer_limit: usi
     let mut nodes = Vec::new();
     for tcp_tls_config in configs {
         nodes.push(
-            Node::new(&tcp_tls_config, peer_limit, NodeType::Mempool, false, false)
-                .await
-                .unwrap(),
+            Node::new(
+                &tcp_tls_config,
+                peer_limit,
+                peer_limit,
+                NodeType::Mempool,
+                false,
+                false,
+            )
+            .await
+            .unwrap(),
         );
     }
     nodes
@@ -606,6 +613,7 @@ async fn create_node_type_version(
     let tcp_tls_config = get_common_tls_config();
     Node::new_with_version(
         &tcp_tls_config,
+        peer_limit,
         peer_limit,
         node_type,
         network_version,

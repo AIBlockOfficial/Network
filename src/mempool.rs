@@ -210,6 +210,7 @@ impl MempoolNode {
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
+            config.sub_peer_limit,
             NodeType::Mempool,
             false,
             true,
@@ -239,6 +240,12 @@ impl MempoolNode {
             mempool_partition_full_size: config.mempool_partition_full_size,
             mempool_miner_whitelist: config.mempool_miner_whitelist,
         };
+
+        if config.sub_peer_limit > config.peer_limit {
+            return Err(MempoolError::ConfigError(
+                "Sub peer limit cannot be greater than peer limit",
+            ));
+        }
 
         MempoolNode {
             node,
