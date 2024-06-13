@@ -1,8 +1,9 @@
 use crate::active_raft::ActiveRaft;
 use crate::asert::calculate_asert_target;
 use crate::block_pipeline::{
-    MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineItem, MiningPipelinePhaseChange,
-    MiningPipelineStatus, Participants, PipelineEventInfo, MiningPipelineInfoPreDifficulty,
+    MiningPipelineInfo, MiningPipelineInfoImport, MiningPipelineInfoPreDifficulty,
+    MiningPipelineItem, MiningPipelinePhaseChange, MiningPipelineStatus, Participants,
+    PipelineEventInfo,
 };
 use crate::configurations::{MempoolNodeConfig, UnicornFixedInfo};
 use crate::constants::{BLOCK_SIZE_IN_TX, COINBASE_MATURITY, DB_PATH, TX_POOL_LIMIT};
@@ -13,7 +14,9 @@ use crate::raft_util::{RaftContextKey, RaftInFlightProposals};
 use crate::tracked_utxo::TrackedUtxoSet;
 use crate::unicorn::{UnicornFixedParam, UnicornInfo};
 use crate::utils::{
-    calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now, get_total_coinbase_tokens, make_utxo_set_from_seed, try_deserialize, BackupCheck, UtxoReAlignCheck
+    calculate_reward, construct_coinbase_tx, create_socket_addr_for_list, get_timestamp_now,
+    get_total_coinbase_tokens, make_utxo_set_from_seed, try_deserialize, BackupCheck,
+    UtxoReAlignCheck,
 };
 use bincode::serialize;
 use serde::{Deserialize, Serialize};
@@ -138,7 +141,7 @@ pub struct MempoolConsensusedRuntimeData {
     pub mining_api_keys: BTreeMap<SocketAddr, String>,
 }
 
-/// This is a dirty patch to enable the import of consensus snapshots 
+/// This is a dirty patch to enable the import of consensus snapshots
 /// from before the introduction of the difficulty function for mining
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MempoolConsensusedPreDifficulty {
@@ -249,7 +252,7 @@ pub struct MempoolConsensusedImport {
     pub miner_whitelist: MinerWhitelist,
     pub init_issuances: Vec<InitialIssuance>,
     pub activation_height_asert: u64,
-    pub asert_winning_hashes_count: u64
+    pub asert_winning_hashes_count: u64,
 }
 
 /// Consensused Mempool fields and consensus management.
@@ -565,7 +568,7 @@ impl MempoolRaft {
             warn!("apply_snapshot called self.consensused updated");
 
             let consensus_check: Result<MempoolConsensused, _> = try_deserialize(&consensused_ser);
-            
+
             // Handle the case where the snapshot is from a previous version
             self.consensused = match consensus_check {
                 Ok(consensused) => consensused,
@@ -573,7 +576,8 @@ impl MempoolRaft {
                     warn!("Deserialization of consensus snapshot failed: {:?}", e);
                     warn!("Attempting to deserialize as a previous version");
 
-                    let consensus_prediff: Result<MempoolConsensusedPreDifficulty, _> = try_deserialize(&consensused_ser);
+                    let consensus_prediff: Result<MempoolConsensusedPreDifficulty, _> =
+                        try_deserialize(&consensused_ser);
                     match consensus_prediff {
                         Ok(consensused) => consensused.into(),
                         Err(e) => {
@@ -1234,7 +1238,7 @@ impl From<MempoolConsensusedPreDifficulty> for MempoolConsensused {
             miner_whitelist,
             timestamp,
             init_issuances,
-            block_pipeline
+            block_pipeline,
         } = consensused;
 
         let post_diff_block_pipeline: MiningPipelineInfo = block_pipeline.into();
@@ -1331,9 +1335,7 @@ impl MempoolConsensused {
 
     /// Specify the height at which the ASERT algorithm activates
     pub fn with_activation_height_asert(mut self, height: u64) -> Self {
-        self.block_pipeline = self
-            .block_pipeline
-            .with_activation_height_asert(height);
+        self.block_pipeline = self.block_pipeline.with_activation_height_asert(height);
         self
     }
 
@@ -1373,7 +1375,7 @@ impl MempoolConsensused {
             current_block_num: tx_current_block_num,
             current_block,
             activation_height_asert,
-            asert_winning_hashes_count
+            asert_winning_hashes_count,
         };
         let timestamp = get_timestamp_now();
 
@@ -1623,13 +1625,12 @@ impl MempoolConsensused {
         // use ASERT from the block AFTER the block that started
         // the counter.
         if self.block_pipeline.get_activation_height_asert() < b_num {
-
             let target = calculate_asert_target(
                 self.block_pipeline.get_activation_height_asert(),
                 b_num,
                 self.block_pipeline.get_asert_winning_hashes_count(),
             );
-            
+
             block.header.difficulty = target.into_array().to_vec();
         }
 

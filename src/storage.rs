@@ -965,7 +965,7 @@ impl StorageNode {
             self.resend_trigger_message().await;
             return None;
         };
-        
+
         if let Err(e) = construct_valid_block_pow_hash(&common.block) {
             debug!("Block received not added. PoW invalid: {}", e);
             return Some(Response {

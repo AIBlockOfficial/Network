@@ -41,7 +41,6 @@ pub enum MiningPipelineItem {
     ResetPipeline,
 }
 
-
 /// Participants collection (unsorted: given order, and lookup collection)
 #[derive(Default, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Participants {
@@ -126,11 +125,11 @@ pub struct MiningPipelineInfo {
     current_reward: TokenAmount,
     /// Proposed keys for current mining pipeline cycle
     proposed_keys: BTreeSet<RaftContextKey>,
-    
+
     /// [AM] The total number of hashes since ASERT activation
     #[serde(default)]
     asert_winning_hashes_count: u64,
-    
+
     /// [AM] the block height at which ASERT activates
     //
     // note: this data structure has a subtly complex interaction between:
@@ -576,7 +575,6 @@ impl MiningPipelineInfo {
 
     /// Selects a winning miner from the list via UNICORN and move to halted state
     pub fn start_winning_pow_halted(&mut self) {
-        
         let all_winning_pow = std::mem::take(&mut self.all_winning_pow);
         let _timeouts = std::mem::take(&mut self.current_phase_timeout_peer_ids);
 
@@ -589,10 +587,10 @@ impl MiningPipelineInfo {
             // the first block to use ASERT is the one that immediately follows the anchor block.
             // therefore, we collect metrics from the anchor block.
             if b_num >= self.activation_height_asert {
-                self.asert_winning_hashes_count += u64::try_from(all_winning_pow.len()).unwrap_or(crate::constants::ASERT_TARGET_HASHES_PER_BLOCK);
+                self.asert_winning_hashes_count += u64::try_from(all_winning_pow.len())
+                    .unwrap_or(crate::constants::ASERT_TARGET_HASHES_PER_BLOCK);
             }
-        }
-        else {
+        } else {
             panic!("[AM] we've hooked the wrong place; we need the block number and the number of winning hashes in the same place at the same time");
         }
 
@@ -700,7 +698,7 @@ impl MiningPipelineInfo {
             current_block_num,
             current_block,
             activation_height_asert,
-            asert_winning_hashes_count
+            asert_winning_hashes_count,
         } = value;
 
         Self {
@@ -720,7 +718,7 @@ impl MiningPipelineInfo {
             current_block_num: self.current_block_num,
             current_block: self.current_block,
             activation_height_asert: self.activation_height_asert,
-            asert_winning_hashes_count: self.asert_winning_hashes_count
+            asert_winning_hashes_count: self.asert_winning_hashes_count,
         }
     }
 }

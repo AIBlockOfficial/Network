@@ -113,11 +113,12 @@ pub const ASERT_TARGET_HASHES_PER_BLOCK: u64 = 11;
 const BCH_SECONDS_PER_BLOCK: u64 = 10 * 60;
 const BCH_HALF_LIFE: u64 = 2 * 24 * 60 * 60;
 /// ASERT algorithm constant for smoothing difficulty target adjustments over a number of blocks
-/// 
+///
 /// Our mapping function projects number of hashes to seconds, so we feed ASERT_TARGET_HASHES_PER_BLOCK
 /// to asert as the target block time. This constant adjusts the half life constant such that ASERT's
 /// smoothing/spreading/smearing acts over the same number of blocks as it would in BCH.
-pub const ASERT_HALF_LIFE: u64 = BCH_HALF_LIFE * ASERT_TARGET_HASHES_PER_BLOCK / BCH_SECONDS_PER_BLOCK;
+pub const ASERT_HALF_LIFE: u64 =
+    BCH_HALF_LIFE * ASERT_TARGET_HASHES_PER_BLOCK / BCH_SECONDS_PER_BLOCK;
 
 /*------- TESTS -------*/
 

@@ -152,7 +152,8 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
         // This should not happen! All errors should be handled
         error!("Unhandled API rejection: {:?}", err);
         error.code = StatusCode::INTERNAL_SERVER_ERROR;
-        error.message = ApiErrorType::Generic(format!("Unhandled rejection: {err:?}"));
+        error.message =
+            ApiErrorType::Generic(format!("Unhandled rejection. Internal Server Error"));
     }
 
     Ok(common_error_reply(

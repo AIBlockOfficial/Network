@@ -10,9 +10,11 @@ use crate::interfaces::{
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
 use bincode::serialize;
+use bincode::{self, Error as BincodeError};
 use chrono::Utc;
 use futures::future::join_all;
 use rand::{self, Rng};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -29,8 +31,6 @@ use tokio::time::Instant;
 use tracing::{info, trace, warn};
 use trust_dns_resolver::TokioAsyncResolver;
 use tw_chain::constants::TOTAL_TOKENS;
-use serde::Deserialize;
-use bincode::{self, Error as BincodeError};
 use tw_chain::crypto::sha3_256;
 use tw_chain::crypto::sign_ed25519::{self as sign, PublicKey, SecretKey, Signature};
 use tw_chain::primitives::transaction::GenesisTxHashSpec;
@@ -587,9 +587,9 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
 }
 
 /// Will attempt deserialization of a given byte array using bincode
-/// 
+///
 /// ### Arguments
-/// 
+///
 /// * `data`    - Byte array to attempt deserialization on
 pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, BincodeError> {
     bincode::deserialize(data)
@@ -650,7 +650,6 @@ pub fn validate_pow_block(header: &BlockHeader) -> bool {
 ///
 /// * `header`   - The header for PoW
 fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
-
     // [AM] even though we've got explicit activation height in configuration
     // and a hard-coded fallback elsewhere in the code, here
     // we're basically sniffing at the difficulty field in the
@@ -665,12 +664,9 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
     // access configuration.
 
     if header.difficulty.is_empty() {
-
         let pow = serialize(header).unwrap();
         validate_pow_leading_zeroes(&pow)
-    }
-    else {
-
+    } else {
         use crate::asert::{CompactTarget, HeaderHash};
 
         let target = CompactTarget::try_from_slice(&header.difficulty)?;
@@ -678,8 +674,7 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
 
         if header_hash.is_below_compact_target(&target) {
             Some(header_hash.into_vec())
-        }
-        else {
+        } else {
             None
         }
     }
