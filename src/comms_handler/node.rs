@@ -1011,11 +1011,13 @@ impl Node {
 
         // Check if the peer is a miner and we are a mempool
         let mut sub_peers = self.sub_peers.write().await;
+
+        debug!("Peer type: {:?}", peer_type);
         if self.node_type == NodeType::Mempool && peer_type == NodeType::Miner {
             debug!("Current sub-peers: {:?}", sub_peers);
             debug!("Sub-peer limit: {:?}", self.sub_peer_limit);
 
-            if sub_peers.len() + 1 > self.sub_peer_limit {
+            if sub_peers.len() + 1 > self.sub_peer_limit && !sub_peers.contains(&peer_in_addr) {
                 all_peers.remove_entry(&peer_in_addr);
                 return Err(CommsError::PeerListFull);
             } else {
