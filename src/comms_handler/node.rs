@@ -734,7 +734,12 @@ impl Node {
         self.peers
             .write()
             .await
-            .retain(|addr, _| !stale_peers.contains(addr))
+            .retain(|addr, _| !stale_peers.contains(addr));
+
+        self.sub_peers
+            .write()
+            .await
+            .retain(|addr| !stale_peers.contains(addr));
     }
 
     pub fn abort_heartbeat_handle(&mut self) {
