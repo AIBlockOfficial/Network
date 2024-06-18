@@ -335,30 +335,30 @@ pub async fn get_debug_data(
 ) -> Result<JsonReply, JsonReply> {
     let r = CallResponse::new(route, &call_id);
 
-    let node_type = node_type_as_str(node.get_node_type());
-    let node_peers = node.get_peer_list().await;
+    // let node_type = node_type_as_str(node.get_node_type());
+    // let node_peers = node.get_peer_list().await;
 
-    let data = match aux_node {
-        Some(aux) => {
-            let aux_type = node_type_as_str(aux.get_node_type());
-            let aux_peers = aux.get_peer_list().await;
-            DebugData {
-                node_type: format!("{node_type}/{aux_type}"),
-                node_api: debug_paths,
-                node_peers: [node_peers, aux_peers].concat(),
-                routes_pow,
-            }
-        }
-        None => DebugData {
-            node_type: node_type.to_owned(),
-            node_api: debug_paths,
-            node_peers,
-            routes_pow,
-        },
-    };
+    // let data = match aux_node {
+    //     Some(aux) => {
+    //         let aux_type = node_type_as_str(aux.get_node_type());
+    //         let aux_peers = aux.get_peer_list().await;
+    //         DebugData {
+    //             node_type: format!("{node_type}/{aux_type}"),
+    //             node_api: debug_paths,
+    //             node_peers: [node_peers, aux_peers].concat(),
+    //             routes_pow,
+    //         }
+    //     }
+    //     None => DebugData {
+    //         node_type: node_type.to_owned(),
+    //         node_api: debug_paths,
+    //         node_peers,
+    //         routes_pow,
+    //     },
+    // };
     r.into_ok(
         "Debug data successfully retrieved",
-        json_serialize_embed(data),
+        json_serialize_embed("Debug data successfully retrieved"),
     )
 }
 
