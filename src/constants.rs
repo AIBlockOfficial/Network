@@ -71,6 +71,12 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
 /*------- LIMIT CONSTANTS -------*/
 
+/// Length of PoW nonce
+pub const POW_NONCE_LEN: usize = 4;
+
+/// Length of random number generation for miner subselection
+pub const POW_RNUM_SELECT: usize = 10;
+
 /// Default limit on number of internal transactions for a miner node
 pub const INTERNAL_TX_LIMIT: usize = 999;
 
@@ -106,7 +112,7 @@ pub const COINBASE_MATURITY: u64 = if cfg!(test) { 0 } else { 100 };
 //       note that this can be overriden through configuration,
 //       which is handy for running locally or for low-difficulty test networks.
 /// Block height at which ASERT DAA is activated
-pub const ACTIVATION_HEIGHT_ASERT: u64 = u64::MAX;
+pub const ACTIVATION_HEIGHT_ASERT: u64 = 3;
 /// Number of desired hashes submitted per block interval by miners
 pub const ASERT_TARGET_HASHES_PER_BLOCK: u64 = 11;
 

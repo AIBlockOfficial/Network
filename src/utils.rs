@@ -1,8 +1,7 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
-    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
+    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION, POW_NONCE_LEN, POW_RNUM_SELECT, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL
 };
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
@@ -15,9 +14,10 @@ use chrono::Utc;
 use futures::future::join_all;
 use rand::{self, Rng};
 use serde::Deserialize;
+use tracing_subscriber::field::debug;
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt;
+use std::{fmt, vec};
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
@@ -462,14 +462,36 @@ pub fn apply_mining_tx(mut header: BlockHeader, nonce: Vec<u8>, tx_hash: String)
     header
 }
 
-/// Generates a random sequence of values for a nonce
-pub fn generate_pow_nonce() -> Vec<u8> {
-    generate_random_num(16)
-}
-
 /// Generates a random num for use for proof of work
 pub fn generate_pow_random_num() -> Vec<u8> {
-    generate_random_num(10)
+    generate_random_num(POW_RNUM_SELECT)
+}
+
+/// Increments the provided nonce
+/// 
+/// ### Arguments
+/// 
+/// * `nonce` - Nonce to increment
+pub fn get_nonce_increment(nonce: &[u8]) -> Vec<u8> {
+    // Ensure the input vector has exactly 4 bytes
+    if nonce.len() != 4 {
+        return vec![];
+    }
+
+    // Convert the u8 slice to a fixed-size array
+    let mut array: [u8; 4] = [0; 4];
+    array.copy_from_slice(&nonce);
+
+    // Interpret the fixed-size array as i32
+    let current_value = i32::from_le_bytes(array); // Assuming little-endian byte order
+
+    // Increment the value
+    let incremented_value = current_value + 1;
+
+    // Convert incremented value back to u8 vector
+    let incremented_bytes = incremented_value.to_le_bytes().to_vec(); // Convert i32 to little-endian u8 vector
+
+    incremented_bytes
 }
 
 /// Generates a garbage random num for use in network testing
@@ -566,11 +588,11 @@ pub fn generate_pow_for_address(
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
-            nonce: generate_pow_nonce(),
+            nonce: vec![0; POW_NONCE_LEN],
         };
 
         while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
-            pow.nonce = generate_pow_nonce();
+            pow.nonce = get_nonce_increment(&pow.nonce);
         }
 
         (pow, pow_info, peer)
@@ -601,9 +623,11 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 ///
 /// * `header`   - The header for PoW
 pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
-    header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+    header.nonce_and_mining_tx_hash.0 = vec![0; POW_NONCE_LEN];
+
     while !validate_pow_block(&header) {
-        header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+        header.nonce_and_mining_tx_hash.0 = get_nonce_increment(&header.nonce_and_mining_tx_hash.0);
+        info!("PoW nonce: {:?}", header.nonce_and_mining_tx_hash.0);
     }
     header
 }
@@ -668,6 +692,7 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
         validate_pow_leading_zeroes(&pow)
     } else {
         use crate::asert::{CompactTarget, HeaderHash};
+        info!("We have difficuly");
 
         let target = CompactTarget::try_from_slice(&header.difficulty)?;
         let header_hash = HeaderHash::try_calculate(header)?;

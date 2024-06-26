@@ -117,7 +117,7 @@ fn map_asert_inputs(
     const TARGET_BLOCK_TIME_D: Duration = Duration::from_secs(ASERT_TARGET_HASHES_PER_BLOCK);
     const HALF_LIFE_D: Duration = Duration::from_secs(ASERT_HALF_LIFE);
 
-    let anchor_target = "0x1f00ffff".parse().unwrap();
+    let anchor_target = "0xc800ffff".parse().unwrap();
 
     let context = Asert::with_parameters(TARGET_BLOCK_TIME_D, HALF_LIFE_D)
         .with_anchor(anchor_block_height, anchor_target)
@@ -385,11 +385,15 @@ impl HeaderHash {
 
     pub fn is_below_target(&self, target: &Target) -> bool {
         let h_int = Integer::from_digits(self.0.as_slice(), rug::integer::Order::MsfBe);
+        println!("h_int: {:?}", h_int);
+        println!("target: {:?}", target.0);
+        println!("h_int <= target.0: {:?}", h_int <= target.0);
         h_int <= target.0
     }
 
     pub fn is_below_compact_target(&self, target: &CompactTarget) -> bool {
         let target = target.expand();
+        println!("target: {:?}", target);
         self.is_below_target(&target)
     }
 
