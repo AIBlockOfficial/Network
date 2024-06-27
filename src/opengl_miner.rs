@@ -12,6 +12,7 @@ use crate::opengl_miner::gl_wrapper::{AddContext, GlError, ImmutableBuffer, Inde
 
 pub struct Miner {
     mine_program: Program,
+    mine_program_first_nonce_uniform: UniformLocation,
     mine_program_header_length_uniform: UniformLocation,
     mine_program_header_nonce_offset_uniform: UniformLocation,
 
@@ -51,6 +52,7 @@ impl Miner {
             .expect("Shader linking failed?!?");
 
         Ok(Self {
+            mine_program_first_nonce_uniform: program.uniform_location("u_firstNonce").unwrap(),
             mine_program_header_length_uniform: program.uniform_location("u_blockHeader_length").unwrap(),
             mine_program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
             mine_program: program,
@@ -61,35 +63,88 @@ impl Miner {
         })
     }
 
-    #[allow(non_snake_case)]
-    fn mine(&mut self, block_header_length: u32) -> Result<(), GlError> {
-        const INSERT_NONCE : bool = false;
+    fn find_block_header_nonce_location(block_header: &BlockHeader) -> (Vec<u8>, u32) {
+        assert_eq!(POW_NONCE_LEN, 4, "POW_NONCE_LEN has changed?!?");
 
-        //let block_header_length = 172u32;
-        //let block_header_length = 8u32;
-        let block_header_nonceOffset = 7u32;
-        let block_header_bytes = (0..block_header_length).map(|n| n as u8).collect::<Vec<_>>();
-        println!("block header: length={block_header_length}, nonce offset={block_header_nonceOffset}");
+        let mut block_header = block_header.clone();
+
+        block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; POW_NONCE_LEN];
+        let serialized_00 = bincode::serialize(&block_header).unwrap();
+        block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; POW_NONCE_LEN];
+        let serialized_ff = bincode::serialize(&block_header).unwrap();
+
+        assert_ne!(serialized_00, serialized_ff,
+                   "changing the nonce didn't affect the serialized block header?!?");
+        assert_eq!(serialized_00.len(), serialized_ff.len(),
+                   "changing the nonce affected the block header's serialized length?!?");
+
+        // find the index at which the two headers differ
+        let nonce_offset = (0..serialized_00.len())
+            .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
+            .expect("the serialized block headers are not equal, but are equal at every index?!?");
+
+        assert_eq!(serialized_00.as_slice()[nonce_offset..nonce_offset + 4], [0x00u8; 4],
+                   "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
+        assert_eq!(serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], [0xFFu8; 4],
+                   "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
+
+        (serialized_00, nonce_offset.try_into().unwrap())
+    }
+
+    /// Tries to generate a Proof-of-Work for a block.
+    fn generate_pow_block_cpu(
+        block_header: &BlockHeader,
+        first_nonce: u32,
+        nonce_count: u32,
+    ) -> Result<Option<Vec<u8>>, ()> {
+        let (mut block_header_bytes, block_header_nonce_offset) =
+            Self::find_block_header_nonce_location(block_header);
+        let block_header_nonce_offset = block_header_nonce_offset as usize;
+
+        for nonce in 0..nonce_count {
+            let nonce = nonce.wrapping_add(first_nonce);
+
+            block_header_bytes.as_mut_slice()
+                [block_header_nonce_offset..block_header_nonce_offset + 4]
+                .copy_from_slice(&nonce.to_ne_bytes());
+            std::hint::black_box(sha3_256::digest(&block_header_bytes));
+        }
+
+        Ok(None)
+    }
+
+    /// Tries to generate a Proof-of-Work for a block.
+    #[allow(non_snake_case)]
+    fn generate_pow_block(
+        &mut self,
+        block_header: &BlockHeader,
+        first_nonce: u32,
+        nonce_count: u32,
+    ) -> Result<Option<u32>, GlError> {
+        let (block_header_bytes, block_header_nonce_offset) =
+            Self::find_block_header_nonce_location(block_header);
+        let block_header_length: u32 = block_header_bytes.len().try_into().unwrap();
+        //println!("block header: length={block_header_length}, nonce offset={block_header_nonce_offset}");
 
         let mut work_group_size_arr = [0 as GLint; 3];
         unsafe { gl::GetProgramiv(self.mine_program.id, gl::COMPUTE_WORK_GROUP_SIZE, work_group_size_arr.as_mut_ptr()) };
         GlError::check_msg("glGetProgramiv(COMPUTE_WORK_GROUP_SIZE)")?;
         let work_group_size = work_group_size_arr.iter().cloned().reduce(<GLint as std::ops::Mul>::mul).unwrap() as u32;
-        println!("compute shader work group size: {work_group_size_arr:?} -> {work_group_size}");
+        //println!("compute shader work group size: {work_group_size_arr:?} -> {work_group_size}");
 
-        let dispatch_count = 2u32;
+        let dispatch_count = nonce_count.div_ceil(work_group_size);
         let hash_count = work_group_size * dispatch_count;
         let hash_buffer_capacity_int32s = hash_count * 32;
         let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
 
+        self.mine_program.set_uniform_1ui(self.mine_program_first_nonce_uniform, first_nonce)?;
         self.mine_program.set_uniform_1ui(self.mine_program_header_length_uniform, block_header_length)?;
-        self.mine_program.set_uniform_1ui(self.mine_program_header_nonce_offset_uniform, block_header_nonceOffset)?;
+        self.mine_program.set_uniform_1ui(self.mine_program_header_nonce_offset_uniform, block_header_nonce_offset)?;
 
-        let mut block_header_buffer_data = Vec::new();
-        for byte in &block_header_bytes {
-            block_header_buffer_data.extend_from_slice(&(*byte as u32).to_ne_bytes());
-        }
-        block_header_buffer_data.push(0); //ensure the buffer isn't empty
+        let block_header_buffer_data = block_header_bytes.iter()
+            .map(|b| (*b as u32).to_ne_bytes())
+            .collect::<Vec<_>>()
+            .concat();
         let block_header_buffer = ImmutableBuffer::new_initialized(&block_header_buffer_data, 0)
             .add_msg("BlockHeader buffer")?;
 
@@ -110,21 +165,24 @@ impl Miner {
 
         let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
         hash_buffer.download(0, &mut hash_buffer_data).unwrap();
+        std::hint::black_box(&hash_buffer_data);
+
+        if true {
+            return Ok(None);
+        }
 
         //println!("hash_buffer: {}", hex::encode(&hash_buffer_data));
 
         let mut hash_buffer_idx = 0usize;
+        let mut expected_block_header = block_header_bytes.clone();
         for nonce in 0u32..hash_count {
-            let expected_block_header = if INSERT_NONCE {
-                let mut expected_block_header = block_header_bytes.clone();
+            if true {
                 expected_block_header.as_mut_slice()
-                    [(block_header_nonceOffset as usize)..((block_header_nonceOffset + 4) as usize)]
+                    [(block_header_nonce_offset as usize)..((block_header_nonce_offset + 4) as usize)]
                     .copy_from_slice(&nonce.to_ne_bytes());
-                expected_block_header
-            } else {
-                // hash the block header in one go, without inserting the nonce
-                block_header_bytes.clone()
-            };
+            } else if true {
+                expected_block_header[block_header_nonce_offset as usize] = nonce as u8;
+            }
 
             let expected_hash : [u8; 32] = sha3_256::digest(&expected_block_header).try_into().unwrap();
 
@@ -141,12 +199,11 @@ impl Miner {
             // incrementing counter
             //let expected_hash : [u8; 32] = std::array::from_fn(|n| (nonce as u8).wrapping_add(n as u8));
 
+            //println!("nonce {nonce} => expected hash=\"{}\", gpu hash=\"{}\"", hex::encode(&expected_hash), hex::encode(&constructed_hash));
             assert_eq!(expected_hash, constructed_hash, "block_header_length={block_header_length}, nonce={nonce}");
-
-            //println!("nonce {nonce} => expected hash=\"{expected_hex}\", gpu hash=\"{constructed_hex}\"");
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -568,11 +625,62 @@ mod gl_wrapper {
 }
 
 #[cfg(test)]
-#[test]
-fn test() {
-    let mut miner = Miner::new().unwrap();
-    for block_header_length in 0..=1024 {
-        println!("block_header_length={block_header_length}");
-        miner.mine(block_header_length).unwrap();
+mod test {
+    use std::time::{Duration, Instant};
+    use super::*;
+
+    fn test_block_header() -> BlockHeader {
+        BlockHeader {
+            version: 1337,
+            bits: 10973,
+            nonce_and_mining_tx_hash: (vec![], "abcde".to_string()),
+            b_num: 2398927,
+            timestamp: 29837637,
+            difficulty: b"1oidhdiush38szud".to_vec(),
+            seed_value: b"2983zuifsigezd".to_vec(),
+            previous_hash: Some("jeff".to_string()),
+            txs_merkle_root_and_hash: ("merkle_root".to_string(), "hash".to_string()),
+        }
+    }
+
+    fn fmt_per_second(qty: f64, elapsed: Duration) -> String {
+        let qty_per_second = qty / elapsed.as_secs_f64();
+
+        let (mut divisor, mut prefix) = (1f64, "");
+        for (next_divisor, next_prefix) in [
+            (1000f64, "k"),
+            (1000000f64, "M"),
+            (1000000000f64, "G"),
+        ] {
+            if qty_per_second > next_divisor {
+                (divisor, prefix) = (next_divisor, next_prefix);
+            }
+        }
+        format!("{:.2}{}", qty_per_second / divisor, prefix)
+    }
+
+    #[test]
+    fn test_cpu() {
+        let header = test_block_header();
+
+        for nonce_count in (0..15).map(|i| 1u32 << i) {
+            let start_time = Instant::now();
+            Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
+            let elapsed = start_time.elapsed();
+            println!("calculated {} hashes in {:?} ({}H/s)", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed));
+        }
+    }
+
+    #[test]
+    fn test_gpu() {
+        let header = test_block_header();
+
+        let mut miner = Miner::new().unwrap();
+        for nonce_count in (0..21).map(|i| 1u32 << i) {
+            let start_time = Instant::now();
+            miner.generate_pow_block(&header, 0, nonce_count).unwrap();
+            let elapsed = start_time.elapsed();
+            println!("calculated {} hashes in {:?} ({}H/s)", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed));
+        }
     }
 }

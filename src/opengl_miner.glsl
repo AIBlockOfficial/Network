@@ -24,7 +24,7 @@ layout(local_size_x = 16) in;
 /*
  * This flag is used to configure "pure" Keccak, as opposed to NIST SHA3.
  */
-#define SHA3_USE_KECCAK false
+#define SHA3_USE_KECCAK 0
 
 #define SHA3_ROTL64(x, y) (((x) << (y)) | ((x) >> (64/*(sizeof(uint64_t)*8)*/ - (y))))
 
@@ -229,19 +229,20 @@ uint8_t[SHA3_256_BYTES] sha3_Finalize(inout sha3_context ctx) {
     uint32_t u_hash[16];
 };*/
 
+uniform uint u_firstNonce;
 uniform uint u_blockHeader_length;
 uniform uint u_blockHeader_nonceOffset;
+
 layout(std430, binding = 0) readonly restrict buffer BlockHeader {
     uint32_t bytes[];
 } b_blockHeader;
 
-layout(std430, binding = 1) /*writeonly restrict*/ buffer HashOutput {
+layout(std430, binding = 1) writeonly restrict buffer HashOutput {
     uint32_t hashes[][SHA3_256_BYTES];
 } b_hashOutput;
 
 void main() {
-    //uint32_t nonce = uint32_t(gl_LocalInvocationIndex) + (uint32_t(gl_WorkGroupID.x) * uint32_t(WORK_GROUP_SIZE_1D));
-    uint32_t nonce = gl_GlobalInvocationID.x;
+    uint32_t nonce = u_firstNonce + gl_GlobalInvocationID.x;
 
     // hash the block header with the nonce inserted in the correct location
     uint header_length = u_blockHeader_length;
@@ -249,7 +250,7 @@ void main() {
     sha3_context ctx;
     sha3_Init_256(ctx);
 
-#if false
+#if 1
     // hash the block header, inserting the nonce in the correct location
     for (uint i = 0; i < header_nonceOffset; i++) sha3_Update(ctx, uint8_t(b_blockHeader.bytes[i] & 0xFFu));
     for (uint i = 0; i < 4; i++) sha3_Update(ctx, uint8_t((nonce >> (i * 8u)) & 0xFFu));
@@ -262,7 +263,4 @@ void main() {
     uint8_t[SHA3_256_BYTES] hash = sha3_Finalize(ctx);
 
     for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
-
-    // incrementing counter
-    //for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[nonce][i] = uint32_t((nonce + i) & 0xFFu);
 }
