@@ -308,6 +308,10 @@ impl CompactTarget {
         Target(target)
     }
 
+    pub fn expand_integer(&self) -> Integer {
+        self.expand().0
+    }
+
     pub fn into_array(self) -> [u8; 4] {
         self.0.to_be_bytes()
     }
@@ -399,6 +403,12 @@ impl HeaderHash {
 
     pub fn into_vec(self) -> Vec<u8> {
         self.0.to_vec()
+    }
+}
+
+impl From<sha3_256::Output<sha3::Sha3_256>> for HeaderHash {
+    fn from(value: sha3_256::Output<sha3::Sha3_256>) -> Self {
+        Self(value)
     }
 }
 

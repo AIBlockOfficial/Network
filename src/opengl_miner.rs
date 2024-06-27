@@ -5,6 +5,7 @@ use gl::types::*;
 use glfw::{Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tw_chain::crypto::sha3_256;
 use tw_chain::primitives::block::BlockHeader;
+use crate::asert::{CompactTarget, HeaderHash};
 use crate::constants::{MINING_DIFFICULTY, POW_NONCE_LEN};
 use crate::opengl_miner::gl_wrapper::{AddContext, GlError, ImmutableBuffer, IndexedBufferTarget, Program, Shader, ShaderType, UniformLocation};
 
@@ -17,6 +18,7 @@ pub struct Miner {
     mine_program_header_nonce_offset_uniform: UniformLocation,
     mine_program_difficulty_function_uniform: UniformLocation,
     mine_program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
+    mine_program_compact_target_expanded_uniform: UniformLocation,
 
     glfw_window: PWindow,
     glfw_events: GlfwReceiver<(f64, WindowEvent)>,
@@ -59,6 +61,7 @@ impl Miner {
             mine_program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
             mine_program_difficulty_function_uniform: program.uniform_location("u_difficultyFunction").unwrap(),
             mine_program_leading_zeroes_mining_difficulty_uniform: program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap(),
+            mine_program_compact_target_expanded_uniform: program.uniform_location("u_compactTarget_expanded").unwrap(),
             mine_program: program,
 
             glfw_window: window,
@@ -95,17 +98,66 @@ impl Miner {
         (serialized_00, nonce_offset.try_into().unwrap())
     }
 
+    fn extract_difficulty_target(block_header: &BlockHeader) -> Result<Option<CompactTarget>, &'static str> {
+        if block_header.difficulty.is_empty() {
+            Ok(None)
+        } else {
+            match CompactTarget::try_from_slice(&block_header.difficulty) {
+                Some(target) => Ok(Some(target)),
+                None => Err("block header contains invalid difficulty"),
+            }
+        }
+    }
+
+    fn expand_target_hash(compact_target: CompactTarget) -> Option<[u8; 32]> {
+        use rug::Integer;
+        const SHA3_256_BYTES: usize = 32;
+
+        let expanded_target = compact_target.expand_integer();
+
+        let byte_digits: Vec<u8> = expanded_target.to_digits(rug::integer::Order::MsfBe);
+        if byte_digits.len() > 32 {
+            // The target value is higher than the largest possible SHA3-256 hash.
+            None
+        } else {
+            let mut result = [0u8; 32];
+            result[32 - byte_digits.len()..].copy_from_slice(&byte_digits);
+
+            assert_eq!(expanded_target, Integer::from_digits(&result, rug::integer::Order::MsfBe));
+
+            Some(result)
+        }
+
+        /*assert_eq!(expanded_target.clone() & ((Integer::ONE.clone() << (SHA3_256_BYTES * 8)) - 1),
+                   expanded_target.clone(), "expanded difficulty target has more than 256 significant bits!");
+
+        let expanded_target_bytes : [u8; SHA3_256_BYTES] = std::array::from_fn(|n| {
+            let shift = (SHA3_256_BYTES - 1 - n) * 8;
+            let extracted_byte : Integer = (expanded_target.clone() >> shift) & 0xFF;
+            extracted_byte.to_u8().unwrap()
+        });
+
+        assert_eq!(expanded_target,
+                   Integer::from_digits(&expanded_target_bytes, rug::integer::Order::MsfBe));
+
+        //assert_eq!(byte_digits.as_slice(), expanded_target_bytes.as_slice());
+
+        expanded_target_bytes*/
+    }
+
     /// Tries to generate a Proof-of-Work for a block.
     fn generate_pow_block_cpu(
         block_header: &BlockHeader,
         first_nonce: u32,
         nonce_count: u32,
-    ) -> Result<Option<u32>, ()> {
-        assert!(block_header.difficulty.is_empty(), "non-empty difficulty function not supported");
-
+    ) -> Result<Option<u32>, &'static str> {
         let (mut block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_nonce_offset = block_header_nonce_offset as usize;
+
+        let difficulty_target = Self::extract_difficulty_target(block_header)?
+            .as_ref()
+            .map(CompactTarget::expand);
 
         // we accumulate the result into an Option rather than immediately returning the first
         // result so that we still have to compute every hash, allowing a fair hash rate comparison
@@ -121,9 +173,20 @@ impl Miner {
 
             let hash = sha3_256::digest(&block_header_bytes);
 
-            let hash_prefix = hash.first_chunk::<MINING_DIFFICULTY>().unwrap();
-            if hash_prefix == &[0u8; MINING_DIFFICULTY] && result.is_none() {
-                result = Some(nonce);
+            match &difficulty_target {
+                None => {
+                    // There isn't a difficulty function, check if the first MINING_DIFFICULTY bytes
+                    // of the hash are 0
+                    let hash_prefix = hash.first_chunk::<MINING_DIFFICULTY>().unwrap();
+                    if hash_prefix == &[0u8; MINING_DIFFICULTY] && result.is_none() {
+                        result = Some(nonce);
+                    }
+                },
+                Some(target) => {
+                    if HeaderHash::from(hash).is_below_target(target) && result.is_none() {
+                        result = Some(nonce);
+                    }
+                },
             }
 
             std::hint::black_box(hash);
@@ -140,8 +203,6 @@ impl Miner {
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, GlError> {
-        assert!(block_header.difficulty.is_empty(), "non-empty difficulty function not supported");
-
         let (block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_length: u32 = block_header_bytes.len().try_into().unwrap();
@@ -160,12 +221,23 @@ impl Miner {
         self.mine_program.set_uniform_1ui(self.mine_program_header_length_uniform, block_header_length)?;
         self.mine_program.set_uniform_1ui(self.mine_program_header_nonce_offset_uniform, block_header_nonce_offset)?;
 
-        if block_header.difficulty.is_empty() {
+        // TODO: don't unwrap here
+        if let Some(compact_target) = Self::extract_difficulty_target(block_header).unwrap() {
+            if let Some(expanded_target_hash) = Self::expand_target_hash(compact_target) {
+                // DIFFICULTY_FUNCTION_COMPACT_TARGET
+                self.mine_program.set_uniform_1ui(self.mine_program_difficulty_function_uniform, 2)?;
+                self.mine_program.set_uniform_1uiv(self.mine_program_compact_target_expanded_uniform,
+                                                   &expanded_target_hash.map(|b| b as u32))?;
+            } else {
+                // The target value is higher than the largest possible SHA3-256 hash. Therefore,
+                // every hash will meet the required difficulty threshold, so we can just return
+                // an arbitrary nonce.
+                return Ok(Some(first_nonce))
+            }
+        } else {
             // DIFFICULTY_FUNCTION_LEADING_ZEROES
             self.mine_program.set_uniform_1ui(self.mine_program_difficulty_function_uniform, 1)?;
             self.mine_program.set_uniform_1ui(self.mine_program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
-        } else {
-            assert!(false, "non-empty difficulty function not supported");
         }
 
         let block_header_buffer_data = block_header_bytes.iter()
@@ -588,6 +660,14 @@ mod gl_wrapper {
             unsafe { gl::ProgramUniform1ui(self.id, location.location, value) };
             GlError::check_msg("glProgramUniform1ui")
         }
+
+        pub fn set_uniform_1uiv(
+            &mut self, location: UniformLocation,
+            value: &[u32],
+        ) -> Result<(), GlError> {
+            unsafe { gl::ProgramUniform1uiv(self.id, location.location, value.len().try_into().unwrap(), value.as_ptr()) };
+            GlError::check_msg("glProgramUniform1uiv")
+        }
     }
 
     impl Drop for Program {
@@ -682,17 +762,89 @@ mod gl_wrapper {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
+    #[test]
+    fn test_big_integer_behaves_as_expected() {
+        use rug::Integer;
+        use std::cmp::Ordering::{self, *};
+        type DigestArr = [u8; 32];
+
+        fn to_int(digits: &[u8]) -> Integer {
+            let res = Integer::from_digits(digits, rug::integer::Order::MsfBe);
+            assert_eq!(res, Integer::from_digits(digits, rug::integer::Order::MsfLe));
+            res
+        }
+
+        fn test(hash: &[u8], target: &[u8], order: Ordering) {
+            let (hash, target) = (to_int(hash), to_int(target));
+            assert_eq!(PartialOrd::partial_cmp(&hash, &target), Some(order),
+                       "hash: {hash}, target: {target}");
+        }
+
+        test(b"\x00", b"\x00", Equal);
+        test(b"\x02", b"\x00", Greater);
+        test(b"\x02", b"\x80", Less);
+
+        test(b"\x0201234567", b"\x8001234567", Less);
+        test(b"\x8001234567", b"\x8001234567", Equal);
+        test(b"01234567890abcde01234567890abcde", b"01234567890abcde01234567890abcde", Equal);
+        test(b"01234567890abcde01234567890abcde", b"91234567890abcde01234567890abcde", Less);
+        test(b"01234567890abcde01234567890abcde", b"01234567890abcde91234567890abcde", Less);
+
+        //test();
+    }
+
+    #[test]
+    fn test_expand_target_hash() {
+        fn test_hex(compact_target: u32, target_hash_hex: Option<&str>) {
+            let target_hash = Miner::expand_target_hash(CompactTarget::from_array(compact_target.to_be_bytes()))
+                .map(|h| hex::encode_upper(&h));
+            assert_eq!(target_hash.as_ref().map(|s| s.as_str()), target_hash_hex,
+                       "compact_target=0x{:08x}", compact_target)
+        }
+
+        test_hex(0x00000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+        test_hex(0x03000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+        test_hex(0xFF000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+
+        test_hex(0x03000001, Some("0000000000000000000000000000000000000000000000000000000000000001"));
+        test_hex(0x037FFFFF, Some("00000000000000000000000000000000000000000000000000000000007FFFFF"));
+        test_hex(0x03FFFFFF, Some("00000000000000000000000000000000000000000000000000000000007FFFFF"));
+        test_hex(0x02FFFFFF, Some("0000000000000000000000000000000000000000000000000000000000007FFF"));
+        test_hex(0x01FFFFFF, Some("000000000000000000000000000000000000000000000000000000000000007F"));
+        test_hex(0x00FFFFFF, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+
+        test_hex(0x22000001, Some("0100000000000000000000000000000000000000000000000000000000000000"));
+
+        test_hex(0xFFFFFFFF, None);
+    }
+
+    /*#[test]
+    fn test_verify_target_hash() {
+        for compact_target in (0..=u32::MAX).rev() {
+            let integer = CompactTarget::from_array(compact_target.to_be_bytes()).expand_integer();
+            let bytes : Vec<u8> = integer.to_digits(rug::integer::Order::MsfBe);
+            assert!(bytes.len() <= 32, "0x{compact_target:08X} -> \"{}\" {bytes:?}", hex::encode_upper(&bytes));
+        }
+    }*/
+}
+
+#[cfg(test)]
+mod bench {
     use std::time::{Duration, Instant};
     use super::*;
 
-    fn test_block_header() -> BlockHeader {
+    const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
+
+    fn test_block_header(difficulty: &[u8]) -> BlockHeader {
         BlockHeader {
             version: 1337,
             bits: 10973,
             nonce_and_mining_tx_hash: (vec![], "abcde".to_string()),
             b_num: 2398927,
             timestamp: 29837637,
-            difficulty: vec![],
+            difficulty: difficulty.to_vec(),
             seed_value: b"2983zuifsigezd".to_vec(),
             previous_hash: Some("jeff".to_string()),
             txs_merkle_root_and_hash: ("merkle_root".to_string(), "hash".to_string()),
@@ -715,11 +867,10 @@ mod test {
         format!("{:.2}{}", qty_per_second / divisor, prefix)
     }
 
-    #[test]
-    fn test_cpu() {
-        let header = test_block_header();
+    fn test_cpu(difficulty: &[u8]) {
+        let header = test_block_header(difficulty);
 
-        for nonce_count in (0..15).map(|i| 1u32 << i) {
+        for nonce_count in (0..16).map(|i| 1u32 << i) {
             let start_time = Instant::now();
             let nonce = Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
             let elapsed = start_time.elapsed();
@@ -728,15 +879,34 @@ mod test {
     }
 
     #[test]
-    fn test_gpu() {
-        let header = test_block_header();
+    fn test_cpu_nodiff() {
+        test_cpu(&[]);
+    }
+
+    #[test]
+    fn test_cpu_diff() {
+        test_cpu(TEST_MINING_DIFFICULTY);
+    }
+
+    fn test_gpu(difficulty: &[u8]) {
+        let header = test_block_header(difficulty);
 
         let mut miner = Miner::new().unwrap();
-        for nonce_count in (0..21).map(|i| 1u32 << i) {
+        for nonce_count in (0..27).map(|i| 1u32 << i) {
             let start_time = Instant::now();
             let nonce = miner.generate_pow_block(&header, 0, nonce_count).unwrap();
             let elapsed = start_time.elapsed();
             println!("calculated {} hashes in {:?} ({}H/s) -> nonce={:?}", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed), nonce);
         }
+    }
+
+    #[test]
+    fn test_gpu_nodiff() {
+        test_gpu(&[]);
+    }
+
+    #[test]
+    fn test_gpu_diff() {
+        test_gpu(TEST_MINING_DIFFICULTY);
     }
 }

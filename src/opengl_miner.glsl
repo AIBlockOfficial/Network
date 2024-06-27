@@ -223,10 +223,6 @@ uint8_t[SHA3_256_BYTES] sha3_Finalize(inout sha3_context ctx) {
 // Miner implementation
 //
 
-/*layout(std140, binding = 0) uniform Uniforms {
-    uint32_t u_hash[16];
-};*/
-
 uniform uint u_firstNonce;
 uniform uint u_blockHeader_length;
 uniform uint u_blockHeader_nonceOffset;
@@ -236,6 +232,8 @@ const uint DIFFICULTY_FUNCTION_LEADING_ZEROES = 1;
 const uint DIFFICULTY_FUNCTION_COMPACT_TARGET = 2;
 
 uniform uint u_leadingZeroes_miningDifficulty;
+
+uniform uint32_t u_compactTarget_expanded[SHA3_256_BYTES];
 
 layout(std430, binding = 0) readonly restrict buffer BlockHeader {
     uint32_t bytes[];
@@ -276,21 +274,19 @@ void respond_error(uint error_code) {
 void main() {
     uint32_t nonce = u_firstNonce + gl_GlobalInvocationID.x;
 
+    //TODO: uncomment this eventually, but keep it disabled for now for test purposes
+    //if (b_response.success_nonce < nonce) return;
+
     // hash the block header with the nonce inserted in the correct location
     uint header_length = u_blockHeader_length;
     uint header_nonceOffset = u_blockHeader_nonceOffset;
     sha3_context ctx;
     sha3_Init_256(ctx);
 
-#if 1
     // hash the block header, inserting the nonce in the correct location
     for (uint i = 0; i < header_nonceOffset; i++) sha3_Update(ctx, uint8_t(b_blockHeader.bytes[i] & 0xFFu));
     for (uint i = 0; i < 4; i++) sha3_Update(ctx, uint8_t((nonce >> (i * 8u)) & 0xFFu));
     for (uint i = header_nonceOffset + 4u; i < header_length; i++) sha3_Update(ctx, uint8_t(b_blockHeader.bytes[i] & 0xFFu));
-#else
-    // hash the block header in one go
-    for (uint i = 0; i < header_length; i++) sha3_Update(ctx, uint8_t(b_blockHeader.bytes[i] & 0xFFu));
-#endif
 
     uint8_t[SHA3_256_BYTES] hash = sha3_Finalize(ctx);
 
@@ -303,6 +299,15 @@ void main() {
             // check that the first u_leadingZeroes_miningDifficulty bytes of the hash are 0
             for (uint i = 0; i < u_leadingZeroes_miningDifficulty; i++)
                 if (hash[i] != 0)
+                    return;
+
+            respond_success(nonce);
+            return;
+        }
+        case DIFFICULTY_FUNCTION_COMPACT_TARGET: {
+            // check that the hash is lexicographically less than or equal to the expanded target hash
+            for (uint i = 0; i < SHA3_256_BYTES; i++)
+                if (uint32_t(hash[i]) > uint32_t(u_compactTarget_expanded[i]))
                     return;
 
             respond_success(nonce);
