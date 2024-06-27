@@ -9,17 +9,18 @@
 
 #define uint8_t uint32_t
 
-layout(local_size_x = 16) in;
+layout(local_size_x = 256) in;
 
 //
 // SHA-3 implementation
+// This is ported from https://github.com/brainhub/SHA3IUF
 //
 
 /* 'Words' here refers to uint64_t */
 #define SHA3_KECCAK_SPONGE_WORDS uint(((1600)/8/*bits to byte*/)/8/*sizeof(uint64_t)*/)
 #define SHA3_256_BYTES uint(32)
 
-#define KECCAK_ROUNDS 24
+#define KECCAK_ROUNDS uint(24)
 
 /*
  * This flag is used to configure "pure" Keccak, as opposed to NIST SHA3.
@@ -31,10 +32,7 @@ layout(local_size_x = 16) in;
 struct sha3_context {
     uint64_t saved;             /* the portion of the input message that we
                                  * didn't consume yet */
-    //union {                     /* Keccak's state */
-        uint64_t s[SHA3_KECCAK_SPONGE_WORDS];
-    //    uint8_t sb[SHA3_KECCAK_SPONGE_WORDS * 8];
-    //} u;
+    uint64_t s[SHA3_KECCAK_SPONGE_WORDS]; /* Keccak's state */
     uint byteIndex;         /* 0..7--the next byte after the set one
                                  * (starts from 0; 0--none are buffered) */
     uint wordIndex;         /* 0..24--the next word to integrate input
@@ -233,13 +231,47 @@ uniform uint u_firstNonce;
 uniform uint u_blockHeader_length;
 uniform uint u_blockHeader_nonceOffset;
 
+uniform uint u_difficultyFunction;
+const uint DIFFICULTY_FUNCTION_LEADING_ZEROES = 1;
+const uint DIFFICULTY_FUNCTION_COMPACT_TARGET = 2;
+
+uniform uint u_leadingZeroes_miningDifficulty;
+
 layout(std430, binding = 0) readonly restrict buffer BlockHeader {
     uint32_t bytes[];
 } b_blockHeader;
 
-layout(std430, binding = 1) writeonly restrict buffer HashOutput {
+/*layout(std430, binding = 1) writeonly restrict buffer HashOutput {
     uint32_t hashes[][SHA3_256_BYTES];
-} b_hashOutput;
+} b_hashOutput;*/
+
+layout(std430, binding = 2) volatile restrict buffer Response {
+    uint32_t status;        // initialized to 0
+    uint32_t success_nonce; // initialized to u32::MAX
+    uint32_t error_code;    // initialized to 0
+} b_response;
+
+const uint RESPONSE_STATUS_NONE = 0;
+const uint RESPONSE_STATUS_SUCCESS = 1;
+const uint RESPONSE_STATUS_ERROR = 2;
+
+const uint ERROR_CODE_INVALID_DIFFICULTY_FUNCTION = 1;
+
+void respond_success(uint32_t nonce) {
+    // race to change the response status from NONE to SUCCESS
+    atomicCompSwap(b_response.status, RESPONSE_STATUS_NONE, RESPONSE_STATUS_SUCCESS);
+    // set the response nonce to the min() of the current response nonce and this thread's nonce.
+    //   this ensures that we always return the first valid nonce to the CPU, and works because
+    //   b_response.success_nonce should be initialized to the maximum uint32_t value.
+    atomicMin(b_response.success_nonce, nonce);
+}
+
+void respond_error(uint error_code) {
+    // set the response status to ERROR, regardless of what the current value is
+    // (this will hide any future threads which try to respond with success)
+    atomicMax(b_response.status, RESPONSE_STATUS_ERROR);
+    b_response.error_code = error_code;
+}
 
 void main() {
     uint32_t nonce = u_firstNonce + gl_GlobalInvocationID.x;
@@ -262,5 +294,21 @@ void main() {
 
     uint8_t[SHA3_256_BYTES] hash = sha3_Finalize(ctx);
 
-    for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
+    switch (u_difficultyFunction) {
+        default: {
+            respond_error(ERROR_CODE_INVALID_DIFFICULTY_FUNCTION);
+            return;
+        }
+        case DIFFICULTY_FUNCTION_LEADING_ZEROES: {
+            // check that the first u_leadingZeroes_miningDifficulty bytes of the hash are 0
+            for (uint i = 0; i < u_leadingZeroes_miningDifficulty; i++)
+                if (hash[i] != 0)
+                    return;
+
+            respond_success(nonce);
+            return;
+        }
+    }
+
+    //for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
 }

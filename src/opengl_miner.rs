@@ -5,7 +5,7 @@ use gl::types::*;
 use glfw::{Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tw_chain::crypto::sha3_256;
 use tw_chain::primitives::block::BlockHeader;
-use crate::constants::POW_NONCE_LEN;
+use crate::constants::{MINING_DIFFICULTY, POW_NONCE_LEN};
 use crate::opengl_miner::gl_wrapper::{AddContext, GlError, ImmutableBuffer, IndexedBufferTarget, Program, Shader, ShaderType, UniformLocation};
 
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
@@ -15,6 +15,8 @@ pub struct Miner {
     mine_program_first_nonce_uniform: UniformLocation,
     mine_program_header_length_uniform: UniformLocation,
     mine_program_header_nonce_offset_uniform: UniformLocation,
+    mine_program_difficulty_function_uniform: UniformLocation,
+    mine_program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
 
     glfw_window: PWindow,
     glfw_events: GlfwReceiver<(f64, WindowEvent)>,
@@ -55,6 +57,8 @@ impl Miner {
             mine_program_first_nonce_uniform: program.uniform_location("u_firstNonce").unwrap(),
             mine_program_header_length_uniform: program.uniform_location("u_blockHeader_length").unwrap(),
             mine_program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
+            mine_program_difficulty_function_uniform: program.uniform_location("u_difficultyFunction").unwrap(),
+            mine_program_leading_zeroes_mining_difficulty_uniform: program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap(),
             mine_program: program,
 
             glfw_window: window,
@@ -96,10 +100,17 @@ impl Miner {
         block_header: &BlockHeader,
         first_nonce: u32,
         nonce_count: u32,
-    ) -> Result<Option<Vec<u8>>, ()> {
+    ) -> Result<Option<u32>, ()> {
+        assert!(block_header.difficulty.is_empty(), "non-empty difficulty function not supported");
+
         let (mut block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_nonce_offset = block_header_nonce_offset as usize;
+
+        // we accumulate the result into an Option rather than immediately returning the first
+        // result so that we still have to compute every hash, allowing a fair hash rate comparison
+        // with the GPU implementation.
+        let mut result = None;
 
         for nonce in 0..nonce_count {
             let nonce = nonce.wrapping_add(first_nonce);
@@ -107,10 +118,18 @@ impl Miner {
             block_header_bytes.as_mut_slice()
                 [block_header_nonce_offset..block_header_nonce_offset + 4]
                 .copy_from_slice(&nonce.to_ne_bytes());
-            std::hint::black_box(sha3_256::digest(&block_header_bytes));
+
+            let hash = sha3_256::digest(&block_header_bytes);
+
+            let hash_prefix = hash.first_chunk::<MINING_DIFFICULTY>().unwrap();
+            if hash_prefix == &[0u8; MINING_DIFFICULTY] && result.is_none() {
+                result = Some(nonce);
+            }
+
+            std::hint::black_box(hash);
         }
 
-        Ok(None)
+        Ok(result)
     }
 
     /// Tries to generate a Proof-of-Work for a block.
@@ -121,25 +140,33 @@ impl Miner {
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, GlError> {
+        assert!(block_header.difficulty.is_empty(), "non-empty difficulty function not supported");
+
         let (block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_length: u32 = block_header_bytes.len().try_into().unwrap();
-        //println!("block header: length={block_header_length}, nonce offset={block_header_nonce_offset}");
 
         let mut work_group_size_arr = [0 as GLint; 3];
         unsafe { gl::GetProgramiv(self.mine_program.id, gl::COMPUTE_WORK_GROUP_SIZE, work_group_size_arr.as_mut_ptr()) };
         GlError::check_msg("glGetProgramiv(COMPUTE_WORK_GROUP_SIZE)")?;
         let work_group_size = work_group_size_arr.iter().cloned().reduce(<GLint as std::ops::Mul>::mul).unwrap() as u32;
-        //println!("compute shader work group size: {work_group_size_arr:?} -> {work_group_size}");
 
         let dispatch_count = nonce_count.div_ceil(work_group_size);
-        let hash_count = work_group_size * dispatch_count;
-        let hash_buffer_capacity_int32s = hash_count * 32;
-        let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
+        //let hash_count = work_group_size * dispatch_count;
+        //let hash_buffer_capacity_int32s = hash_count * 32;
+        //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
 
         self.mine_program.set_uniform_1ui(self.mine_program_first_nonce_uniform, first_nonce)?;
         self.mine_program.set_uniform_1ui(self.mine_program_header_length_uniform, block_header_length)?;
         self.mine_program.set_uniform_1ui(self.mine_program_header_nonce_offset_uniform, block_header_nonce_offset)?;
+
+        if block_header.difficulty.is_empty() {
+            // DIFFICULTY_FUNCTION_LEADING_ZEROES
+            self.mine_program.set_uniform_1ui(self.mine_program_difficulty_function_uniform, 1)?;
+            self.mine_program.set_uniform_1ui(self.mine_program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
+        } else {
+            assert!(false, "non-empty difficulty function not supported");
+        }
 
         let block_header_buffer_data = block_header_bytes.iter()
             .map(|b| (*b as u32).to_ne_bytes())
@@ -148,13 +175,21 @@ impl Miner {
         let block_header_buffer = ImmutableBuffer::new_initialized(&block_header_buffer_data, 0)
             .add_msg("BlockHeader buffer")?;
 
-        let mut hash_buffer = ImmutableBuffer::new_uninitialized(hash_buffer_capacity_bytes, 0)
-            .add_msg("HashOutput buffer")?;
+        //let mut hash_buffer = ImmutableBuffer::new_uninitialized(hash_buffer_capacity_bytes, 0)
+        //    .add_msg("HashOutput buffer")?;
+
+        const RESPONSE_BUFFER_CAPACITY: usize = 12;
+        let response_buffer_data = [ 0u32, u32::MAX, 0u32 ];
+        //let mut response_buffer_data = [0u8; RESPONSE_BUFFER_CAPACITY];
+        let mut response_buffer_data : [u8; RESPONSE_BUFFER_CAPACITY] = unsafe { std::mem::transmute(response_buffer_data.map(u32::to_ne_bytes)) };
+        let response_buffer = ImmutableBuffer::new_initialized(&response_buffer_data, 0)
+            .add_msg("Response buffer")?;
 
         block_header_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 0).unwrap();
-        hash_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 1).unwrap();
+        //hash_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 1).unwrap();
+        response_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 2).unwrap();
 
-        hash_buffer.invalidate().unwrap();
+        //hash_buffer.invalidate().unwrap();
         self.mine_program.bind().unwrap();
 
         unsafe { gl::DispatchCompute(dispatch_count, 1, 1) };
@@ -163,11 +198,32 @@ impl Miner {
         //unsafe { gl::Finish() };
         unsafe { gl::MemoryBarrier(gl::BUFFER_UPDATE_BARRIER_BIT) };
 
-        let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
-        hash_buffer.download(0, &mut hash_buffer_data).unwrap();
-        std::hint::black_box(&hash_buffer_data);
+        //let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
+        //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
+        //std::hint::black_box(&hash_buffer_data);
 
-        if true {
+        response_buffer.download(0, &mut response_buffer_data).unwrap();
+
+        let response_status = u32::from_ne_bytes(*response_buffer_data[0..].first_chunk().unwrap());
+        let response_success_nonce = u32::from_ne_bytes(*response_buffer_data[4..].first_chunk().unwrap());
+        let response_error_code = u32::from_ne_bytes(*response_buffer_data[8..].first_chunk().unwrap());
+
+        match response_status {
+            // RESPONSE_STATUS_NONE
+            0 => return Ok(None),
+            // RESPONSE_STATUS_SUCCESS
+            1 => return Ok(Some(response_success_nonce)),
+            // RESPONSE_STATUS_ERROR_CODE
+            2 => panic!("compute shader returned error code 0x{:04x}: {}",
+                        response_error_code,
+                        match response_error_code {
+                            1 => "INVALID_DIFFICULTY_FUNCTION",
+                            _ => "(unknown)",
+                        }),
+            _ => panic!("compute shader returned unknown response status 0x{:04x}", response_status),
+        }
+
+        /*if true {
             return Ok(None);
         }
 
@@ -203,7 +259,7 @@ impl Miner {
             assert_eq!(expected_hash, constructed_hash, "block_header_length={block_header_length}, nonce={nonce}");
         }
 
-        Ok(None)
+        Ok(None)*/
     }
 }
 
@@ -636,7 +692,7 @@ mod test {
             nonce_and_mining_tx_hash: (vec![], "abcde".to_string()),
             b_num: 2398927,
             timestamp: 29837637,
-            difficulty: b"1oidhdiush38szud".to_vec(),
+            difficulty: vec![],
             seed_value: b"2983zuifsigezd".to_vec(),
             previous_hash: Some("jeff".to_string()),
             txs_merkle_root_and_hash: ("merkle_root".to_string(), "hash".to_string()),
@@ -665,9 +721,9 @@ mod test {
 
         for nonce_count in (0..15).map(|i| 1u32 << i) {
             let start_time = Instant::now();
-            Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
+            let nonce = Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
             let elapsed = start_time.elapsed();
-            println!("calculated {} hashes in {:?} ({}H/s)", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed));
+            println!("calculated {} hashes in {:?} ({}H/s) -> nonce={:?}", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed), nonce);
         }
     }
 
@@ -678,9 +734,9 @@ mod test {
         let mut miner = Miner::new().unwrap();
         for nonce_count in (0..21).map(|i| 1u32 << i) {
             let start_time = Instant::now();
-            miner.generate_pow_block(&header, 0, nonce_count).unwrap();
+            let nonce = miner.generate_pow_block(&header, 0, nonce_count).unwrap();
             let elapsed = start_time.elapsed();
-            println!("calculated {} hashes in {:?} ({}H/s)", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed));
+            println!("calculated {} hashes in {:?} ({}H/s) -> nonce={:?}", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed), nonce);
         }
     }
 }
