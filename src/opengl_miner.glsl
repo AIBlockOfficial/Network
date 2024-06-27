@@ -290,6 +290,8 @@ void main() {
 
     uint8_t[SHA3_256_BYTES] hash = sha3_Finalize(ctx);
 
+    //for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
+
     switch (u_difficultyFunction) {
         default: {
             respond_error(ERROR_CODE_INVALID_DIFFICULTY_FUNCTION);
@@ -306,14 +308,16 @@ void main() {
         }
         case DIFFICULTY_FUNCTION_COMPACT_TARGET: {
             // check that the hash is lexicographically less than or equal to the expanded target hash
-            for (uint i = 0; i < SHA3_256_BYTES; i++)
-                if (uint32_t(hash[i]) > uint32_t(u_compactTarget_expanded[i]))
+            for (uint i = 0; i < SHA3_256_BYTES; i++) {
+                if (uint32_t(hash[i]) > uint32_t(u_compactTarget_expanded[i])) {
                     return;
+                } else if (uint32_t(hash[i]) < uint32_t(u_compactTarget_expanded[i])) {
+                    break;
+                }
+            }
 
             respond_success(nonce);
             return;
         }
     }
-
-    //for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
 }

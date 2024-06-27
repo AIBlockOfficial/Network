@@ -252,7 +252,6 @@ impl Miner {
 
         const RESPONSE_BUFFER_CAPACITY: usize = 12;
         let response_buffer_data = [ 0u32, u32::MAX, 0u32 ];
-        //let mut response_buffer_data = [0u8; RESPONSE_BUFFER_CAPACITY];
         let mut response_buffer_data : [u8; RESPONSE_BUFFER_CAPACITY] = unsafe { std::mem::transmute(response_buffer_data.map(u32::to_ne_bytes)) };
         let response_buffer = ImmutableBuffer::new_initialized(&response_buffer_data, 0)
             .add_msg("Response buffer")?;
@@ -267,12 +266,10 @@ impl Miner {
         unsafe { gl::DispatchCompute(dispatch_count, 1, 1) };
         GlError::check_msg("glDispatchCompute").add_msg("Dispatch miner")?;
 
-        //unsafe { gl::Finish() };
         unsafe { gl::MemoryBarrier(gl::BUFFER_UPDATE_BARRIER_BIT) };
 
         //let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
         //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
-        //std::hint::black_box(&hash_buffer_data);
 
         response_buffer.download(0, &mut response_buffer_data).unwrap();
 
@@ -282,9 +279,9 @@ impl Miner {
 
         match response_status {
             // RESPONSE_STATUS_NONE
-            0 => return Ok(None),
+            0 => Ok(None),
             // RESPONSE_STATUS_SUCCESS
-            1 => return Ok(Some(response_success_nonce)),
+            1 => Ok(Some(response_success_nonce)),
             // RESPONSE_STATUS_ERROR_CODE
             2 => panic!("compute shader returned error code 0x{:04x}: {}",
                         response_error_code,
@@ -295,13 +292,9 @@ impl Miner {
             _ => panic!("compute shader returned unknown response status 0x{:04x}", response_status),
         }
 
-        /*if true {
-            return Ok(None);
-        }
-
         //println!("hash_buffer: {}", hex::encode(&hash_buffer_data));
 
-        let mut hash_buffer_idx = 0usize;
+        /*let mut hash_buffer_idx = 0usize;
         let mut expected_block_header = block_header_bytes.clone();
         for nonce in 0u32..hash_count {
             if true {
@@ -828,6 +821,27 @@ mod test {
             assert!(bytes.len() <= 32, "0x{compact_target:08X} -> \"{}\" {bytes:?}", hex::encode_upper(&bytes));
         }
     }*/
+
+    #[test]
+    fn verify_cpu() {
+        let header = bench::test_block_header( bench::TEST_MINING_DIFFICULTY);
+
+        for nonce_count in [32u32] {
+            let nonce = Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
+            println!("calculated {} hashes -> nonce={:?}", nonce_count, nonce);
+        }
+    }
+
+    #[test]
+    fn verify_gpu() {
+        let header = bench::test_block_header( bench::TEST_MINING_DIFFICULTY);
+
+        let mut miner = Miner::new().unwrap();
+        for nonce_count in [32u32] {
+            let nonce = miner.generate_pow_block(&header, 0, nonce_count).unwrap();
+            println!("calculated {} hashes -> nonce={:?}", nonce_count, nonce);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -835,9 +849,9 @@ mod bench {
     use std::time::{Duration, Instant};
     use super::*;
 
-    const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
+    pub const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
 
-    fn test_block_header(difficulty: &[u8]) -> BlockHeader {
+    pub fn test_block_header(difficulty: &[u8]) -> BlockHeader {
         BlockHeader {
             version: 1337,
             bits: 10973,
