@@ -472,7 +472,7 @@ pub fn generate_pow_random_num() -> Vec<u8> {
 /// ### Arguments
 /// 
 /// * `nonce` - Nonce to increment
-pub fn get_nonce_increment(nonce: &[u8]) -> Vec<u8> {
+fn get_nonce_increment(nonce: &[u8]) -> Vec<u8> {
     // Ensure the input vector has exactly 4 bytes
     if nonce.len() != 4 {
         return vec![];
@@ -622,14 +622,33 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
-    header.nonce_and_mining_tx_hash.0 = vec![0; POW_NONCE_LEN];
+pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    use crate::opengl_miner::*;
+    const CPU_MINER: bool = true;
 
-    while !validate_pow_block(&header) {
-        header.nonce_and_mining_tx_hash.0 = get_nonce_increment(&header.nonce_and_mining_tx_hash.0);
-        info!("PoW nonce: {:?}", header.nonce_and_mining_tx_hash.0);
+    let prepared_header = PreparedBlockHeader::prepare(header)
+        .map_err(|msg| Box::new(StringError(msg.to_string())))?;
+
+    let result = if CPU_MINER {
+        Miner::generate_pow_block_cpu(&prepared_header, 0, u32::MAX)
+            .map_err(|msg| Box::new(StringError(msg.to_string())))?
+    } else {
+        let mut miner = Miner::new().map_err(Box::new)?;
+        miner.generate_pow_block_gpu(&prepared_header, 0, u32::MAX).map_err(Box::new)?
+    };
+
+    match result {
+        None => Ok(None),
+        Some(nonce) => {
+            // Verify that the found nonce is actually valid
+            let mut header_copy = header.clone();
+            header_copy.nonce_and_mining_tx_hash.0 = nonce.to_le_bytes().to_vec();
+            assert!(validate_pow_block(&header_copy),
+                    "generated PoW nonce {} isn't actually valid! block header: {:#?}",
+                    nonce, header);
+            Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
+        },
     }
-    header
 }
 
 /// Verify block is valid & consistent: Can be fully verified from PoW hash.

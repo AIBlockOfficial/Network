@@ -110,67 +110,9 @@ impl Miner {
         })
     }
 
-    fn find_block_header_nonce_location(block_header: &BlockHeader) -> (Vec<u8>, u32) {
-        assert_eq!(POW_NONCE_LEN, 4, "POW_NONCE_LEN has changed?!?");
-
-        let mut block_header = block_header.clone();
-
-        block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; POW_NONCE_LEN];
-        let serialized_00 = bincode::serialize(&block_header).unwrap();
-        block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; POW_NONCE_LEN];
-        let serialized_ff = bincode::serialize(&block_header).unwrap();
-
-        assert_ne!(serialized_00, serialized_ff,
-                   "changing the nonce didn't affect the serialized block header?!?");
-        assert_eq!(serialized_00.len(), serialized_ff.len(),
-                   "changing the nonce affected the block header's serialized length?!?");
-
-        // find the index at which the two headers differ
-        let nonce_offset = (0..serialized_00.len())
-            .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
-            .expect("the serialized block headers are not equal, but are equal at every index?!?");
-
-        assert_eq!(serialized_00.as_slice()[nonce_offset..nonce_offset + 4], [0x00u8; 4],
-                   "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
-        assert_eq!(serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], [0xFFu8; 4],
-                   "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
-
-        (serialized_00, nonce_offset.try_into().unwrap())
-    }
-
-    fn extract_difficulty_target(block_header: &BlockHeader) -> Result<Option<CompactTarget>, &'static str> {
-        if block_header.difficulty.is_empty() {
-            Ok(None)
-        } else {
-            match CompactTarget::try_from_slice(&block_header.difficulty) {
-                Some(target) => Ok(Some(target)),
-                None => Err("block header contains invalid difficulty"),
-            }
-        }
-    }
-
-    fn expand_target_to_bytes(compact_target: CompactTarget) -> Option<[u8; 32]> {
-        use rug::Integer;
-
-        let expanded_target = compact_target.expand_integer();
-
-        let byte_digits: Vec<u8> = expanded_target.to_digits(rug::integer::Order::MsfBe);
-        if byte_digits.len() > 32 {
-            // The target value is higher than the largest possible SHA3-256 hash.
-            None
-        } else {
-            let mut result = [0u8; 32];
-            result[32 - byte_digits.len()..].copy_from_slice(&byte_digits);
-
-            assert_eq!(expanded_target, Integer::from_digits(&result, rug::integer::Order::MsfBe));
-
-            Some(result)
-        }
-    }
-
     /// Tries to generate a Proof-of-Work for a block.
     pub fn generate_pow_block_cpu(
-        block_header: &BlockHeader,
+        prepared_block_header: &PreparedBlockHeader,
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, &'static str> {
@@ -178,23 +120,21 @@ impl Miner {
             return Ok(None);
         }
 
-        let (mut block_header_bytes, block_header_nonce_offset) =
-            Self::find_block_header_nonce_location(block_header);
-        let block_header_nonce_offset = block_header_nonce_offset as usize;
+        let difficulty_target = match &prepared_block_header.difficulty {
+            // The target value is higher than the largest possible SHA3-256 hash. Therefore,
+            // every hash will meet the required difficulty threshold, so we can just return
+            // an arbitrary nonce.
+            PreparedBlockDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
 
-        let difficulty_target = match Self::extract_difficulty_target(block_header)? {
-            None => None,
-            Some(compact_target) => match Self::expand_target_to_bytes(compact_target) {
-                // The target value is higher than the largest possible SHA3-256 hash. Therefore,
-                // every hash will meet the required difficulty threshold, so we can just return
-                // an arbitrary nonce.
-                None => return Ok(Some(first_nonce)),
-                Some(expanded_target) => Some(expanded_target),
-            },
+            PreparedBlockDifficulty::LeadingZeroBytes => None,
+            PreparedBlockDifficulty::TargetHash { target_hash } => Some(target_hash),
         };
 
+        let block_header_nonce_offset = prepared_block_header.header_nonce_offset;
+        let mut block_header_bytes = prepared_block_header.header_bytes.clone();
+
         for nonce in first_nonce..=first_nonce.saturating_add(nonce_count - 1) {
-            block_header_bytes.as_mut_slice()
+            block_header_bytes
                 [block_header_nonce_offset..block_header_nonce_offset + 4]
                 .copy_from_slice(&nonce.to_ne_bytes());
 
@@ -223,7 +163,7 @@ impl Miner {
     /// Tries to generate a Proof-of-Work for a block.
     pub fn generate_pow_block_gpu(
         &mut self,
-        block_header: &BlockHeader,
+        prepared_block_header: &PreparedBlockHeader,
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, GlError> {
@@ -231,9 +171,8 @@ impl Miner {
             return Ok(None);
         }
 
-        let (block_header_bytes, block_header_nonce_offset) =
-            Self::find_block_header_nonce_location(block_header);
-        let block_header_length: u32 = block_header_bytes.len().try_into().unwrap();
+        let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
+        let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
 
         let dispatch_count = nonce_count.div_ceil(self.program_work_group_size);
         //let hash_count = work_group_size * dispatch_count;
@@ -244,26 +183,26 @@ impl Miner {
         self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
         self.program.set_uniform_1ui(self.program_header_nonce_offset_uniform, block_header_nonce_offset)?;
 
-        // TODO: don't unwrap here
-        if let Some(compact_target) = Self::extract_difficulty_target(block_header).unwrap() {
-            if let Some(expanded_target_hash) = Self::expand_target_to_bytes(compact_target) {
+        match &prepared_block_header.difficulty {
+            // The target value is higher than the largest possible SHA3-256 hash. Therefore,
+            // every hash will meet the required difficulty threshold, so we can just return
+            // an arbitrary nonce.
+            PreparedBlockDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
+
+            PreparedBlockDifficulty::LeadingZeroBytes => {
+                // DIFFICULTY_FUNCTION_LEADING_ZEROES
+                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)?;
+                self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
+            },
+            PreparedBlockDifficulty::TargetHash { target_hash } => {
                 // DIFFICULTY_FUNCTION_COMPACT_TARGET
                 self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 2)?;
                 self.program.set_uniform_1uiv(self.program_compact_target_expanded_uniform,
-                                              &expanded_target_hash.map(|b| b as u32))?;
-            } else {
-                // The target value is higher than the largest possible SHA3-256 hash. Therefore,
-                // every hash will meet the required difficulty threshold, so we can just return
-                // an arbitrary nonce.
-                return Ok(Some(first_nonce))
-            }
-        } else {
-            // DIFFICULTY_FUNCTION_LEADING_ZEROES
-            self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)?;
-            self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
+                                              &target_hash.map(|b| b as u32))?;
+            },
         }
 
-        let block_header_buffer_data = block_header_bytes.iter()
+        let block_header_buffer_data = prepared_block_header.header_bytes.iter()
             .map(|b| (*b as u32).to_ne_bytes())
             .collect::<Vec<_>>()
             .concat();
@@ -313,6 +252,102 @@ impl Miner {
                         }),
             _ => panic!("compute shader returned unknown response status 0x{:04x}", response_status),
         }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct PreparedBlockHeader {
+    pub header_bytes: Box<[u8]>,
+    pub header_nonce_offset: usize,
+    pub difficulty: PreparedBlockDifficulty,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum PreparedBlockDifficulty {
+    /// Indicates that the bock header
+    LeadingZeroBytes,
+    TargetHashAlwaysPass,
+    TargetHash {
+        target_hash: [u8; 32],
+    },
+}
+
+fn find_block_header_nonce_location(block_header: &BlockHeader) -> (Box<[u8]>, usize) {
+    assert_eq!(POW_NONCE_LEN, 4, "POW_NONCE_LEN has changed?!?");
+
+    let mut block_header = block_header.clone();
+
+    block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; POW_NONCE_LEN];
+    let serialized_00 = bincode::serialize(&block_header).unwrap();
+    block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; POW_NONCE_LEN];
+    let serialized_ff = bincode::serialize(&block_header).unwrap();
+
+    assert_ne!(serialized_00, serialized_ff,
+               "changing the nonce didn't affect the serialized block header?!?");
+    assert_eq!(serialized_00.len(), serialized_ff.len(),
+               "changing the nonce affected the block header's serialized length?!?");
+
+    // find the index at which the two headers differ
+    let nonce_offset = (0..serialized_00.len())
+        .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
+        .expect("the serialized block headers are not equal, but are equal at every index?!?");
+
+    assert_eq!(serialized_00.as_slice()[nonce_offset..nonce_offset + 4], [0x00u8; 4],
+               "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
+    assert_eq!(serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], [0xFFu8; 4],
+               "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
+
+    (serialized_00.into_boxed_slice(), nonce_offset)
+}
+
+fn extract_target_difficulty(
+    difficulty: &[u8],
+) -> Result<PreparedBlockDifficulty, &'static str> {
+    if difficulty.is_empty() {
+        // There is no difficulty function enabled
+        return Ok(PreparedBlockDifficulty::LeadingZeroBytes);
+    }
+
+    // Decode the difficulty bytes into a CompactTarget and then expand that into a target
+    // hash threshold.
+    let compact_target = CompactTarget::try_from_slice(difficulty)
+        .ok_or("block header contains invalid difficulty")?;
+
+    match expand_compact_target_difficulty(compact_target) {
+        // The target value is higher than the largest possible SHA3-256 hash.
+        None => Ok(PreparedBlockDifficulty::TargetHashAlwaysPass),
+        Some(target_hash) => Ok(PreparedBlockDifficulty::TargetHash { target_hash }),
+    }
+}
+
+fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8; 32]> {
+    let expanded_target = compact_target.expand_integer();
+    let byte_digits: Vec<u8> = expanded_target.to_digits(rug::integer::Order::MsfBe);
+    if byte_digits.len() > 32 {
+        // The target value is higher than the largest possible SHA3-256 hash.
+        return None;
+    }
+
+    // Pad the target hash with leading zeroes to make it exactly 32 bytes long.
+    let mut result = [0u8; 32];
+    result[32 - byte_digits.len()..].copy_from_slice(&byte_digits);
+
+    assert_eq!(expanded_target, rug::Integer::from_digits(&result, rug::integer::Order::MsfBe));
+
+    Some(result)
+}
+
+impl PreparedBlockHeader {
+    pub fn prepare(block_header: &BlockHeader) -> Result<Self, &'static str> {
+        let (header_bytes, header_nonce_offset) = find_block_header_nonce_location(block_header);
+
+        let difficulty = extract_target_difficulty(&block_header.difficulty)?;
+
+        Ok(Self {
+            header_bytes,
+            header_nonce_offset,
+            difficulty,
+        })
     }
 }
 
@@ -954,9 +989,9 @@ mod test {
     }
 
     #[test]
-    fn test_expand_target_hash() {
+    fn test_expand_compact_target_difficulty() {
         fn test_hex(compact_target: u32, target_hash_hex: Option<&str>) {
-            let target_hash = Miner::expand_target_to_bytes(CompactTarget::from_array(compact_target.to_be_bytes()))
+            let target_hash = expand_compact_target_difficulty(CompactTarget::from_array(compact_target.to_be_bytes()))
                 .map(|h| hex::encode_upper(&h));
             assert_eq!(target_hash.as_ref().map(|s| s.as_str()), target_hash_hex,
                        "compact_target=0x{:08x}", compact_target)
@@ -980,8 +1015,8 @@ mod test {
 
     const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
 
-    fn test_block_header(difficulty: &[u8]) -> BlockHeader {
-        BlockHeader {
+    fn test_block_header(difficulty: &[u8]) -> PreparedBlockHeader {
+        PreparedBlockHeader::prepare(&BlockHeader {
             version: 1337,
             bits: 10973,
             nonce_and_mining_tx_hash: (vec![], "abcde".to_string()),
@@ -991,7 +1026,7 @@ mod test {
             seed_value: b"2983zuifsigezd".to_vec(),
             previous_hash: Some("jeff".to_string()),
             txs_merkle_root_and_hash: ("merkle_root".to_string(), "hash".to_string()),
-        }
+        }).unwrap()
     }
 
     #[test]
