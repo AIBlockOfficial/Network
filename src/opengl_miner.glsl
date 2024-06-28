@@ -214,8 +214,10 @@ void respond_error(uint error_code) {
 void main() {
     uint32_t nonce = u_firstNonce + gl_GlobalInvocationID.x;
 
-    //TODO: uncomment this eventually, but keep it disabled for now for test purposes
-    //if (b_response.success_nonce < nonce) return;
+    if (b_response.success_nonce < nonce) {
+        // If another thread has already successfully found a nonce lower than this thread, exit immediately.
+        return;
+    }
 
     // hash the block header with the nonce inserted in the correct location
     uint header_length = u_blockHeader_length;

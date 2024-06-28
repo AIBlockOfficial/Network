@@ -624,17 +624,34 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// * `header`   - The header for PoW
 pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     use crate::opengl_miner::*;
-    const CPU_MINER: bool = true;
 
     let prepared_header = PreparedBlockHeader::prepare(header)
         .map_err(|msg| Box::new(StringError(msg.to_string())))?;
 
-    let result = if CPU_MINER {
+    println!("generate_pow_for_block({header:?})");
+
+    // if there isn't a difficulty function, the PoW will be easy enough that the GPU miner won't
+    // really help much
+    let use_cpu_miner = header.difficulty.is_empty();
+
+    let result = if use_cpu_miner {
         Miner::generate_pow_block_cpu(&prepared_header, 0, u32::MAX)
             .map_err(|msg| Box::new(StringError(msg.to_string())))?
     } else {
+        // Doing this
+        const GPU_MINER_MAX_NONCES_AT_A_TIME: u32 = 1 << 20;
+
         let mut miner = Miner::new().map_err(Box::new)?;
-        miner.generate_pow_block_gpu(&prepared_header, 0, u32::MAX).map_err(Box::new)?
+        let mut result = None;
+        for first_nonce in (0..u32::MAX.div_ceil(GPU_MINER_MAX_NONCES_AT_A_TIME)).map(|i| i * GPU_MINER_MAX_NONCES_AT_A_TIME) {
+            //println!("GPU miner: testing nonces {first_nonce} to {}", first_nonce.saturating_add(GPU_MINER_MAX_NONCES_AT_A_TIME));
+            if let Some(nonce) = miner.generate_pow_block_gpu(&prepared_header, first_nonce, GPU_MINER_MAX_NONCES_AT_A_TIME).map_err(Box::new)? {
+                //println!("GPU miner: found valid nonce {nonce}");
+                result = Some(nonce);
+                break;
+            }
+        }
+        result
     };
 
     match result {

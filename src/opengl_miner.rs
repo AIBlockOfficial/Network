@@ -1,6 +1,7 @@
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::{error, fmt};
+use std::sync::{Mutex, MutexGuard};
 use gl::types::*;
 use glfw::{Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tw_chain::crypto::sha3_256;
@@ -14,6 +15,7 @@ use crate::opengl_miner::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntTy
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum CreateMinerError {
+    LockFailed,
     InitializeGlfw(glfw::InitError),
     CreateGlfwWindow,
     CompileShader(CompileShaderError),
@@ -24,6 +26,8 @@ pub enum CreateMinerError {
 impl fmt::Display for CreateMinerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::LockFailed =>
+                f.write_str("couldn't acquire global lock for using GLFW context"),
             Self::InitializeGlfw(cause) =>
                 write!(f, "Failed to initialize GLFW: {cause}"),
             Self::CreateGlfwWindow => f.write_str("Failed to create GLFW window"),
@@ -53,10 +57,17 @@ pub struct Miner {
     glfw_window: PWindow,
     glfw_events: GlfwReceiver<(f64, WindowEvent)>,
     glfw: Glfw,
+
+    glfw_mutex_guard: MutexGuard<'static, ()>,
 }
+
+static MINER_LOCK: Mutex<()> = Mutex::new(());
 
 impl Miner {
     pub fn new() -> Result<Self, CreateMinerError> {
+        let glfw_mutex_guard = MINER_LOCK.lock()
+            .map_err(|_| CreateMinerError::LockFailed)?;
+
         let mut glfw = glfw::init(glfw::fail_on_errors)
             .map_err(CreateMinerError::InitializeGlfw)?;
 
@@ -107,6 +118,7 @@ impl Miner {
             glfw_window: window,
             glfw_events: events,
             glfw,
+            glfw_mutex_guard,
         })
     }
 
