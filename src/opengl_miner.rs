@@ -1,9 +1,9 @@
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::{error, fmt};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
-use glfw::{Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
+use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tw_chain::crypto::sha3_256;
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
@@ -43,29 +43,54 @@ impl fmt::Display for CreateMinerError {
 
 impl error::Error for CreateMinerError {}
 
-pub struct Miner {
-    program: Program,
-    program_first_nonce_uniform: UniformLocation,
-    program_header_length_uniform: UniformLocation,
-    program_header_nonce_offset_uniform: UniformLocation,
-    program_difficulty_function_uniform: UniformLocation,
-    program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
-    program_compact_target_expanded_uniform: UniformLocation,
-    program_work_group_size: u32,
-    max_work_group_count: u32,
+struct GlfwContext<Ctx> {
+    mutex: Mutex<Ctx>,
 
     glfw_window: PWindow,
     glfw_events: GlfwReceiver<(f64, WindowEvent)>,
     glfw: Glfw,
-
     glfw_mutex_guard: MutexGuard<'static, ()>,
 }
 
-static MINER_LOCK: Mutex<()> = Mutex::new(());
+impl<Ctx> Drop for GlfwContext<Ctx> {
+    fn drop(&mut self) {
+        println!("Thread {} is destroying the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+    }
+}
 
-impl Miner {
-    pub fn new() -> Result<Self, CreateMinerError> {
-        let glfw_mutex_guard = MINER_LOCK.lock()
+pub struct GlfwContextGuard<'glfw, Ctx> {
+    mutex_guard: MutexGuard<'glfw, Ctx>,
+}
+
+impl<'glfw, Ctx> std::ops::Deref for GlfwContextGuard<'glfw, Ctx> {
+    type Target = Ctx;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.mutex_guard
+    }
+}
+
+impl<'glfw, Ctx> std::ops::DerefMut for GlfwContextGuard<'glfw, Ctx> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.mutex_guard
+    }
+}
+
+impl<'glfw, Ctx> Drop for GlfwContextGuard<'glfw, Ctx> {
+    fn drop(&mut self) {
+        // un-bind the context before releasing the context's mutex
+        println!("Thread {} is releasing the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        glfw::make_context_current(None);
+    }
+}
+
+static GLFW_MUTEX: Mutex<()> = Mutex::new(());
+
+impl<Ctx> GlfwContext<Ctx> {
+    fn new(f: impl FnOnce() -> Result<Ctx, CreateMinerError>) -> Result<Self, CreateMinerError> {
+        println!("Thread {} is creating the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+
+        let glfw_mutex_guard = GLFW_MUTEX.lock()
             .map_err(|_| CreateMinerError::LockFailed)?;
 
         let mut glfw = glfw::init(glfw::fail_on_errors)
@@ -84,6 +109,50 @@ impl Miner {
         let version = gl_wrapper::get_string(GetStringType::VERSION).unwrap();
         let glsl_version = gl_wrapper::get_string(GetStringType::SHADING_LANGUAGE_VERSION).unwrap();
         println!("Created OpenGL context:\n  Vendor: {vendor}\n  Renderer: {renderer}\n  Version: {version}\n  GLSL version: {glsl_version}");
+
+        let ctx = f()?;
+
+        glfw::make_context_current(None);
+
+        Ok(Self {
+            mutex: Mutex::new(ctx),
+            glfw_window: window,
+            glfw_events: events,
+            glfw,
+            glfw_mutex_guard,
+        })
+    }
+
+    fn make_current(&mut self) -> GlfwContextGuard<Ctx> {
+        let guard = self.mutex.lock().unwrap();
+        println!("Thread {} is acquiring the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        self.glfw_window.make_current();
+        GlfwContextGuard { mutex_guard: guard }
+    }
+}
+
+pub struct Miner {
+    program: Program,
+    program_first_nonce_uniform: UniformLocation,
+    program_header_length_uniform: UniformLocation,
+    program_header_nonce_offset_uniform: UniformLocation,
+    program_difficulty_function_uniform: UniformLocation,
+    program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
+    program_compact_target_expanded_uniform: UniformLocation,
+    program_work_group_size: u32,
+    max_work_group_count: u32,
+
+    glfw_context: GlfwContext<()>,
+}
+
+static mut GLOBAL_MINER: OnceLock<GlfwContext<Miner>> = OnceLock::new();
+
+impl Miner {
+    pub fn new() -> Result<Self, CreateMinerError> {
+        let mut glfw_context = GlfwContext::new(|| Ok(()))?;
+        let guard = glfw_context.make_current();
+
+        println!("compiling shader...");
 
         // compile and link the compute shader
         let shader = Shader::compile(
@@ -104,21 +173,27 @@ impl Miner {
         let max_work_group_count = gl_wrapper::get_int(GetIntIndexedType::MAX_COMPUTE_WORK_GROUP_COUNT, 0)
             .map_err(CreateMinerError::GlError)? as u32;
 
+        let program_first_nonce_uniform = program.uniform_location("u_firstNonce").unwrap();
+        let program_header_length_uniform = program.uniform_location("u_blockHeader_length").unwrap();
+        let program_header_nonce_offset_uniform = program.uniform_location("u_blockHeader_nonceOffset").unwrap();
+        let program_difficulty_function_uniform = program.uniform_location("u_difficultyFunction").unwrap();
+        let program_leading_zeroes_mining_difficulty_uniform = program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap();
+        let program_compact_target_expanded_uniform = program.uniform_location("u_compactTarget_expanded").unwrap();
+
+        drop(guard);
+
         Ok(Self {
-            program_first_nonce_uniform: program.uniform_location("u_firstNonce").unwrap(),
-            program_header_length_uniform: program.uniform_location("u_blockHeader_length").unwrap(),
-            program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
-            program_difficulty_function_uniform: program.uniform_location("u_difficultyFunction").unwrap(),
-            program_leading_zeroes_mining_difficulty_uniform: program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap(),
-            program_compact_target_expanded_uniform: program.uniform_location("u_compactTarget_expanded").unwrap(),
+            program_first_nonce_uniform,
+            program_header_length_uniform,
+            program_header_nonce_offset_uniform,
+            program_difficulty_function_uniform,
+            program_leading_zeroes_mining_difficulty_uniform,
+            program_compact_target_expanded_uniform,
             program_work_group_size: work_group_size_arr[0].try_into().unwrap(),
             max_work_group_count,
             program,
 
-            glfw_window: window,
-            glfw_events: events,
-            glfw,
-            glfw_mutex_guard,
+            glfw_context,
         })
     }
 
@@ -190,6 +265,8 @@ impl Miner {
         //let hash_count = work_group_size * dispatch_count;
         //let hash_buffer_capacity_int32s = hash_count * 32;
         //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
+
+        let guard = self.glfw_context.make_current();
 
         self.program.set_uniform_1ui(self.program_first_nonce_uniform, first_nonce)?;
         self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
