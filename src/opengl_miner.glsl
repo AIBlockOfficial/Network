@@ -122,66 +122,6 @@ void sha3_Update(inout sha3_context ctx, uint8_t byteIn) {
             keccakf(ctx.s);
         }
     }
-
-    // 0...7 -- how much is needed to have a word
-    /*uint old_tail = (8u - ctx.byteIndex) & 7u;
-
-    uint len = 1u; // The number of bytes being added
-
-    if(len < old_tail) {        // have no complete word or haven't started
-                                // the word yet
-        // endian-independent code follows:
-        ctx.saved |= (uint64_t(byteIn) << ((ctx.byteIndex++) * 8u));
-        return;
-    }
-
-    if (old_tail != 0) {              // will have one word to process
-        // endian-independent code follows:
-        len -= old_tail;
-        ctx.saved |= (uint64_t(byteIn) << ((ctx.byteIndex++) * 8u));
-
-        // now ready to add saved to the sponge
-        ctx.s[ctx.wordIndex] ^= ctx.saved;
-        ctx.byteIndex = 0u;
-        ctx.saved = 0ul;
-        if(++ctx.wordIndex == (SHA3_KECCAK_SPONGE_WORDS - ctx.capacityWords)) {
-            keccakf(ctx.s);
-            ctx.wordIndex = 0u;
-        }
-    }*/
-    // we're going to assume that we're done at this point
-
-    // now work in full words directly from input
-    //uint words = len / 8/*sizeof(uint64_t)*/;
-    //uint tail = len - words * 8/*sizeof(uint64_t)*/;
-
-    /*for(uint i = 0; i < words; i++, buf += sizeof(uint64_t)) {
-        const uint64_t t = (uint64_t) (buf[0]) |
-                ((uint64_t) (buf[1]) << 8 * 1) |
-                ((uint64_t) (buf[2]) << 8 * 2) |
-                ((uint64_t) (buf[3]) << 8 * 3) |
-                ((uint64_t) (buf[4]) << 8 * 4) |
-                ((uint64_t) (buf[5]) << 8 * 5) |
-                ((uint64_t) (buf[6]) << 8 * 6) |
-                ((uint64_t) (buf[7]) << 8 * 7);
-        ctx->u.s[ctx->wordIndex] ^= t;
-        if(++ctx->wordIndex ==
-                (SHA3_KECCAK_SPONGE_WORDS - SHA3_CW(ctx->capacityWords))) {
-            keccakf(ctx->u.s);
-            ctx->wordIndex = 0;
-        }
-    }
-
-    SHA3_TRACE("have %d bytes left to process, save them", (unsigned)tail);
-
-    // finally, save the partial word
-    SHA3_ASSERT(ctx->byteIndex == 0 && tail < 8);
-    while (tail--) {
-        SHA3_TRACE("Store byte %02x '%c'", *buf, *buf);
-        ctx->saved |= (uint64_t) (*(buf++)) << ((ctx->byteIndex++) * 8);
-    }
-    SHA3_ASSERT(ctx->byteIndex < 8);
-    SHA3_TRACE("Have saved=0x%016" PRIx64 " at the end", ctx->saved);*/
 }
 
 uint8_t[SHA3_256_BYTES] sha3_Finalize(inout sha3_context ctx) {

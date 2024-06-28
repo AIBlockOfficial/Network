@@ -1,24 +1,54 @@
 use std::convert::TryInto;
 use std::ffi::CStr;
-//use std::ops::Deref;
+use std::{error, fmt};
 use gl::types::*;
 use glfw::{Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tw_chain::crypto::sha3_256;
 use tw_chain::primitives::block::BlockHeader;
-use crate::asert::{CompactTarget, HeaderHash};
+use crate::asert::CompactTarget;
 use crate::constants::{MINING_DIFFICULTY, POW_NONCE_LEN};
-use crate::opengl_miner::gl_wrapper::{AddContext, GlError, ImmutableBuffer, IndexedBufferTarget, Program, Shader, ShaderType, UniformLocation};
+use crate::opengl_miner::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
+use crate::opengl_miner::gl_wrapper::{GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub enum CreateMinerError {
+    InitializeGlfw(glfw::InitError),
+    CreateGlfwWindow,
+    CompileShader(CompileShaderError),
+    LinkProgram(LinkProgramError),
+    GlError(GlError),
+}
+
+impl fmt::Display for CreateMinerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InitializeGlfw(cause) =>
+                write!(f, "Failed to initialize GLFW: {cause}"),
+            Self::CreateGlfwWindow => f.write_str("Failed to create GLFW window"),
+            Self::CompileShader(cause) =>
+                write!(f, "Failed to compile shader: {cause}"),
+            Self::LinkProgram(cause) =>
+                write!(f, "Failed to link shader program: {cause}"),
+            Self::GlError(cause) =>
+                write!(f, "An OpenGL error occurred while initializing the GPU miner: {cause}"),
+        }
+    }
+}
+
+impl error::Error for CreateMinerError {}
+
 pub struct Miner {
-    mine_program: Program,
-    mine_program_first_nonce_uniform: UniformLocation,
-    mine_program_header_length_uniform: UniformLocation,
-    mine_program_header_nonce_offset_uniform: UniformLocation,
-    mine_program_difficulty_function_uniform: UniformLocation,
-    mine_program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
-    mine_program_compact_target_expanded_uniform: UniformLocation,
+    program: Program,
+    program_first_nonce_uniform: UniformLocation,
+    program_header_length_uniform: UniformLocation,
+    program_header_nonce_offset_uniform: UniformLocation,
+    program_difficulty_function_uniform: UniformLocation,
+    program_leading_zeroes_mining_difficulty_uniform: UniformLocation,
+    program_compact_target_expanded_uniform: UniformLocation,
+    program_work_group_size: u32,
+    max_work_group_count: u32,
 
     glfw_window: PWindow,
     glfw_events: GlfwReceiver<(f64, WindowEvent)>,
@@ -26,43 +56,53 @@ pub struct Miner {
 }
 
 impl Miner {
-    pub fn new() -> Result<Self, &'static str> {
+    pub fn new() -> Result<Self, CreateMinerError> {
         let mut glfw = glfw::init(glfw::fail_on_errors)
-            .map_err(|_| "Failed to initialize GLFW library")?;
+            .map_err(CreateMinerError::InitializeGlfw)?;
 
         glfw.window_hint(WindowHint::ContextVersion(4, 5));
         glfw.window_hint(WindowHint::OpenGlProfile(OpenGlProfileHint::Core));
         glfw.window_hint(WindowHint::Visible(false));
         let (mut window, events) = glfw.create_window(256, 256, "AIBlock Miner", WindowMode::Windowed)
-            .ok_or("Failed to create GLFW window")?;
+            .ok_or(CreateMinerError::CreateGlfwWindow)?;
 
         gl::load_with(|name| window.get_proc_address(name) as *const _);
 
-        let vendor = unsafe { CStr::from_ptr(gl::GetString(gl::VENDOR) as *const std::ffi::c_char) }.to_str().unwrap();
-        let renderer = unsafe { CStr::from_ptr(gl::GetString(gl::RENDERER) as *const std::ffi::c_char) }.to_str().unwrap();
-        let version = unsafe { CStr::from_ptr(gl::GetString(gl::VERSION) as *const std::ffi::c_char) }.to_str().unwrap();
-        let glsl_version = unsafe { CStr::from_ptr(gl::GetString(gl::SHADING_LANGUAGE_VERSION) as *const std::ffi::c_char) }.to_str().unwrap();
+        let vendor = gl_wrapper::get_string(GetStringType::Vendor).unwrap();
+        let renderer = gl_wrapper::get_string(GetStringType::Renderer).unwrap();
+        let version = gl_wrapper::get_string(GetStringType::Version).unwrap();
+        let glsl_version = gl_wrapper::get_string(GetStringType::ShadingLanguageVersion).unwrap();
         println!("Created OpenGL context:\n  Vendor: {vendor}\n  Renderer: {renderer}\n  Version: {version}\n  GLSL version: {glsl_version}");
 
-        let source = std::fs::read_to_string("src/opengl_miner.glsl").expect("failed to read source");
-
+        // compile and link the compute shader
         let shader = Shader::compile(
             ShaderType::Compute,
             //&[include_str!("opengl_miner.glsl")],
-            &[ source.as_str() ]
-        ).expect("Shader compilation failed?!?");
+            &[ std::fs::read_to_string("src/opengl_miner.glsl").expect("failed to read source").as_str() ]
+        ).map_err(CreateMinerError::CompileShader)?;
 
         let program = Program::link(&[&shader])
-            .expect("Shader linking failed?!?");
+            .map_err(CreateMinerError::LinkProgram)?;
+
+        // figure out the compute shader's work group size
+        let work_group_size_arr = program.get_program_int::<3>(GetProgramIntType::ComputeWorkGroupSize)
+            .map_err(CreateMinerError::GlError)?;
+        assert_eq!(&work_group_size_arr[1..], &[1; 2],
+                   "work group size should be 1 on y and z axes...");
+
+        let max_work_group_count = gl_wrapper::get_int(GetIntIndexedType::MaxComputeWorkGroupCount, 0)
+            .map_err(CreateMinerError::GlError)? as u32;
 
         Ok(Self {
-            mine_program_first_nonce_uniform: program.uniform_location("u_firstNonce").unwrap(),
-            mine_program_header_length_uniform: program.uniform_location("u_blockHeader_length").unwrap(),
-            mine_program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
-            mine_program_difficulty_function_uniform: program.uniform_location("u_difficultyFunction").unwrap(),
-            mine_program_leading_zeroes_mining_difficulty_uniform: program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap(),
-            mine_program_compact_target_expanded_uniform: program.uniform_location("u_compactTarget_expanded").unwrap(),
-            mine_program: program,
+            program_first_nonce_uniform: program.uniform_location("u_firstNonce").unwrap(),
+            program_header_length_uniform: program.uniform_location("u_blockHeader_length").unwrap(),
+            program_header_nonce_offset_uniform: program.uniform_location("u_blockHeader_nonceOffset").unwrap(),
+            program_difficulty_function_uniform: program.uniform_location("u_difficultyFunction").unwrap(),
+            program_leading_zeroes_mining_difficulty_uniform: program.uniform_location("u_leadingZeroes_miningDifficulty").unwrap(),
+            program_compact_target_expanded_uniform: program.uniform_location("u_compactTarget_expanded").unwrap(),
+            program_work_group_size: work_group_size_arr[0].try_into().unwrap(),
+            max_work_group_count,
+            program,
 
             glfw_window: window,
             glfw_events: events,
@@ -109,9 +149,8 @@ impl Miner {
         }
     }
 
-    fn expand_target_hash(compact_target: CompactTarget) -> Option<[u8; 32]> {
+    fn expand_target_to_bytes(compact_target: CompactTarget) -> Option<[u8; 32]> {
         use rug::Integer;
-        const SHA3_256_BYTES: usize = 32;
 
         let expanded_target = compact_target.expand_integer();
 
@@ -127,46 +166,34 @@ impl Miner {
 
             Some(result)
         }
-
-        /*assert_eq!(expanded_target.clone() & ((Integer::ONE.clone() << (SHA3_256_BYTES * 8)) - 1),
-                   expanded_target.clone(), "expanded difficulty target has more than 256 significant bits!");
-
-        let expanded_target_bytes : [u8; SHA3_256_BYTES] = std::array::from_fn(|n| {
-            let shift = (SHA3_256_BYTES - 1 - n) * 8;
-            let extracted_byte : Integer = (expanded_target.clone() >> shift) & 0xFF;
-            extracted_byte.to_u8().unwrap()
-        });
-
-        assert_eq!(expanded_target,
-                   Integer::from_digits(&expanded_target_bytes, rug::integer::Order::MsfBe));
-
-        //assert_eq!(byte_digits.as_slice(), expanded_target_bytes.as_slice());
-
-        expanded_target_bytes*/
     }
 
     /// Tries to generate a Proof-of-Work for a block.
-    fn generate_pow_block_cpu(
+    pub fn generate_pow_block_cpu(
         block_header: &BlockHeader,
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, &'static str> {
+        if nonce_count == 0 {
+            return Ok(None);
+        }
+
         let (mut block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_nonce_offset = block_header_nonce_offset as usize;
 
-        let difficulty_target = Self::extract_difficulty_target(block_header)?
-            .as_ref()
-            .map(CompactTarget::expand);
+        let difficulty_target = match Self::extract_difficulty_target(block_header)? {
+            None => None,
+            Some(compact_target) => match Self::expand_target_to_bytes(compact_target) {
+                // The target value is higher than the largest possible SHA3-256 hash. Therefore,
+                // every hash will meet the required difficulty threshold, so we can just return
+                // an arbitrary nonce.
+                None => return Ok(Some(first_nonce)),
+                Some(expanded_target) => Some(expanded_target),
+            },
+        };
 
-        // we accumulate the result into an Option rather than immediately returning the first
-        // result so that we still have to compute every hash, allowing a fair hash rate comparison
-        // with the GPU implementation.
-        let mut result = None;
-
-        for nonce in 0..nonce_count {
-            let nonce = nonce.wrapping_add(first_nonce);
-
+        for nonce in first_nonce..=first_nonce.saturating_add(nonce_count - 1) {
             block_header_bytes.as_mut_slice()
                 [block_header_nonce_offset..block_header_nonce_offset + 4]
                 .copy_from_slice(&nonce.to_ne_bytes());
@@ -178,56 +205,52 @@ impl Miner {
                     // There isn't a difficulty function, check if the first MINING_DIFFICULTY bytes
                     // of the hash are 0
                     let hash_prefix = hash.first_chunk::<MINING_DIFFICULTY>().unwrap();
-                    if hash_prefix == &[0u8; MINING_DIFFICULTY] && result.is_none() {
-                        result = Some(nonce);
+                    if hash_prefix == &[0u8; MINING_DIFFICULTY] {
+                        return Ok(Some(nonce));
                     }
                 },
                 Some(target) => {
-                    if HeaderHash::from(hash).is_below_target(target) && result.is_none() {
-                        result = Some(nonce);
+                    if hash.as_slice() <= target.as_slice() {
+                        return Ok(Some(nonce));
                     }
                 },
             }
-
-            std::hint::black_box(hash);
         }
 
-        Ok(result)
+        Ok(None)
     }
 
     /// Tries to generate a Proof-of-Work for a block.
-    #[allow(non_snake_case)]
-    fn generate_pow_block(
+    pub fn generate_pow_block_gpu(
         &mut self,
         block_header: &BlockHeader,
         first_nonce: u32,
         nonce_count: u32,
     ) -> Result<Option<u32>, GlError> {
+        if nonce_count == 0 {
+            return Ok(None);
+        }
+
         let (block_header_bytes, block_header_nonce_offset) =
             Self::find_block_header_nonce_location(block_header);
         let block_header_length: u32 = block_header_bytes.len().try_into().unwrap();
 
-        let mut work_group_size_arr = [0 as GLint; 3];
-        unsafe { gl::GetProgramiv(self.mine_program.id, gl::COMPUTE_WORK_GROUP_SIZE, work_group_size_arr.as_mut_ptr()) };
-        GlError::check_msg("glGetProgramiv(COMPUTE_WORK_GROUP_SIZE)")?;
-        let work_group_size = work_group_size_arr.iter().cloned().reduce(<GLint as std::ops::Mul>::mul).unwrap() as u32;
-
-        let dispatch_count = nonce_count.div_ceil(work_group_size);
+        let dispatch_count = nonce_count.div_ceil(self.program_work_group_size);
         //let hash_count = work_group_size * dispatch_count;
         //let hash_buffer_capacity_int32s = hash_count * 32;
         //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
 
-        self.mine_program.set_uniform_1ui(self.mine_program_first_nonce_uniform, first_nonce)?;
-        self.mine_program.set_uniform_1ui(self.mine_program_header_length_uniform, block_header_length)?;
-        self.mine_program.set_uniform_1ui(self.mine_program_header_nonce_offset_uniform, block_header_nonce_offset)?;
+        self.program.set_uniform_1ui(self.program_first_nonce_uniform, first_nonce)?;
+        self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
+        self.program.set_uniform_1ui(self.program_header_nonce_offset_uniform, block_header_nonce_offset)?;
 
         // TODO: don't unwrap here
         if let Some(compact_target) = Self::extract_difficulty_target(block_header).unwrap() {
-            if let Some(expanded_target_hash) = Self::expand_target_hash(compact_target) {
+            if let Some(expanded_target_hash) = Self::expand_target_to_bytes(compact_target) {
                 // DIFFICULTY_FUNCTION_COMPACT_TARGET
-                self.mine_program.set_uniform_1ui(self.mine_program_difficulty_function_uniform, 2)?;
-                self.mine_program.set_uniform_1uiv(self.mine_program_compact_target_expanded_uniform,
-                                                   &expanded_target_hash.map(|b| b as u32))?;
+                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 2)?;
+                self.program.set_uniform_1uiv(self.program_compact_target_expanded_uniform,
+                                              &expanded_target_hash.map(|b| b as u32))?;
             } else {
                 // The target value is higher than the largest possible SHA3-256 hash. Therefore,
                 // every hash will meet the required difficulty threshold, so we can just return
@@ -236,8 +259,8 @@ impl Miner {
             }
         } else {
             // DIFFICULTY_FUNCTION_LEADING_ZEROES
-            self.mine_program.set_uniform_1ui(self.mine_program_difficulty_function_uniform, 1)?;
-            self.mine_program.set_uniform_1ui(self.mine_program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
+            self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)?;
+            self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
         }
 
         let block_header_buffer_data = block_header_bytes.iter()
@@ -261,12 +284,12 @@ impl Miner {
         response_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 2).unwrap();
 
         //hash_buffer.invalidate().unwrap();
-        self.mine_program.bind().unwrap();
+        self.program.bind().unwrap();
 
         unsafe { gl::DispatchCompute(dispatch_count, 1, 1) };
         GlError::check_msg("glDispatchCompute").add_msg("Dispatch miner")?;
 
-        unsafe { gl::MemoryBarrier(gl::BUFFER_UPDATE_BARRIER_BIT) };
+        gl_wrapper::memory_barrier(&[ MemoryBarrierBit::BufferUpdate ])?;
 
         //let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
         //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
@@ -291,51 +314,14 @@ impl Miner {
                         }),
             _ => panic!("compute shader returned unknown response status 0x{:04x}", response_status),
         }
-
-        //println!("hash_buffer: {}", hex::encode(&hash_buffer_data));
-
-        /*let mut hash_buffer_idx = 0usize;
-        let mut expected_block_header = block_header_bytes.clone();
-        for nonce in 0u32..hash_count {
-            if true {
-                expected_block_header.as_mut_slice()
-                    [(block_header_nonce_offset as usize)..((block_header_nonce_offset + 4) as usize)]
-                    .copy_from_slice(&nonce.to_ne_bytes());
-            } else if true {
-                expected_block_header[block_header_nonce_offset as usize] = nonce as u8;
-            }
-
-            let expected_hash : [u8; 32] = sha3_256::digest(&expected_block_header).try_into().unwrap();
-
-            let mut constructed_hash = [0u8; 32];
-            for i in 0..32 {
-                let byte_u32 = u32::from_ne_bytes(*hash_buffer_data.as_slice()[hash_buffer_idx..].first_chunk::<4>().unwrap());
-                assert!(byte_u32 < 256, "{}", byte_u32);
-
-                constructed_hash[i] = byte_u32.try_into().unwrap();
-
-                hash_buffer_idx += 4;
-            }
-
-            // incrementing counter
-            //let expected_hash : [u8; 32] = std::array::from_fn(|n| (nonce as u8).wrapping_add(n as u8));
-
-            //println!("nonce {nonce} => expected hash=\"{}\", gpu hash=\"{}\"", hex::encode(&expected_hash), hex::encode(&constructed_hash));
-            assert_eq!(expected_hash, constructed_hash, "block_header_length={block_header_length}, nonce={nonce}");
-        }
-
-        Ok(None)*/
     }
 }
 
-mod gl_wrapper {
+pub mod gl_error {
     use std::{error, fmt};
-    use std::convert::TryInto;
-    use std::ffi::CString;
-    use std::ptr::null;
     use super::*;
 
-    pub trait AddContext {
+    pub(super) trait AddContext {
         fn add_msg(self, message: &'static str) -> Self;
     }
 
@@ -415,17 +401,6 @@ mod gl_wrapper {
         }
     }
 
-    /// An OpenGL shader object
-    pub struct Shader {
-        pub id: GLuint,
-    }
-
-    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-    #[repr(u32)]
-    pub enum ShaderType {
-        Compute = gl::COMPUTE_SHADER,
-    }
-
     /// An error which can occur while compiling an OpenGL shader
     #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     pub enum CompileShaderError {
@@ -457,6 +432,101 @@ mod gl_wrapper {
                 _ => None,
             }
         }
+    }
+
+    /// An error which can occur while linking an OpenGL program
+    #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    pub enum LinkProgramError {
+        OpenGlError(GlError),
+        LinkFailed {
+            info_log: Box<str>,
+        },
+    }
+
+    impl fmt::Display for LinkProgramError {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                Self::OpenGlError(cause) =>
+                    write!(f, "OpenGL error occurred while linking an OpenGL shader: {cause}"),
+                Self::LinkFailed { info_log } =>
+                    write!(f, "Failed to link an OpenGL shader program: {info_log}"),
+            }
+        }
+    }
+
+    impl error::Error for LinkProgramError {
+        fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+            match self {
+                Self::OpenGlError(cause) => Some(&*cause),
+                _ => None,
+            }
+        }
+    }
+}
+
+mod gl_wrapper {
+    use std::convert::TryInto;
+    use std::ffi::CString;
+    use std::ptr::null;
+    use gl_error::*;
+    use super::*;
+
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
+    pub enum GetStringType {
+        Vendor = gl::VENDOR,
+        Renderer = gl::RENDERER,
+        Version = gl::VERSION,
+        ShadingLanguageVersion = gl::SHADING_LANGUAGE_VERSION,
+    }
+
+    /// Wrapper around `glGetString`
+    pub fn get_string(t: GetStringType) -> Result<&'static str, GlError> {
+        let cptr = unsafe { gl::GetString(t as GLenum) };
+        GlError::check_msg("glGetString")?;
+        let cstr = unsafe { CStr::from_ptr(cptr as *const std::ffi::c_char) };
+        Ok(cstr.to_str().unwrap())
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
+    pub enum GetIntIndexedType {
+        MaxComputeWorkGroupCount = gl::MAX_COMPUTE_WORK_GROUP_COUNT,
+    }
+
+    /// Wrapper around `glGetIntegeri_v`
+    pub fn get_int(t: GetIntIndexedType, index: GLuint) -> Result<i32, GlError> {
+        let mut value = 0;
+        unsafe { gl::GetIntegeri_v(t as GLenum, index, &mut value) };
+        GlError::check_msg("glGetIntegeri_v")?;
+        Ok(value)
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
+    pub enum MemoryBarrierBit {
+        BufferUpdate = gl::BUFFER_UPDATE_BARRIER_BIT,
+    }
+
+    /// Wrapper around `glMemoryBarrier`
+    pub fn memory_barrier(bits: &[MemoryBarrierBit]) -> Result<(), GlError> {
+        let mask = bits.iter()
+            .map(|bit| *bit as GLenum)
+            .reduce(<GLenum as std::ops::BitOr>::bitor)
+            .unwrap_or(0);
+        unsafe { gl::MemoryBarrier(mask) };
+        GlError::check_msg("glMemoryBarrier")
+    }
+
+    /// An OpenGL shader object
+    pub struct Shader {
+        pub id: GLuint,
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
+    pub enum ShaderType {
+        Compute = gl::COMPUTE_SHADER,
     }
 
     impl Shader {
@@ -525,6 +595,20 @@ mod gl_wrapper {
         }
     }
 
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
+    pub enum GetProgramIntType {
+        ComputeWorkGroupSize = gl::COMPUTE_WORK_GROUP_SIZE,
+    }
+
+    impl GetProgramIntType {
+        const fn element_count(&self) -> usize {
+            match self {
+                Self::ComputeWorkGroupSize => 3,
+            }
+        }
+    }
+
     /// The location of an OpenGL program uniform
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     pub struct UniformLocation {
@@ -534,35 +618,6 @@ mod gl_wrapper {
     /// An OpenGL program object
     pub struct Program {
         pub id: GLuint,
-    }
-
-    /// An error which can occur while linking an OpenGL program
-    #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-    pub enum LinkProgramError {
-        OpenGlError(GlError),
-        LinkFailed {
-            info_log: Box<str>,
-        },
-    }
-
-    impl fmt::Display for LinkProgramError {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            match self {
-                Self::OpenGlError(cause) =>
-                    write!(f, "OpenGL error occurred while linking an OpenGL shader: {cause}"),
-                Self::LinkFailed { info_log } =>
-                    write!(f, "Failed to link an OpenGL shader program: {info_log}"),
-            }
-        }
-    }
-
-    impl error::Error for LinkProgramError {
-        fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-            match self {
-                Self::OpenGlError(cause) => Some(&*cause),
-                _ => None,
-            }
-        }
     }
 
     impl Program {
@@ -629,6 +684,14 @@ mod gl_wrapper {
         pub fn bind(&self) -> Result<(), GlError> {
             unsafe { gl::UseProgram(self.id) };
             GlError::check_msg("glUseProgram")
+        }
+
+        pub fn get_program_int<const N: usize>(&self, t: GetProgramIntType) -> Result<[i32; N], GlError> {
+            assert_eq!(N, t.element_count(), "{:?} returns {} elements, not {}", t, t.element_count(), N);
+            let mut res = [0 as GLint; N];
+            unsafe { gl::GetProgramiv(self.id, t as GLenum, res.as_mut_ptr()) };
+            GlError::check_msg("glGetProgramiv")?;
+            Ok(res)
         }
 
         pub fn uniform_location(&self, uniform_name: &'static str) -> Result<UniformLocation, GlError> {
@@ -784,14 +847,12 @@ mod test {
         test(b"01234567890abcde01234567890abcde", b"01234567890abcde01234567890abcde", Equal);
         test(b"01234567890abcde01234567890abcde", b"91234567890abcde01234567890abcde", Less);
         test(b"01234567890abcde01234567890abcde", b"01234567890abcde91234567890abcde", Less);
-
-        //test();
     }
 
     #[test]
     fn test_expand_target_hash() {
         fn test_hex(compact_target: u32, target_hash_hex: Option<&str>) {
-            let target_hash = Miner::expand_target_hash(CompactTarget::from_array(compact_target.to_be_bytes()))
+            let target_hash = Miner::expand_target_to_bytes(CompactTarget::from_array(compact_target.to_be_bytes()))
                 .map(|h| hex::encode_upper(&h));
             assert_eq!(target_hash.as_ref().map(|s| s.as_str()), target_hash_hex,
                        "compact_target=0x{:08x}", compact_target)
@@ -813,45 +874,9 @@ mod test {
         test_hex(0xFFFFFFFF, None);
     }
 
-    /*#[test]
-    fn test_verify_target_hash() {
-        for compact_target in (0..=u32::MAX).rev() {
-            let integer = CompactTarget::from_array(compact_target.to_be_bytes()).expand_integer();
-            let bytes : Vec<u8> = integer.to_digits(rug::integer::Order::MsfBe);
-            assert!(bytes.len() <= 32, "0x{compact_target:08X} -> \"{}\" {bytes:?}", hex::encode_upper(&bytes));
-        }
-    }*/
+    const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
 
-    #[test]
-    fn verify_cpu() {
-        let header = bench::test_block_header( bench::TEST_MINING_DIFFICULTY);
-
-        for nonce_count in [32u32] {
-            let nonce = Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
-            println!("calculated {} hashes -> nonce={:?}", nonce_count, nonce);
-        }
-    }
-
-    #[test]
-    fn verify_gpu() {
-        let header = bench::test_block_header( bench::TEST_MINING_DIFFICULTY);
-
-        let mut miner = Miner::new().unwrap();
-        for nonce_count in [32u32] {
-            let nonce = miner.generate_pow_block(&header, 0, nonce_count).unwrap();
-            println!("calculated {} hashes -> nonce={:?}", nonce_count, nonce);
-        }
-    }
-}
-
-#[cfg(test)]
-mod bench {
-    use std::time::{Duration, Instant};
-    use super::*;
-
-    pub const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
-
-    pub fn test_block_header(difficulty: &[u8]) -> BlockHeader {
+    fn test_block_header(difficulty: &[u8]) -> BlockHeader {
         BlockHeader {
             version: 1337,
             bits: 10973,
@@ -865,62 +890,27 @@ mod bench {
         }
     }
 
-    fn fmt_per_second(qty: f64, elapsed: Duration) -> String {
-        let qty_per_second = qty / elapsed.as_secs_f64();
+    #[test]
+    fn verify_cpu() {
+        let header = test_block_header(TEST_MINING_DIFFICULTY);
+        assert_eq!(Miner::generate_pow_block_cpu(&header, 0, 1024),
+                   Ok(Some(28)));
 
-        let (mut divisor, mut prefix) = (1f64, "");
-        for (next_divisor, next_prefix) in [
-            (1000f64, "k"),
-            (1000000f64, "M"),
-            (1000000000f64, "G"),
-        ] {
-            if qty_per_second > next_divisor {
-                (divisor, prefix) = (next_divisor, next_prefix);
-            }
-        }
-        format!("{:.2}{}", qty_per_second / divisor, prefix)
-    }
-
-    fn test_cpu(difficulty: &[u8]) {
-        let header = test_block_header(difficulty);
-
-        for nonce_count in (0..16).map(|i| 1u32 << i) {
-            let start_time = Instant::now();
-            let nonce = Miner::generate_pow_block_cpu(&header, 0, nonce_count).unwrap();
-            let elapsed = start_time.elapsed();
-            println!("calculated {} hashes in {:?} ({}H/s) -> nonce={:?}", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed), nonce);
-        }
+        let header = test_block_header(&[]);
+        assert_eq!(Miner::generate_pow_block_cpu(&header, 0, 1024),
+                   Ok(Some(455)));
     }
 
     #[test]
-    fn test_cpu_nodiff() {
-        test_cpu(&[]);
-    }
-
-    #[test]
-    fn test_cpu_diff() {
-        test_cpu(TEST_MINING_DIFFICULTY);
-    }
-
-    fn test_gpu(difficulty: &[u8]) {
-        let header = test_block_header(difficulty);
-
+    fn verify_gpu() {
         let mut miner = Miner::new().unwrap();
-        for nonce_count in (0..27).map(|i| 1u32 << i) {
-            let start_time = Instant::now();
-            let nonce = miner.generate_pow_block(&header, 0, nonce_count).unwrap();
-            let elapsed = start_time.elapsed();
-            println!("calculated {} hashes in {:?} ({}H/s) -> nonce={:?}", nonce_count, elapsed, fmt_per_second(nonce_count as f64, elapsed), nonce);
-        }
-    }
 
-    #[test]
-    fn test_gpu_nodiff() {
-        test_gpu(&[]);
-    }
+        let header = test_block_header(TEST_MINING_DIFFICULTY);
+        assert_eq!(miner.generate_pow_block_gpu(&header, 0, 1024),
+                   Ok(Some(28)));
 
-    #[test]
-    fn test_gpu_diff() {
-        test_gpu(TEST_MINING_DIFFICULTY);
+        let header = test_block_header(&[]);
+        assert_eq!(miner.generate_pow_block_gpu(&header, 0, 1024),
+                   Ok(Some(455)));
     }
 }
