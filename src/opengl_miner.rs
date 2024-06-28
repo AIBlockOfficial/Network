@@ -8,7 +8,7 @@ use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
 use crate::constants::{MINING_DIFFICULTY, POW_NONCE_LEN};
 use crate::opengl_miner::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
-use crate::opengl_miner::gl_wrapper::{GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
+use crate::opengl_miner::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
@@ -68,10 +68,10 @@ impl Miner {
 
         gl::load_with(|name| window.get_proc_address(name) as *const _);
 
-        let vendor = gl_wrapper::get_string(GetStringType::Vendor).unwrap();
-        let renderer = gl_wrapper::get_string(GetStringType::Renderer).unwrap();
-        let version = gl_wrapper::get_string(GetStringType::Version).unwrap();
-        let glsl_version = gl_wrapper::get_string(GetStringType::ShadingLanguageVersion).unwrap();
+        let vendor = gl_wrapper::get_string(GetStringType::VENDOR).unwrap();
+        let renderer = gl_wrapper::get_string(GetStringType::RENDERER).unwrap();
+        let version = gl_wrapper::get_string(GetStringType::VERSION).unwrap();
+        let glsl_version = gl_wrapper::get_string(GetStringType::SHADING_LANGUAGE_VERSION).unwrap();
         println!("Created OpenGL context:\n  Vendor: {vendor}\n  Renderer: {renderer}\n  Version: {version}\n  GLSL version: {glsl_version}");
 
         // compile and link the compute shader
@@ -90,7 +90,7 @@ impl Miner {
         assert_eq!(&work_group_size_arr[1..], &[1; 2],
                    "work group size should be 1 on y and z axes...");
 
-        let max_work_group_count = gl_wrapper::get_int(GetIntIndexedType::MaxComputeWorkGroupCount, 0)
+        let max_work_group_count = gl_wrapper::get_int(GetIntIndexedType::MAX_COMPUTE_WORK_GROUP_COUNT, 0)
             .map_err(CreateMinerError::GlError)? as u32;
 
         Ok(Self {
@@ -268,7 +268,7 @@ impl Miner {
             .collect::<Vec<_>>()
             .concat();
         let block_header_buffer = ImmutableBuffer::new_initialized(&block_header_buffer_data, 0)
-            .add_msg("BlockHeader buffer")?;
+            .add_context("BlockHeader buffer")?;
 
         //let mut hash_buffer = ImmutableBuffer::new_uninitialized(hash_buffer_capacity_bytes, 0)
         //    .add_msg("HashOutput buffer")?;
@@ -277,7 +277,7 @@ impl Miner {
         let response_buffer_data = [ 0u32, u32::MAX, 0u32 ];
         let mut response_buffer_data : [u8; RESPONSE_BUFFER_CAPACITY] = unsafe { std::mem::transmute(response_buffer_data.map(u32::to_ne_bytes)) };
         let response_buffer = ImmutableBuffer::new_initialized(&response_buffer_data, 0)
-            .add_msg("Response buffer")?;
+            .add_context("Response buffer")?;
 
         block_header_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 0).unwrap();
         //hash_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 1).unwrap();
@@ -286,15 +286,14 @@ impl Miner {
         //hash_buffer.invalidate().unwrap();
         self.program.bind().unwrap();
 
-        unsafe { gl::DispatchCompute(dispatch_count, 1, 1) };
-        GlError::check_msg("glDispatchCompute").add_msg("Dispatch miner")?;
+        gl_wrapper::dispatch_compute(dispatch_count, 1, 1)?;
 
         gl_wrapper::memory_barrier(&[ MemoryBarrierBit::BufferUpdate ])?;
 
         //let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
         //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
 
-        response_buffer.download(0, &mut response_buffer_data).unwrap();
+        response_buffer.download_sub_data(0, &mut response_buffer_data).unwrap();
 
         let response_status = u32::from_ne_bytes(*response_buffer_data[0..].first_chunk().unwrap());
         let response_success_nonce = u32::from_ne_bytes(*response_buffer_data[4..].first_chunk().unwrap());
@@ -321,13 +320,39 @@ pub mod gl_error {
     use std::{error, fmt};
     use super::*;
 
+    pub(super) trait ErrorContext: Sized {
+        fn into_string(self) -> String;
+
+        fn into_boxed_str(self) -> Box<str> {
+            self.into_string().into_boxed_str()
+        }
+    }
+
+    impl<'a> ErrorContext for &'a str {
+        fn into_string(self) -> String {
+            self.into()
+        }
+    }
+
+    impl<'a> ErrorContext for fmt::Arguments<'a> {
+        fn into_string(self) -> String {
+            fmt::format(self)
+        }
+    }
+
+    impl<F: FnOnce() -> String> ErrorContext for F {
+        fn into_string(self) -> String {
+            self()
+        }
+    }
+
     pub(super) trait AddContext {
-        fn add_msg(self, message: &'static str) -> Self;
+        fn add_context(self, message: impl ErrorContext) -> Self;
     }
 
     impl<OK, ERR: AddContext> AddContext for Result<OK, ERR> {
-        fn add_msg(self, message: &'static str) -> Self {
-            self.map_err(|err| err.add_msg(message))
+        fn add_context(self, message: impl ErrorContext) -> Self {
+            self.map_err(|err| err.add_context(message))
         }
     }
 
@@ -344,7 +369,7 @@ pub mod gl_error {
         Unknown(GLenum),
         WrappedWithMessage {
             cause: Box<GlError>,
-            message: Box<str>,
+            message: String,
         },
     }
 
@@ -374,14 +399,14 @@ pub mod gl_error {
     }
 
     impl AddContext for GlError {
-        fn add_msg(self, message: &'static str) -> Self {
-            Self::WrappedWithMessage { cause: Box::new(self), message: message.into() }
+        fn add_context(self, message: impl ErrorContext) -> Self {
+            Self::WrappedWithMessage { cause: Box::new(self), message: message.into_string() }
         }
     }
 
     impl GlError {
         /// Checks the OpenGL context for errors
-        pub fn check() -> Result<(), Self> {
+        pub(super) fn check() -> Result<(), Self> {
             match unsafe { gl::GetError() } {
                 gl::NO_ERROR => Ok(()),
                 gl::INVALID_ENUM => Err(Self::InvalidEnum),
@@ -396,8 +421,8 @@ pub mod gl_error {
         }
 
         /// Checks the OpenGL context for errors
-        pub fn check_msg(message: &'static str) -> Result<(), Self> {
-            Self::check().add_msg(message)
+        pub(super) fn check_msg(message: impl ErrorContext) -> Result<(), Self> {
+            Self::check().add_context(message)
         }
     }
 
@@ -464,6 +489,7 @@ pub mod gl_error {
     }
 }
 
+#[allow(non_camel_case_types)]
 mod gl_wrapper {
     use std::convert::TryInto;
     use std::ffi::CString;
@@ -474,16 +500,16 @@ mod gl_wrapper {
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     #[repr(u32)]
     pub enum GetStringType {
-        Vendor = gl::VENDOR,
-        Renderer = gl::RENDERER,
-        Version = gl::VERSION,
-        ShadingLanguageVersion = gl::SHADING_LANGUAGE_VERSION,
+        VENDOR = gl::VENDOR,
+        RENDERER = gl::RENDERER,
+        VERSION = gl::VERSION,
+        SHADING_LANGUAGE_VERSION = gl::SHADING_LANGUAGE_VERSION,
     }
 
     /// Wrapper around `glGetString`
     pub fn get_string(t: GetStringType) -> Result<&'static str, GlError> {
         let cptr = unsafe { gl::GetString(t as GLenum) };
-        GlError::check_msg("glGetString")?;
+        GlError::check_msg(format_args!("glGetString(GL_{t:?})"))?;
         let cstr = unsafe { CStr::from_ptr(cptr as *const std::ffi::c_char) };
         Ok(cstr.to_str().unwrap())
     }
@@ -491,14 +517,14 @@ mod gl_wrapper {
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     #[repr(u32)]
     pub enum GetIntIndexedType {
-        MaxComputeWorkGroupCount = gl::MAX_COMPUTE_WORK_GROUP_COUNT,
+        MAX_COMPUTE_WORK_GROUP_COUNT = gl::MAX_COMPUTE_WORK_GROUP_COUNT,
     }
 
     /// Wrapper around `glGetIntegeri_v`
     pub fn get_int(t: GetIntIndexedType, index: GLuint) -> Result<i32, GlError> {
         let mut value = 0;
         unsafe { gl::GetIntegeri_v(t as GLenum, index, &mut value) };
-        GlError::check_msg("glGetIntegeri_v")?;
+        GlError::check_msg(format_args!("glGetIntegeri_v(GL_{t:?}, {index})"))?;
         Ok(value)
     }
 
@@ -515,7 +541,17 @@ mod gl_wrapper {
             .reduce(<GLenum as std::ops::BitOr>::bitor)
             .unwrap_or(0);
         unsafe { gl::MemoryBarrier(mask) };
-        GlError::check_msg("glMemoryBarrier")
+        GlError::check_msg(format_args!("glMemoryBarrier({bits:?}) -> glMemoryBarrier({mask:#08x})"))
+    }
+
+    /// Wrapper around `glDispatchCompute`
+    pub fn dispatch_compute(
+        num_groups_x: u32,
+        num_groups_y: u32,
+        num_groups_z: u32,
+    ) -> Result<(), GlError> {
+        unsafe { gl::DispatchCompute(num_groups_x, num_groups_y, num_groups_z) };
+        GlError::check_msg(format_args!("glDispatchCompute({num_groups_x}, {num_groups_y}, {num_groups_z})"))
     }
 
     /// An OpenGL shader object
@@ -613,6 +649,7 @@ mod gl_wrapper {
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     pub struct UniformLocation {
         location: GLint,
+        name: &'static str,
     }
 
     /// An OpenGL program object
@@ -690,15 +727,15 @@ mod gl_wrapper {
             assert_eq!(N, t.element_count(), "{:?} returns {} elements, not {}", t, t.element_count(), N);
             let mut res = [0 as GLint; N];
             unsafe { gl::GetProgramiv(self.id, t as GLenum, res.as_mut_ptr()) };
-            GlError::check_msg("glGetProgramiv")?;
+            GlError::check_msg(format_args!("glGetProgramiv({}, {t:?})", self.id))?;
             Ok(res)
         }
 
         pub fn uniform_location(&self, uniform_name: &'static str) -> Result<UniformLocation, GlError> {
             let uniform_name_cstr = CString::new(uniform_name).expect(uniform_name);
             let location = unsafe { gl::GetUniformLocation(self.id, uniform_name_cstr.as_ptr()) };
-            GlError::check_msg("glGetUniformLocation").add_msg(uniform_name)?;
-            Ok(UniformLocation { location })
+            GlError::check_msg(format_args!("glGetUniformLocation({}, \"{uniform_name}\")", self.id))?;
+            Ok(UniformLocation { location, name: uniform_name })
         }
 
         pub fn set_uniform_1i(
@@ -706,7 +743,7 @@ mod gl_wrapper {
             value: i32,
         ) -> Result<(), GlError> {
             unsafe { gl::ProgramUniform1i(self.id, location.location, value) };
-            GlError::check_msg("glProgramUniform1i")
+            GlError::check_msg(format_args!("glProgramUniform1i({}, {location:?})", self.id))
         }
 
         pub fn set_uniform_1ui(
@@ -714,7 +751,7 @@ mod gl_wrapper {
             value: u32,
         ) -> Result<(), GlError> {
             unsafe { gl::ProgramUniform1ui(self.id, location.location, value) };
-            GlError::check_msg("glProgramUniform1ui")
+            GlError::check_msg(format_args!("glProgramUniform1ui({}, {location:?})", self.id))
         }
 
         pub fn set_uniform_1uiv(
@@ -722,7 +759,7 @@ mod gl_wrapper {
             value: &[u32],
         ) -> Result<(), GlError> {
             unsafe { gl::ProgramUniform1uiv(self.id, location.location, value.len().try_into().unwrap(), value.as_ptr()) };
-            GlError::check_msg("glProgramUniform1uiv")
+            GlError::check_msg(format_args!("glProgramUniform1uiv({}, {location:?})", self.id))
         }
     }
 
@@ -734,52 +771,75 @@ mod gl_wrapper {
 
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
     #[repr(u32)]
+    pub enum BufferTarget {
+        ArrayBuffer = gl::ARRAY_BUFFER,
+        ElementArrayBuffer = gl::ELEMENT_ARRAY_BUFFER,
+        CopyReadBuffer = gl::COPY_READ_BUFFER,
+        CopyWriteBuffer = gl::COPY_WRITE_BUFFER,
+        UniformBuffer = gl::UNIFORM_BUFFER,
+        ShaderStorageBuffer = gl::SHADER_STORAGE_BUFFER,
+        AtomicCounterBuffer = gl::ATOMIC_COUNTER_BUFFER,
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+    #[repr(u32)]
     pub enum IndexedBufferTarget {
         UniformBuffer = gl::UNIFORM_BUFFER,
         ShaderStorageBuffer = gl::SHADER_STORAGE_BUFFER,
         AtomicCounterBuffer = gl::ATOMIC_COUNTER_BUFFER,
     }
 
-    /// An OpenGL immutable buffer
-    pub struct ImmutableBuffer {
-        pub id: GLuint,
-        size: usize,
-        flags: GLbitfield,
+    /// Shared trait providing functions accessible to both kinds of OpenGL buffers.
+    pub trait Buffer {
+        fn invalidate(&mut self) -> Result<(), GlError>;
+
+        fn upload_sub_data(&mut self, offset: usize, data: &[u8]) -> Result<(), GlError>;
+
+        fn download_sub_data(&self, offset: usize, data: &mut [u8]) -> Result<(), GlError>;
+
+        fn bind_base(&self, target: IndexedBufferTarget, index: GLuint) -> Result<(), GlError>;
     }
 
-    impl ImmutableBuffer {
-        fn new_internal(size: usize, flags: GLbitfield) -> Result<Self, GlError> {
+    impl<T: AsRef<BaseBuffer> + AsMut<BaseBuffer>> Buffer for T {
+        fn invalidate(&mut self) -> Result<(), GlError> {
+            self.as_mut().invalidate()
+        }
+
+        fn upload_sub_data(&mut self, offset: usize, data: &[u8]) -> Result<(), GlError> {
+            self.as_mut().upload_sub_data(offset, data)
+        }
+
+        fn download_sub_data(&self, offset: usize, data: &mut [u8]) -> Result<(), GlError> {
+            <Self as AsRef<BaseBuffer>>::as_ref(self).download_sub_data(offset, data)
+        }
+
+        fn bind_base(&self, target: IndexedBufferTarget, index: GLuint) -> Result<(), GlError> {
+            <Self as AsRef<BaseBuffer>>::as_ref(self).bind_base(target, index)
+        }
+    }
+
+    /// An OpenGL buffer
+    struct BaseBuffer {
+        id: GLuint,
+        size: usize,
+    }
+
+    impl BaseBuffer {
+        fn new(size: usize) -> Result<Self, GlError> {
             let mut id: GLuint = 0;
             unsafe { gl::CreateBuffers(1, &mut id) };
             GlError::check_msg("glCreateBuffers")?;
-
-            Ok(Self { id, size, flags })
+            Ok(Self { id, size })
         }
+    }
 
-        pub fn new_uninitialized(size: usize, flags: GLbitfield) -> Result<Self, GlError> {
-            let buffer = Self::new_internal(size, flags)?;
-
-            unsafe { gl::NamedBufferStorage(buffer.id, size.try_into().unwrap(), null(), flags) };
-            GlError::check_msg("glNamedBufferStorage(NULL)")?;
-
-            Ok(buffer)
-        }
-
-        pub fn new_initialized(data: &[u8], flags: GLbitfield) -> Result<Self, GlError> {
-            let buffer = Self::new_internal(data.len(), flags)?;
-
-            unsafe { gl::NamedBufferStorage(buffer.id, data.len().try_into().unwrap(), data.as_ptr() as *const _, flags) };
-            GlError::check_msg("glNamedBufferStorage(data.as_ptr())")?;
-
-            Ok(buffer)
-        }
-
-        pub fn invalidate(&mut self) -> Result<(), GlError> {
+    impl Buffer for BaseBuffer {
+        fn invalidate(&mut self) -> Result<(), GlError> {
             unsafe { gl::InvalidateBufferData(self.id) };
             GlError::check_msg("glInvalidateBufferData")
         }
 
-        pub fn upload(&mut self, offset: usize, data: &[u8]) -> Result<(), GlError> {
+        fn upload_sub_data(&mut self, offset: usize, data: &[u8]) -> Result<(), GlError> {
             unsafe {
                 gl::NamedBufferSubData(
                     self.id,
@@ -791,7 +851,7 @@ mod gl_wrapper {
             GlError::check_msg("glNamedBufferSubData")
         }
 
-        pub fn download(&self, offset: usize, data: &mut [u8]) -> Result<(), GlError> {
+        fn download_sub_data(&self, offset: usize, data: &mut [u8]) -> Result<(), GlError> {
             unsafe {
                 gl::GetNamedBufferSubData(
                     self.id,
@@ -803,15 +863,59 @@ mod gl_wrapper {
             GlError::check_msg("glGetNamedBufferSubData")
         }
 
-        pub fn bind_base(&self, target: IndexedBufferTarget, index: GLuint) -> Result<(), GlError> {
+        fn bind_base(&self, target: IndexedBufferTarget, index: GLuint) -> Result<(), GlError> {
             unsafe { gl::BindBufferBase(target as GLenum, index, self.id) };
             GlError::check_msg("glBindBufferBase")
         }
     }
 
-    impl Drop for ImmutableBuffer {
+    impl Drop for BaseBuffer {
         fn drop(&mut self) {
             unsafe { gl::DeleteBuffers(1, &self.id) };
+        }
+    }
+
+    /// An OpenGL immutable buffer
+    pub struct ImmutableBuffer {
+        internal_buffer: BaseBuffer,
+        flags: GLbitfield,
+    }
+
+    impl ImmutableBuffer {
+        fn new_internal(size: usize, flags: GLbitfield) -> Result<Self, GlError> {
+            let internal_buffer = BaseBuffer::new(size)
+                .add_context(format_args!("size={}", size))?;
+            Ok(Self { internal_buffer, flags })
+        }
+
+        pub fn new_uninitialized(size: usize, flags: GLbitfield) -> Result<Self, GlError> {
+            let buffer = Self::new_internal(size, flags)?;
+
+            unsafe { gl::NamedBufferStorage(buffer.internal_buffer.id, size.try_into().unwrap(), null(), flags) };
+            GlError::check_msg("glNamedBufferStorage(NULL)")?;
+
+            Ok(buffer)
+        }
+
+        pub fn new_initialized(data: &[u8], flags: GLbitfield) -> Result<Self, GlError> {
+            let buffer = Self::new_internal(data.len(), flags)?;
+
+            unsafe { gl::NamedBufferStorage(buffer.internal_buffer.id, data.len().try_into().unwrap(), data.as_ptr() as *const _, flags) };
+            GlError::check_msg("glNamedBufferStorage(data.as_ptr())")?;
+
+            Ok(buffer)
+        }
+    }
+
+    impl AsRef<BaseBuffer> for ImmutableBuffer {
+        fn as_ref(&self) -> &BaseBuffer {
+            &self.internal_buffer
+        }
+    }
+
+    impl AsMut<BaseBuffer> for ImmutableBuffer {
+        fn as_mut(&mut self) -> &mut BaseBuffer {
+            &mut self.internal_buffer
         }
     }
 }
