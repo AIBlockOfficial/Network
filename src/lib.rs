@@ -16,6 +16,7 @@ pub mod key_creation;
 mod mempool;
 mod mempool_raft;
 mod miner;
+mod miner_pow;
 mod pre_launch;
 mod raft;
 mod raft_store;

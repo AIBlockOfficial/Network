@@ -623,6 +623,8 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 ///
 /// * `header`   - The header for PoW
 pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    use crate::miner_pow::*;
+    use crate::miner_pow::cpu::*;
     use crate::opengl_miner::*;
 
     let prepared_header = PreparedBlockHeader::prepare(header)
@@ -635,7 +637,7 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
     let use_cpu_miner = header.difficulty.is_empty();
 
     let result = if use_cpu_miner {
-        Miner::generate_pow_block_cpu(&prepared_header, 0, u32::MAX)
+        generate_pow_block_cpu(&prepared_header, 0, u32::MAX)
             .map_err(|msg| Box::new(StringError(msg.to_string())))?
     } else {
         // Doing this
