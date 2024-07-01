@@ -1,10 +1,12 @@
 pub mod cpu;
+pub mod vulkan;
 
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
 use crate::constants::POW_NONCE_LEN;
 
 pub const SHA3_256_BYTES: usize = 32;
+pub const BLOCK_HEADER_MAX_BYTES: usize = 1024;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct PreparedBlockHeader {
