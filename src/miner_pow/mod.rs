@@ -4,6 +4,8 @@ use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
 use crate::constants::POW_NONCE_LEN;
 
+pub const SHA3_256_BYTES: usize = 32;
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct PreparedBlockHeader {
     pub header_bytes: Box<[u8]>,
@@ -16,7 +18,7 @@ pub enum PreparedBlockDifficulty {
     LeadingZeroBytes,
     TargetHashAlwaysPass,
     TargetHash {
-        target_hash: [u8; 32],
+        target_hash: [u8; SHA3_256_BYTES],
     },
 }
 
@@ -68,17 +70,17 @@ fn extract_target_difficulty(
     }
 }
 
-fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8; 32]> {
+fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8; SHA3_256_BYTES]> {
     let expanded_target = compact_target.expand_integer();
     let byte_digits: Vec<u8> = expanded_target.to_digits(rug::integer::Order::MsfBe);
-    if byte_digits.len() > 32 {
+    if byte_digits.len() > SHA3_256_BYTES {
         // The target value is higher than the largest possible SHA3-256 hash.
         return None;
     }
 
-    // Pad the target hash with leading zeroes to make it exactly 32 bytes long.
-    let mut result = [0u8; 32];
-    result[32 - byte_digits.len()..].copy_from_slice(&byte_digits);
+    // Pad the target hash with leading zeroes to make it exactly SHA3_256_BYTES bytes long.
+    let mut result = [0u8; SHA3_256_BYTES];
+    result[SHA3_256_BYTES - byte_digits.len()..].copy_from_slice(&byte_digits);
 
     assert_eq!(expanded_target, rug::Integer::from_digits(&result, rug::integer::Order::MsfBe));
 
@@ -123,7 +125,7 @@ pub(crate) mod test {
     fn test_big_integer_behaves_as_expected() {
         use rug::Integer;
         use std::cmp::Ordering::{self, *};
-        type DigestArr = [u8; 32];
+        type DigestArr = [u8; SHA3_256_BYTES];
 
         fn to_int(digits: &[u8]) -> Integer {
             let res = Integer::from_digits(digits, rug::integer::Order::MsfBe);
