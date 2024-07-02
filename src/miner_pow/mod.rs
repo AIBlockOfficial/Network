@@ -1,4 +1,5 @@
 pub mod cpu;
+pub mod opengl;
 
 use std::fmt;
 use std::fmt::Debug;
@@ -300,7 +301,9 @@ pub trait PoWBlockMiner {
 }
 
 #[cfg(test)]
-pub(crate) mod test {
+pub(super) mod test {
+    use crate::miner_pow::cpu::CpuMiner;
+    use crate::miner_pow::opengl::OpenGlMiner;
     use super::*;
 
     #[derive(Copy, Clone, Debug)]
@@ -324,10 +327,22 @@ pub(crate) mod test {
             expected_nonce: 28,
             max_nonce_count: 1024,
         };
+        const THRESHOLD_HARD: Self = Self {
+            name: "THRESHOLD_HARD",
+            difficulty: b"\x20\x00\x00\x01",
+            expected_nonce: 4894069,
+            max_nonce_count: 4900000,
+        };
 
         pub const ALL_EASY: &'static [TestBlockMinerInternal] = &[
             Self::NO_DIFFICULTY,
             Self::THRESHOLD_EASY,
+        ];
+
+        pub const ALL_BENCH: &'static [TestBlockMinerInternal] = &[
+            Self::NO_DIFFICULTY,
+            Self::THRESHOLD_EASY,
+            Self::THRESHOLD_HARD,
         ];
 
         pub fn test_miner(&self, miner: &mut impl PoWBlockMiner) {
@@ -344,7 +359,7 @@ pub(crate) mod test {
 
     pub const TEST_MINING_DIFFICULTY: &'static [u8] = b"\x22\x00\x00\x01";
 
-    pub fn test_block_header(difficulty: &[u8]) -> BlockHeader {
+    fn test_block_header(difficulty: &[u8]) -> BlockHeader {
         BlockHeader {
             version: 1337,
             bits: 10973,
@@ -358,7 +373,7 @@ pub(crate) mod test {
         }
     }
 
-    pub fn test_prepared_block_header(difficulty: &[u8]) -> PreparedBlockHeader {
+    fn test_prepared_block_header(difficulty: &[u8]) -> PreparedBlockHeader {
         PreparedBlockHeader::prepare(&test_block_header(difficulty)).unwrap()
     }
 
@@ -414,5 +429,47 @@ pub(crate) mod test {
         test_hex(0x22000001, Some("0100000000000000000000000000000000000000000000000000000000000000"));
 
         test_hex(0xFFFFFFFF, None);
+    }
+
+    #[test]
+    fn verify_cpu() {
+        let mut miner = CpuMiner::new();
+        for case in TestBlockMinerInternal::ALL_EASY {
+            case.test_miner(&mut miner);
+        }
+    }
+
+    #[test]
+    fn verify_opengl() {
+        let mut miner = OpenGlMiner::new().unwrap();
+        for case in TestBlockMinerInternal::ALL_EASY {
+            case.test_miner(&mut miner);
+        }
+    }
+}
+
+// cargo bench --package aiblock_network --lib miner_pow::bench --features benchmark_miners -- --show-output --test
+#[cfg(test)]
+#[cfg(feature = "benchmark_miners")]
+mod bench {
+    use crate::miner_pow::cpu::CpuMiner;
+    use crate::miner_pow::opengl::OpenGlMiner;
+    use super::*;
+    use super::test::*;
+
+    #[test]
+    fn bench_cpu() {
+        let mut miner = CpuMiner::new();
+        for case in TestBlockMinerInternal::ALL_BENCH {
+            case.test_miner(&mut miner);
+        }
+    }
+
+    #[test]
+    fn bench_opengl() {
+        let mut miner = OpenGlMiner::new().unwrap();
+        for case in TestBlockMinerInternal::ALL_BENCH {
+            case.test_miner(&mut miner);
+        }
     }
 }

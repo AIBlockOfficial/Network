@@ -49,3 +49,4 @@ rustls-pemfile = "2.0.0"
 [features]
 mock = []
 config_override = []
+benchmark_miners = []

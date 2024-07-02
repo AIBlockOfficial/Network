@@ -625,7 +625,7 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     use crate::miner_pow::*;
     use crate::miner_pow::cpu::*;
-    use crate::opengl_miner::*;
+    use crate::miner_pow::opengl::*;
 
     // if there isn't a difficulty function, the PoW will be easy enough that the GPU miner won't
     // really help much

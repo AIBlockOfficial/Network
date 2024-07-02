@@ -6,8 +6,8 @@ use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use crate::constants::MINING_DIFFICULTY;
 use crate::miner_pow::{MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader};
-use crate::opengl_miner::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
-use crate::opengl_miner::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
+use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
+use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
@@ -155,8 +155,8 @@ impl OpenGlMiner {
         // compile and link the compute shader
         let shader = Shader::compile(
             ShaderType::Compute,
-            //&[include_str!("opengl_miner.glsl")],
-            &[std::fs::read_to_string("src/opengl_miner.glsl").expect("failed to read source").as_str()]
+            &[include_str!("opengl_miner.glsl")],
+            //&[std::fs::read_to_string("src/miner_pow/opengl_miner.glsl").expect("failed to read source").as_str()]
         ).map_err(CreateMinerError::CompileShader)?;
 
         let program = Program::link(&[&shader])
@@ -911,20 +911,6 @@ mod gl_wrapper {
     impl AsMut<BaseBuffer> for ImmutableBuffer {
         fn as_mut(&mut self) -> &mut BaseBuffer {
             &mut self.internal_buffer
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::miner_pow::test::TestBlockMinerInternal;
-    use super::*;
-
-    #[test]
-    fn verify_opengl() {
-        let mut miner = OpenGlMiner::new().unwrap();
-        for case in TestBlockMinerInternal::ALL_EASY {
-            case.test_miner(&mut miner);
         }
     }
 }

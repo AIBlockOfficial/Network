@@ -80,17 +80,3 @@ impl PoWBlockMiner for CpuMiner {
         Ok(None)
     }
 }
-
-#[cfg(test)]
-mod test {
-    use crate::miner_pow::test::TestBlockMinerInternal;
-    use super::*;
-
-    #[test]
-    fn verify_cpu() {
-        let mut miner = CpuMiner::new();
-        for case in TestBlockMinerInternal::ALL_EASY {
-            case.test_miner(&mut miner);
-        }
-    }
-}
