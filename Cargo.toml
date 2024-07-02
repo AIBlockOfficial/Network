@@ -7,6 +7,7 @@ readme = "README.md"
 description = "The AIBlock Network"
 
 [dependencies]
+ahash = "0.8.11"
 async-std = "1.7.0"
 async-trait = "0.1.58"
 async-stream = "0.3.2"

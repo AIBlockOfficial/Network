@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::fmt;
 use std::sync::Arc;
@@ -9,12 +10,14 @@ use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, Standar
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::descriptor_set::layout::{DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType};
 use vulkano::device::{Device, DeviceCreateInfo, Features, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
-use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo};
+use vulkano::shader::{ShaderModule, ShaderStages, SpecializationConstant};
 use vulkano::sync::GpuFuture;
 use crate::constants::MINING_DIFFICULTY;
 use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader, SHA3_256_BYTES};
@@ -47,12 +50,33 @@ impl fmt::Display for MinerError {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
+struct VulkanMinerVariant {
+    block_header_length: u32,
+    block_header_nonce_offset: u32,
+    difficulty_function: u32,
+    leading_zeroes_mining_difficulty: u32,
+}
+
+impl VulkanMinerVariant {
+    pub fn specialization_constants(&self) -> impl IntoIterator<Item = (u32, SpecializationConstant)> {
+        [
+            (0, SpecializationConstant::U32(BLOCK_HEADER_MAX_BYTES as u32)),
+            (1, SpecializationConstant::U32(self.block_header_length)),
+            (2, SpecializationConstant::U32(self.block_header_nonce_offset)),
+            (10, SpecializationConstant::U32(self.difficulty_function)),
+            (11, SpecializationConstant::U32(self.leading_zeroes_mining_difficulty)),
+        ]
+    }
+}
+
 pub struct VulkanMiner {
     uniform_buffer: Subbuffer<<MineUniforms as AsStd140>::Output>,
     response_buffer: Subbuffer<<MineResponse as AsStd430>::Output>,
     memory_allocator: Arc<StandardMemoryAllocator>,
 
-    compute_pipeline: Arc<ComputePipeline>,
+    base_compute_shader: Arc<ShaderModule>,
+    compute_pipelines: BTreeMap<VulkanMinerVariant, Arc<ComputePipeline>>,
     work_group_size: u32,
 
     descriptor_set_layout_index: usize,
@@ -136,23 +160,31 @@ impl VulkanMiner {
 
         let shader = mine_shader::load(device.clone()).unwrap();
 
-        let cs = shader.entry_point("main").unwrap();
-        let stage = PipelineShaderStageCreateInfo::new(cs);
-        let layout = PipelineLayout::new(
-            device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
-                .into_pipeline_layout_create_info(device.clone())
-                .unwrap(),
-        ).unwrap();
-        let compute_pipeline = ComputePipeline::new(
-            device.clone(),
-            None,
-            ComputePipelineCreateInfo::stage_layout(stage, layout)
-        ).unwrap();
-
         let descriptor_set_allocator =
             StandardDescriptorSetAllocator::new(device.clone(), Default::default());
-        let pipeline_layout = compute_pipeline.layout();
+        let pipeline_layout = PipelineLayout::new(
+            device.clone(),
+            PipelineLayoutCreateInfo {
+                set_layouts: vec![DescriptorSetLayout::new(
+                    device.clone(),
+                    DescriptorSetLayoutCreateInfo {
+                        bindings: BTreeMap::from([
+                            (0, DescriptorSetLayoutBinding {
+                                stages: ShaderStages::COMPUTE,
+                                ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::UniformBuffer)
+                            }),
+                            (1, DescriptorSetLayoutBinding {
+                                stages: ShaderStages::COMPUTE,
+                                ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer)
+                            }),
+                        ]),
+                        ..Default::default()
+                    },
+                ).unwrap()],
+                push_constant_ranges: vec![],
+                ..Default::default()
+            },
+        ).unwrap();
         let descriptor_set_layouts = pipeline_layout.set_layouts();
 
         let descriptor_set_layout_index = 0;
@@ -174,7 +206,8 @@ impl VulkanMiner {
             response_buffer,
             memory_allocator,
 
-            compute_pipeline,
+            base_compute_shader: shader,
+            compute_pipelines: Default::default(),
             work_group_size: WORK_GROUP_SIZE,
 
             descriptor_set_layout_index,
@@ -185,6 +218,33 @@ impl VulkanMiner {
 
             instance,
         })
+    }
+
+    fn get_compute_pipeline(&mut self, variant: VulkanMinerVariant) -> Arc<ComputePipeline> {
+        if let Some(compute_pipeline) = self.compute_pipelines.get(&variant) {
+            // This pipeline variant is already cached!
+            return compute_pipeline.clone();
+        }
+
+        let specialized_shader = self.base_compute_shader.specialize(
+            variant.specialization_constants().into_iter().collect()
+        ).unwrap();
+        let cs = specialized_shader.entry_point("main").unwrap();
+        let stage = PipelineShaderStageCreateInfo::new(cs);
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                .into_pipeline_layout_create_info(self.device.clone())
+                .unwrap(),
+        ).unwrap();
+        let compute_pipeline = ComputePipeline::new(
+            self.device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(stage, layout),
+        ).unwrap();
+
+        self.compute_pipelines.insert(variant, compute_pipeline.clone());
+        compute_pipeline
     }
 }
 
@@ -250,10 +310,6 @@ impl PoWBlockMiner for VulkanMiner {
         //update the uniforms
         *self.uniform_buffer.write().unwrap() = MineUniforms {
             u_firstNonce: first_nonce,
-            u_blockHeader_length: block_header_length,
-            u_blockHeader_nonceOffset: block_header_nonce_offset,
-            u_difficultyFunction: difficulty_function,
-            u_leadingZeroes_miningDifficulty: leading_zeroes_mining_difficulty,
             u_compactTarget_expanded: compact_target_expanded,
             u_blockHeader_bytes: block_header_bytes.map(|b| b as u32).into(),
         }.as_std140();
@@ -272,12 +328,19 @@ impl PoWBlockMiner for VulkanMiner {
             CommandBufferUsage::OneTimeSubmit,
         ).unwrap();
 
+        let compute_pipeline = self.get_compute_pipeline(VulkanMinerVariant {
+            block_header_length,
+            block_header_nonce_offset,
+            difficulty_function,
+            leading_zeroes_mining_difficulty,
+        });
+
         command_buffer_builder
-            .bind_pipeline_compute(self.compute_pipeline.clone())
+            .bind_pipeline_compute(compute_pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Compute,
-                self.compute_pipeline.layout().clone(),
+                compute_pipeline.layout().clone(),
                 self.descriptor_set_layout_index as u32,
                 self.descriptor_set.clone(),
             )
@@ -322,11 +385,6 @@ impl PoWBlockMiner for VulkanMiner {
 #[derive(Clone, Copy, Debug, Default, AsStd140)]
 struct MineUniforms {
     u_firstNonce : u32,
-    u_blockHeader_length : u32,
-    u_blockHeader_nonceOffset : u32,
-
-    u_difficultyFunction : u32,
-    u_leadingZeroes_miningDifficulty : u32,
 
     u_compactTarget_expanded : crevice_utils::FixedArray<u32, SHA3_256_BYTES>,
 

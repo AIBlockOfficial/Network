@@ -9,15 +9,15 @@ layout(local_size_x = 256) in;
 
 #include "vulkan_miner_sha3_256.glsl"
 
-const uint BLOCK_HEADER_MAX_BYTES = 1024; // TODO: sync this with rust code?
+layout(constant_id = 0) const uint BLOCK_HEADER_MAX_BYTES = 1;
+layout(constant_id = 1) const uint u_blockHeader_length = 0;
+layout(constant_id = 2) const uint u_blockHeader_nonceOffset = 0;
+
+layout(constant_id = 10) const uint u_difficultyFunction = 0;
+layout(constant_id = 11) const uint u_leadingZeroes_miningDifficulty = 0;
 
 layout(std140, set = 0, binding = 0) uniform Uniforms {
     uint u_firstNonce;
-    uint u_blockHeader_length;
-    uint u_blockHeader_nonceOffset;
-
-    uint u_difficultyFunction;
-    uint u_leadingZeroes_miningDifficulty;
 
     uint u_compactTarget_expanded[SHA3_256_BYTES];
     uint u_blockHeader_bytes[BLOCK_HEADER_MAX_BYTES];
