@@ -4,11 +4,8 @@ use std::{error, fmt};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
-use tw_chain::crypto::sha3_256;
-use tw_chain::primitives::block::BlockHeader;
-use crate::asert::CompactTarget;
-use crate::constants::{MINING_DIFFICULTY, POW_NONCE_LEN};
-use crate::miner_pow::{PreparedBlockDifficulty, PreparedBlockHeader};
+use crate::constants::MINING_DIFFICULTY;
+use crate::miner_pow::{MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader};
 use crate::opengl_miner::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::opengl_miner::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 
@@ -132,7 +129,7 @@ impl<Ctx> GlfwContext<Ctx> {
     }
 }
 
-pub struct Miner {
+pub struct OpenGlMiner {
     program: Program,
     program_first_nonce_uniform: UniformLocation,
     program_header_length_uniform: UniformLocation,
@@ -146,9 +143,9 @@ pub struct Miner {
     glfw_context: GlfwContext<()>,
 }
 
-static mut GLOBAL_MINER: OnceLock<GlfwContext<Miner>> = OnceLock::new();
+static mut GLOBAL_MINER: OnceLock<GlfwContext<OpenGlMiner>> = OnceLock::new();
 
-impl Miner {
+impl OpenGlMiner {
     pub fn new() -> Result<Self, CreateMinerError> {
         let mut glfw_context = GlfwContext::new(|| Ok(()))?;
         let guard = glfw_context.make_current();
@@ -159,7 +156,7 @@ impl Miner {
         let shader = Shader::compile(
             ShaderType::Compute,
             //&[include_str!("opengl_miner.glsl")],
-            &[ std::fs::read_to_string("src/opengl_miner.glsl").expect("failed to read source").as_str() ]
+            &[std::fs::read_to_string("src/opengl_miner.glsl").expect("failed to read source").as_str()]
         ).map_err(CreateMinerError::CompileShader)?;
 
         let program = Program::link(&[&shader])
@@ -197,17 +194,32 @@ impl Miner {
             glfw_context,
         })
     }
+}
 
-    /// Tries to generate a Proof-of-Work for a block.
-    pub fn generate_pow_block_gpu(
+impl PoWBlockMiner for OpenGlMiner {
+    type Error = GlError;
+
+    fn min_nonce_count(&self) -> u32 {
+        self.program_work_group_size
+    }
+
+    fn nonce_peel_amount(&self) -> u32 {
+        // TODO: Auto-detect this based on device speed
+        1u32 << 20
+    }
+
+    fn generate_pow_block_internal(
         &mut self,
         prepared_block_header: &PreparedBlockHeader,
         first_nonce: u32,
         nonce_count: u32,
+        statistics: &mut MinerStatistics,
     ) -> Result<Option<u32>, GlError> {
         if nonce_count == 0 {
             return Ok(None);
         }
+
+        let mut statistics_updater = statistics.update_safe();
 
         let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
         let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
@@ -217,7 +229,7 @@ impl Miner {
         //let hash_buffer_capacity_int32s = hash_count * 32;
         //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
 
-        let guard = self.glfw_context.make_current();
+        let _guard = self.glfw_context.make_current();
 
         self.program.set_uniform_1ui(self.program_first_nonce_uniform, first_nonce)?;
         self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
@@ -273,6 +285,10 @@ impl Miner {
         //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
 
         response_buffer.download_sub_data(0, &mut response_buffer_data).unwrap();
+
+        // Now that the hashes have been computed, update the statistics
+        statistics_updater.computed_hashes(
+            (dispatch_count as u128) * (self.program_work_group_size as u128));
 
         let response_status = u32::from_ne_bytes(*response_buffer_data[0..].first_chunk().unwrap());
         let response_success_nonce = u32::from_ne_bytes(*response_buffer_data[4..].first_chunk().unwrap());
@@ -901,19 +917,14 @@ mod gl_wrapper {
 
 #[cfg(test)]
 mod test {
-    use crate::miner_pow::test::{test_block_header, TEST_MINING_DIFFICULTY};
+    use crate::miner_pow::test::TestBlockMinerInternal;
     use super::*;
 
     #[test]
-    fn verify_gpu() {
-        let mut miner = Miner::new().unwrap();
-
-        let header = test_block_header(TEST_MINING_DIFFICULTY);
-        assert_eq!(miner.generate_pow_block_gpu(&header, 0, 1024),
-                   Ok(Some(28)));
-
-        let header = test_block_header(&[]);
-        assert_eq!(miner.generate_pow_block_gpu(&header, 0, 1024),
-                   Ok(Some(455)));
+    fn verify_opengl() {
+        let mut miner = OpenGlMiner::new().unwrap();
+        for case in TestBlockMinerInternal::ALL_EASY {
+            case.test_miner(&mut miner);
+        }
     }
 }
