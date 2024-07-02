@@ -17,7 +17,7 @@ use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLa
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::sync::GpuFuture;
 use crate::constants::MINING_DIFFICULTY;
-use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, PreparedBlockDifficulty, PreparedBlockHeader, SHA3_256_BYTES};
+use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader, SHA3_256_BYTES};
 
 // synced with vulkan_miner.glsl
 const WORK_GROUP_SIZE: u32 = 256;
@@ -186,16 +186,32 @@ impl VulkanMiner {
             instance,
         })
     }
+}
 
-    pub fn generate_pow_block(
+impl PoWBlockMiner for VulkanMiner {
+    type Error = MinerError;
+
+    fn min_nonce_count(&self) -> u32 {
+        self.work_group_size
+    }
+
+    fn nonce_peel_amount(&self) -> u32 {
+        // TODO: do runtime benchmarks to find an optimal value for this
+        1 << 20
+    }
+
+    fn generate_pow_block_internal(
         &mut self,
         prepared_block_header: &PreparedBlockHeader,
         first_nonce: u32,
         nonce_count: u32,
-    ) -> Result<Option<u32>, MinerError> {
+        statistics: &mut MinerStatistics,
+    ) -> Result<Option<u32>, Self::Error> {
         if nonce_count == 0 {
             return Ok(None);
         }
+
+        let mut stats_updater = statistics.update_safe();
 
         let work_group_counts = [nonce_count.div_ceil(self.work_group_size), 1, 1];
 
@@ -280,6 +296,10 @@ impl VulkanMiner {
         future.wait(None).unwrap();
 
         let response = MineResponse::from_std430(*self.response_buffer.read().unwrap());
+
+        // Now that the hashes have been computed, update the statistics
+        stats_updater.computed_hashes(
+            (work_group_counts[0] as u128) * (self.work_group_size as u128));
 
         match response.status {
             // RESPONSE_STATUS_NONE
@@ -446,24 +466,5 @@ mod crevice_utils {
         fn from_padded(value: Self::Output) -> Self {
             value.value
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::miner_pow::test::{test_block_header, TEST_MINING_DIFFICULTY};
-    use crate::miner_pow::vulkan::VulkanMiner;
-
-    #[test]
-    fn test_vulkan() {
-        let mut miner = VulkanMiner::new().unwrap();
-
-        let header = test_block_header(TEST_MINING_DIFFICULTY);
-        assert_eq!(miner.generate_pow_block(&header, 0, 1024).unwrap(),
-                   Some(28));
-
-        let header = test_block_header(&[]);
-        assert_eq!(miner.generate_pow_block(&header, 0, 1024).unwrap(),
-                   Some(455));
     }
 }
