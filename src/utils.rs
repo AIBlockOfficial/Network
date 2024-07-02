@@ -625,40 +625,29 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     use crate::miner_pow::*;
     use crate::miner_pow::cpu::*;
-    use crate::opengl_miner::*;
-
-    let prepared_header = PreparedBlockHeader::prepare(header)
-        .map_err(|msg| Box::new(StringError(msg.to_string())))?;
-
-    println!("generate_pow_for_block({header:?})");
+    use crate::miner_pow::opengl::*;
 
     // if there isn't a difficulty function, the PoW will be easy enough that the GPU miner won't
     // really help much
     let use_cpu_miner = header.difficulty.is_empty();
 
-    let result = if use_cpu_miner {
-        generate_pow_block_cpu(&prepared_header, 0, u32::MAX)
-            .map_err(|msg| Box::new(StringError(msg.to_string())))?
-    } else {
-        // Doing this
-        const GPU_MINER_MAX_NONCES_AT_A_TIME: u32 = 1 << 20;
+    let mut statistics = Default::default();
+    let terminate_flag = None;
+    let timeout_duration = None;
 
-        let mut miner = Miner::new().map_err(Box::new)?;
-        let mut result = None;
-        for first_nonce in (0..u32::MAX.div_ceil(GPU_MINER_MAX_NONCES_AT_A_TIME)).map(|i| i * GPU_MINER_MAX_NONCES_AT_A_TIME) {
-            //println!("GPU miner: testing nonces {first_nonce} to {}", first_nonce.saturating_add(GPU_MINER_MAX_NONCES_AT_A_TIME));
-            if let Some(nonce) = miner.generate_pow_block_gpu(&prepared_header, first_nonce, GPU_MINER_MAX_NONCES_AT_A_TIME).map_err(Box::new)? {
-                //println!("GPU miner: found valid nonce {nonce}");
-                result = Some(nonce);
-                break;
-            }
-        }
-        result
+    let result = if use_cpu_miner {
+        CpuMiner::new()
+            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
+            .unwrap() // this can't fail
+    } else {
+        OpenGlMiner::new()
+            .map_err(Box::new)?
+            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
+            .map_err(Box::new)?
     };
 
     match result {
-        None => Ok(None),
-        Some(nonce) => {
+        BlockMineResult::FoundNonce { nonce } => {
             // Verify that the found nonce is actually valid
             let mut header_copy = header.clone();
             header_copy.nonce_and_mining_tx_hash.0 = nonce.to_le_bytes().to_vec();
@@ -667,6 +656,9 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
                     nonce, header);
             Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
         },
+        BlockMineResult::Exhausted => Ok(None),
+        BlockMineResult::TerminateRequested => Ok(None),
+        BlockMineResult::TimeoutReached => Ok(None),
     }
 }
 
@@ -1402,6 +1394,38 @@ pub mod rug_integer {
     {
         let value: String = Deserialize::deserialize(d)?;
         Integer::from_str_radix(&value, 16).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
+pub struct UnitsPrefixed {
+    pub value: f64,
+    pub unit_name: &'static str,
+    pub duration: Option<Duration>,
+}
+
+impl fmt::Display for UnitsPrefixed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let scales = &[
+            ( 1000_000_000_000f64, "T" ),
+            ( 1000_000_000f64, "G" ),
+            ( 1000_000f64, "M" ),
+            ( 1000f64, "k" ),
+        ];
+
+        let value = match &self.duration {
+            None => self.value,
+            Some(duration) => self.value / duration.as_secs_f64(),
+        };
+
+        let (divisor, prefix) = scales.iter()
+            .find(|(threshold, _)| value > *threshold)
+            .unwrap_or(&(1f64, ""));
+
+        match &self.duration {
+            None => write!(f, "{} {}{}", value / divisor, prefix, self.unit_name),
+            Some(_) => write!(f, "{} {}{}/s", value / divisor, prefix, self.unit_name),
+        }
     }
 }
 

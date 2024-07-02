@@ -37,7 +37,6 @@ pub mod upgrade;
 mod user;
 pub mod utils;
 pub mod wallet;
-mod opengl_miner;
 
 pub use api::routes;
 pub use constants::SANC_LIST_PROD;
