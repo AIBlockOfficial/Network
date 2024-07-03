@@ -3,25 +3,18 @@ pub mod opengl;
 
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::{Range, RangeBounds};
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::debug;
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
-use crate::constants::{MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
+use crate::constants::{ADDRESS_POW_NONCE_LEN, MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
+use crate::interfaces::ProofOfWork;
 use crate::utils::{split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct PreparedBlockHeader {
-    pub leading_bytes: Box<[u8]>,
-    pub trailing_bytes: Box<[u8]>,
-    pub nonce_length: usize,
-    pub difficulty: PoWDifficulty,
-}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum PoWDifficulty {
@@ -34,38 +27,37 @@ pub enum PoWDifficulty {
     },
 }
 
-fn find_block_header_nonce_location(
-    block_header: &BlockHeader,
+fn find_nonce_location<T: Clone + serde::Serialize>(
+    object: &T,
+    nonce_setter: impl Fn(&mut T, Vec<u8>) -> (),
     nonce_length: usize,
 ) -> (Box<[u8]>, Box<[u8]>) {
-    assert!(nonce_length > 0 && nonce_length <= POW_NONCE_MAX_LEN,
-            "invalid nonce_length {}, should be in range [0, {}]",
-            nonce_length, POW_NONCE_MAX_LEN);
+    assert_ne!(nonce_length, 0, "nonce_length may not be 0!");
 
-    let mut block_header = block_header.clone();
+    let mut object = object.clone();
 
     let nonce_00 = vec![0x00u8; nonce_length];
     let nonce_ff = vec![0xFFu8; nonce_length];
 
-    block_header.nonce_and_mining_tx_hash.0 = nonce_00.clone();
-    let serialized_00 = bincode::serialize(&block_header).unwrap();
-    block_header.nonce_and_mining_tx_hash.0 = nonce_ff.clone();
-    let serialized_ff = bincode::serialize(&block_header).unwrap();
+    nonce_setter(&mut object, nonce_00.clone());
+    let serialized_00 = bincode::serialize(&object).unwrap();
+    nonce_setter(&mut object, nonce_ff.clone());
+    let serialized_ff = bincode::serialize(&object).unwrap();
 
     assert_ne!(serialized_00, serialized_ff,
-               "changing the nonce didn't affect the serialized block header?!?");
+               "changing the nonce didn't affect the serialized object?!?");
     assert_eq!(serialized_00.len(), serialized_ff.len(),
-               "changing the nonce affected the block header's serialized length?!?");
+               "changing the nonce affected the object's serialized length?!?");
 
     // find the index at which the two headers differ
     let nonce_offset = (0..serialized_00.len())
         .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
-        .expect("the serialized block headers are not equal, but are equal at every index?!?");
+        .expect("the serialized objects are not equal, but are equal at every index?!?");
 
     assert_eq!(&serialized_00.as_slice()[nonce_offset..nonce_offset + 4], nonce_00.as_slice(),
-               "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
+               "serialized object with nonce 0x00000000 has different bytes at presumed nonce offset!");
     assert_eq!(&serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], nonce_ff.as_slice(),
-               "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
+               "serialized object with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
 
     let leading_bytes = serialized_00[..nonce_offset].into();
     let trailing_bytes = serialized_00[nonce_offset + nonce_length..].into();
@@ -111,25 +103,6 @@ fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8
     Some(result)
 }
 
-impl PreparedBlockHeader {
-    pub fn prepare(
-        block_header: &BlockHeader,
-        nonce_length: usize,
-    ) -> Result<Self, &'static str> {
-        let (leading_bytes, trailing_bytes) =
-            find_block_header_nonce_location(block_header, nonce_length);
-
-        let difficulty = extract_target_difficulty(&block_header.difficulty)?;
-
-        Ok(Self {
-            leading_bytes,
-            trailing_bytes,
-            nonce_length,
-            difficulty,
-        })
-    }
-}
-
 /// An object which contains a nonce and can therefore be mined.
 pub trait PoWObject {
     /// Gets the difficulty requirements for mining this object.
@@ -159,7 +132,7 @@ impl PoWObject for BlockHeader {
     }
 
     fn permitted_nonce_lengths(&self) -> Range<usize> {
-        0..POW_NONCE_MAX_LEN + 1
+        1..POW_NONCE_MAX_LEN + 1
     }
 
     fn get_leading_and_trailing_bytes_for_mine(
@@ -170,7 +143,39 @@ impl PoWObject for BlockHeader {
             return Err(nonce_length);
         }
 
-        Ok(find_block_header_nonce_location(self, nonce_length))
+        Ok(find_nonce_location(
+            self,
+            |block_header, nonce| block_header.nonce_and_mining_tx_hash.0 = nonce,
+            nonce_length,
+        ))
+    }
+}
+
+impl PoWObject for ProofOfWork {
+    fn difficulty(&self) -> PoWDifficulty {
+        // see utils::validate_pow_for_address()
+        PoWDifficulty::LeadingZeroBytes {
+            leading_zeroes: MINING_DIFFICULTY,
+        }
+    }
+
+    fn permitted_nonce_lengths(&self) -> Range<usize> {
+        ADDRESS_POW_NONCE_LEN..ADDRESS_POW_NONCE_LEN + 1
+    }
+
+    fn get_leading_and_trailing_bytes_for_mine(
+        &self,
+        nonce_length: usize,
+    ) -> Result<(Box<[u8]>, Box<[u8]>), usize> {
+        if !self.permitted_nonce_lengths().contains(&nonce_length) {
+            return Err(nonce_length);
+        }
+
+        Ok(find_nonce_location(
+            self,
+            |pow, nonce| pow.nonce = nonce,
+            nonce_length,
+        ))
     }
 }
 
@@ -448,14 +453,19 @@ pub(super) mod test {
                 return;
             }
 
-            let prepared_block_header = test_prepared_block_header(self.difficulty);
+            let block_header = test_block_header(self.difficulty);
+
+            let difficulty = block_header.difficulty();
+            let (leading_bytes, trailing_bytes) =
+                block_header.get_leading_and_trailing_bytes_for_mine(4)
+                    .unwrap();
 
             let mut statistics = Default::default();
             assert_eq!(
                 miner.generate_pow_internal(
-                    &prepared_block_header.leading_bytes,
-                    &prepared_block_header.trailing_bytes,
-                    &prepared_block_header.difficulty,
+                    &leading_bytes,
+                    &trailing_bytes,
+                    &difficulty,
                     0, self.max_nonce_count, &mut statistics,
                 ).unwrap(),
                 Some(self.expected_nonce),
@@ -479,10 +489,6 @@ pub(super) mod test {
             previous_hash: Some("jeff".to_string()),
             txs_merkle_root_and_hash: ("merkle_root".to_string(), "hash".to_string()),
         }
-    }
-
-    fn test_prepared_block_header(difficulty: &[u8]) -> PreparedBlockHeader {
-        PreparedBlockHeader::prepare(&test_block_header(difficulty), 4).unwrap()
     }
 
     #[test]
