@@ -87,6 +87,11 @@ void keccakf(inout uint64_t s[SHA3_KECCAK_SPONGE_WORDS]) {
     }
 }
 
+/**
+ * Initializes the SHA3-256 context to begin computing a new hash.
+ *
+ * @param ctx the SHA3-256 context
+ */
 void sha3_256_Init(inout sha3_256_context ctx) {
     ctx.saved = 0ul;
     for (uint i = 0; i < SHA3_KECCAK_SPONGE_WORDS; i++) ctx.s[i] = 0ul;
@@ -94,53 +99,129 @@ void sha3_256_Init(inout sha3_256_context ctx) {
     ctx.wordIndex = 0u;
 }
 
-void sha3_256_Update(inout sha3_256_context ctx, uint8_t byteIn) {
-    ctx.saved |= ((uint64_t(byteIn) & uint64_t(0xFFu)) << ((ctx.byteIndex++) * 8u));
+/**
+ * Checks if the SHA3-256 context has buffered an entire block, consuming the block if it has.
+ *
+ * @param ctx the SHA3-256 context
+ */
+void sha3_256_tryFlushBlock(inout sha3_256_context ctx) {
+    if (ctx.wordIndex == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS)) {
+        ctx.wordIndex = 0u;
+        keccakf(ctx.s);
+    }
+}
+
+/**
+ * Checks if the SHA3-256 context has buffered an entire word, consuming the word if it has.
+ *
+ * @param ctx the SHA3-256 context
+ */
+void sha3_256_tryFlushWord(inout sha3_256_context ctx) {
     if (ctx.byteIndex == 8u) {
         ctx.s[ctx.wordIndex] ^= ctx.saved;
         ctx.saved = 0u;
         ctx.byteIndex = 0u;
-        if (++ctx.wordIndex == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS)) {
-            ctx.wordIndex = 0u;
-            keccakf(ctx.s);
-        }
+        ctx.wordIndex++;
+        sha3_256_tryFlushBlock(ctx);
     }
-
-    /*
-    ctx.saved |= ((uint64_t(byteIn) & uint64_t(0xFFu)) << ((ctx.written_bytes % 8u) * 8u));
-    if ((ctx.written_bytes % 8u) == 8u - 1u) {
-        uint word_index = (ctx.written_bytes / 8u) % (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS);
-        ctx.s[word_index] ^= ctx.saved;
-        ctx.saved = 0u;
-        if (word_index == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS - 1u)) {
-            keccakf(ctx.s);
-        }
-    }
-    ctx.written_bytes++;
-    */
 }
 
+/**
+ * Updates the SHA3-256 digest with a single byte.
+ *
+ * @param ctx    the SHA3-256 context
+ * @param byteIn the byte to update the digest with
+ */
+void sha3_256_Update(inout sha3_256_context ctx, uint8_t byteIn) {
+    ctx.saved |= ((uint64_t(byteIn) & uint64_t(0xFFu)) << (ctx.byteIndex * 8u));
+    ctx.byteIndex++;
+    sha3_256_tryFlushWord(ctx);
+}
 
+/**
+ * Updates the SHA3-256 digest with 4 bytes, stored in a 32-bit integer in little-endian order.
+ *
+ * @param ctx     the SHA3-256 context
+ * @param bytesIn an integer containing the 4 bytes to update the digest with in little-endian order
+ */
 void sha3_256_Update_int32le(inout sha3_256_context ctx, uint32_t bytesIn) {
-    /*if ((ctx.written_bytes & 8u) < 4u) {
-        //ctx.saved |= ((uint64_t(bytesIn) & uint64_t(0xFFFFFFFFu)) << ((ctx.written_bytes % 8u) * 8u));
-        //if ((ctx.written_bytes % 8u) == 8u - 4u) {
-        //    uint word_index = (ctx.written_bytes / 8u) % (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS);
-        //    ctx.s[word_index] ^= ctx.saved;
-        //    ctx.saved = 0u;
-        //    if (word_index == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS - 1u)) {
-        //        keccakf(ctx.s);
-        //    }
-        //}
-        //ctx.written_bytes += 4u;
-    } else {*/
-        sha3_256_Update(ctx, uint8_t((bytesIn >> 0u) & 0xFFu));
-        sha3_256_Update(ctx, uint8_t((bytesIn >> 8u) & 0xFFu));
-        sha3_256_Update(ctx, uint8_t((bytesIn >> 16u) & 0xFFu));
-        sha3_256_Update(ctx, uint8_t((bytesIn >> 24u) & 0xFFu));
-    //}
+    if (ctx.byteIndex <= 4u) {
+        //ctx.s[ctx.wordIndex] ^= (uint64_t(bytesIn) << (ctx.byteIndex * 8u));
+        ctx.saved |= (uint64_t(bytesIn) << (ctx.byteIndex * 8u));
+        ctx.byteIndex += 4u;
+        sha3_256_tryFlushWord(ctx);
+    } else {
+        u8vec4 unpacked = unpack8(bytesIn);
+        sha3_256_Update(ctx, unpacked.x);
+        sha3_256_Update(ctx, unpacked.y);
+        sha3_256_Update(ctx, unpacked.z);
+        sha3_256_Update(ctx, unpacked.w);
+    }
 }
 
+/**
+ * Updates the SHA3-256 digest with 8 bytes, stored in a 64-bit integer in little-endian order.
+ *
+ * @param ctx     the SHA3-256 context
+ * @param bytesIn an integer containing the 8 bytes to update the digest with in little-endian order
+ */
+void sha3_256_Update_int64le(inout sha3_256_context ctx, uint64_t bytesIn) {
+    if (ctx.byteIndex == 0u) {
+        // Digest the entire word in one go
+        ctx.s[ctx.wordIndex] ^= bytesIn;
+        ctx.wordIndex++;
+        sha3_256_tryFlushBlock(ctx);
+    } else {
+        // Split the word in two halves and digest them separately
+        uvec2 unpacked = unpackUint2x32(bytesIn);
+        sha3_256_Update_int32le(ctx, unpacked.x);
+        sha3_256_Update_int32le(ctx, unpacked.y);
+    }
+}
+
+/**
+ * Updates the SHA3-256 digest with between 0 and 8 bytes, stored in a 64-bit integer in little-endian order.
+ *
+ * @param ctx     the SHA3-256 context
+ * @param bytesIn an integer containing the 8 bytes to update the digest with in little-endian order
+ * @param count   the number of bytes to update the digest with. Must be 0 <= count <= 8
+ */
+void sha3_256_Update_int64le_partial(inout sha3_256_context ctx, uint64_t bytesIn, uint count) {
+    switch (count) {
+        case 0u:
+            // Do nothing
+            break;
+        case 4u:
+            // Digest the entire lower half of the word in one go
+            sha3_256_Update_int32le(ctx, unpackUint2x32(bytesIn).x);
+            break;
+        case 8u:
+            // Digest the entire word in one go
+            sha3_256_Update_int64le(ctx, bytesIn);
+            break;
+        default:
+            if (ctx.byteIndex <= 8u - count) {
+                // Digest all the relevant bits of the word in one go
+                ctx.saved |= ((uint64_t(bytesIn) & ((uint64_t(1) << (count * 8u)) - 1)) << (ctx.byteIndex * 8u));
+                ctx.byteIndex += count;
+                sha3_256_tryFlushWord(ctx);
+                break;
+            } else {
+                // Slow case!
+                for (uint i = 0; i < count; i++) {
+                    sha3_256_Update(ctx, uint8_t((bytesIn >> (i * 8u)) & uint64_t(0xFFu)));
+                }
+                break;
+            }
+    }
+}
+
+/**
+ * Finishes digesting data into the SHA3-256 digest and returns the 32-byte hash.
+ *
+ * @param ctx     the SHA3-256 context
+ * @return the 32-byte hash
+ */
 uint8_t[SHA3_256_BYTES] sha3_256_Finalize(inout sha3_256_context ctx) {
     /* Append 2-bit suffix 01, per SHA-3 spec. Instead of 1 for padding we
      * use 1<<2 below. The 0x02 below corresponds to the suffix 01.
