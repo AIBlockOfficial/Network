@@ -3,27 +3,31 @@ pub mod opengl;
 
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::{Range, RangeBounds};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::debug;
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
-use crate::constants::POW_NONCE_MAX_LEN;
+use crate::constants::{MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
 use crate::utils::{split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct PreparedBlockHeader {
-    pub header_bytes: Box<[u8]>,
-    pub header_nonce_offset: usize,
-    pub difficulty: PreparedBlockDifficulty,
+    pub leading_bytes: Box<[u8]>,
+    pub trailing_bytes: Box<[u8]>,
+    pub nonce_length: usize,
+    pub difficulty: PoWDifficulty,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub enum PreparedBlockDifficulty {
-    LeadingZeroBytes,
+pub enum PoWDifficulty {
+    LeadingZeroBytes {
+        leading_zeroes: usize,
+    },
     TargetHashAlwaysPass,
     TargetHash {
         target_hash: [u8; SHA3_256_BYTES],
@@ -33,16 +37,19 @@ pub enum PreparedBlockDifficulty {
 fn find_block_header_nonce_location(
     block_header: &BlockHeader,
     nonce_length: usize,
-) -> (Box<[u8]>, usize) {
+) -> (Box<[u8]>, Box<[u8]>) {
     assert!(nonce_length > 0 && nonce_length <= POW_NONCE_MAX_LEN,
             "invalid nonce_length {}, should be in range [0, {}]",
             nonce_length, POW_NONCE_MAX_LEN);
 
     let mut block_header = block_header.clone();
 
-    block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; nonce_length];
+    let nonce_00 = vec![0x00u8; nonce_length];
+    let nonce_ff = vec![0xFFu8; nonce_length];
+
+    block_header.nonce_and_mining_tx_hash.0 = nonce_00.clone();
     let serialized_00 = bincode::serialize(&block_header).unwrap();
-    block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; nonce_length];
+    block_header.nonce_and_mining_tx_hash.0 = nonce_ff.clone();
     let serialized_ff = bincode::serialize(&block_header).unwrap();
 
     assert_ne!(serialized_00, serialized_ff,
@@ -55,20 +62,24 @@ fn find_block_header_nonce_location(
         .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
         .expect("the serialized block headers are not equal, but are equal at every index?!?");
 
-    assert_eq!(&serialized_00.as_slice()[nonce_offset..nonce_offset + 4], vec![0x00u8; nonce_length].as_slice(),
+    assert_eq!(&serialized_00.as_slice()[nonce_offset..nonce_offset + 4], nonce_00.as_slice(),
                "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
-    assert_eq!(&serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], vec![0xFFu8; nonce_length].as_slice(),
+    assert_eq!(&serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], nonce_ff.as_slice(),
                "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
 
-    (serialized_00.into_boxed_slice(), nonce_offset)
+    let leading_bytes = serialized_00[..nonce_offset].into();
+    let trailing_bytes = serialized_00[nonce_offset + nonce_length..].into();
+    (leading_bytes, trailing_bytes)
 }
 
 fn extract_target_difficulty(
     difficulty: &[u8],
-) -> Result<PreparedBlockDifficulty, &'static str> {
+) -> Result<PoWDifficulty, &'static str> {
     if difficulty.is_empty() {
         // There is no difficulty function enabled
-        return Ok(PreparedBlockDifficulty::LeadingZeroBytes);
+        return Ok(PoWDifficulty::LeadingZeroBytes {
+            leading_zeroes: MINING_DIFFICULTY,
+        });
     }
 
     // Decode the difficulty bytes into a CompactTarget and then expand that into a target
@@ -78,8 +89,8 @@ fn extract_target_difficulty(
 
     match expand_compact_target_difficulty(compact_target) {
         // The target value is higher than the largest possible SHA3-256 hash.
-        None => Ok(PreparedBlockDifficulty::TargetHashAlwaysPass),
-        Some(target_hash) => Ok(PreparedBlockDifficulty::TargetHash { target_hash }),
+        None => Ok(PoWDifficulty::TargetHashAlwaysPass),
+        Some(target_hash) => Ok(PoWDifficulty::TargetHash { target_hash }),
     }
 }
 
@@ -105,22 +116,67 @@ impl PreparedBlockHeader {
         block_header: &BlockHeader,
         nonce_length: usize,
     ) -> Result<Self, &'static str> {
-        let (header_bytes, header_nonce_offset) =
+        let (leading_bytes, trailing_bytes) =
             find_block_header_nonce_location(block_header, nonce_length);
 
         let difficulty = extract_target_difficulty(&block_header.difficulty)?;
 
         Ok(Self {
-            header_bytes,
-            header_nonce_offset,
+            leading_bytes,
+            trailing_bytes,
+            nonce_length,
             difficulty,
         })
     }
 }
 
+/// An object which contains a nonce and can therefore be mined.
+pub trait PoWObject {
+    /// Gets the difficulty requirements for mining this object.
+    fn difficulty(&self) -> PoWDifficulty;
+
+    /// Gets a range containing all nonce lengths permitted by this object.
+    fn permitted_nonce_lengths(&self) -> Range<usize>;
+
+    /// Gets the leading and trailing bytes for this object.
+    ///
+    /// These bytes are concatenated with a nonce of the given length in the middle while mining.
+    ///
+    /// ### Arguments
+    ///
+    /// * `nonce_length`  - The length (in bytes) of the nonce to be inserted between the leading
+    ///                     and trailing bytes
+    fn get_leading_and_trailing_bytes_for_mine(
+        &self,
+        nonce_length: usize,
+    ) -> Result<(Box<[u8]>, Box<[u8]>), usize>;
+}
+
+impl PoWObject for BlockHeader {
+    fn difficulty(&self) -> PoWDifficulty {
+        extract_target_difficulty(&self.difficulty)
+            .expect("Block header contains invalid difficulty!")
+    }
+
+    fn permitted_nonce_lengths(&self) -> Range<usize> {
+        0..POW_NONCE_MAX_LEN + 1
+    }
+
+    fn get_leading_and_trailing_bytes_for_mine(
+        &self,
+        nonce_length: usize,
+    ) -> Result<(Box<[u8]>, Box<[u8]>), usize> {
+        if !self.permitted_nonce_lengths().contains(&nonce_length) {
+            return Err(nonce_length);
+        }
+
+        Ok(find_block_header_nonce_location(self, nonce_length))
+    }
+}
+
 /// A response from a mining operation which didn't encounter any errors.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub enum BlockMineResult {
+pub enum MineResult {
     /// Indicates that a valid Proof-of-Work was found for the block.
     FoundNonce {
         /// The found nonce which meets the block's difficulty requirements.
@@ -204,7 +260,7 @@ impl fmt::Display for MinerStatistics {
     }
 }
 
-pub trait PoWBlockMiner {
+pub trait SHA3_256PoWMiner {
     type Error : Sized + Debug;
 
     /// Returns true if this miner is hardware-accelerated.
@@ -223,36 +279,42 @@ pub trait PoWBlockMiner {
     /// iteration.
     fn nonce_peel_amount(&self) -> u32;
 
-    /// Tries to generate a Proof-of-Work for a block header.
+    /// Tries to generate a Proof-of-Work for the given bytes.
     ///
-    /// This will try to generate a Proof-of-Work using the requested 32-bit nonces and
-    /// return the first nonce which met the requirements, or `None` if none of the nonces
-    /// could fulfil the difficulty requirements.
+    /// This will try to generate a Proof-of-Work by inserting 4-byte (32-bit) nonces (in
+    /// little-endian encoding) between the given leading and trailing byte sequences and hashing
+    /// the result. It will return the first nonce which met the given difficulty requirements, or
+    /// `None` if none of the nonces could meet the difficulty requirements.
     ///
     /// ### Arguments
     ///
-    /// * `prepared_block_header`  - A `PreparedBlockHeader` for the block header to be mined
-    /// * `first_nonce`            - The first nonce to test
-    /// * `nonce_count`            - The number of nonces to test
-    /// * `statistics`             - A `MinerStatistics` instance to be updated with information
-    ///                              about the mining progress
-    fn generate_pow_block_internal(
+    /// * `leading_bytes`     - The bytes to hash before the 4-byte nonce
+    /// * `trailing_bytes`    - The bytes to after the 4-byte nonce
+    /// * `difficulty`        - The difficulty requirements
+    /// * `first_nonce`       - The first nonce to test
+    /// * `nonce_count`       - The number of nonces to test
+    /// * `statistics`        - A `MinerStatistics` instance to be updated with information
+    ///                         about the mining progress
+    fn generate_pow_internal(
         &mut self,
-        prepared_block_header: &PreparedBlockHeader,
+        leading_bytes: &[u8],
+        trailing_bytes: &[u8],
+        difficulty: &PoWDifficulty,
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
     ) -> Result<Option<u32>, Self::Error>;
 
-    /// Tries to generate a Proof-of-Work for a block header.
+    /// Tries to generate a Proof-of-Work for the given object.
     ///
-    /// This will try to generate a Proof-of-Work using any valid nonce, and will keep going until
-    /// a valid nonce is found, the provided termination flag becomes `true`, or the given timeout
-    /// duration is reached.
+    /// This will try to generate a Proof-of-Work by inserting nonces between the given leading and
+    /// trailing byte sequences and hashing the result. It will return the first nonce which met the
+    /// given difficulty requirements, or `None` if none of the nonces could meet the object's
+    /// difficulty requirements.
     ///
     /// ### Arguments
     ///
-    /// * `block_header`     - The block header to find a Proof-of-Work for.
+    /// * `object`           - The object to be mined
     /// * `statistics`       - A `MinerStatistics` instance to be updated with information
     ///                        about the mining progress
     /// * `terminate_flag`   - If set, this is a reference to an externally mutable boolean flag.
@@ -260,23 +322,30 @@ pub trait PoWBlockMiner {
     /// * `timeout_duration` - If set, this is the maximum duration which the miner will run for.
     ///                        The miner will stop after approximately this duration, regardless
     ///                        of whether a result was found.
-    fn generate_pow_block(
+    fn generate_pow(
         &mut self,
-        block_header: &BlockHeader,
+        object: &impl PoWObject,
         statistics: &mut MinerStatistics,
         terminate_flag: Option<Arc<AtomicBool>>,
         timeout_duration: Option<Duration>,
-    ) -> Result<BlockMineResult, Self::Error> {
+    ) -> Result<MineResult, Self::Error> {
+        let difficulty = object.difficulty();
+
         // TODO: Change the nonce prefix if we run out of hashes to try
-        let prepared_header = PreparedBlockHeader::prepare(block_header, std::mem::size_of::<u32>()).unwrap();
+        let nonce_prefix_length = std::mem::size_of::<u32>();
+        let (leading_bytes, trailing_bytes) =
+            object.get_leading_and_trailing_bytes_for_mine(nonce_prefix_length)
+                .expect("Object doesn't permit a 32-bit nonce!");
 
         let peel_amount = self.nonce_peel_amount();
 
         let total_start_time = Instant::now();
 
         for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
-            let result = self.generate_pow_block_internal(
-                &prepared_header,
+            let result = self.generate_pow_internal(
+                &leading_bytes,
+                &trailing_bytes,
+                &difficulty,
                 first_nonce,
                 nonce_count,
                 statistics,
@@ -285,7 +354,7 @@ pub trait PoWBlockMiner {
             println!("Mining statistics: {}", statistics);
 
             if let Some(nonce) = result {
-                return Ok(BlockMineResult::FoundNonce {
+                return Ok(MineResult::FoundNonce {
                     nonce: nonce.to_le_bytes().to_vec(),
                 });
             }
@@ -293,7 +362,7 @@ pub trait PoWBlockMiner {
             if let Some(terminate_flag) = &terminate_flag {
                 if terminate_flag.load(Ordering::Acquire) {
                     debug!("Miner terminating after being requested to terminate");
-                    return Ok(BlockMineResult::TerminateRequested);
+                    return Ok(MineResult::TerminateRequested);
                 }
             }
 
@@ -304,12 +373,12 @@ pub trait PoWBlockMiner {
                         "Miner terminating after reaching timeout (timeout={}s, elapsed time={}s)",
                         timeout_duration.as_secs_f64(),
                         total_elapsed_time.as_secs_f64());
-                    return Ok(BlockMineResult::TimeoutReached);
+                    return Ok(MineResult::TimeoutReached);
                 }
             }
         }
 
-        Ok(BlockMineResult::Exhausted)
+        Ok(MineResult::Exhausted)
     }
 }
 
@@ -372,7 +441,7 @@ pub(super) mod test {
             Self::THRESHOLD_VERY_HARD,
         ];
 
-        pub fn test_miner(&self, miner: &mut impl PoWBlockMiner, is_bench: bool) {
+        pub fn test_miner(&self, miner: &mut impl SHA3_256PoWMiner, is_bench: bool) {
             if !miner.is_hw_accelerated()
                 && if is_bench { self.requires_hw_accel.1 } else { self.requires_hw_accel.0 } {
                 println!("Skipping test case {} (too hard)", self.name);
@@ -382,9 +451,15 @@ pub(super) mod test {
             let prepared_block_header = test_prepared_block_header(self.difficulty);
 
             let mut statistics = Default::default();
-            assert_eq!(miner.generate_pow_block_internal(&prepared_block_header, 0, self.max_nonce_count, &mut statistics).unwrap(),
-                       Some(self.expected_nonce),
-                       "Test case {:?}", self);
+            assert_eq!(
+                miner.generate_pow_internal(
+                    &prepared_block_header.leading_bytes,
+                    &prepared_block_header.trailing_bytes,
+                    &prepared_block_header.difficulty,
+                    0, self.max_nonce_count, &mut statistics,
+                ).unwrap(),
+                Some(self.expected_nonce),
+                "Test case {:?}", self);
 
             println!("Test case {} statistics: {}", self.name, statistics);
         }

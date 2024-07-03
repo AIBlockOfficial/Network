@@ -4,9 +4,8 @@ use std::{error, fmt};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
-use tracing::warn;
-use crate::constants::MINING_DIFFICULTY;
-use crate::miner_pow::{MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader};
+use tracing::{debug, info, warn};
+use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty};
 use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 use crate::utils::split_range_into_blocks;
@@ -54,7 +53,7 @@ struct GlfwContext<Ctx> {
 
 impl<Ctx> Drop for GlfwContext<Ctx> {
     fn drop(&mut self) {
-        println!("Thread {} is destroying the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        debug!("Thread {} is destroying the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
     }
 }
 
@@ -79,7 +78,7 @@ impl<'glfw, Ctx> std::ops::DerefMut for GlfwContextGuard<'glfw, Ctx> {
 impl<'glfw, Ctx> Drop for GlfwContextGuard<'glfw, Ctx> {
     fn drop(&mut self) {
         // un-bind the context before releasing the context's mutex
-        println!("Thread {} is releasing the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        debug!("Thread {} is releasing the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
         glfw::make_context_current(None);
     }
 }
@@ -88,7 +87,7 @@ static GLFW_MUTEX: Mutex<()> = Mutex::new(());
 
 impl<Ctx> GlfwContext<Ctx> {
     fn new(f: impl FnOnce() -> Result<Ctx, CreateMinerError>) -> Result<Self, CreateMinerError> {
-        println!("Thread {} is creating the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        debug!("Thread {} is creating the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
 
         let glfw_mutex_guard = GLFW_MUTEX.lock()
             .map_err(|_| CreateMinerError::LockFailed)?;
@@ -108,7 +107,7 @@ impl<Ctx> GlfwContext<Ctx> {
         let renderer = gl_wrapper::get_string(GetStringType::RENDERER).unwrap();
         let version = gl_wrapper::get_string(GetStringType::VERSION).unwrap();
         let glsl_version = gl_wrapper::get_string(GetStringType::SHADING_LANGUAGE_VERSION).unwrap();
-        println!("Created OpenGL context:\n  Vendor: {vendor}\n  Renderer: {renderer}\n  Version: {version}\n  GLSL version: {glsl_version}");
+        info!("Created OpenGL context:\n  Vendor: {vendor}\n  Renderer: {renderer}\n  Version: {version}\n  GLSL version: {glsl_version}");
 
         let ctx = f()?;
 
@@ -125,7 +124,7 @@ impl<Ctx> GlfwContext<Ctx> {
 
     fn make_current(&mut self) -> GlfwContextGuard<Ctx> {
         let guard = self.mutex.lock().unwrap();
-        println!("Thread {} is acquiring the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
+        debug!("Thread {} is acquiring the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
         self.glfw_window.make_current();
         GlfwContextGuard { mutex_guard: guard }
     }
@@ -152,7 +151,7 @@ impl OpenGlMiner {
         let mut glfw_context = GlfwContext::new(|| Ok(()))?;
         let guard = glfw_context.make_current();
 
-        println!("compiling shader...");
+        debug!("compiling shader...");
 
         // compile and link the compute shader
         let shader = Shader::compile(
@@ -198,7 +197,7 @@ impl OpenGlMiner {
     }
 }
 
-impl PoWBlockMiner for OpenGlMiner {
+impl SHA3_256PoWMiner for OpenGlMiner {
     type Error = GlError;
 
     fn is_hw_accelerated(&self) -> bool {
@@ -214,9 +213,11 @@ impl PoWBlockMiner for OpenGlMiner {
         1u32 << 20
     }
 
-    fn generate_pow_block_internal(
+    fn generate_pow_internal(
         &mut self,
-        prepared_block_header: &PreparedBlockHeader,
+        leading_bytes: &[u8],
+        trailing_bytes: &[u8],
+        difficulty: &PoWDifficulty,
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
@@ -225,13 +226,10 @@ impl PoWBlockMiner for OpenGlMiner {
             return Ok(None);
         }
 
-        let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
-        let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
-
         let dispatch_count = nonce_count.div_ceil(self.program_work_group_size);
 
         if dispatch_count > self.max_work_group_count {
-            println!("OpenGL miner dispatched with too high nonce_count {} (work group size={}, max \
+            warn!("OpenGL miner dispatched with too high nonce_count {} (work group size={}, max \
                    work group count={})! Splitting into multiple dispatches.",
                   nonce_count, self.program_work_group_size, self.max_work_group_count);
 
@@ -240,7 +238,7 @@ impl PoWBlockMiner for OpenGlMiner {
                 nonce_count,
                 self.max_work_group_count * self.program_work_group_size
             ) {
-                match self.generate_pow_block_internal(prepared_block_header, first, count, statistics)? {
+                match self.generate_pow_internal(leading_bytes, trailing_bytes, difficulty, first, count, statistics)? {
                     Some(nonce) => return Ok(Some(nonce)),
                     None => (),
                 };
@@ -250,9 +248,9 @@ impl PoWBlockMiner for OpenGlMiner {
 
         let mut stats_updater = statistics.update_safe();
 
-        //let hash_count = work_group_size * dispatch_count;
-        //let hash_buffer_capacity_int32s = hash_count * 32;
-        //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
+        let block_header_nonce_offset = leading_bytes.len().try_into().unwrap();
+        let header_bytes = [ leading_bytes, &0u32.to_le_bytes(), trailing_bytes ].concat();
+        let block_header_length = header_bytes.len().try_into().unwrap();
 
         let _guard = self.glfw_context.make_current();
 
@@ -260,18 +258,18 @@ impl PoWBlockMiner for OpenGlMiner {
         self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
         self.program.set_uniform_1ui(self.program_header_nonce_offset_uniform, block_header_nonce_offset)?;
 
-        match &prepared_block_header.difficulty {
+        match difficulty {
             // The target value is higher than the largest possible SHA3-256 hash. Therefore,
             // every hash will meet the required difficulty threshold, so we can just return
             // an arbitrary nonce.
-            PreparedBlockDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
+            PoWDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
 
-            PreparedBlockDifficulty::LeadingZeroBytes => {
+            PoWDifficulty::LeadingZeroBytes { leading_zeroes } => {
                 // DIFFICULTY_FUNCTION_LEADING_ZEROES
                 self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)?;
-                self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, MINING_DIFFICULTY.try_into().unwrap())?;
+                self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, (*leading_zeroes).try_into().unwrap())?;
             },
-            PreparedBlockDifficulty::TargetHash { target_hash } => {
+            PoWDifficulty::TargetHash { target_hash } => {
                 // DIFFICULTY_FUNCTION_COMPACT_TARGET
                 self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 2)?;
                 self.program.set_uniform_1uiv(self.program_compact_target_expanded_uniform,
@@ -279,15 +277,12 @@ impl PoWBlockMiner for OpenGlMiner {
             },
         }
 
-        let block_header_buffer_data = prepared_block_header.header_bytes.iter()
+        let block_header_buffer_data = header_bytes.iter()
             .map(|b| (*b as u32).to_ne_bytes())
             .collect::<Vec<_>>()
             .concat();
         let block_header_buffer = ImmutableBuffer::new_initialized(&block_header_buffer_data, 0)
             .add_context("BlockHeader buffer")?;
-
-        //let mut hash_buffer = ImmutableBuffer::new_uninitialized(hash_buffer_capacity_bytes, 0)
-        //    .add_msg("HashOutput buffer")?;
 
         const RESPONSE_BUFFER_CAPACITY: usize = 12;
         let response_buffer_data = [ 0u32, u32::MAX, 0u32 ];
@@ -296,18 +291,12 @@ impl PoWBlockMiner for OpenGlMiner {
             .add_context("Response buffer")?;
 
         block_header_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 0).unwrap();
-        //hash_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 1).unwrap();
         response_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 2).unwrap();
 
-        //hash_buffer.invalidate().unwrap();
         self.program.bind().unwrap();
 
         gl_wrapper::dispatch_compute(dispatch_count, 1, 1)?;
-
         gl_wrapper::memory_barrier(&[ MemoryBarrierBit::BufferUpdate ])?;
-
-        //let mut hash_buffer_data = vec![0u8; hash_buffer_capacity_bytes];
-        //hash_buffer.download(0, &mut hash_buffer_data).unwrap();
 
         response_buffer.download_sub_data(0, &mut response_buffer_data).unwrap();
 
@@ -638,7 +627,7 @@ mod gl_wrapper {
             if compile_status as GLboolean == gl::FALSE {
                 return Err(CompileShaderError::CompilationFailed { shader_type, info_log });
             } else if !info_log.is_empty() {
-                println!("Shader compile warnings: {info_log}");
+                warn!("Shader compile warnings: {info_log}");
             }
 
             Ok(shader)
@@ -732,7 +721,7 @@ mod gl_wrapper {
             if link_status as GLboolean == gl::FALSE {
                 return Err(LinkProgramError::LinkFailed { info_log });
             } else if !info_log.is_empty() {
-                println!("Program link warnings: {info_log}");
+                warn!("Program link warnings: {info_log}");
             }
 
             Ok(program)

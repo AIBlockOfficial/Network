@@ -637,17 +637,17 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
 
     let result = if use_cpu_miner {
         CpuMiner::new()
-            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
+            .generate_pow(header, &mut statistics, terminate_flag, timeout_duration)
             .unwrap() // this can't fail
     } else {
         OpenGlMiner::new()
             .map_err(Box::new)?
-            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
+            .generate_pow(header, &mut statistics, terminate_flag, timeout_duration)
             .map_err(Box::new)?
     };
 
     match result {
-        BlockMineResult::FoundNonce { nonce } => {
+        MineResult::FoundNonce { nonce } => {
             // Verify that the found nonce is actually valid
             let mut header_copy = header.clone();
             header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
@@ -656,9 +656,9 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
                     hex::encode(&nonce), header);
             Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
         },
-        BlockMineResult::Exhausted => Ok(None),
-        BlockMineResult::TerminateRequested => Ok(None),
-        BlockMineResult::TimeoutReached => Ok(None),
+        MineResult::Exhausted => Ok(None),
+        MineResult::TerminateRequested => Ok(None),
+        MineResult::TimeoutReached => Ok(None),
     }
 }
 
