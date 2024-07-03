@@ -4,10 +4,12 @@ use std::{error, fmt};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
+use tracing::warn;
 use crate::constants::MINING_DIFFICULTY;
 use crate::miner_pow::{MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader};
 use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
+use crate::utils::split_range_into_blocks;
 
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
@@ -223,12 +225,31 @@ impl PoWBlockMiner for OpenGlMiner {
             return Ok(None);
         }
 
-        let mut statistics_updater = statistics.update_safe();
-
         let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
         let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
 
         let dispatch_count = nonce_count.div_ceil(self.program_work_group_size);
+
+        if dispatch_count > self.max_work_group_count {
+            println!("OpenGL miner dispatched with too high nonce_count {} (work group size={}, max \
+                   work group count={})! Splitting into multiple dispatches.",
+                  nonce_count, self.program_work_group_size, self.max_work_group_count);
+
+            for (first, count) in split_range_into_blocks(
+                first_nonce,
+                nonce_count,
+                self.max_work_group_count * self.program_work_group_size
+            ) {
+                match self.generate_pow_block_internal(prepared_block_header, first, count, statistics)? {
+                    Some(nonce) => return Ok(Some(nonce)),
+                    None => (),
+                };
+            }
+            return Ok(None);
+        }
+
+        let mut stats_updater = statistics.update_safe();
+
         //let hash_count = work_group_size * dispatch_count;
         //let hash_buffer_capacity_int32s = hash_count * 32;
         //let hash_buffer_capacity_bytes = hash_buffer_capacity_int32s as usize * 4;
@@ -291,7 +312,7 @@ impl PoWBlockMiner for OpenGlMiner {
         response_buffer.download_sub_data(0, &mut response_buffer_data).unwrap();
 
         // Now that the hashes have been computed, update the statistics
-        statistics_updater.computed_hashes(
+        stats_updater.computed_hashes(
             (dispatch_count as u128) * (self.program_work_group_size as u128));
 
         let response_status = u32::from_ne_bytes(*response_buffer_data[0..].first_chunk().unwrap());

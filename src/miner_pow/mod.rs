@@ -10,7 +10,7 @@ use tracing::debug;
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
 use crate::constants::POW_NONCE_LEN;
-use crate::utils::UnitsPrefixed;
+use crate::utils::{split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
 
@@ -264,10 +264,7 @@ pub trait PoWBlockMiner {
 
         let total_start_time = Instant::now();
 
-        for i in 0..u32::MAX / peel_amount {
-            let first_nonce = i * peel_amount;
-            let nonce_count = peel_amount;
-
+        for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
             let result = self.generate_pow_block_internal(
                 &prepared_header,
                 first_nonce,
@@ -316,6 +313,7 @@ pub(super) mod test {
         pub difficulty: &'static [u8],
         pub expected_nonce: u32,
         pub max_nonce_count: u32,
+        pub requires_hw_accel: bool,
     }
 
     impl TestBlockMinerInternal {
@@ -324,24 +322,28 @@ pub(super) mod test {
             difficulty: &[],
             expected_nonce: 455,
             max_nonce_count: 1024,
+            requires_hw_accel: false,
         };
         const THRESHOLD_EASY: Self = Self {
             name: "THRESHOLD_EASY",
             difficulty: b"\x22\x00\x00\x01",
             expected_nonce: 28,
             max_nonce_count: 1024,
+            requires_hw_accel: false,
         };
         const THRESHOLD_HARD: Self = Self {
             name: "THRESHOLD_HARD",
             difficulty: b"\x20\x00\x00\x01",
             expected_nonce: 4894069,
             max_nonce_count: 4900000,
+            requires_hw_accel: false,
         };
         const THRESHOLD_VERY_HARD: Self = Self {
             name: "THRESHOLD_VERY_HARD",
-            difficulty: b"\x1f\x00\x00\x01",
-            expected_nonce: 4894069,
-            max_nonce_count: 49000000,
+            difficulty: b"\x1f\x00\x00\xFF",
+            expected_nonce: 14801080,
+            max_nonce_count: 15000000,
+            requires_hw_accel: true,
         };
 
         pub const ALL_TEST: &'static [TestBlockMinerInternal] = &[
@@ -359,7 +361,7 @@ pub(super) mod test {
         ];
 
         pub fn test_miner(&self, miner: &mut impl PoWBlockMiner) {
-            if !miner.is_hw_accelerated() && self.max_nonce_count > miner.nonce_peel_amount() {
+            if !miner.is_hw_accelerated() && self.requires_hw_accel {
                 println!("Skipping test case {} (too hard)", self.name);
                 return;
             }

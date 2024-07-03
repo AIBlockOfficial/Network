@@ -1429,6 +1429,49 @@ impl fmt::Display for UnitsPrefixed {
     }
 }
 
+/// Splits the given integer range into smaller segments with the given maximum size.
+///
+/// ### Arguments
+///
+/// * `start`           - the first value
+/// * `len`             - the total length of the range
+/// * `max_block_size`  - the maximum size of each block
+pub fn split_range_into_blocks(
+    start: u32,
+    len: u32,
+    max_block_size: u32,
+) -> impl Iterator<Item = (u32, u32)> {
+    assert_ne!(max_block_size, 0);
+
+    struct Itr {
+        pos: u32,
+        remaining: u32,
+        max_block_size: u32,
+    }
+
+    impl Iterator for Itr {
+        type Item = (u32, u32);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let block_size = u32::min(self.remaining, self.max_block_size);
+            let result = (self.pos, block_size);
+            self.pos += block_size;
+            self.remaining -= block_size;
+            Some(result)
+        }
+    }
+
+    Itr {
+        pos: start,
+        remaining: len,
+        max_block_size,
+    }
+}
+
 /*---- TESTS ----*/
 
 #[cfg(test)]
@@ -1467,5 +1510,25 @@ mod util_tests {
             domain_with_port_addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
         );
+    }
+
+    #[test]
+    fn test_split_range_into_blocks() {
+        assert_eq!(
+            split_range_into_blocks(0, 16, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 4)]);
+
+        assert_eq!(
+            split_range_into_blocks(0, 15, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 3)]);
+
+        assert_eq!(
+            split_range_into_blocks(0, u32::MAX, 1 << 30).collect::<Vec<_>>(),
+            vec![
+                (0 << 30, 1 << 30),
+                (1 << 30, 1 << 30),
+                (2 << 30, 1 << 30),
+                (3 << 30, (1 << 30) - 1),
+            ]);
     }
 }
