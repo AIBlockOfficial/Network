@@ -290,8 +290,9 @@ impl Sub for Timestamp {
 pub struct CompactTarget(u32);
 
 impl CompactTarget {
-    /// This is defined ... somewhere.
-    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x1d, 0x00, 0xff, 0xff]));
+    /// This is the easiest difficulty possible. It's roughly equivalent to requiring a single
+    /// leading zero byte.
+    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x22, 0x00, 0x00, 0x01]));
 
     pub fn expand(&self) -> Target {
         let byte_len = self.0 >> 24;

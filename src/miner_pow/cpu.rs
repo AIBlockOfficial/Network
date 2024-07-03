@@ -16,6 +16,10 @@ impl CpuMiner {
 impl PoWBlockMiner for CpuMiner {
     type Error = ();
 
+    fn is_hw_accelerated(&self) -> bool {
+        false
+    }
+
     fn min_nonce_count(&self) -> u32 {
         1
     }

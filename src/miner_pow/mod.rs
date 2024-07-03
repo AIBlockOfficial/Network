@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use tracing::debug;
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
-use crate::constants::POW_NONCE_LEN;
-use crate::utils::UnitsPrefixed;
+use crate::constants::POW_NONCE_MAX_LEN;
+use crate::utils::{split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
 pub const BLOCK_HEADER_MAX_BYTES: usize = 1024;
@@ -32,14 +32,19 @@ pub enum PreparedBlockDifficulty {
     },
 }
 
-fn find_block_header_nonce_location(block_header: &BlockHeader) -> (Box<[u8]>, usize) {
-    assert_eq!(POW_NONCE_LEN, 4, "POW_NONCE_LEN has changed?!?");
+fn find_block_header_nonce_location(
+    block_header: &BlockHeader,
+    nonce_length: usize,
+) -> (Box<[u8]>, usize) {
+    assert!(nonce_length > 0 && nonce_length <= POW_NONCE_MAX_LEN,
+            "invalid nonce_length {}, should be in range [0, {}]",
+            nonce_length, POW_NONCE_MAX_LEN);
 
     let mut block_header = block_header.clone();
 
-    block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; POW_NONCE_LEN];
+    block_header.nonce_and_mining_tx_hash.0 = vec![0x00u8; nonce_length];
     let serialized_00 = bincode::serialize(&block_header).unwrap();
-    block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; POW_NONCE_LEN];
+    block_header.nonce_and_mining_tx_hash.0 = vec![0xFFu8; nonce_length];
     let serialized_ff = bincode::serialize(&block_header).unwrap();
 
     assert_ne!(serialized_00, serialized_ff,
@@ -52,9 +57,9 @@ fn find_block_header_nonce_location(block_header: &BlockHeader) -> (Box<[u8]>, u
         .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
         .expect("the serialized block headers are not equal, but are equal at every index?!?");
 
-    assert_eq!(serialized_00.as_slice()[nonce_offset..nonce_offset + 4], [0x00u8; 4],
+    assert_eq!(&serialized_00.as_slice()[nonce_offset..nonce_offset + 4], vec![0x00u8; nonce_length].as_slice(),
                "serialized block header with nonce 0x00000000 has different bytes at presumed nonce offset!");
-    assert_eq!(serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], [0xFFu8; 4],
+    assert_eq!(&serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], vec![0xFFu8; nonce_length].as_slice(),
                "serialized block header with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
 
     (serialized_00.into_boxed_slice(), nonce_offset)
@@ -98,8 +103,12 @@ fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8
 }
 
 impl PreparedBlockHeader {
-    pub fn prepare(block_header: &BlockHeader) -> Result<Self, &'static str> {
-        let (header_bytes, header_nonce_offset) = find_block_header_nonce_location(block_header);
+    pub fn prepare(
+        block_header: &BlockHeader,
+        nonce_length: usize,
+    ) -> Result<Self, &'static str> {
+        let (header_bytes, header_nonce_offset) =
+            find_block_header_nonce_location(block_header, nonce_length);
 
         let difficulty = extract_target_difficulty(&block_header.difficulty)?;
 
@@ -112,12 +121,12 @@ impl PreparedBlockHeader {
 }
 
 /// A response from a mining operation which didn't encounter any errors.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum BlockMineResult {
     /// Indicates that a valid Proof-of-Work was found for the block.
     FoundNonce {
         /// The found nonce which meets the block's difficulty requirements.
-        nonce: u32,
+        nonce: Vec<u8>,
     },
     /// Indicates that despite testing all possible nonce values, the miner was unable to find a
     /// nonce which could meet the block's difficulty requirements.
@@ -190,14 +199,18 @@ impl<'a> Drop for MinerStatisticsUpdater<'a> {
 
 impl fmt::Display for MinerStatistics {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Computed {} hashes, speed: {:.3}",
+        write!(f, "Computed {} hashes in {:.3}s, speed: {:.3}",
                self.total_computed_hashes,
+               self.total_mining_duration.as_secs_f64(),
                self.hash_rate_units())
     }
 }
 
 pub trait PoWBlockMiner {
     type Error : Sized + Debug;
+
+    /// Returns true if this miner is hardware-accelerated.
+    fn is_hw_accelerated(&self) -> bool;
 
     /// Returns the recommended minimum number of nonces which this implementation should compute
     /// at a time. Calling `generate_pow_block_internal` with a `nonce_count` smaller than this
@@ -256,16 +269,14 @@ pub trait PoWBlockMiner {
         terminate_flag: Option<Arc<AtomicBool>>,
         timeout_duration: Option<Duration>,
     ) -> Result<BlockMineResult, Self::Error> {
-        let prepared_header = PreparedBlockHeader::prepare(block_header).unwrap();
+        // TODO: Change the nonce prefix if we run out of hashes to try
+        let prepared_header = PreparedBlockHeader::prepare(block_header, std::mem::size_of::<u32>()).unwrap();
 
         let peel_amount = self.nonce_peel_amount();
 
         let total_start_time = Instant::now();
 
-        for i in 0..u32::MAX / peel_amount {
-            let first_nonce = i * peel_amount;
-            let nonce_count = peel_amount;
-
+        for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
             let result = self.generate_pow_block_internal(
                 &prepared_header,
                 first_nonce,
@@ -276,7 +287,9 @@ pub trait PoWBlockMiner {
             println!("Mining statistics: {}", statistics);
 
             if let Some(nonce) = result {
-                return Ok(BlockMineResult::FoundNonce { nonce });
+                return Ok(BlockMineResult::FoundNonce {
+                    nonce: nonce.to_le_bytes().to_vec(),
+                });
             }
 
             if let Some(terminate_flag) = &terminate_flag {
@@ -315,6 +328,7 @@ pub(super) mod test {
         pub difficulty: &'static [u8],
         pub expected_nonce: u32,
         pub max_nonce_count: u32,
+        pub requires_hw_accel: (bool, bool),
     }
 
     impl TestBlockMinerInternal {
@@ -323,32 +337,51 @@ pub(super) mod test {
             difficulty: &[],
             expected_nonce: 455,
             max_nonce_count: 1024,
+            requires_hw_accel: (false, false),
         };
         const THRESHOLD_EASY: Self = Self {
             name: "THRESHOLD_EASY",
             difficulty: b"\x22\x00\x00\x01",
             expected_nonce: 28,
             max_nonce_count: 1024,
+            requires_hw_accel: (false, false),
         };
         const THRESHOLD_HARD: Self = Self {
             name: "THRESHOLD_HARD",
             difficulty: b"\x20\x00\x00\x01",
             expected_nonce: 4894069,
             max_nonce_count: 4900000,
+            requires_hw_accel: (true, false),
+        };
+        const THRESHOLD_VERY_HARD: Self = Self {
+            name: "THRESHOLD_VERY_HARD",
+            difficulty: b"\x1f\x00\x00\xFF",
+            expected_nonce: 14801080,
+            max_nonce_count: 15000000,
+            requires_hw_accel: (true, true),
         };
 
-        pub const ALL_EASY: &'static [TestBlockMinerInternal] = &[
+        pub const ALL_TEST: &'static [TestBlockMinerInternal] = &[
             Self::NO_DIFFICULTY,
             Self::THRESHOLD_EASY,
+            Self::THRESHOLD_HARD,
+            Self::THRESHOLD_VERY_HARD,
         ];
 
         pub const ALL_BENCH: &'static [TestBlockMinerInternal] = &[
             Self::NO_DIFFICULTY,
             Self::THRESHOLD_EASY,
             Self::THRESHOLD_HARD,
+            Self::THRESHOLD_VERY_HARD,
         ];
 
-        pub fn test_miner(&self, miner: &mut impl PoWBlockMiner) {
+        pub fn test_miner(&self, miner: &mut impl PoWBlockMiner, is_bench: bool) {
+            if !miner.is_hw_accelerated()
+                && if is_bench { self.requires_hw_accel.1 } else { self.requires_hw_accel.0 } {
+                println!("Skipping test case {} (too hard)", self.name);
+                return;
+            }
+
             let prepared_block_header = test_prepared_block_header(self.difficulty);
 
             let mut statistics = Default::default();
@@ -377,7 +410,7 @@ pub(super) mod test {
     }
 
     fn test_prepared_block_header(difficulty: &[u8]) -> PreparedBlockHeader {
-        PreparedBlockHeader::prepare(&test_block_header(difficulty)).unwrap()
+        PreparedBlockHeader::prepare(&test_block_header(difficulty), 4).unwrap()
     }
 
     #[test]
@@ -437,24 +470,24 @@ pub(super) mod test {
     #[test]
     fn verify_cpu() {
         let mut miner = CpuMiner::new();
-        for case in TestBlockMinerInternal::ALL_EASY {
-            case.test_miner(&mut miner);
+        for case in TestBlockMinerInternal::ALL_TEST {
+            case.test_miner(&mut miner, false);
         }
     }
 
     #[test]
     fn verify_opengl() {
         let mut miner = OpenGlMiner::new().unwrap();
-        for case in TestBlockMinerInternal::ALL_EASY {
-            case.test_miner(&mut miner);
+        for case in TestBlockMinerInternal::ALL_TEST {
+            case.test_miner(&mut miner, false);
         }
     }
 
     #[test]
     fn verify_vulkan() {
         let mut miner = VulkanMiner::new().unwrap();
-        for case in TestBlockMinerInternal::ALL_EASY {
-            case.test_miner(&mut miner);
+        for case in TestBlockMinerInternal::ALL_TEST {
+            case.test_miner(&mut miner, false);
         }
     }
 }
@@ -473,7 +506,7 @@ mod bench {
     fn bench_cpu() {
         let mut miner = CpuMiner::new();
         for case in TestBlockMinerInternal::ALL_BENCH {
-            case.test_miner(&mut miner);
+            case.test_miner(&mut miner, true);
         }
     }
 
@@ -481,7 +514,7 @@ mod bench {
     fn bench_opengl() {
         let mut miner = OpenGlMiner::new().unwrap();
         for case in TestBlockMinerInternal::ALL_BENCH {
-            case.test_miner(&mut miner);
+            case.test_miner(&mut miner, true);
         }
     }
 
@@ -489,7 +522,7 @@ mod bench {
     fn bench_vulkan() {
         let mut miner = VulkanMiner::new().unwrap();
         for case in TestBlockMinerInternal::ALL_BENCH {
-            case.test_miner(&mut miner);
+            case.test_miner(&mut miner, true);
         }
     }
 }

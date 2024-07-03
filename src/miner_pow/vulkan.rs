@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use crevice::std140::AsStd140;
 use crevice::std430::AsStd430;
+use tracing::warn;
 use vulkano::*;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
@@ -21,6 +22,7 @@ use vulkano::shader::{ShaderModule, ShaderStages, SpecializationConstant};
 use vulkano::sync::GpuFuture;
 use crate::constants::MINING_DIFFICULTY;
 use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader, SHA3_256_BYTES};
+use crate::utils::split_range_into_blocks;
 
 // synced with vulkan_miner.glsl
 const WORK_GROUP_SIZE: u32 = 256;
@@ -251,6 +253,10 @@ impl VulkanMiner {
 impl PoWBlockMiner for VulkanMiner {
     type Error = MinerError;
 
+    fn is_hw_accelerated(&self) -> bool {
+        true
+    }
+
     fn min_nonce_count(&self) -> u32 {
         self.work_group_size
     }
@@ -271,9 +277,28 @@ impl PoWBlockMiner for VulkanMiner {
             return Ok(None);
         }
 
-        let mut stats_updater = statistics.update_safe();
-
         let work_group_counts = [nonce_count.div_ceil(self.work_group_size), 1, 1];
+
+        let max_work_group_count = self.device.physical_device().properties().max_compute_work_group_count[0];
+        if work_group_counts[0] > max_work_group_count {
+            warn!("Vulkan miner dispatched with too high nonce_count {} (work group size={}, max \
+                   work group count={})! Splitting into multiple dispatches.",
+                  nonce_count, self.work_group_size, max_work_group_count);
+
+            for (first, count) in split_range_into_blocks(
+                first_nonce,
+                nonce_count,
+                max_work_group_count * self.work_group_size
+            ) {
+                match self.generate_pow_block_internal(prepared_block_header, first, count, statistics)? {
+                    Some(nonce) => return Ok(Some(nonce)),
+                    None => (),
+                };
+            }
+            return Ok(None);
+        }
+
+        let mut stats_updater = statistics.update_safe();
 
         let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
         let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
