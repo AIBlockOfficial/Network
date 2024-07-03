@@ -4,19 +4,20 @@
 //
 
 /* 'Words' here refers to uint64_t */
-#define SHA3_KECCAK_SPONGE_WORDS uint(((1600)/8/*bits to byte*/)/8/*sizeof(uint64_t)*/)
-#define SHA3_256_BYTES uint(32)
+const uint SHA3_KECCAK_SPONGE_WORDS = ((1600)/8/*bits to byte*/)/8/*sizeof(uint64_t)*/; // 25
+const uint SHA3_256_BYTES = 256 / 8; // 32
+const uint SHA3_256_CAPACITY_WORDS = 2 * 256 / (8 * 8); // 8
 
-#define KECCAK_ROUNDS uint(24)
+const uint KECCAK_ROUNDS = 24;
 
 /*
  * This flag is used to configure "pure" Keccak, as opposed to NIST SHA3.
  */
-#define SHA3_USE_KECCAK 0
+const bool SHA3_USE_KECCAK = false;
 
 #define SHA3_ROTL64(x, y) (((x) << (y)) | ((x) >> (64/*(sizeof(uint64_t)*8)*/ - (y))))
 
-struct sha3_context {
+struct sha3_256_context {
     uint64_t saved;             /* the portion of the input message that we
                                  * didn't consume yet */
     uint64_t s[SHA3_KECCAK_SPONGE_WORDS]; /* Keccak's state */
@@ -24,8 +25,6 @@ struct sha3_context {
                                  * (starts from 0; 0--none are buffered) */
     uint wordIndex;         /* 0..24--the next word to integrate input
                                  * (starts from 0) */
-    uint capacityWords;     /* the double size of the hash output in
-                                 * words (e.g. 16 for Keccak 512) */
 };
 
 const uint keccakf_rotc[24] = {
@@ -88,47 +87,75 @@ void keccakf(inout uint64_t s[SHA3_KECCAK_SPONGE_WORDS]) {
     }
 }
 
-void sha3_Init_256(inout sha3_context ctx) {
-    uint bitSize = 256u;
-
+void sha3_256_Init(inout sha3_256_context ctx) {
     ctx.saved = 0ul;
     for (uint i = 0; i < SHA3_KECCAK_SPONGE_WORDS; i++) ctx.s[i] = 0ul;
     ctx.byteIndex = 0u;
     ctx.wordIndex = 0u;
-    ctx.capacityWords = 2u * bitSize / (8u * 8u/*sizeof(uint64_t)*/);
 }
 
-void sha3_Update(inout sha3_context ctx, uint8_t byteIn) {
+void sha3_256_Update(inout sha3_256_context ctx, uint8_t byteIn) {
     ctx.saved |= ((uint64_t(byteIn) & uint64_t(0xFFu)) << ((ctx.byteIndex++) * 8u));
     if (ctx.byteIndex == 8u) {
         ctx.s[ctx.wordIndex] ^= ctx.saved;
         ctx.saved = 0u;
         ctx.byteIndex = 0u;
-        if (++ctx.wordIndex == (SHA3_KECCAK_SPONGE_WORDS - ctx.capacityWords)) {
+        if (++ctx.wordIndex == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS)) {
             ctx.wordIndex = 0u;
             keccakf(ctx.s);
         }
     }
+
+    /*
+    ctx.saved |= ((uint64_t(byteIn) & uint64_t(0xFFu)) << ((ctx.written_bytes % 8u) * 8u));
+    if ((ctx.written_bytes % 8u) == 8u - 1u) {
+        uint word_index = (ctx.written_bytes / 8u) % (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS);
+        ctx.s[word_index] ^= ctx.saved;
+        ctx.saved = 0u;
+        if (word_index == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS - 1u)) {
+            keccakf(ctx.s);
+        }
+    }
+    ctx.written_bytes++;
+    */
 }
 
-uint8_t[SHA3_256_BYTES] sha3_Finalize(inout sha3_context ctx) {
+
+void sha3_256_Update_int32le(inout sha3_256_context ctx, uint32_t bytesIn) {
+    /*if ((ctx.written_bytes & 8u) < 4u) {
+        //ctx.saved |= ((uint64_t(bytesIn) & uint64_t(0xFFFFFFFFu)) << ((ctx.written_bytes % 8u) * 8u));
+        //if ((ctx.written_bytes % 8u) == 8u - 4u) {
+        //    uint word_index = (ctx.written_bytes / 8u) % (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS);
+        //    ctx.s[word_index] ^= ctx.saved;
+        //    ctx.saved = 0u;
+        //    if (word_index == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS - 1u)) {
+        //        keccakf(ctx.s);
+        //    }
+        //}
+        //ctx.written_bytes += 4u;
+    } else {*/
+        sha3_256_Update(ctx, uint8_t((bytesIn >> 0u) & 0xFFu));
+        sha3_256_Update(ctx, uint8_t((bytesIn >> 8u) & 0xFFu));
+        sha3_256_Update(ctx, uint8_t((bytesIn >> 16u) & 0xFFu));
+        sha3_256_Update(ctx, uint8_t((bytesIn >> 24u) & 0xFFu));
+    //}
+}
+
+uint8_t[SHA3_256_BYTES] sha3_256_Finalize(inout sha3_256_context ctx) {
     /* Append 2-bit suffix 01, per SHA-3 spec. Instead of 1 for padding we
      * use 1<<2 below. The 0x02 below corresponds to the suffix 01.
      * Overall, we feed 0, then 1, and finally 1 to start padding. Without
      * M || 01, we would simply use 1 to start padding. */
 
-    uint64_t t;
-#if SHA3_USE_KECCAK
-    /* Keccak version */
-    t = uint64_t((uint64_t(1)) << (ctx.byteIndex * 8u));
-#else
-    /* SHA3 version */
-    t = uint64_t((uint64_t(0x02 | (1 << 2))) << ((ctx.byteIndex) * 8u));
-#endif
+    uint64_t t = SHA3_USE_KECCAK
+        /* Keccak version */
+        ? uint64_t((uint64_t(1)) << (ctx.byteIndex * 8u))
+        /* SHA3 version */
+        : uint64_t((uint64_t(0x02 | (1 << 2))) << ((ctx.byteIndex) * 8u));
 
     ctx.s[ctx.wordIndex] ^= ctx.saved ^ t;
 
-    ctx.s[uint(SHA3_KECCAK_SPONGE_WORDS) - ctx.capacityWords - 1u] ^= 0x8000000000000000UL;
+    ctx.s[SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS - 1u] ^= 0x8000000000000000UL;
     keccakf(ctx.s);
 
     uint8_t result[SHA3_256_BYTES];

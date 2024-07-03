@@ -65,17 +65,16 @@ void main() {
     // hash the block header with the nonce inserted in the correct location
     uint header_length = u_blockHeader_length;
     uint header_nonceOffset = u_blockHeader_nonceOffset;
-    sha3_context ctx;
-    sha3_Init_256(ctx);
+    sha3_256_context ctx;
+    sha3_256_Init(ctx);
 
     // hash the block header, inserting the nonce in the correct location
-    for (uint i = 0; i < header_nonceOffset; i++) sha3_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
-    for (uint i = 0; i < 4; i++) sha3_Update(ctx, uint8_t((nonce >> (i * 8u)) & 0xFFu));
-    for (uint i = header_nonceOffset + 4u; i < header_length; i++) sha3_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
+    for (uint i = 0; i < header_nonceOffset; i++) sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
+    //for (uint i = 0; i < 4; i++) sha3_256_Update(ctx, uint8_t((nonce >> (i * 8u)) & 0xFFu));
+    sha3_256_Update_int32le(ctx, nonce);
+    for (uint i = header_nonceOffset + 4u; i < header_length; i++) sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
 
-    uint8_t[SHA3_256_BYTES] hash = sha3_Finalize(ctx);
-
-    //for (uint i = 0; i < SHA3_256_BYTES; i++) b_hashOutput.hashes[uint(nonce)][i] = uint32_t(hash[i]);
+    uint8_t[SHA3_256_BYTES] hash = sha3_256_Finalize(ctx);
 
     switch (u_difficultyFunction) {
         default: {
