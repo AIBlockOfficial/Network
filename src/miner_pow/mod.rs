@@ -7,11 +7,12 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 use tw_chain::primitives::block::BlockHeader;
 use crate::asert::CompactTarget;
 use crate::constants::{ADDRESS_POW_NONCE_LEN, MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
 use crate::interfaces::ProofOfWork;
+use crate::miner_pow::cpu::CpuMiner;
 use crate::utils::{split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
@@ -106,7 +107,7 @@ fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8
 /// An object which contains a nonce and can therefore be mined.
 pub trait PoWObject {
     /// Gets the difficulty requirements for mining this object.
-    fn difficulty(&self) -> PoWDifficulty;
+    fn pow_difficulty(&self) -> PoWDifficulty;
 
     /// Gets a range containing all nonce lengths permitted by this object.
     fn permitted_nonce_lengths(&self) -> Range<usize>;
@@ -126,7 +127,7 @@ pub trait PoWObject {
 }
 
 impl PoWObject for BlockHeader {
-    fn difficulty(&self) -> PoWDifficulty {
+    fn pow_difficulty(&self) -> PoWDifficulty {
         extract_target_difficulty(&self.difficulty)
             .expect("Block header contains invalid difficulty!")
     }
@@ -152,7 +153,7 @@ impl PoWObject for BlockHeader {
 }
 
 impl PoWObject for ProofOfWork {
-    fn difficulty(&self) -> PoWDifficulty {
+    fn pow_difficulty(&self) -> PoWDifficulty {
         // see utils::validate_pow_for_address()
         PoWDifficulty::LeadingZeroBytes {
             leading_zeroes: MINING_DIFFICULTY,
@@ -265,9 +266,29 @@ impl fmt::Display for MinerStatistics {
     }
 }
 
-pub trait SHA3_256PoWMiner {
-    type Error : Sized + Debug;
+/// An error which is thrown by a miner.
+#[derive(Debug)]
+pub enum MineError {
+    Wrapped(Box<dyn std::error::Error>),
+}
 
+impl MineError {
+    pub fn wrap<E: std::error::Error + 'static>(value: E) -> Self {
+        Self::Wrapped(Box::new(value))
+    }
+}
+
+impl std::error::Error for MineError {}
+
+impl fmt::Display for MineError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Wrapped(cause) => write!(f, "An error occurred while mining: {cause}"),
+        }
+    }
+}
+
+pub trait SHA3_256PoWMiner {
     /// Returns true if this miner is hardware-accelerated.
     fn is_hw_accelerated(&self) -> bool;
 
@@ -308,83 +329,106 @@ pub trait SHA3_256PoWMiner {
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
-    ) -> Result<Option<u32>, Self::Error>;
+    ) -> Result<Option<u32>, MineError>;
+}
 
-    /// Tries to generate a Proof-of-Work for the given object.
-    ///
-    /// This will try to generate a Proof-of-Work by inserting nonces between the given leading and
-    /// trailing byte sequences and hashing the result. It will return the first nonce which met the
-    /// given difficulty requirements, or `None` if none of the nonces could meet the object's
-    /// difficulty requirements.
-    ///
-    /// ### Arguments
-    ///
-    /// * `object`           - The object to be mined
-    /// * `statistics`       - A `MinerStatistics` instance to be updated with information
-    ///                        about the mining progress
-    /// * `terminate_flag`   - If set, this is a reference to an externally mutable boolean flag.
-    ///                        Setting the value to `true` will signal the miner to stop.
-    /// * `timeout_duration` - If set, this is the maximum duration which the miner will run for.
-    ///                        The miner will stop after approximately this duration, regardless
-    ///                        of whether a result was found.
-    fn generate_pow(
-        &mut self,
-        object: &impl PoWObject,
-        statistics: &mut MinerStatistics,
-        terminate_flag: Option<Arc<AtomicBool>>,
-        timeout_duration: Option<Duration>,
-    ) -> Result<MineResult, Self::Error> {
-        let difficulty = object.difficulty();
+/// Tries to generate a Proof-of-Work for the given object.
+///
+/// This will try to generate a Proof-of-Work by inserting nonces between the given leading and
+/// trailing byte sequences and hashing the result. It will return the first nonce which met the
+/// given difficulty requirements, or `None` if none of the nonces could meet the object's
+/// difficulty requirements.
+///
+/// ### Arguments
+///
+/// * `object`           - The object to be mined
+/// * `statistics`       - A `MinerStatistics` instance to be updated with information
+///                        about the mining progress
+/// * `terminate_flag`   - If set, this is a reference to an externally mutable boolean flag.
+///                        Setting the value to `true` will signal the miner to stop.
+/// * `timeout_duration` - If set, this is the maximum duration which the miner will run for.
+///                        The miner will stop after approximately this duration, regardless
+///                        of whether a result was found.
+pub fn generate_pow(
+    miner: &mut dyn SHA3_256PoWMiner,
+    object: &impl PoWObject,
+    statistics: &mut MinerStatistics,
+    terminate_flag: Option<Arc<AtomicBool>>,
+    timeout_duration: Option<Duration>,
+) -> Result<MineResult, MineError> {
+    let difficulty = object.pow_difficulty();
 
-        // TODO: Change the nonce prefix if we run out of hashes to try
-        let nonce_prefix_length = std::mem::size_of::<u32>();
-        let (leading_bytes, trailing_bytes) =
-            object.get_leading_and_trailing_bytes_for_mine(nonce_prefix_length)
-                .expect("Object doesn't permit a 32-bit nonce!");
+    // TODO: Change the nonce prefix if we run out of hashes to try
+    let nonce_prefix_length = std::mem::size_of::<u32>();
+    let (leading_bytes, trailing_bytes) =
+        object.get_leading_and_trailing_bytes_for_mine(nonce_prefix_length)
+            .expect("Object doesn't permit a 32-bit nonce!");
 
-        let peel_amount = self.nonce_peel_amount();
+    let peel_amount = miner.nonce_peel_amount();
 
-        let total_start_time = Instant::now();
+    let total_start_time = Instant::now();
 
-        for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
-            let result = self.generate_pow_internal(
-                &leading_bytes,
-                &trailing_bytes,
-                &difficulty,
-                first_nonce,
-                nonce_count,
-                statistics,
-            )?;
+    for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
+        let result = miner.generate_pow_internal(
+            &leading_bytes,
+            &trailing_bytes,
+            &difficulty,
+            first_nonce,
+            nonce_count,
+            statistics,
+        )?;
 
-            println!("Mining statistics: {}", statistics);
+        println!("Mining statistics: {}", statistics);
 
-            if let Some(nonce) = result {
-                return Ok(MineResult::FoundNonce {
-                    nonce: nonce.to_le_bytes().to_vec(),
-                });
-            }
+        if let Some(nonce) = result {
+            return Ok(MineResult::FoundNonce {
+                nonce: nonce.to_le_bytes().to_vec(),
+            });
+        }
 
-            if let Some(terminate_flag) = &terminate_flag {
-                if terminate_flag.load(Ordering::Acquire) {
-                    debug!("Miner terminating after being requested to terminate");
-                    return Ok(MineResult::TerminateRequested);
-                }
-            }
-
-            if let Some(timeout_duration) = &timeout_duration {
-                let total_elapsed_time = total_start_time.elapsed();
-                if total_elapsed_time >= *timeout_duration {
-                    debug!(
-                        "Miner terminating after reaching timeout (timeout={}s, elapsed time={}s)",
-                        timeout_duration.as_secs_f64(),
-                        total_elapsed_time.as_secs_f64());
-                    return Ok(MineResult::TimeoutReached);
-                }
+        if let Some(terminate_flag) = &terminate_flag {
+            if terminate_flag.load(Ordering::Acquire) {
+                debug!("Miner terminating after being requested to terminate");
+                return Ok(MineResult::TerminateRequested);
             }
         }
 
-        Ok(MineResult::Exhausted)
+        if let Some(timeout_duration) = &timeout_duration {
+            let total_elapsed_time = total_start_time.elapsed();
+            if total_elapsed_time >= *timeout_duration {
+                debug!(
+                    "Miner terminating after reaching timeout (timeout={}s, elapsed time={}s)",
+                    timeout_duration.as_secs_f64(),
+                    total_elapsed_time.as_secs_f64());
+                return Ok(MineResult::TimeoutReached);
+            }
+        }
     }
+
+    Ok(MineResult::Exhausted)
+}
+
+/// Creates a miner.
+pub fn create_any_miner(
+    difficulty: Option<&PoWDifficulty>,
+) -> Box<dyn SHA3_256PoWMiner> {
+    if let Some(difficulty) = difficulty {
+        match difficulty {
+            // If the difficulty is sufficiently low that the overhead of a GPU miner would make
+            // things slower, don't bother!
+            PoWDifficulty::TargetHashAlwaysPass |
+            PoWDifficulty::LeadingZeroBytes { leading_zeroes: ..=1 } =>
+                return Box::new(CpuMiner::new()),
+            _ => (),
+        }
+    }
+
+    match opengl::OpenGlMiner::new() {
+        Ok(miner) => return Box::new(miner),
+        Err(cause) => warn!("Failed to create OpenGL miner: {cause}"),
+    };
+
+    Box::new(CpuMiner::new())
 }
 
 #[cfg(test)]
@@ -455,7 +499,7 @@ pub(super) mod test {
 
             let block_header = test_block_header(self.difficulty);
 
-            let difficulty = block_header.difficulty();
+            let difficulty = block_header.pow_difficulty();
             let (leading_bytes, trailing_bytes) =
                 block_header.get_leading_and_trailing_bytes_for_mine(4)
                     .unwrap();

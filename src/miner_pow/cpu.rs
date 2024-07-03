@@ -1,6 +1,6 @@
 use tw_chain::crypto::sha3_256;
 use crate::constants::MINING_DIFFICULTY;
-use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty};
+use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty, MineError};
 
 /// A miner which runs on the CPU.
 #[derive(Copy, Clone, Debug)]
@@ -14,8 +14,6 @@ impl CpuMiner {
 }
 
 impl SHA3_256PoWMiner for CpuMiner {
-    type Error = ();
-
     fn is_hw_accelerated(&self) -> bool {
         false
     }
@@ -37,7 +35,7 @@ impl SHA3_256PoWMiner for CpuMiner {
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
-    ) -> Result<Option<u32>, Self::Error> {
+    ) -> Result<Option<u32>, MineError> {
         if nonce_count == 0 {
             return Ok(None);
         }

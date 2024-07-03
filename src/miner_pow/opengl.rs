@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tracing::{debug, info, warn};
-use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty};
+use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty, MineError};
 use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 use crate::utils::split_range_into_blocks;
@@ -13,7 +13,7 @@ use crate::utils::split_range_into_blocks;
 // libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub enum CreateMinerError {
+pub enum OpenGlMinerError {
     LockFailed,
     InitializeGlfw(glfw::InitError),
     CreateGlfwWindow,
@@ -22,7 +22,7 @@ pub enum CreateMinerError {
     GlError(GlError),
 }
 
-impl fmt::Display for CreateMinerError {
+impl fmt::Display for OpenGlMinerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::LockFailed =>
@@ -40,7 +40,7 @@ impl fmt::Display for CreateMinerError {
     }
 }
 
-impl error::Error for CreateMinerError {}
+impl error::Error for OpenGlMinerError {}
 
 struct GlfwContext<Ctx> {
     mutex: Mutex<Ctx>,
@@ -86,20 +86,20 @@ impl<'glfw, Ctx> Drop for GlfwContextGuard<'glfw, Ctx> {
 static GLFW_MUTEX: Mutex<()> = Mutex::new(());
 
 impl<Ctx> GlfwContext<Ctx> {
-    fn new(f: impl FnOnce() -> Result<Ctx, CreateMinerError>) -> Result<Self, CreateMinerError> {
+    fn new(f: impl FnOnce() -> Result<Ctx, OpenGlMinerError>) -> Result<Self, OpenGlMinerError> {
         debug!("Thread {} is creating the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
 
         let glfw_mutex_guard = GLFW_MUTEX.lock()
-            .map_err(|_| CreateMinerError::LockFailed)?;
+            .map_err(|_| OpenGlMinerError::LockFailed)?;
 
         let mut glfw = glfw::init(glfw::fail_on_errors)
-            .map_err(CreateMinerError::InitializeGlfw)?;
+            .map_err(OpenGlMinerError::InitializeGlfw)?;
 
         glfw.window_hint(WindowHint::ContextVersion(4, 5));
         glfw.window_hint(WindowHint::OpenGlProfile(OpenGlProfileHint::Core));
         glfw.window_hint(WindowHint::Visible(false));
         let (mut window, events) = glfw.create_window(256, 256, "AIBlock Miner", WindowMode::Windowed)
-            .ok_or(CreateMinerError::CreateGlfwWindow)?;
+            .ok_or(OpenGlMinerError::CreateGlfwWindow)?;
 
         gl::load_with(|name| window.get_proc_address(name) as *const _);
 
@@ -147,7 +147,7 @@ pub struct OpenGlMiner {
 static mut GLOBAL_MINER: OnceLock<GlfwContext<OpenGlMiner>> = OnceLock::new();
 
 impl OpenGlMiner {
-    pub fn new() -> Result<Self, CreateMinerError> {
+    pub fn new() -> Result<Self, OpenGlMinerError> {
         let mut glfw_context = GlfwContext::new(|| Ok(()))?;
         let guard = glfw_context.make_current();
 
@@ -158,19 +158,19 @@ impl OpenGlMiner {
             ShaderType::Compute,
             &[include_str!("opengl_miner.glsl")],
             //&[std::fs::read_to_string("src/miner_pow/opengl_miner.glsl").expect("failed to read source").as_str()]
-        ).map_err(CreateMinerError::CompileShader)?;
+        ).map_err(OpenGlMinerError::CompileShader)?;
 
         let program = Program::link(&[&shader])
-            .map_err(CreateMinerError::LinkProgram)?;
+            .map_err(OpenGlMinerError::LinkProgram)?;
 
         // figure out the compute shader's work group size
         let work_group_size_arr = program.get_program_int::<3>(GetProgramIntType::ComputeWorkGroupSize)
-            .map_err(CreateMinerError::GlError)?;
+            .map_err(OpenGlMinerError::GlError)?;
         assert_eq!(&work_group_size_arr[1..], &[1; 2],
                    "work group size should be 1 on y and z axes...");
 
         let max_work_group_count = gl_wrapper::get_int(GetIntIndexedType::MAX_COMPUTE_WORK_GROUP_COUNT, 0)
-            .map_err(CreateMinerError::GlError)? as u32;
+            .map_err(OpenGlMinerError::GlError)? as u32;
 
         let program_first_nonce_uniform = program.uniform_location("u_firstNonce").unwrap();
         let program_header_length_uniform = program.uniform_location("u_blockHeader_length").unwrap();
@@ -198,8 +198,6 @@ impl OpenGlMiner {
 }
 
 impl SHA3_256PoWMiner for OpenGlMiner {
-    type Error = GlError;
-
     fn is_hw_accelerated(&self) -> bool {
         true
     }
@@ -221,7 +219,7 @@ impl SHA3_256PoWMiner for OpenGlMiner {
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
-    ) -> Result<Option<u32>, GlError> {
+    ) -> Result<Option<u32>, MineError> {
         if nonce_count == 0 {
             return Ok(None);
         }
@@ -254,9 +252,12 @@ impl SHA3_256PoWMiner for OpenGlMiner {
 
         let _guard = self.glfw_context.make_current();
 
-        self.program.set_uniform_1ui(self.program_first_nonce_uniform, first_nonce)?;
-        self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)?;
-        self.program.set_uniform_1ui(self.program_header_nonce_offset_uniform, block_header_nonce_offset)?;
+        self.program.set_uniform_1ui(self.program_first_nonce_uniform, first_nonce)
+            .map_err(MineError::wrap)?;
+        self.program.set_uniform_1ui(self.program_header_length_uniform, block_header_length)
+            .map_err(MineError::wrap)?;
+        self.program.set_uniform_1ui(self.program_header_nonce_offset_uniform, block_header_nonce_offset)
+            .map_err(MineError::wrap)?;
 
         match difficulty {
             // The target value is higher than the largest possible SHA3-256 hash. Therefore,
@@ -266,14 +267,18 @@ impl SHA3_256PoWMiner for OpenGlMiner {
 
             PoWDifficulty::LeadingZeroBytes { leading_zeroes } => {
                 // DIFFICULTY_FUNCTION_LEADING_ZEROES
-                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)?;
-                self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, (*leading_zeroes).try_into().unwrap())?;
+                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 1)
+                    .map_err(MineError::wrap)?;
+                self.program.set_uniform_1ui(self.program_leading_zeroes_mining_difficulty_uniform, (*leading_zeroes).try_into().unwrap())
+                    .map_err(MineError::wrap)?;
             },
             PoWDifficulty::TargetHash { target_hash } => {
                 // DIFFICULTY_FUNCTION_COMPACT_TARGET
-                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 2)?;
+                self.program.set_uniform_1ui(self.program_difficulty_function_uniform, 2)
+                    .map_err(MineError::wrap)?;
                 self.program.set_uniform_1uiv(self.program_compact_target_expanded_uniform,
-                                              &target_hash.map(|b| b as u32))?;
+                                              &target_hash.map(|b| b as u32))
+                    .map_err(MineError::wrap)?;
             },
         }
 
@@ -282,21 +287,25 @@ impl SHA3_256PoWMiner for OpenGlMiner {
             .collect::<Vec<_>>()
             .concat();
         let block_header_buffer = ImmutableBuffer::new_initialized(&block_header_buffer_data, 0)
-            .add_context("BlockHeader buffer")?;
+            .add_context("BlockHeader buffer")
+            .map_err(MineError::wrap)?;
 
         const RESPONSE_BUFFER_CAPACITY: usize = 12;
         let response_buffer_data = [ 0u32, u32::MAX, 0u32 ];
         let mut response_buffer_data : [u8; RESPONSE_BUFFER_CAPACITY] = unsafe { std::mem::transmute(response_buffer_data.map(u32::to_ne_bytes)) };
         let response_buffer = ImmutableBuffer::new_initialized(&response_buffer_data, 0)
-            .add_context("Response buffer")?;
+            .add_context("Response buffer")
+            .map_err(MineError::wrap)?;
 
         block_header_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 0).unwrap();
         response_buffer.bind_base(IndexedBufferTarget::ShaderStorageBuffer, 2).unwrap();
 
         self.program.bind().unwrap();
 
-        gl_wrapper::dispatch_compute(dispatch_count, 1, 1)?;
-        gl_wrapper::memory_barrier(&[ MemoryBarrierBit::BufferUpdate ])?;
+        gl_wrapper::dispatch_compute(dispatch_count, 1, 1)
+            .map_err(MineError::wrap)?;
+        gl_wrapper::memory_barrier(&[ MemoryBarrierBit::BufferUpdate ])
+            .map_err(MineError::wrap)?;
 
         response_buffer.download_sub_data(0, &mut response_buffer_data).unwrap();
 
