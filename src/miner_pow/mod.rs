@@ -425,6 +425,11 @@ pub fn create_any_miner(
         }
     }
 
+    match vulkan::VulkanMiner::new() {
+        Ok(miner) => return Box::new(miner),
+        Err(cause) => warn!("Failed to create Vulkan miner: {cause}"),
+    };
+
     match opengl::OpenGlMiner::new() {
         Ok(miner) => return Box::new(miner),
         Err(cause) => warn!("Failed to create OpenGL miner: {cause}"),

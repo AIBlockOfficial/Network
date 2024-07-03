@@ -10,8 +10,8 @@ layout(local_size_x = 256) in;
 #include "vulkan_miner_sha3_256.glsl"
 
 layout(constant_id = 0) const uint BLOCK_HEADER_MAX_BYTES = 1;
-layout(constant_id = 1) const uint u_blockHeader_length = 0;
-layout(constant_id = 2) const uint u_blockHeader_nonceOffset = 0;
+layout(constant_id = 1) const uint u_blockHeader_leadingBytesCount = 1;
+layout(constant_id = 2) const uint u_blockHeader_trailingBytesCount = 1;
 
 layout(constant_id = 10) const uint u_difficultyFunction = 0;
 layout(constant_id = 11) const uint u_leadingZeroes_miningDifficulty = 0;
@@ -63,16 +63,15 @@ void main() {
     }
 
     // hash the block header with the nonce inserted in the correct location
-    uint header_length = u_blockHeader_length;
-    uint header_nonceOffset = u_blockHeader_nonceOffset;
     sha3_256_context ctx;
     sha3_256_Init(ctx);
 
     // hash the block header, inserting the nonce in the correct location
-    for (uint i = 0; i < header_nonceOffset; i++) sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
-    //for (uint i = 0; i < 4; i++) sha3_256_Update(ctx, uint8_t((nonce >> (i * 8u)) & 0xFFu));
+    for (uint i = 0; i < u_blockHeader_leadingBytesCount; i++)
+        sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
     sha3_256_Update_int32le(ctx, nonce);
-    for (uint i = header_nonceOffset + 4u; i < header_length; i++) sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
+    for (uint i = 0; i < u_blockHeader_trailingBytesCount; i++)
+        sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[u_blockHeader_leadingBytesCount + i] & 0xFFu));
 
     uint8_t[SHA3_256_BYTES] hash = sha3_256_Finalize(ctx);
 

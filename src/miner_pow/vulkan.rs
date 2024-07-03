@@ -20,15 +20,14 @@ use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLa
 use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo};
 use vulkano::shader::{ShaderModule, ShaderStages, SpecializationConstant};
 use vulkano::sync::GpuFuture;
-use crate::constants::MINING_DIFFICULTY;
-use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MinerStatistics, PoWBlockMiner, PreparedBlockDifficulty, PreparedBlockHeader, SHA3_256_BYTES};
+use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MineError, MinerStatistics, PoWDifficulty, SHA3_256_BYTES, SHA3_256PoWMiner};
 use crate::utils::split_range_into_blocks;
 
 // synced with vulkan_miner.glsl
 const WORK_GROUP_SIZE: u32 = 256;
 
 #[derive(Debug)]
-pub enum MinerError {
+pub enum VulkanMinerError {
     Load(LoadingError),
     Instance(Validated<VulkanError>),
     EnumerateDevices(VulkanError),
@@ -37,9 +36,9 @@ pub enum MinerError {
     Device(Validated<VulkanError>),
 }
 
-impl std::error::Error for MinerError {}
+impl std::error::Error for VulkanMinerError {}
 
-impl fmt::Display for MinerError {
+impl fmt::Display for VulkanMinerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Load(cause) => write!(f, "Failed to load Vulkan library: {cause}"),
@@ -54,8 +53,8 @@ impl fmt::Display for MinerError {
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 struct VulkanMinerVariant {
-    block_header_length: u32,
-    block_header_nonce_offset: u32,
+    block_header_leading_bytes_count: u32,
+    block_header_trailing_bytes_count: u32,
     difficulty_function: u32,
     leading_zeroes_mining_difficulty: u32,
 }
@@ -64,8 +63,8 @@ impl VulkanMinerVariant {
     pub fn specialization_constants(&self) -> impl IntoIterator<Item = (u32, SpecializationConstant)> {
         [
             (0, SpecializationConstant::U32(BLOCK_HEADER_MAX_BYTES as u32)),
-            (1, SpecializationConstant::U32(self.block_header_length)),
-            (2, SpecializationConstant::U32(self.block_header_nonce_offset)),
+            (1, SpecializationConstant::U32(self.block_header_leading_bytes_count)),
+            (2, SpecializationConstant::U32(self.block_header_trailing_bytes_count)),
             (10, SpecializationConstant::U32(self.difficulty_function)),
             (11, SpecializationConstant::U32(self.leading_zeroes_mining_difficulty)),
         ]
@@ -91,17 +90,17 @@ pub struct VulkanMiner {
 }
 
 impl VulkanMiner {
-    pub fn new() -> Result<Self, MinerError> {
-        let library = VulkanLibrary::new().map_err(MinerError::Load)?;
+    pub fn new() -> Result<Self, VulkanMinerError> {
+        let library = VulkanLibrary::new().map_err(VulkanMinerError::Load)?;
         let instance = Instance::new(library, InstanceCreateInfo::default())
-            .map_err(MinerError::Instance)?;
+            .map_err(VulkanMinerError::Instance)?;
 
         let physical_device = instance
             .enumerate_physical_devices()
-            .map_err(MinerError::EnumerateDevices)?
+            .map_err(VulkanMinerError::EnumerateDevices)?
             //.filter(|d| d.supported_features().shader_int64)
             .next()
-            .ok_or_else(|| MinerError::NoDevices)?;
+            .ok_or_else(|| VulkanMinerError::NoDevices)?;
 
         let queue_family_index = physical_device
             .queue_family_properties()
@@ -110,7 +109,7 @@ impl VulkanMiner {
             .position(|(_queue_family_index, queue_family_properties)| {
                 queue_family_properties.queue_flags.contains(QueueFlags::COMPUTE)
             })
-            .ok_or_else(|| MinerError::NoComputeQueues)? as u32;
+            .ok_or_else(|| VulkanMinerError::NoComputeQueues)? as u32;
 
         let (device, mut queues) = Device::new(
             physical_device,
@@ -127,7 +126,7 @@ impl VulkanMiner {
                 },
                 ..Default::default()
             },
-        ).map_err(MinerError::Device)?;
+        ).map_err(VulkanMinerError::Device)?;
         let queue = queues.next().unwrap();
 
         // create buffers
@@ -250,9 +249,7 @@ impl VulkanMiner {
     }
 }
 
-impl PoWBlockMiner for VulkanMiner {
-    type Error = MinerError;
-
+impl SHA3_256PoWMiner for VulkanMiner {
     fn is_hw_accelerated(&self) -> bool {
         true
     }
@@ -266,13 +263,15 @@ impl PoWBlockMiner for VulkanMiner {
         1 << 20
     }
 
-    fn generate_pow_block_internal(
+    fn generate_pow_internal(
         &mut self,
-        prepared_block_header: &PreparedBlockHeader,
+        leading_bytes: &[u8],
+        trailing_bytes: &[u8],
+        difficulty: &PoWDifficulty,
         first_nonce: u32,
         nonce_count: u32,
         statistics: &mut MinerStatistics,
-    ) -> Result<Option<u32>, Self::Error> {
+    ) -> Result<Option<u32>, MineError> {
         if nonce_count == 0 {
             return Ok(None);
         }
@@ -290,7 +289,7 @@ impl PoWBlockMiner for VulkanMiner {
                 nonce_count,
                 max_work_group_count * self.work_group_size
             ) {
-                match self.generate_pow_block_internal(prepared_block_header, first, count, statistics)? {
+                match self.generate_pow_internal(leading_bytes, trailing_bytes, difficulty, first, count, statistics)? {
                     Some(nonce) => return Ok(Some(nonce)),
                     None => (),
                 };
@@ -300,26 +299,23 @@ impl PoWBlockMiner for VulkanMiner {
 
         let mut stats_updater = statistics.update_safe();
 
-        let block_header_nonce_offset = prepared_block_header.header_nonce_offset.try_into().unwrap();
-        let block_header_length = prepared_block_header.header_bytes.len().try_into().unwrap();
-
         let (
             difficulty_function,
             leading_zeroes_mining_difficulty,
             compact_target_expanded,
-        ) = match &prepared_block_header.difficulty {
+        ) = match difficulty {
             // The target value is higher than the largest possible SHA3-256 hash. Therefore,
             // every hash will meet the required difficulty threshold, so we can just return
             // an arbitrary nonce.
-            PreparedBlockDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
+            PoWDifficulty::TargetHashAlwaysPass => return Ok(Some(first_nonce)),
 
-            PreparedBlockDifficulty::LeadingZeroBytes => (
+            PoWDifficulty::LeadingZeroBytes { leading_zeroes } => (
                 // DIFFICULTY_FUNCTION_LEADING_ZEROES
                 1,
-                MINING_DIFFICULTY.try_into().unwrap(),
+                (*leading_zeroes).try_into().unwrap(),
                 Default::default(),
             ),
-            PreparedBlockDifficulty::TargetHash { target_hash } => (
+            PoWDifficulty::TargetHash { target_hash } => (
                 // DIFFICULTY_FUNCTION_COMPACT_TARGET
                 2,
                 Default::default(),
@@ -328,9 +324,10 @@ impl PoWBlockMiner for VulkanMiner {
         };
 
         // extend the block header with trailing zeroes
+        let header_bytes = [leading_bytes, trailing_bytes].concat();
         let mut block_header_bytes = [0u8; BLOCK_HEADER_MAX_BYTES];
-        block_header_bytes[..prepared_block_header.header_bytes.len()]
-            .copy_from_slice(&prepared_block_header.header_bytes);
+        block_header_bytes[..header_bytes.len()]
+            .copy_from_slice(&header_bytes);
 
         //update the uniforms
         *self.uniform_buffer.write().unwrap() = MineUniforms {
@@ -354,8 +351,8 @@ impl PoWBlockMiner for VulkanMiner {
         ).unwrap();
 
         let compute_pipeline = self.get_compute_pipeline(VulkanMinerVariant {
-            block_header_length,
-            block_header_nonce_offset,
+            block_header_leading_bytes_count: leading_bytes.len().try_into().unwrap(),
+            block_header_trailing_bytes_count: trailing_bytes.len().try_into().unwrap(),
             difficulty_function,
             leading_zeroes_mining_difficulty,
         });
