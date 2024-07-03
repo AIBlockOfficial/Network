@@ -71,8 +71,11 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 
 /*------- LIMIT CONSTANTS -------*/
 
-/// Length of PoW nonce
-pub const POW_NONCE_LEN: usize = 4;
+/// Length of address PoW nonce
+pub const ADDRESS_POW_NONCE_LEN: usize = 4;
+
+/// Maximum length of PoW nonce
+pub const POW_NONCE_MAX_LEN: usize = 32; // The size of a SHA3-256 digest
 
 /// Length of random number generation for miner subselection
 pub const POW_RNUM_SELECT: usize = 10;

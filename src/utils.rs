@@ -1,8 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION, POW_NONCE_LEN, POW_RNUM_SELECT, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL
-};
+use crate::constants::{ADDRESS_POW_NONCE_LEN, BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION, POW_RNUM_SELECT, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL};
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
@@ -588,7 +586,9 @@ pub fn generate_pow_for_address(
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
-            nonce: vec![0; POW_NONCE_LEN],
+            // TODO: instead of hard-coding a separate constant for this, rewrite this to use
+            //       the existing miner infrastructure
+            nonce: vec![0; ADDRESS_POW_NONCE_LEN],
         };
 
         while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
@@ -650,10 +650,10 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
         BlockMineResult::FoundNonce { nonce } => {
             // Verify that the found nonce is actually valid
             let mut header_copy = header.clone();
-            header_copy.nonce_and_mining_tx_hash.0 = nonce.to_le_bytes().to_vec();
+            header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
             assert!(validate_pow_block(&header_copy),
                     "generated PoW nonce {} isn't actually valid! block header: {:#?}",
-                    nonce, header);
+                    hex::encode(&nonce), header);
             Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
         },
         BlockMineResult::Exhausted => Ok(None),
