@@ -188,14 +188,18 @@ impl<'a> Drop for MinerStatisticsUpdater<'a> {
 
 impl fmt::Display for MinerStatistics {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Computed {} hashes, speed: {:.3}",
+        write!(f, "Computed {} hashes in {:.3}s, speed: {:.3}",
                self.total_computed_hashes,
+               self.total_mining_duration.as_secs_f64(),
                self.hash_rate_units())
     }
 }
 
 pub trait PoWBlockMiner {
     type Error : Sized + Debug;
+
+    /// Returns true if this miner is hardware-accelerated.
+    fn is_hw_accelerated(&self) -> bool;
 
     /// Returns the recommended minimum number of nonces which this implementation should compute
     /// at a time. Calling `generate_pow_block_internal` with a `nonce_count` smaller than this
@@ -333,19 +337,33 @@ pub(super) mod test {
             expected_nonce: 4894069,
             max_nonce_count: 4900000,
         };
+        const THRESHOLD_VERY_HARD: Self = Self {
+            name: "THRESHOLD_VERY_HARD",
+            difficulty: b"\x1f\x00\x00\x01",
+            expected_nonce: 4894069,
+            max_nonce_count: 49000000,
+        };
 
-        pub const ALL_EASY: &'static [TestBlockMinerInternal] = &[
+        pub const ALL_TEST: &'static [TestBlockMinerInternal] = &[
             Self::NO_DIFFICULTY,
             Self::THRESHOLD_EASY,
+            Self::THRESHOLD_HARD,
+            Self::THRESHOLD_VERY_HARD,
         ];
 
         pub const ALL_BENCH: &'static [TestBlockMinerInternal] = &[
             Self::NO_DIFFICULTY,
             Self::THRESHOLD_EASY,
             Self::THRESHOLD_HARD,
+            Self::THRESHOLD_VERY_HARD,
         ];
 
         pub fn test_miner(&self, miner: &mut impl PoWBlockMiner) {
+            if !miner.is_hw_accelerated() && self.max_nonce_count > miner.nonce_peel_amount() {
+                println!("Skipping test case {} (too hard)", self.name);
+                return;
+            }
+
             let prepared_block_header = test_prepared_block_header(self.difficulty);
 
             let mut statistics = Default::default();
@@ -434,7 +452,7 @@ pub(super) mod test {
     #[test]
     fn verify_cpu() {
         let mut miner = CpuMiner::new();
-        for case in TestBlockMinerInternal::ALL_EASY {
+        for case in TestBlockMinerInternal::ALL_TEST {
             case.test_miner(&mut miner);
         }
     }
@@ -442,7 +460,7 @@ pub(super) mod test {
     #[test]
     fn verify_opengl() {
         let mut miner = OpenGlMiner::new().unwrap();
-        for case in TestBlockMinerInternal::ALL_EASY {
+        for case in TestBlockMinerInternal::ALL_TEST {
             case.test_miner(&mut miner);
         }
     }

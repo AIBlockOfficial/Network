@@ -199,6 +199,10 @@ impl OpenGlMiner {
 impl PoWBlockMiner for OpenGlMiner {
     type Error = GlError;
 
+    fn is_hw_accelerated(&self) -> bool {
+        true
+    }
+
     fn min_nonce_count(&self) -> u32 {
         self.program_work_group_size
     }
