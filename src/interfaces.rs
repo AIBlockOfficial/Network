@@ -220,29 +220,6 @@ pub struct ProofOfWork {
     pub nonce: Vec<u8>,
 }
 
-/// PoW structure for blocks
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofOfWorkBlock {
-    pub nonce: Vec<u8>,
-    pub block: Block,
-}
-
-impl Default for ProofOfWorkBlock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ProofOfWorkBlock {
-    ///Proof of work block constructor
-    pub fn new() -> Self {
-        ProofOfWorkBlock {
-            nonce: Vec::new(),
-            block: Block::new(),
-        }
-    }
-}
-
 /// Winning PoW structure
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WinningPoWInfo {

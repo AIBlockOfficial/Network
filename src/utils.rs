@@ -624,30 +624,17 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// * `header`   - The header for PoW
 pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     use crate::miner_pow::*;
-    use crate::miner_pow::cpu::*;
-    use crate::miner_pow::opengl::*;
-
-    // if there isn't a difficulty function, the PoW will be easy enough that the GPU miner won't
-    // really help much
-    let use_cpu_miner = header.difficulty.is_empty();
 
     let mut statistics = Default::default();
     let terminate_flag = None;
     let timeout_duration = None;
 
-    let result = if use_cpu_miner {
-        CpuMiner::new()
-            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
-            .unwrap() // this can't fail
-    } else {
-        OpenGlMiner::new()
-            .map_err(Box::new)?
-            .generate_pow_block(header, &mut statistics, terminate_flag, timeout_duration)
-            .map_err(Box::new)?
-    };
+    let mut miner = create_any_miner(Some(&header.pow_difficulty()));
+    let result = generate_pow(&mut *miner, header, &mut statistics, terminate_flag, timeout_duration)
+        .map_err(Box::new)?;
 
     match result {
-        BlockMineResult::FoundNonce { nonce } => {
+        MineResult::FoundNonce { nonce } => {
             // Verify that the found nonce is actually valid
             let mut header_copy = header.clone();
             header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
@@ -656,9 +643,9 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, B
                     hex::encode(&nonce), header);
             Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
         },
-        BlockMineResult::Exhausted => Ok(None),
-        BlockMineResult::TerminateRequested => Ok(None),
-        BlockMineResult::TimeoutReached => Ok(None),
+        MineResult::Exhausted => Ok(None),
+        MineResult::TerminateRequested => Ok(None),
+        MineResult::TimeoutReached => Ok(None),
     }
 }
 
