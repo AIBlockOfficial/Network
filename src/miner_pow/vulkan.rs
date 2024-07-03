@@ -21,6 +21,7 @@ use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineL
 use vulkano::shader::{ShaderModule, ShaderStages, SpecializationConstant};
 use vulkano::sync::GpuFuture;
 use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MineError, MinerStatistics, PoWDifficulty, SHA3_256_BYTES, SHA3_256PoWMiner};
+use crate::miner_pow::vulkan::sha3_256_shader::SHA3_KECCAK_SPONGE_WORDS;
 use crate::utils::split_range_into_blocks;
 
 // synced with vulkan_miner.glsl
@@ -53,8 +54,9 @@ impl fmt::Display for VulkanMinerError {
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 struct VulkanMinerVariant {
-    block_header_leading_bytes_count: u32,
-    block_header_trailing_bytes_count: u32,
+    trailing_bytes_count: u32,
+    digest_initial_byte_index: u32,
+    digest_initial_word_index: u32,
     difficulty_function: u32,
     leading_zeroes_mining_difficulty: u32,
 }
@@ -63,8 +65,9 @@ impl VulkanMinerVariant {
     pub fn specialization_constants(&self) -> impl IntoIterator<Item = (u32, SpecializationConstant)> {
         [
             (0, SpecializationConstant::U32(BLOCK_HEADER_MAX_BYTES as u32)),
-            (1, SpecializationConstant::U32(self.block_header_leading_bytes_count)),
-            (2, SpecializationConstant::U32(self.block_header_trailing_bytes_count)),
+            (1, SpecializationConstant::U32(self.trailing_bytes_count)),
+            (5, SpecializationConstant::U32(self.digest_initial_byte_index)),
+            (6, SpecializationConstant::U32(self.digest_initial_word_index)),
             (10, SpecializationConstant::U32(self.difficulty_function)),
             (11, SpecializationConstant::U32(self.leading_zeroes_mining_difficulty)),
         ]
@@ -323,16 +326,22 @@ impl SHA3_256PoWMiner for VulkanMiner {
             ),
         };
 
+        // compute the initial digest state
+        let mut digest = sha3_256_shader::Sha3_256Context::default();
+        for byte in leading_bytes {
+            digest.update(*byte);
+        }
+
         // extend the block header with trailing zeroes
-        let header_bytes = [leading_bytes, trailing_bytes].concat();
         let mut block_header_bytes = [0u8; BLOCK_HEADER_MAX_BYTES];
-        block_header_bytes[..header_bytes.len()]
-            .copy_from_slice(&header_bytes);
+        block_header_bytes[..trailing_bytes.len()]
+            .copy_from_slice(trailing_bytes);
 
         //update the uniforms
         *self.uniform_buffer.write().unwrap() = MineUniforms {
             u_firstNonce: first_nonce,
             u_compactTarget_expanded: compact_target_expanded,
+            u_digest_initialState: digest.state.into(),
             u_blockHeader_bytes: block_header_bytes.map(|b| b as u32).into(),
         }.as_std140();
 
@@ -351,8 +360,9 @@ impl SHA3_256PoWMiner for VulkanMiner {
         ).unwrap();
 
         let compute_pipeline = self.get_compute_pipeline(VulkanMinerVariant {
-            block_header_leading_bytes_count: leading_bytes.len().try_into().unwrap(),
-            block_header_trailing_bytes_count: trailing_bytes.len().try_into().unwrap(),
+            trailing_bytes_count: trailing_bytes.len().try_into().unwrap(),
+            digest_initial_byte_index: digest.byte_index,
+            digest_initial_word_index: digest.word_index,
             difficulty_function,
             leading_zeroes_mining_difficulty,
         });
@@ -406,11 +416,10 @@ impl SHA3_256PoWMiner for VulkanMiner {
 #[allow(non_snake_case)]
 #[derive(Clone, Copy, Debug, Default, AsStd140)]
 struct MineUniforms {
-    u_firstNonce : u32,
-
-    u_compactTarget_expanded : crevice_utils::FixedArray<u32, SHA3_256_BYTES>,
-
-    u_blockHeader_bytes : crevice_utils::FixedArray<u32, BLOCK_HEADER_MAX_BYTES>,
+    u_firstNonce: u32,
+    u_compactTarget_expanded: crevice_utils::FixedArray<u32, SHA3_256_BYTES>,
+    u_digest_initialState: crevice_utils::FixedArray<u64, SHA3_KECCAK_SPONGE_WORDS>,
+    u_blockHeader_bytes: crevice_utils::FixedArray<u32, BLOCK_HEADER_MAX_BYTES>,
 }
 
 #[allow(non_snake_case)]
@@ -545,6 +554,126 @@ mod crevice_utils {
 
         fn from_padded(value: Self::Output) -> Self {
             value.value
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, AsStd140, AsStd430)]
+    pub struct F64Padded {
+        value: f64,
+    }
+
+    impl AsPadded for f64 {
+        type Output = F64Padded;
+
+        fn to_padded(self) -> Self::Output {
+            F64Padded { value: self }
+        }
+
+        fn from_padded(value: Self::Output) -> Self {
+            value.value
+        }
+    }
+
+    impl AsPadded for u64 {
+        type Output = F64Padded;
+
+        fn to_padded(self) -> Self::Output {
+            F64Padded { value: f64::from_ne_bytes(self.to_ne_bytes()) }
+        }
+
+        fn from_padded(value: Self::Output) -> Self {
+            Self::from_ne_bytes(value.value.to_ne_bytes())
+        }
+    }
+}
+
+/// Rust port of the SHA3-256 shader.
+///
+/// This enables us to precompute common parts of the digest state on the CPU.
+mod sha3_256_shader {
+    pub(super) const SHA3_KECCAK_SPONGE_WORDS: usize = ((1600)/8/*bits to byte*/)/8/*sizeof(uint64_t)*/; // 25
+    const SHA3_256_BYTES: usize = 256 / 8; // 32
+    const SHA3_256_CAPACITY_WORDS: usize = 2 * 256 / (8 * 8); // 8
+    const KECCAK_ROUNDS: usize = 24;
+    
+    const KECCAKF_ROTC: &'static [u32; 24] = &[
+        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62,
+        18, 39, 61, 20, 44
+    ];
+    
+    const KECCAKF_PILN: &'static [usize; 24] = &[
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20,
+        14, 22, 9, 6, 1
+    ];
+    
+    const KECCAKF_RNDC: &'static [u64; KECCAK_ROUNDS] = &[
+        0x0000000000000001u64, 0x0000000000008082u64, 0x800000000000808Au64, 0x8000000080008000u64,
+        0x000000000000808Bu64, 0x0000000080000001u64, 0x8000000080008081u64, 0x8000000000008009u64,
+        0x000000000000008Au64, 0x0000000000000088u64, 0x0000000080008009u64, 0x000000008000000Au64,
+        0x000000008000808Bu64, 0x800000000000008Bu64, 0x8000000000008089u64, 0x8000000000008003u64,
+        0x8000000000008002u64, 0x8000000000000080u64, 0x000000000000800Au64, 0x800000008000000Au64,
+        0x8000000080008081u64, 0x8000000000008080u64, 0x0000000080000001u64, 0x8000000080008008u64
+    ];
+
+    fn keccakf(s: &mut [u64; SHA3_KECCAK_SPONGE_WORDS]) {
+        let mut bc = [0u64; 5];
+
+        for round in 0..KECCAK_ROUNDS {
+            /* Theta */
+            for i in 0..5 {
+                bc[i] = s[i] ^ s[i + 5] ^ s[i + 10] ^ s[i + 15] ^ s[i + 20];
+            }
+
+            for i in 0..5 {
+                let t = bc[(i + 4) % 5] ^ bc[(i + 1) % 5].rotate_left(1);
+                for j in 0..5 {
+                    s[j * 5 + i] ^= t;
+                }
+            }
+
+            /* Rho Pi */
+            let mut t = s[1];
+            for i in 0..24 {
+                let j = KECCAKF_PILN[i];
+                bc[0] = s[j];
+                s[j] = t.rotate_left(KECCAKF_ROTC[i]);
+                t = bc[0];
+            }
+
+            /* Chi */
+            for j in 0..25 {
+                for i in 0..5 {
+                    bc[i] = s[j + i];
+                }
+                for i in 0..5 {
+                    s[j + i] ^= (!bc[(i + 1) % 5]) & bc[(i + 2) % 5];
+                }
+            }
+
+            /* Iota */
+            s[0] ^= KECCAKF_RNDC[round];
+        }
+    }
+
+    #[derive(Default)]
+    pub(super) struct Sha3_256Context {
+        pub state: [u64; SHA3_KECCAK_SPONGE_WORDS],
+        pub byte_index: u32,
+        pub word_index: u32,
+    }
+
+    impl Sha3_256Context {
+        pub fn update(&mut self, byte: u8) {
+            self.state[self.word_index as usize] ^= (byte as u64) << (self.byte_index * 8);
+            self.byte_index += 1;
+            if self.byte_index == 8 {
+                self.byte_index = 0;
+                self.word_index += 1;
+                if self.word_index == (SHA3_KECCAK_SPONGE_WORDS - SHA3_256_CAPACITY_WORDS) as u32 {
+                    self.word_index = 0;
+                    keccakf(&mut self.state);
+                }
+            }
         }
     }
 }

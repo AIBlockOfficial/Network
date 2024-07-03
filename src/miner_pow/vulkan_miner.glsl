@@ -9,9 +9,13 @@ layout(local_size_x = 256) in;
 
 #include "vulkan_miner_sha3_256.glsl"
 
-layout(constant_id = 0) const uint BLOCK_HEADER_MAX_BYTES = 1;
-layout(constant_id = 1) const uint u_blockHeader_leadingBytesCount = 1;
-layout(constant_id = 2) const uint u_blockHeader_trailingBytesCount = 1;
+// TODO: Properly initialize this value from the Rust code, arrays sized by specialization constants don't
+//       seem to be entirely portable!
+layout(constant_id = 0) const uint BLOCK_HEADER_MAX_BYTES = 1024;
+layout(constant_id = 1) const uint u_blockHeader_trailingBytesCount = 1;
+
+layout(constant_id = 5) const uint u_digest_initialByteIndex = 0;
+layout(constant_id = 6) const uint u_digest_initialWordIndex = 0;
 
 layout(constant_id = 10) const uint u_difficultyFunction = 0;
 layout(constant_id = 11) const uint u_leadingZeroes_miningDifficulty = 0;
@@ -20,7 +24,8 @@ layout(std140, set = 0, binding = 0) uniform Uniforms {
     uint u_firstNonce;
 
     uint u_compactTarget_expanded[SHA3_256_BYTES];
-    uint u_blockHeader_bytes[BLOCK_HEADER_MAX_BYTES];
+    uint64_t u_digest_initialState[SHA3_KECCAK_SPONGE_WORDS];
+    uint u_blockHeader_trailingBytes[BLOCK_HEADER_MAX_BYTES];
 };
 
 const uint DIFFICULTY_FUNCTION_LEADING_ZEROES = 1;
@@ -62,16 +67,17 @@ void main() {
         return;
     }
 
-    // hash the block header with the nonce inserted in the correct location
+    // load the initial digest state (the precomputed state after having digested the leading bytes)
     sha3_256_context ctx;
-    sha3_256_Init(ctx);
+    ctx.saved = 0;
+    ctx.s = u_digest_initialState;
+    ctx.byteIndex = u_digest_initialByteIndex;
+    ctx.wordIndex = u_digest_initialWordIndex;
 
     // hash the block header, inserting the nonce in the correct location
-    for (uint i = 0; i < u_blockHeader_leadingBytesCount; i++)
-        sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[i] & 0xFFu));
     sha3_256_Update_int32le(ctx, nonce);
     for (uint i = 0; i < u_blockHeader_trailingBytesCount; i++)
-        sha3_256_Update(ctx, uint8_t(u_blockHeader_bytes[u_blockHeader_leadingBytesCount + i] & 0xFFu));
+        sha3_256_Update(ctx, uint8_t(u_blockHeader_trailingBytes[i] & 0xFFu));
 
     uint8_t[SHA3_256_BYTES] hash = sha3_256_Finalize(ctx);
 
