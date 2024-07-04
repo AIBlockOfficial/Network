@@ -117,7 +117,7 @@ fn map_asert_inputs(
     const TARGET_BLOCK_TIME_D: Duration = Duration::from_secs(ASERT_TARGET_HASHES_PER_BLOCK);
     const HALF_LIFE_D: Duration = Duration::from_secs(ASERT_HALF_LIFE);
 
-    let anchor_target = "0x1f00ffff".parse().unwrap();
+    let anchor_target = "0xc800ffff".parse().unwrap();
 
     let context = Asert::with_parameters(TARGET_BLOCK_TIME_D, HALF_LIFE_D)
         .with_anchor(anchor_block_height, anchor_target)
@@ -290,8 +290,9 @@ impl Sub for Timestamp {
 pub struct CompactTarget(u32);
 
 impl CompactTarget {
-    /// This is defined ... somewhere.
-    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x1d, 0x00, 0xff, 0xff]));
+    /// This is the easiest difficulty possible. It's roughly equivalent to requiring a single
+    /// leading zero byte.
+    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x22, 0x00, 0x00, 0x01]));
 
     pub fn expand(&self) -> Target {
         let byte_len = self.0 >> 24;
@@ -306,6 +307,10 @@ impl CompactTarget {
         // todo: some stuff around negative number stuffing
 
         Target(target)
+    }
+
+    pub fn expand_integer(&self) -> Integer {
+        self.expand().0
     }
 
     pub fn into_array(self) -> [u8; 4] {
@@ -385,16 +390,26 @@ impl HeaderHash {
 
     pub fn is_below_target(&self, target: &Target) -> bool {
         let h_int = Integer::from_digits(self.0.as_slice(), rug::integer::Order::MsfBe);
+        println!("h_int: {:?}", h_int);
+        println!("target: {:?}", target.0);
+        println!("h_int <= target.0: {:?}", h_int <= target.0);
         h_int <= target.0
     }
 
     pub fn is_below_compact_target(&self, target: &CompactTarget) -> bool {
         let target = target.expand();
+        println!("target: {:?}", target);
         self.is_below_target(&target)
     }
 
     pub fn into_vec(self) -> Vec<u8> {
         self.0.to_vec()
+    }
+}
+
+impl From<sha3_256::Output<sha3::Sha3_256>> for HeaderHash {
+    fn from(value: sha3_256::Output<sha3::Sha3_256>) -> Self {
+        Self(value)
     }
 }
 

@@ -1536,7 +1536,10 @@ impl MinerNode {
     /// * `info`      - Block Proof of work info
     fn generate_pow_for_block(mut info: BlockPoWInfo) -> task::JoinHandle<BlockPoWInfo> {
         task::spawn_blocking(move || {
-            info.header = generate_pow_for_block(info.header);
+            info.header.nonce_and_mining_tx_hash.0 = generate_pow_for_block(&info.header)
+                .expect("error occurred while mining block")
+                // TODO: We should make BlockPoWInfo actually indicate if no PoW could be found
+                .expect("couldn't find a valid nonce");
             info
         })
     }

@@ -252,7 +252,9 @@ async fn get_db_with_block_no_mutex() -> SimpleDb {
     block.header = apply_mining_tx(block.header, nonce, "test".to_string());
 
     if !validate_pow_block(&block.header) {
-        block.header = generate_pow_for_block(block.header);
+        block.header.nonce_and_mining_tx_hash.0 = generate_pow_for_block(&block.header)
+            .expect("error occurred while mining block")
+            .expect("couldn't find a valid nonce");
         let new_nonce = hex::encode(&block.header.nonce_and_mining_tx_hash.0);
         panic!(
             "get_db_with_block_no_mutex: Out of date nonce: {} -> new({})",

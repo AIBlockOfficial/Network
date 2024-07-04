@@ -1,9 +1,6 @@
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
-use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
-    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
-};
+use crate::constants::{ADDRESS_POW_NONCE_LEN, BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION, POW_RNUM_SELECT, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL};
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
@@ -15,9 +12,10 @@ use chrono::Utc;
 use futures::future::join_all;
 use rand::{self, Rng};
 use serde::Deserialize;
+use tracing_subscriber::field::debug;
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt;
+use std::{fmt, vec};
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
@@ -462,14 +460,36 @@ pub fn apply_mining_tx(mut header: BlockHeader, nonce: Vec<u8>, tx_hash: String)
     header
 }
 
-/// Generates a random sequence of values for a nonce
-pub fn generate_pow_nonce() -> Vec<u8> {
-    generate_random_num(16)
-}
-
 /// Generates a random num for use for proof of work
 pub fn generate_pow_random_num() -> Vec<u8> {
-    generate_random_num(10)
+    generate_random_num(POW_RNUM_SELECT)
+}
+
+/// Increments the provided nonce
+/// 
+/// ### Arguments
+/// 
+/// * `nonce` - Nonce to increment
+fn get_nonce_increment(nonce: &[u8]) -> Vec<u8> {
+    // Ensure the input vector has exactly 4 bytes
+    if nonce.len() != 4 {
+        return vec![];
+    }
+
+    // Convert the u8 slice to a fixed-size array
+    let mut array: [u8; 4] = [0; 4];
+    array.copy_from_slice(&nonce);
+
+    // Interpret the fixed-size array as i32
+    let current_value = i32::from_le_bytes(array); // Assuming little-endian byte order
+
+    // Increment the value
+    let incremented_value = current_value + 1;
+
+    // Convert incremented value back to u8 vector
+    let incremented_bytes = incremented_value.to_le_bytes().to_vec(); // Convert i32 to little-endian u8 vector
+
+    incremented_bytes
 }
 
 /// Generates a garbage random num for use in network testing
@@ -566,11 +586,13 @@ pub fn generate_pow_for_address(
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
-            nonce: generate_pow_nonce(),
+            // TODO: instead of hard-coding a separate constant for this, rewrite this to use
+            //       the existing miner infrastructure
+            nonce: vec![0; ADDRESS_POW_NONCE_LEN],
         };
 
         while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
-            pow.nonce = generate_pow_nonce();
+            pow.nonce = get_nonce_increment(&pow.nonce);
         }
 
         (pow, pow_info, peer)
@@ -600,12 +622,31 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
-    header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
-    while !validate_pow_block(&header) {
-        header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    use crate::miner_pow::*;
+
+    let mut statistics = Default::default();
+    let terminate_flag = None;
+    let timeout_duration = None;
+
+    let mut miner = create_any_miner(Some(&header.pow_difficulty()));
+    let result = generate_pow(&mut *miner, header, &mut statistics, terminate_flag, timeout_duration)
+        .map_err(Box::new)?;
+
+    match result {
+        MineResult::FoundNonce { nonce } => {
+            // Verify that the found nonce is actually valid
+            let mut header_copy = header.clone();
+            header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
+            assert!(validate_pow_block(&header_copy),
+                    "generated PoW nonce {} isn't actually valid! block header: {:#?}",
+                    hex::encode(&nonce), header);
+            Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
+        },
+        MineResult::Exhausted => Ok(None),
+        MineResult::TerminateRequested => Ok(None),
+        MineResult::TimeoutReached => Ok(None),
     }
-    header
 }
 
 /// Verify block is valid & consistent: Can be fully verified from PoW hash.
@@ -668,6 +709,7 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
         validate_pow_leading_zeroes(&pow)
     } else {
         use crate::asert::{CompactTarget, HeaderHash};
+        info!("We have difficuly");
 
         let target = CompactTarget::try_from_slice(&header.difficulty)?;
         let header_hash = HeaderHash::try_calculate(header)?;
@@ -1342,6 +1384,81 @@ pub mod rug_integer {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
+pub struct UnitsPrefixed {
+    pub value: f64,
+    pub unit_name: &'static str,
+    pub duration: Option<Duration>,
+}
+
+impl fmt::Display for UnitsPrefixed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let scales = &[
+            ( 1000_000_000_000f64, "T" ),
+            ( 1000_000_000f64, "G" ),
+            ( 1000_000f64, "M" ),
+            ( 1000f64, "k" ),
+        ];
+
+        let value = match &self.duration {
+            None => self.value,
+            Some(duration) => self.value / duration.as_secs_f64(),
+        };
+
+        let (divisor, prefix) = scales.iter()
+            .find(|(threshold, _)| value > *threshold)
+            .unwrap_or(&(1f64, ""));
+
+        match &self.duration {
+            None => write!(f, "{} {}{}", value / divisor, prefix, self.unit_name),
+            Some(_) => write!(f, "{} {}{}/s", value / divisor, prefix, self.unit_name),
+        }
+    }
+}
+
+/// Splits the given integer range into smaller segments with the given maximum size.
+///
+/// ### Arguments
+///
+/// * `start`           - the first value
+/// * `len`             - the total length of the range
+/// * `max_block_size`  - the maximum size of each block
+pub fn split_range_into_blocks(
+    start: u32,
+    len: u32,
+    max_block_size: u32,
+) -> impl Iterator<Item = (u32, u32)> {
+    assert_ne!(max_block_size, 0);
+
+    struct Itr {
+        pos: u32,
+        remaining: u32,
+        max_block_size: u32,
+    }
+
+    impl Iterator for Itr {
+        type Item = (u32, u32);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let block_size = u32::min(self.remaining, self.max_block_size);
+            let result = (self.pos, block_size);
+            self.pos += block_size;
+            self.remaining -= block_size;
+            Some(result)
+        }
+    }
+
+    Itr {
+        pos: start,
+        remaining: len,
+        max_block_size,
+    }
+}
+
 /*---- TESTS ----*/
 
 #[cfg(test)]
@@ -1380,5 +1497,25 @@ mod util_tests {
             domain_with_port_addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
         );
+    }
+
+    #[test]
+    fn test_split_range_into_blocks() {
+        assert_eq!(
+            split_range_into_blocks(0, 16, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 4)]);
+
+        assert_eq!(
+            split_range_into_blocks(0, 15, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 3)]);
+
+        assert_eq!(
+            split_range_into_blocks(0, u32::MAX, 1 << 30).collect::<Vec<_>>(),
+            vec![
+                (0 << 30, 1 << 30),
+                (1 << 30, 1 << 30),
+                (2 << 30, 1 << 30),
+                (3 << 30, (1 << 30) - 1),
+            ]);
     }
 }
