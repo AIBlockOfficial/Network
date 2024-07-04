@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 use tw_chain::primitives::block::BlockHeader;
-use crate::asert::CompactTarget;
+use crate::asert::{CompactTarget, CompactTargetError};
 use crate::constants::{ADDRESS_POW_NONCE_LEN, MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
 use crate::interfaces::ProofOfWork;
 use crate::miner_pow::cpu::CpuMiner;
@@ -66,11 +66,6 @@ pub enum PoWError {
         /// The permitted nonce lengths
         permitted_lengths: RangeInclusive<usize>,
     },
-    /// Indicates that a block header contained an invalid serialized difficulty requirement.
-    DifficultyLength {
-        /// The length of the serialized difficulty requirement.
-        difficulty_length: usize,
-    },
 }
 
 impl std::error::Error for PoWError {}
@@ -81,9 +76,6 @@ impl fmt::Display for PoWError {
             Self::NonceLength { nonce_length, permitted_lengths } =>
                 write!(f, "The provided nonce length {} is invalid (should be in range {}..={})",
                        nonce_length, permitted_lengths.start(), permitted_lengths.end()),
-            Self::DifficultyLength { difficulty_length } =>
-                write!(f, "Block header contains difficulty with invalid length: {}",
-                       difficulty_length),
         }
     }
 }
@@ -153,6 +145,17 @@ pub trait PoWObject : Clone {
     /// Gets a range containing all nonce lengths permitted by this object.
     fn permitted_nonce_lengths() -> RangeInclusive<usize>;
 
+    fn check_nonce_length(nonce_length: usize) -> Result<(), PoWError> {
+        if Self::permitted_nonce_lengths().contains(&nonce_length) {
+            Ok(())
+        } else {
+            Err(PoWError::NonceLength {
+                nonce_length,
+                permitted_lengths: Self::permitted_nonce_lengths(),
+            })
+        }
+    }
+
     /// Sets this object's nonce to the given value.
     ///
     /// ### Arguments
@@ -164,7 +167,7 @@ pub trait PoWObject : Clone {
     fn get_nonce(&self) -> &[u8];
 
     /// Gets the difficulty requirements for mining this object.
-    fn pow_difficulty(&self) -> Result<PoWDifficulty, PoWError>;
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError>;
 
     /// Gets the leading and trailing bytes for this object.
     ///
@@ -186,22 +189,16 @@ impl PoWObject for BlockHeader {
     }
 
     fn set_nonce(&mut self, nonce: Vec<u8>) -> Result<(), PoWError> {
-        if Self::permitted_nonce_lengths().contains(&nonce.len()) {
-            self.nonce_and_mining_tx_hash.0 = nonce;
-            Ok(())
-        } else {
-            Err(PoWError::NonceLength {
-                nonce_length: nonce.len(),
-                permitted_lengths: Self::permitted_nonce_lengths(),
-            })
-        }
+        Self::check_nonce_length(nonce.len())?;
+        self.nonce_and_mining_tx_hash.0 = nonce;
+        Ok(())
     }
 
     fn get_nonce(&self) -> &[u8] {
         &self.nonce_and_mining_tx_hash.0
     }
 
-    fn pow_difficulty(&self) -> Result<PoWDifficulty, PoWError> {
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError> {
         if self.difficulty.is_empty() {
             // There is no difficulty function enabled
             return Ok(PoWDifficulty::LeadingZeroBytes {
@@ -211,10 +208,7 @@ impl PoWObject for BlockHeader {
 
         // Decode the difficulty bytes into a CompactTarget and then expand that into a target
         // hash threshold.
-        let compact_target = CompactTarget::try_from_slice(&self.difficulty)
-            .ok_or_else(|| PoWError::DifficultyLength {
-                difficulty_length: self.difficulty.len(),
-            })?;
+        let compact_target = CompactTarget::try_from_slice(&self.difficulty)?;
 
         match expand_compact_target_difficulty(compact_target) {
             // The target value is higher than the largest possible SHA3-256 hash.
@@ -237,22 +231,16 @@ impl PoWObject for ProofOfWork {
     }
 
     fn set_nonce(&mut self, nonce: Vec<u8>) -> Result<(), PoWError> {
-        if Self::permitted_nonce_lengths().contains(&nonce.len()) {
-            self.nonce = nonce;
-            Ok(())
-        } else {
-            Err(PoWError::NonceLength {
-                nonce_length: nonce.len(),
-                permitted_lengths: Self::permitted_nonce_lengths(),
-            })
-        }
+        Self::check_nonce_length(nonce.len())?;
+        self.nonce = nonce;
+        Ok(())
     }
 
     fn get_nonce(&self) -> &[u8] {
         &self.nonce
     }
 
-    fn pow_difficulty(&self) -> Result<PoWDifficulty, PoWError> {
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError> {
         // see utils::validate_pow_for_address()
         Ok(PoWDifficulty::LeadingZeroBytes {
             leading_zeroes: MINING_DIFFICULTY,
@@ -356,7 +344,7 @@ impl fmt::Display for MinerStatistics {
 /// An error which is thrown by a miner.
 #[derive(Debug)]
 pub enum MineError {
-    GetDifficulty(PoWError),
+    GetDifficulty(CompactTargetError),
     GetLeadingTrailingBytes(PoWError),
     Wrapped(Box<dyn std::error::Error>),
 }

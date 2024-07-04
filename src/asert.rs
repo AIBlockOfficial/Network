@@ -279,6 +279,28 @@ impl Sub for Timestamp {
     }
 }
 
+/// An error which can occur when working with `CompactTarget`.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CompactTargetError {
+    /// Indicates that an attempt was made to construct a `CompactTarget` from a byte slice with
+    /// an invalid length.
+    SliceLength {
+        /// The length of the slice
+        length: usize,
+    },
+}
+
+impl std::error::Error for CompactTargetError {}
+
+impl fmt::Display for CompactTargetError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::SliceLength { length } =>
+                write!(f, "Cannot construct CompactTarget from slice of length {}", length),
+        }
+    }
+}
+
 /// A 32-bit approximation of a 256-bit number that represents the target
 /// a block hash must be lower than in order to meet PoW requirements.
 ///
@@ -322,9 +344,11 @@ impl CompactTarget {
         Self(u32::from_be_bytes(array))
     }
 
-    pub fn try_from_slice(slice: &[u8]) -> Option<Self> {
+    pub fn try_from_slice(slice: &[u8]) -> Result<Self, CompactTargetError> {
         // This requires that the slice's length is exactly 4
-        Some(Self::from_array(slice.try_into().ok()?))
+        slice.try_into()
+            .map(Self::from_array)
+            .map_err(|_| CompactTargetError::SliceLength { length: slice.len() })
     }
 }
 
@@ -375,13 +399,13 @@ impl CompactTarget {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct HeaderHash(sha3_256::Output<sha3::Sha3_256>);
 
 impl HeaderHash {
-    pub fn try_calculate(header: &BlockHeader) -> Option<Self> {
-        let serialized = bincode::serialize(header).ok()?;
-        let hashed = sha3_256::digest(&serialized);
-        Some(Self(hashed))
+    pub fn calculate(header: &BlockHeader) -> Self {
+        let serialized = bincode::serialize(header).unwrap();
+        Self(sha3_256::digest(&serialized))
     }
 
     pub fn is_below_target(&self, target: &Target) -> bool {
@@ -398,6 +422,10 @@ impl HeaderHash {
         self.is_below_target(&target)
     }
 
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     pub fn into_vec(self) -> Vec<u8> {
         self.0.to_vec()
     }
@@ -406,6 +434,18 @@ impl HeaderHash {
 impl From<sha3_256::Output<sha3::Sha3_256>> for HeaderHash {
     fn from(value: sha3_256::Output<sha3::Sha3_256>) -> Self {
         Self(value)
+    }
+}
+
+impl From<HeaderHash> for sha3_256::Output<sha3::Sha3_256> {
+    fn from(value: HeaderHash) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<[u8]> for HeaderHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 

@@ -16,6 +16,7 @@ use tracing_subscriber::field::debug;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::{fmt, vec};
+use std::fmt::Write;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
@@ -44,7 +45,8 @@ use tw_chain::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use url::Url;
-use crate::miner_pow::MineError;
+use crate::asert::{CompactTarget, CompactTargetError, HeaderHash};
+use crate::miner_pow::{MineError, PoWError, PoWObject};
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -177,21 +179,35 @@ impl fmt::Debug for LocalEventChannel {
 #[derive(PartialEq, Eq)]
 pub struct StringError(pub String);
 
-impl Error for StringError {
-    fn description(&self) -> &str {
-        &self.0
+impl StringError {
+    pub fn from<T: Error>(value: T) -> Self {
+        Self(value.to_string())
     }
 }
 
+impl Error for StringError {}
+
 impl fmt::Display for StringError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(&self.0)
     }
 }
 
 impl fmt::Debug for StringError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for StringError {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for StringError {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }
 
@@ -606,7 +622,7 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
-    validate_pow_leading_zeroes(&pow_body).is_some()
+    validate_pow_leading_zeroes(&pow_body).is_ok()
 }
 
 /// Will attempt deserialization of a given byte array using bincode
@@ -646,7 +662,7 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, M
             // Verify that the found nonce is actually valid
             let mut header_copy = header.clone();
             header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
-            assert!(validate_pow_block(&header_copy),
+            assert_eq!(validate_pow_block(&header_copy), Ok(()),
                     "generated PoW nonce {} isn't actually valid! block header: {:#?}",
                     hex::encode(&nonce), header);
             Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
@@ -675,13 +691,54 @@ pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringErr
         ));
     }
 
-    let hash_digest = validate_pow_block_hash(&block.header).ok_or_else(|| {
-        StringError("Only block passing validate_pow_block are accepted".to_owned())
-    })?;
+    let hash_digest = validate_pow_block_hash(&block.header)
+        .map_err(StringError::from)?;
 
     let mut hash_digest = hex::encode(hash_digest);
     hash_digest.insert(0, BLOCK_PREPEND as char);
     Ok(hash_digest)
+}
+
+/// An error which can occur while validating a block header's proof-of-work.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum ValidatePoWBlockError {
+    /// Indicates that the block header's nonce is invalid
+    InvalidNonce {
+        cause: PoWError,
+    },
+    /// Indicates that the block header's difficulty is invalid
+    InvalidDifficulty {
+        cause: CompactTargetError,
+    },
+    /// Indicates that the block header has no difficulty threshold, and its hash has an
+    /// insufficient number of leading zero bytes.
+    InvalidLeadingBytes {
+        cause: ValidatePoWLeadingZeroesError,
+    },
+    /// Indicates that the block header has a threshold, and its hash has an
+    /// insufficient number of leading zero bytes.
+    DoesntMeetThreshold {
+        header_hash: HeaderHash,
+        target: CompactTarget,
+    },
+}
+
+impl std::error::Error for ValidatePoWBlockError {}
+
+impl fmt::Display for ValidatePoWBlockError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InvalidNonce { cause } =>
+                write!(f, "Block header nonce is invalid: {}", cause),
+            Self::InvalidDifficulty { cause } =>
+                write!(f, "Block header difficulty is invalid: {}", cause),
+            Self::InvalidLeadingBytes { cause } =>
+                write!(f, "Block header does not meet the difficulty requirements: {}", cause),
+            Self::DoesntMeetThreshold { header_hash: hash, target } =>
+                write!(f, "Block header does not meet the difficulty requirements: target={}, hash={:?}",
+                       target, hash.as_bytes()),
+        }
+    }
 }
 
 /// Validate Proof of Work for a block with a mining transaction
@@ -689,8 +746,8 @@ pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringErr
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn validate_pow_block(header: &BlockHeader) -> bool {
-    validate_pow_block_hash(header).is_some()
+pub fn validate_pow_block(header: &BlockHeader) -> Result<(), ValidatePoWBlockError> {
+    validate_pow_block_hash(header).map(|_| ())
 }
 
 /// Validate Proof of Work for a block with a mining transaction returning the PoW hash
@@ -698,7 +755,9 @@ pub fn validate_pow_block(header: &BlockHeader) -> bool {
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
+fn validate_pow_block_hash(
+    header: &BlockHeader,
+) -> Result<HeaderHash, ValidatePoWBlockError> {
     // [AM] even though we've got explicit activation height in configuration
     // and a hard-coded fallback elsewhere in the code, here
     // we're basically sniffing at the difficulty field in the
@@ -712,21 +771,46 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
     // arguments or be moved to something more stateful that can
     // access configuration.
 
+    // Ensure the nonce length is valid
+    BlockHeader::check_nonce_length(header.get_nonce().len())
+        .map_err(|cause| ValidatePoWBlockError::InvalidNonce { cause })?;
+
     if header.difficulty.is_empty() {
         let pow = serialize(header).unwrap();
         validate_pow_leading_zeroes(&pow)
+            .map(HeaderHash::from)
+            .map_err(|cause| ValidatePoWBlockError::InvalidLeadingBytes { cause })
     } else {
-        use crate::asert::{CompactTarget, HeaderHash};
-        info!("We have difficuly");
+        info!("We have difficulty");
 
-        let target = CompactTarget::try_from_slice(&header.difficulty)?;
-        let header_hash = HeaderHash::try_calculate(header)?;
+        let target = CompactTarget::try_from_slice(&header.difficulty)
+            .map_err(|cause| ValidatePoWBlockError::InvalidDifficulty { cause })?;
+        let header_hash = HeaderHash::calculate(header);
 
         if header_hash.is_below_compact_target(&target) {
-            Some(header_hash.into_vec())
+            Ok(header_hash)
         } else {
-            None
+            Err(ValidatePoWBlockError::DoesntMeetThreshold { header_hash, target })
         }
+    }
+}
+
+/// An error which indicates that a Proof-of-Work action contained an invalid number of leading
+/// zero bytes.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct ValidatePoWLeadingZeroesError {
+    /// The computed hash
+    pub hash: sha3::digest::Output<sha3::Sha3_256>,
+    /// The mining difficulty
+    pub mining_difficulty: usize,
+}
+
+impl Error for ValidatePoWLeadingZeroesError {}
+
+impl fmt::Display for ValidatePoWLeadingZeroesError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Hash {:?} has fewer than {} leading zero bytes",
+               self.hash.as_slice(), self.mining_difficulty)
     }
 }
 
@@ -736,12 +820,15 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
 ///
 /// * `mining_difficulty`    - usize mining difficulty
 /// * `pow`                  - &u8 proof of work
-fn validate_pow_leading_zeroes_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
-    let pow_hash = sha3_256::digest(pow).to_vec();
-    if pow_hash[0..mining_difficulty].iter().all(|v| *v == 0) {
-        Some(pow_hash)
+fn validate_pow_leading_zeroes_for_diff(
+    mining_difficulty: usize,
+    pow: &[u8],
+) -> Result<sha3::digest::Output<sha3::Sha3_256>, ValidatePoWLeadingZeroesError> {
+    let hash = sha3_256::digest(pow);
+    if hash.as_slice()[0..mining_difficulty].iter().all(|v| *v == 0) {
+        Ok(hash)
     } else {
-        None
+        Err(ValidatePoWLeadingZeroesError { hash, mining_difficulty })
     }
 }
 
@@ -750,7 +837,9 @@ fn validate_pow_leading_zeroes_for_diff(mining_difficulty: usize, pow: &[u8]) ->
 /// ### Arguments
 ///
 /// * `pow`    - &u8 proof of work
-fn validate_pow_leading_zeroes(pow: &[u8]) -> Option<Vec<u8>> {
+fn validate_pow_leading_zeroes(
+    pow: &[u8],
+) -> Result<sha3::digest::Output<sha3::Sha3_256>, ValidatePoWLeadingZeroesError> {
     validate_pow_leading_zeroes_for_diff(MINING_DIFFICULTY, pow)
 }
 
