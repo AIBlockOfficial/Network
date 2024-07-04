@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tracing::{debug, info, warn};
-use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty, MineError};
+use crate::miner_pow::{MinerStatistics, Sha3_256PoWMiner, PoWDifficulty, MineError};
 use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 use crate::utils::split_range_into_blocks;
@@ -200,7 +200,7 @@ impl OpenGlMiner {
     }
 }
 
-impl SHA3_256PoWMiner for OpenGlMiner {
+impl Sha3_256PoWMiner for OpenGlMiner {
     fn is_hw_accelerated(&self) -> bool {
         true
     }

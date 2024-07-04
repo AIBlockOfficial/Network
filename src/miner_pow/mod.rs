@@ -382,7 +382,7 @@ impl fmt::Display for MineError {
     }
 }
 
-pub trait SHA3_256PoWMiner: Debug {
+pub trait Sha3_256PoWMiner: Debug {
     /// Returns true if this miner is hardware-accelerated.
     fn is_hw_accelerated(&self) -> bool;
 
@@ -444,7 +444,7 @@ pub trait SHA3_256PoWMiner: Debug {
 ///                        The miner will stop after approximately this duration, regardless
 ///                        of whether a result was found.
 pub fn generate_pow<O: PoWObject>(
-    miner: &mut dyn SHA3_256PoWMiner,
+    miner: &mut dyn Sha3_256PoWMiner,
     object: &O,
     statistics: &mut MinerStatistics,
     terminate_flag: Option<Arc<AtomicBool>>,
@@ -541,7 +541,7 @@ static OPENGL_ERRORED: OnceLock<()> = OnceLock::new();
 ///                   help choose an optimal miner implementation.
 pub fn create_any_miner(
     difficulty: Option<&PoWDifficulty>,
-) -> Arc<Mutex<dyn SHA3_256PoWMiner>> {
+) -> Arc<Mutex<dyn Sha3_256PoWMiner>> {
     if let Some(difficulty) = difficulty {
         match difficulty {
             // If the difficulty is sufficiently low that the overhead of a GPU miner would make
@@ -553,8 +553,8 @@ pub fn create_any_miner(
         }
     }
 
-    match vulkan::VulkanMiner::new() {
-        Ok(miner) => return Box::new(miner),
+    match vulkan::VulkanMiner::get() {
+        Ok(miner) => return miner.clone(),
         Err(cause) => warn!("Failed to create Vulkan miner: {cause}"),
     };
 
@@ -635,7 +635,7 @@ pub(super) mod test {
             Self::THRESHOLD_VERY_HARD,
         ];
 
-        pub fn test_miner(&self, miner: &mut impl SHA3_256PoWMiner, is_bench: bool) {
+        pub fn test_miner(&self, miner: &mut impl Sha3_256PoWMiner, is_bench: bool) {
             if !miner.is_hw_accelerated()
                 && if is_bench { self.requires_hw_accel.1 } else { self.requires_hw_accel.0 } {
                 println!("Skipping test case {} (too hard)", self.name);
@@ -752,9 +752,9 @@ pub(super) mod test {
 
     #[test]
     fn verify_vulkan() {
-        let mut miner = VulkanMiner::new().unwrap();
+        let miner = VulkanMiner::get().unwrap();
         for case in TestBlockMinerInternal::ALL_TEST {
-            case.test_miner(&mut miner, false);
+            case.test_miner(&mut *miner.lock().unwrap(), false);
         }
     }
 }
@@ -787,9 +787,9 @@ mod bench {
 
     #[test]
     fn bench_vulkan() {
-        let mut miner = VulkanMiner::new().unwrap();
+        let miner = VulkanMiner::get().unwrap();
         for case in TestBlockMinerInternal::ALL_BENCH {
-            case.test_miner(&mut miner, true);
+            case.test_miner(&mut *miner.lock().unwrap(), true);
         }
     }
 }
