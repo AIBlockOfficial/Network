@@ -630,11 +630,11 @@ pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, M
     let terminate_flag = None;
     let timeout_duration = None;
 
-    let mut miner = create_any_miner(Some(
+    let miner = create_any_miner(Some(
         &header.pow_difficulty().map_err(MineError::GetDifficulty)?
     ));
     let result = generate_pow(
-        &mut *miner,
+        &mut *miner.lock().unwrap(),
         header,
         &mut statistics,
         terminate_flag,

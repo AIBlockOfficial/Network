@@ -4,7 +4,7 @@ pub mod opengl;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -380,7 +380,7 @@ impl fmt::Display for MineError {
     }
 }
 
-pub trait SHA3_256PoWMiner {
+pub trait SHA3_256PoWMiner: Debug {
     /// Returns true if this miner is hardware-accelerated.
     fn is_hw_accelerated(&self) -> bool;
 
@@ -529,6 +529,8 @@ pub fn generate_pow<O: PoWObject>(
     Ok(MineResult::Exhausted)
 }
 
+static OPENGL_ERRORED: OnceLock<()> = OnceLock::new();
+
 /// Creates a miner.
 ///
 /// ### Arguments
@@ -537,24 +539,33 @@ pub fn generate_pow<O: PoWObject>(
 ///                   help choose an optimal miner implementation.
 pub fn create_any_miner(
     difficulty: Option<&PoWDifficulty>,
-) -> Box<dyn SHA3_256PoWMiner> {
+) -> Arc<Mutex<dyn SHA3_256PoWMiner>> {
     if let Some(difficulty) = difficulty {
         match difficulty {
             // If the difficulty is sufficiently low that the overhead of a GPU miner would make
             // things slower, don't bother!
             PoWDifficulty::TargetHashAlwaysPass |
             PoWDifficulty::LeadingZeroBytes { leading_zeroes: ..=1 } =>
-                return Box::new(CpuMiner::new()),
+                return Arc::new(Mutex::new(CpuMiner::new())),
             _ => (),
         }
     }
 
-    match opengl::OpenGlMiner::new() {
-        Ok(miner) => return Box::new(miner),
-        Err(cause) => warn!("Failed to create OpenGL miner: {cause}"),
-    };
+    if OPENGL_ERRORED.get().is_none() {
+        // Previous attempts to create an OpenGL miner have succeeded, or we haven't tried yet
+        match opengl::OpenGlMiner::new() {
+            Ok(miner) => return Arc::new(Mutex::new(miner)),
+            Err(cause) => {
+                warn!("Failed to create OpenGL miner: {cause}");
 
-    Box::new(CpuMiner::new())
+                // Remember that OpenGL miner creation failed, so we don't keep trying over and over
+                // on subsequent attempts.
+                OPENGL_ERRORED.get_or_init(|| ());
+            },
+        };
+    }
+
+    Arc::new(Mutex::new(CpuMiner::new()))
 }
 
 #[cfg(test)]
