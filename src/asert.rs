@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use {
     crate::constants::{ASERT_HALF_LIFE, ASERT_TARGET_HASHES_PER_BLOCK},
     rug::{integer::ParseIntegerError, Integer},
@@ -322,13 +323,8 @@ impl CompactTarget {
     }
 
     pub fn try_from_slice(slice: &[u8]) -> Option<Self> {
-        if slice.len() < 4 {
-            return None;
-        }
-
-        let mut array = [0u8; 4];
-        array.copy_from_slice(&slice[slice.len() - 4..]);
-        Some(Self::from_array(array))
+        // This requires that the slice's length is exactly 4
+        Some(Self::from_array(slice.try_into().ok()?))
     }
 }
 

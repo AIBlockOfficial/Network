@@ -44,6 +44,7 @@ use tw_chain::utils::transaction_utils::{
     get_tx_out_with_out_point, get_tx_out_with_out_point_cloned,
 };
 use url::Url;
+use crate::miner_pow::MineError;
 
 pub type RoutesPoWInfo = Arc<Mutex<BTreeMap<String, usize>>>;
 pub type ApiKeys = Arc<Mutex<BTreeMap<String, Vec<String>>>>;
@@ -622,16 +623,23 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, MineError> {
     use crate::miner_pow::*;
 
     let mut statistics = Default::default();
     let terminate_flag = None;
     let timeout_duration = None;
 
-    let mut miner = create_any_miner(Some(&header.pow_difficulty()));
-    let result = generate_pow(&mut *miner, header, &mut statistics, terminate_flag, timeout_duration)
-        .map_err(Box::new)?;
+    let miner = create_any_miner(Some(
+        &header.pow_difficulty().map_err(MineError::GetDifficulty)?
+    ));
+    let result = generate_pow(
+        &mut *miner.lock().unwrap(),
+        header,
+        &mut statistics,
+        terminate_flag,
+        timeout_duration,
+    )?;
 
     match result {
         MineResult::FoundNonce { nonce } => {
@@ -1459,6 +1467,59 @@ pub fn split_range_into_blocks(
     }
 }
 
+/// Returns all possible byte strings with the given length.
+///
+/// Note that for a length of `0` this will return a single 0-length byte string.
+///
+/// ### Arguments
+///
+/// * `len`  - the length of the byte strings to generate
+pub fn all_byte_strings(
+    len: usize,
+) -> impl Iterator<Item = Box<[u8]>> {
+    struct Itr {
+        buf: Box<[u8]>,
+        done: bool,
+    }
+
+    impl Iterator for Itr {
+        type Item = Box<[u8]>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.done {
+                // Iterator has already reached the end
+                return None;
+            }
+
+            // Save the current value to be returned later
+            let result = self.buf.clone();
+
+            // Try to increment the value
+            for byte in self.buf.as_mut() {
+                if let Some(next_value) = (*byte).checked_add(1) {
+                    // The byte was incremented successfully
+                    *byte = next_value;
+                    return Some(result);
+                } else {
+                    // The byte overflowed, set it to 0 and proceed to increment the next one
+                    *byte = 0;
+                }
+            }
+
+            // If we got this far, all the bytes were 0xFF, meaning that we've successfully
+            // iterated through the entire sequence.
+            self.done = true;
+
+            Some(result)
+        }
+    }
+
+    Itr {
+        buf: vec![0u8; len].into_boxed_slice(),
+        done: false,
+    }
+}
+
 /*---- TESTS ----*/
 
 #[cfg(test)]
@@ -1517,5 +1578,20 @@ mod util_tests {
                 (2 << 30, 1 << 30),
                 (3 << 30, (1 << 30) - 1),
             ]);
+    }
+
+    #[test]
+    fn test_all_byte_strings() {
+        assert_eq!(
+            all_byte_strings(0).collect::<Vec<_>>(),
+            vec![Box::from([])]);
+
+        assert_eq!(
+            all_byte_strings(1).collect::<Vec<_>>(),
+            (u8::MIN..=u8::MAX).map(|b| b.to_le_bytes().into()).collect::<Vec<_>>());
+
+        assert_eq!(
+            all_byte_strings(2).collect::<Vec<_>>(),
+            (u16::MIN..=u16::MAX).map(|b| b.to_le_bytes().into()).collect::<Vec<_>>());
     }
 }
