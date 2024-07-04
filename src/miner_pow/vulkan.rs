@@ -101,7 +101,11 @@ impl VulkanMiner {
         let physical_device = instance
             .enumerate_physical_devices()
             .map_err(VulkanMinerError::EnumerateDevices)?
-            //.filter(|d| d.supported_features().shader_int64)
+            .filter(|d| {
+                let features = d.supported_features();
+                features.shader_int8 &&
+                    features.shader_int64
+            })
             .next()
             .ok_or_else(|| VulkanMinerError::NoDevices)?;
 
