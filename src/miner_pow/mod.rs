@@ -4,37 +4,93 @@ pub mod vulkan;
 
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::Arc;
+use std::ops::RangeInclusive;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use tw_chain::primitives::block::BlockHeader;
-use crate::asert::CompactTarget;
+use crate::asert::{CompactTarget, CompactTargetError};
 use crate::constants::{ADDRESS_POW_NONCE_LEN, MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
 use crate::interfaces::ProofOfWork;
 use crate::miner_pow::cpu::CpuMiner;
-use crate::utils::{split_range_into_blocks, UnitsPrefixed};
+use crate::utils::{all_byte_strings, split_range_into_blocks, UnitsPrefixed};
 
 pub const SHA3_256_BYTES: usize = 32;
 pub const BLOCK_HEADER_MAX_BYTES: usize = 1024;
 
+/// A difficulty requirement for a proof-of-work object.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum PoWDifficulty {
+    /// Indicates that the object's hash should start with a fixed number of leading zero bytes.
     LeadingZeroBytes {
+        /// The number of zero bytes which the object's hash must start with.
         leading_zeroes: usize,
     },
+    /// Indicates that the object's hash is irrelevant; any hash would meet the difficulty
+    /// requirements.
     TargetHashAlwaysPass,
+    /// Indicates that the object's hash must be lexicographically less than or equal to the given
+    /// target hash threshold.
     TargetHash {
+        /// The target hash threshold which the object's hash must be lexicographically less than
+        /// or equal to.
         target_hash: [u8; SHA3_256_BYTES],
     },
 }
 
-fn find_nonce_location<T: Clone + serde::Serialize>(
+impl PoWDifficulty {
+    /// Checks if the given hash meets this difficulty requirement.
+    ///
+    /// ### Arguments
+    ///
+    /// * `hash` - the hash to check
+    pub fn check_hash(&self, hash: &[u8; SHA3_256_BYTES]) -> bool {
+        match self {
+            PoWDifficulty::TargetHashAlwaysPass => true,
+            PoWDifficulty::LeadingZeroBytes { leading_zeroes } =>
+                *leading_zeroes <= hash.len() && hash[..*leading_zeroes].iter().all(|b| *b == 0),
+            PoWDifficulty::TargetHash { target_hash } =>
+                hash <= target_hash,
+        }
+    }
+}
+
+/// An error relating to an invalid nonce value.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum PoWError {
+    /// Indicates that an invalid nonce length was provided.
+    NonceLength {
+        /// The provided nonce length
+        nonce_length: usize,
+        /// The permitted nonce lengths
+        permitted_lengths: RangeInclusive<usize>,
+    },
+}
+
+impl std::error::Error for PoWError {}
+
+impl fmt::Display for PoWError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NonceLength { nonce_length, permitted_lengths } =>
+                write!(f, "The provided nonce length {} is invalid (should be in range {}..={})",
+                       nonce_length, permitted_lengths.start(), permitted_lengths.end()),
+        }
+    }
+}
+
+fn find_nonce_location<T: PoWObject + serde::Serialize>(
     object: &T,
-    nonce_setter: impl Fn(&mut T, Vec<u8>) -> (),
     nonce_length: usize,
-) -> (Box<[u8]>, Box<[u8]>) {
+) -> Result<(Box<[u8]>, Box<[u8]>), PoWError> {
+    if !<T as PoWObject>::permitted_nonce_lengths().contains(&nonce_length) {
+        return Err(PoWError::NonceLength {
+            nonce_length,
+            permitted_lengths: <T as PoWObject>::permitted_nonce_lengths(),
+        });
+    }
+
     assert_ne!(nonce_length, 0, "nonce_length may not be 0!");
 
     let mut object = object.clone();
@@ -42,9 +98,9 @@ fn find_nonce_location<T: Clone + serde::Serialize>(
     let nonce_00 = vec![0x00u8; nonce_length];
     let nonce_ff = vec![0xFFu8; nonce_length];
 
-    nonce_setter(&mut object, nonce_00.clone());
+    object.set_nonce(nonce_00.clone()).unwrap();
     let serialized_00 = bincode::serialize(&object).unwrap();
-    nonce_setter(&mut object, nonce_ff.clone());
+    object.set_nonce(nonce_ff.clone()).unwrap();
     let serialized_ff = bincode::serialize(&object).unwrap();
 
     assert_ne!(serialized_00, serialized_ff,
@@ -64,29 +120,7 @@ fn find_nonce_location<T: Clone + serde::Serialize>(
 
     let leading_bytes = serialized_00[..nonce_offset].into();
     let trailing_bytes = serialized_00[nonce_offset + nonce_length..].into();
-    (leading_bytes, trailing_bytes)
-}
-
-fn extract_target_difficulty(
-    difficulty: &[u8],
-) -> Result<PoWDifficulty, &'static str> {
-    if difficulty.is_empty() {
-        // There is no difficulty function enabled
-        return Ok(PoWDifficulty::LeadingZeroBytes {
-            leading_zeroes: MINING_DIFFICULTY,
-        });
-    }
-
-    // Decode the difficulty bytes into a CompactTarget and then expand that into a target
-    // hash threshold.
-    let compact_target = CompactTarget::try_from_slice(difficulty)
-        .ok_or("block header contains invalid difficulty")?;
-
-    match expand_compact_target_difficulty(compact_target) {
-        // The target value is higher than the largest possible SHA3-256 hash.
-        None => Ok(PoWDifficulty::TargetHashAlwaysPass),
-        Some(target_hash) => Ok(PoWDifficulty::TargetHash { target_hash }),
-    }
+    Ok((leading_bytes, trailing_bytes))
 }
 
 fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8; SHA3_256_BYTES]> {
@@ -107,12 +141,33 @@ fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8
 }
 
 /// An object which contains a nonce and can therefore be mined.
-pub trait PoWObject {
-    /// Gets the difficulty requirements for mining this object.
-    fn pow_difficulty(&self) -> PoWDifficulty;
-
+pub trait PoWObject : Clone {
     /// Gets a range containing all nonce lengths permitted by this object.
-    fn permitted_nonce_lengths(&self) -> Range<usize>;
+    fn permitted_nonce_lengths() -> RangeInclusive<usize>;
+
+    fn check_nonce_length(nonce_length: usize) -> Result<(), PoWError> {
+        if Self::permitted_nonce_lengths().contains(&nonce_length) {
+            Ok(())
+        } else {
+            Err(PoWError::NonceLength {
+                nonce_length,
+                permitted_lengths: Self::permitted_nonce_lengths(),
+            })
+        }
+    }
+
+    /// Sets this object's nonce to the given value.
+    ///
+    /// ### Arguments
+    ///
+    /// * `nonce`  - the nonce which the cloned object should contain
+    fn set_nonce(&mut self, nonce: Vec<u8>) -> Result<(), PoWError>;
+
+    /// Gets a reference to this object's nonce.
+    fn get_nonce(&self) -> &[u8];
+
+    /// Gets the difficulty requirements for mining this object.
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError>;
 
     /// Gets the leading and trailing bytes for this object.
     ///
@@ -125,60 +180,78 @@ pub trait PoWObject {
     fn get_leading_and_trailing_bytes_for_mine(
         &self,
         nonce_length: usize,
-    ) -> Result<(Box<[u8]>, Box<[u8]>), usize>;
+    ) -> Result<(Box<[u8]>, Box<[u8]>), PoWError>;
 }
 
 impl PoWObject for BlockHeader {
-    fn pow_difficulty(&self) -> PoWDifficulty {
-        extract_target_difficulty(&self.difficulty)
-            .expect("Block header contains invalid difficulty!")
+    fn permitted_nonce_lengths() -> RangeInclusive<usize> {
+        1..=POW_NONCE_MAX_LEN
     }
 
-    fn permitted_nonce_lengths(&self) -> Range<usize> {
-        1..POW_NONCE_MAX_LEN + 1
+    fn set_nonce(&mut self, nonce: Vec<u8>) -> Result<(), PoWError> {
+        Self::check_nonce_length(nonce.len())?;
+        self.nonce_and_mining_tx_hash.0 = nonce;
+        Ok(())
+    }
+
+    fn get_nonce(&self) -> &[u8] {
+        &self.nonce_and_mining_tx_hash.0
+    }
+
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError> {
+        if self.difficulty.is_empty() {
+            // There is no difficulty function enabled
+            return Ok(PoWDifficulty::LeadingZeroBytes {
+                leading_zeroes: MINING_DIFFICULTY,
+            });
+        }
+
+        // Decode the difficulty bytes into a CompactTarget and then expand that into a target
+        // hash threshold.
+        let compact_target = CompactTarget::try_from_slice(&self.difficulty)?;
+
+        match expand_compact_target_difficulty(compact_target) {
+            // The target value is higher than the largest possible SHA3-256 hash.
+            None => Ok(PoWDifficulty::TargetHashAlwaysPass),
+            Some(target_hash) => Ok(PoWDifficulty::TargetHash { target_hash }),
+        }
     }
 
     fn get_leading_and_trailing_bytes_for_mine(
         &self,
         nonce_length: usize,
-    ) -> Result<(Box<[u8]>, Box<[u8]>), usize> {
-        if !self.permitted_nonce_lengths().contains(&nonce_length) {
-            return Err(nonce_length);
-        }
-
-        Ok(find_nonce_location(
-            self,
-            |block_header, nonce| block_header.nonce_and_mining_tx_hash.0 = nonce,
-            nonce_length,
-        ))
+    ) -> Result<(Box<[u8]>, Box<[u8]>), PoWError> {
+        find_nonce_location(self, nonce_length)
     }
 }
 
 impl PoWObject for ProofOfWork {
-    fn pow_difficulty(&self) -> PoWDifficulty {
-        // see utils::validate_pow_for_address()
-        PoWDifficulty::LeadingZeroBytes {
-            leading_zeroes: MINING_DIFFICULTY,
-        }
+    fn permitted_nonce_lengths() -> RangeInclusive<usize> {
+        ADDRESS_POW_NONCE_LEN..=ADDRESS_POW_NONCE_LEN
     }
 
-    fn permitted_nonce_lengths(&self) -> Range<usize> {
-        ADDRESS_POW_NONCE_LEN..ADDRESS_POW_NONCE_LEN + 1
+    fn set_nonce(&mut self, nonce: Vec<u8>) -> Result<(), PoWError> {
+        Self::check_nonce_length(nonce.len())?;
+        self.nonce = nonce;
+        Ok(())
+    }
+
+    fn get_nonce(&self) -> &[u8] {
+        &self.nonce
+    }
+
+    fn pow_difficulty(&self) -> Result<PoWDifficulty, CompactTargetError> {
+        // see utils::validate_pow_for_address()
+        Ok(PoWDifficulty::LeadingZeroBytes {
+            leading_zeroes: MINING_DIFFICULTY,
+        })
     }
 
     fn get_leading_and_trailing_bytes_for_mine(
         &self,
         nonce_length: usize,
-    ) -> Result<(Box<[u8]>, Box<[u8]>), usize> {
-        if !self.permitted_nonce_lengths().contains(&nonce_length) {
-            return Err(nonce_length);
-        }
-
-        Ok(find_nonce_location(
-            self,
-            |pow, nonce| pow.nonce = nonce,
-            nonce_length,
-        ))
+    ) -> Result<(Box<[u8]>, Box<[u8]>), PoWError> {
+        find_nonce_location(self, nonce_length)
     }
 }
 
@@ -271,6 +344,8 @@ impl fmt::Display for MinerStatistics {
 /// An error which is thrown by a miner.
 #[derive(Debug)]
 pub enum MineError {
+    GetDifficulty(CompactTargetError),
+    GetLeadingTrailingBytes(PoWError),
     Wrapped(Box<dyn std::error::Error>),
 }
 
@@ -285,12 +360,17 @@ impl std::error::Error for MineError {}
 impl fmt::Display for MineError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Wrapped(cause) => write!(f, "An error occurred while mining: {cause}"),
+            Self::GetDifficulty(cause) =>
+                write!(f, "Unable to determine PoW difficulty: {}", cause),
+            Self::GetLeadingTrailingBytes(cause) =>
+                write!(f, "Unable to get leading and trailing bytes for PoW object: {}", cause),
+            Self::Wrapped(cause) =>
+                write!(f, "An error occurred while mining: {}", cause),
         }
     }
 }
 
-pub trait SHA3_256PoWMiner {
+pub trait Sha3_256PoWMiner: Debug {
     /// Returns true if this miner is hardware-accelerated.
     fn is_hw_accelerated(&self) -> bool;
 
@@ -351,58 +431,87 @@ pub trait SHA3_256PoWMiner {
 /// * `timeout_duration` - If set, this is the maximum duration which the miner will run for.
 ///                        The miner will stop after approximately this duration, regardless
 ///                        of whether a result was found.
-pub fn generate_pow(
-    miner: &mut dyn SHA3_256PoWMiner,
-    object: &impl PoWObject,
+pub fn generate_pow<O: PoWObject>(
+    miner: &mut dyn Sha3_256PoWMiner,
+    object: &O,
     statistics: &mut MinerStatistics,
     terminate_flag: Option<Arc<AtomicBool>>,
     timeout_duration: Option<Duration>,
 ) -> Result<MineResult, MineError> {
-    let difficulty = object.pow_difficulty();
-
-    // TODO: Change the nonce prefix if we run out of hashes to try
-    let nonce_prefix_length = std::mem::size_of::<u32>();
-    let (leading_bytes, trailing_bytes) =
-        object.get_leading_and_trailing_bytes_for_mine(nonce_prefix_length)
-            .expect("Object doesn't permit a 32-bit nonce!");
-
-    let peel_amount = miner.nonce_peel_amount();
-
     let total_start_time = Instant::now();
 
-    for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
-        let result = miner.generate_pow_internal(
-            &leading_bytes,
-            &trailing_bytes,
-            &difficulty,
-            first_nonce,
-            nonce_count,
-            statistics,
-        )?;
+    let difficulty = object.pow_difficulty().map_err(MineError::GetDifficulty)?;
+    let peel_amount = miner.nonce_peel_amount();
 
-        println!("Mining statistics: {}", statistics);
-
-        if let Some(nonce) = result {
-            return Ok(MineResult::FoundNonce {
-                nonce: nonce.to_le_bytes().to_vec(),
-            });
+    // Try to generate nonces of every length
+    for nonce_length in <O as PoWObject>::permitted_nonce_lengths() {
+        if nonce_length < std::mem::size_of::<u32>() {
+            // SHA3_256PoWMiner only supports inserting exactly 4 bytes of nonce between objects,
+            // so we'll skip all nonce lengths lower than 4
+            continue;
         }
 
-        if let Some(terminate_flag) = &terminate_flag {
-            if terminate_flag.load(Ordering::Acquire) {
-                debug!("Miner terminating after being requested to terminate");
-                return Ok(MineResult::TerminateRequested);
-            }
-        }
+        // Precompute the leading and trailing bytes for the object assuming a `nonce_length`-byte
+        // nonce.
+        let (leading_bytes, trailing_bytes) =
+            object.get_leading_and_trailing_bytes_for_mine(nonce_length)
+                .map_err(MineError::GetLeadingTrailingBytes)?;
 
-        if let Some(timeout_duration) = &timeout_duration {
-            let total_elapsed_time = total_start_time.elapsed();
-            if total_elapsed_time >= *timeout_duration {
-                debug!(
-                    "Miner terminating after reaching timeout (timeout={}s, elapsed time={}s)",
-                    timeout_duration.as_secs_f64(),
-                    total_elapsed_time.as_secs_f64());
-                return Ok(MineResult::TimeoutReached);
+        // Since SHA3_256PoWMiner always inserts exactly 4 bytes of nonce, we'll need to provide
+        // an additional `nonce_length - 4` bytes so that the resulting nonce does end up being
+        // exactly `nonce_length` bytes long.
+        for nonce_supplement in all_byte_strings(nonce_length - std::mem::size_of::<u32>()) {
+            // In theory, it shouldn't really matter whether we put the nonce supplement before
+            // or after the 4-byte nonce inserted by the miner, but the miner implementation may
+            // prefer the leading/trailing bytes to be aligned on some boundary? That's a potential
+            // optimization for The Future(tm).
+            // For now, we'll always put the nonce supplement after the 4-byte nonce.
+            let leading_bytes = &leading_bytes;
+            let trailing_bytes = [nonce_supplement.as_ref(), trailing_bytes.as_ref()].concat();
+
+            // Have the miner try `peel_amount` nonces at a time. This value should be chosen
+            // appropriately so that mining doesn't take unnecessarily long, or cause other
+            // undesirable side effects like locking up the GPU for so long that the desktop
+            // environment crashes.
+            for (first_nonce, nonce_count) in split_range_into_blocks(0, u32::MAX, peel_amount) {
+                let result = miner.generate_pow_internal(
+                    &leading_bytes,
+                    &trailing_bytes,
+                    &difficulty,
+                    first_nonce,
+                    nonce_count,
+                    statistics,
+                )?;
+
+                info!("Mining statistics: {}", statistics);
+
+                if let Some(nonce_4byte) = result {
+                    let full_nonce = [&nonce_4byte.to_le_bytes(), nonce_supplement.as_ref()].concat();
+                    info!("Miner found nonce: {:?}", full_nonce);
+                    return Ok(MineResult::FoundNonce {
+                        nonce: full_nonce,
+                    });
+                }
+
+                // If a termination flag was provided and is set to true, stop mining now.
+                if let Some(terminate_flag) = &terminate_flag {
+                    if terminate_flag.load(Ordering::Acquire) {
+                        debug!("Miner terminating after being requested to terminate");
+                        return Ok(MineResult::TerminateRequested);
+                    }
+                }
+
+                // If a timeout duration was provided and has been reached, stop mining now.
+                if let Some(timeout_duration) = &timeout_duration {
+                    let total_elapsed_time = total_start_time.elapsed();
+                    if total_elapsed_time >= *timeout_duration {
+                        debug!(
+                            "Miner terminating after reaching timeout (timeout={}s, elapsed time={}s)",
+                            timeout_duration.as_secs_f64(),
+                            total_elapsed_time.as_secs_f64());
+                        return Ok(MineResult::TimeoutReached);
+                    }
+                }
             }
         }
     }
@@ -410,32 +519,48 @@ pub fn generate_pow(
     Ok(MineResult::Exhausted)
 }
 
+static OPENGL_ERRORED: OnceLock<()> = OnceLock::new();
+
 /// Creates a miner.
+///
+/// ### Arguments
+///
+/// * `difficulty`  - An optional hint for the difficulty of the resource that will be mined, to
+///                   help choose an optimal miner implementation.
 pub fn create_any_miner(
     difficulty: Option<&PoWDifficulty>,
-) -> Box<dyn SHA3_256PoWMiner> {
+) -> Arc<Mutex<dyn Sha3_256PoWMiner>> {
     if let Some(difficulty) = difficulty {
         match difficulty {
             // If the difficulty is sufficiently low that the overhead of a GPU miner would make
             // things slower, don't bother!
             PoWDifficulty::TargetHashAlwaysPass |
             PoWDifficulty::LeadingZeroBytes { leading_zeroes: ..=1 } =>
-                return Box::new(CpuMiner::new()),
+                return Arc::new(Mutex::new(CpuMiner::new())),
             _ => (),
         }
     }
 
-    match vulkan::VulkanMiner::new() {
-        Ok(miner) => return Box::new(miner),
+    match vulkan::VulkanMiner::get() {
+        Ok(miner) => return miner.clone(),
         Err(cause) => warn!("Failed to create Vulkan miner: {cause}"),
     };
 
-    match opengl::OpenGlMiner::new() {
-        Ok(miner) => return Box::new(miner),
-        Err(cause) => warn!("Failed to create OpenGL miner: {cause}"),
-    };
+    if OPENGL_ERRORED.get().is_none() {
+        // Previous attempts to create an OpenGL miner have succeeded, or we haven't tried yet
+        match opengl::OpenGlMiner::new() {
+            Ok(miner) => return Arc::new(Mutex::new(miner)),
+            Err(cause) => {
+                warn!("Failed to create OpenGL miner: {cause}");
 
-    Box::new(CpuMiner::new())
+                // Remember that OpenGL miner creation failed, so we don't keep trying over and over
+                // on subsequent attempts.
+                OPENGL_ERRORED.get_or_init(|| ());
+            },
+        };
+    }
+
+    Arc::new(Mutex::new(CpuMiner::new()))
 }
 
 #[cfg(test)]
@@ -498,7 +623,7 @@ pub(super) mod test {
             Self::THRESHOLD_VERY_HARD,
         ];
 
-        pub fn test_miner(&self, miner: &mut impl SHA3_256PoWMiner, is_bench: bool) {
+        pub fn test_miner(&self, miner: &mut impl Sha3_256PoWMiner, is_bench: bool) {
             if !miner.is_hw_accelerated()
                 && if is_bench { self.requires_hw_accel.1 } else { self.requires_hw_accel.0 } {
                 println!("Skipping test case {} (too hard)", self.name);
@@ -507,10 +632,10 @@ pub(super) mod test {
 
             let block_header = test_block_header(self.difficulty);
 
-            let difficulty = block_header.pow_difficulty();
+            let difficulty = block_header.pow_difficulty().expect(self.name);
             let (leading_bytes, trailing_bytes) =
                 block_header.get_leading_and_trailing_bytes_for_mine(4)
-                    .unwrap();
+                    .expect(self.name);
 
             let mut statistics = Default::default();
             assert_eq!(
@@ -519,7 +644,7 @@ pub(super) mod test {
                     &trailing_bytes,
                     &difficulty,
                     0, self.max_nonce_count, &mut statistics,
-                ).unwrap(),
+                ).expect(self.name),
                 Some(self.expected_nonce),
                 "Test case {:?}", self);
 
@@ -615,9 +740,9 @@ pub(super) mod test {
 
     #[test]
     fn verify_vulkan() {
-        let mut miner = VulkanMiner::new().unwrap();
+        let miner = VulkanMiner::get().unwrap();
         for case in TestBlockMinerInternal::ALL_TEST {
-            case.test_miner(&mut miner, false);
+            case.test_miner(&mut *miner.lock().unwrap(), false);
         }
     }
 }
@@ -650,9 +775,9 @@ mod bench {
 
     #[test]
     fn bench_vulkan() {
-        let mut miner = VulkanMiner::new().unwrap();
+        let miner = VulkanMiner::get().unwrap();
         for case in TestBlockMinerInternal::ALL_BENCH {
-            case.test_miner(&mut miner, true);
+            case.test_miner(&mut *miner.lock().unwrap(), true);
         }
     }
 }

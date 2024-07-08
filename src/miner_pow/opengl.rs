@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use gl::types::*;
 use glfw::{Context, Glfw, GlfwReceiver, OpenGlProfileHint, PWindow, WindowEvent, WindowHint, WindowMode};
 use tracing::{debug, info, warn};
-use crate::miner_pow::{MinerStatistics, SHA3_256PoWMiner, PoWDifficulty, MineError};
+use crate::miner_pow::{MinerStatistics, Sha3_256PoWMiner, PoWDifficulty, MineError};
 use crate::miner_pow::opengl::gl_error::{AddContext, CompileShaderError, GlError, LinkProgramError};
 use crate::miner_pow::opengl::gl_wrapper::{Buffer, GetIntIndexedType, GetProgramIntType, GetStringType, ImmutableBuffer, IndexedBufferTarget, MemoryBarrierBit, Program, Shader, ShaderType, UniformLocation};
 use crate::utils::split_range_into_blocks;
@@ -42,7 +42,8 @@ impl fmt::Display for OpenGlMinerError {
 
 impl error::Error for OpenGlMinerError {}
 
-struct GlfwContext<Ctx> {
+#[derive(Debug)]
+struct GlfwContext<Ctx: fmt::Debug> {
     mutex: Mutex<Ctx>,
 
     glfw_window: PWindow,
@@ -51,17 +52,18 @@ struct GlfwContext<Ctx> {
     glfw_mutex_guard: MutexGuard<'static, ()>,
 }
 
-impl<Ctx> Drop for GlfwContext<Ctx> {
+impl<Ctx: fmt::Debug> Drop for GlfwContext<Ctx> {
     fn drop(&mut self) {
         debug!("Thread {} is destroying the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
     }
 }
 
-pub struct GlfwContextGuard<'glfw, Ctx> {
+#[derive(Debug)]
+pub struct GlfwContextGuard<'glfw, Ctx: fmt::Debug> {
     mutex_guard: MutexGuard<'glfw, Ctx>,
 }
 
-impl<'glfw, Ctx> std::ops::Deref for GlfwContextGuard<'glfw, Ctx> {
+impl<'glfw, Ctx: fmt::Debug> std::ops::Deref for GlfwContextGuard<'glfw, Ctx> {
     type Target = Ctx;
 
     fn deref(&self) -> &Self::Target {
@@ -69,13 +71,13 @@ impl<'glfw, Ctx> std::ops::Deref for GlfwContextGuard<'glfw, Ctx> {
     }
 }
 
-impl<'glfw, Ctx> std::ops::DerefMut for GlfwContextGuard<'glfw, Ctx> {
+impl<'glfw, Ctx: fmt::Debug> std::ops::DerefMut for GlfwContextGuard<'glfw, Ctx> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.mutex_guard
     }
 }
 
-impl<'glfw, Ctx> Drop for GlfwContextGuard<'glfw, Ctx> {
+impl<'glfw, Ctx: fmt::Debug> Drop for GlfwContextGuard<'glfw, Ctx> {
     fn drop(&mut self) {
         // un-bind the context before releasing the context's mutex
         debug!("Thread {} is releasing the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
@@ -85,7 +87,7 @@ impl<'glfw, Ctx> Drop for GlfwContextGuard<'glfw, Ctx> {
 
 static GLFW_MUTEX: Mutex<()> = Mutex::new(());
 
-impl<Ctx> GlfwContext<Ctx> {
+impl<Ctx: fmt::Debug> GlfwContext<Ctx> {
     fn new(f: impl FnOnce() -> Result<Ctx, OpenGlMinerError>) -> Result<Self, OpenGlMinerError> {
         debug!("Thread {} is creating the GLFW context", std::thread::current().name().unwrap_or("<unnamed thread>"));
 
@@ -130,6 +132,7 @@ impl<Ctx> GlfwContext<Ctx> {
     }
 }
 
+#[derive(Debug)]
 pub struct OpenGlMiner {
     program: Program,
     program_first_nonce_uniform: UniformLocation,
@@ -197,7 +200,7 @@ impl OpenGlMiner {
     }
 }
 
-impl SHA3_256PoWMiner for OpenGlMiner {
+impl Sha3_256PoWMiner for OpenGlMiner {
     fn is_hw_accelerated(&self) -> bool {
         true
     }
@@ -573,6 +576,7 @@ mod gl_wrapper {
     }
 
     /// An OpenGL shader object
+    #[derive(Debug)]
     pub struct Shader {
         pub id: GLuint,
     }
@@ -671,6 +675,7 @@ mod gl_wrapper {
     }
 
     /// An OpenGL program object
+    #[derive(Debug)]
     pub struct Program {
         pub id: GLuint,
     }
@@ -808,7 +813,7 @@ mod gl_wrapper {
     }
 
     /// Shared trait providing functions accessible to both kinds of OpenGL buffers.
-    pub trait Buffer {
+    pub trait Buffer: fmt::Debug {
         fn invalidate(&mut self) -> Result<(), GlError>;
 
         fn upload_sub_data(&mut self, offset: usize, data: &[u8]) -> Result<(), GlError>;
@@ -818,7 +823,7 @@ mod gl_wrapper {
         fn bind_base(&self, target: IndexedBufferTarget, index: GLuint) -> Result<(), GlError>;
     }
 
-    impl<T: AsRef<BaseBuffer> + AsMut<BaseBuffer>> Buffer for T {
+    impl<T: AsRef<BaseBuffer> + AsMut<BaseBuffer> + fmt::Debug> Buffer for T {
         fn invalidate(&mut self) -> Result<(), GlError> {
             self.as_mut().invalidate()
         }
@@ -837,6 +842,7 @@ mod gl_wrapper {
     }
 
     /// An OpenGL buffer
+    #[derive(Debug)]
     struct BaseBuffer {
         id: GLuint,
         size: usize,
@@ -894,6 +900,7 @@ mod gl_wrapper {
     }
 
     /// An OpenGL immutable buffer
+    #[derive(Debug)]
     pub struct ImmutableBuffer {
         internal_buffer: BaseBuffer,
         flags: GLbitfield,

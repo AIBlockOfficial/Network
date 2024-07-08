@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use crevice::std140::AsStd140;
 use crevice::std430::AsStd430;
+use debug_ignore::DebugIgnore;
 use tracing::warn;
 use vulkano::*;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -20,16 +21,16 @@ use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLa
 use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo};
 use vulkano::shader::{ShaderModule, ShaderStages, SpecializationConstant};
 use vulkano::sync::GpuFuture;
-use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MineError, MinerStatistics, PoWDifficulty, SHA3_256_BYTES, SHA3_256PoWMiner};
+use crate::miner_pow::{BLOCK_HEADER_MAX_BYTES, MineError, MinerStatistics, PoWDifficulty, SHA3_256_BYTES, Sha3_256PoWMiner};
 use crate::miner_pow::vulkan::sha3_256_shader::SHA3_KECCAK_SPONGE_WORDS;
 use crate::utils::split_range_into_blocks;
 
 // synced with vulkan_miner.glsl
 const WORK_GROUP_SIZE: u32 = 256;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum VulkanMinerError {
-    Load(LoadingError),
+    Load(String),
     Instance(Validated<VulkanError>),
     EnumerateDevices(VulkanError),
     NoDevices,
@@ -74,6 +75,7 @@ impl VulkanMinerVariant {
     }
 }
 
+#[derive(Debug)]
 pub struct VulkanMiner {
     uniform_buffer: Subbuffer<<MineUniforms as AsStd140>::Output>,
     response_buffer: Subbuffer<<MineResponse as AsStd430>::Output>,
@@ -84,7 +86,7 @@ pub struct VulkanMiner {
     work_group_size: u32,
 
     descriptor_set_layout_index: usize,
-    descriptor_set: Arc<PersistentDescriptorSet>,
+    descriptor_set: DebugIgnore<Arc<PersistentDescriptorSet>>,
 
     queue: Arc<Queue>,
     device: Arc<Device>,
@@ -92,16 +94,29 @@ pub struct VulkanMiner {
     instance: Arc<Instance>,
 }
 
+static VULKAN_MINER: OnceLock<Result<Arc<Mutex<VulkanMiner>>, VulkanMinerError>> = OnceLock::new();
+
 impl VulkanMiner {
-    pub fn new() -> Result<Self, VulkanMinerError> {
-        let library = VulkanLibrary::new().map_err(VulkanMinerError::Load)?;
+    pub fn get() -> Result<Arc<Mutex<VulkanMiner>>, VulkanMinerError> {
+        VULKAN_MINER.get_or_init(|| Self::new().map(|miner| Arc::new(Mutex::new(miner))))
+            .clone()
+        //Self::new().map(|miner| Arc::new(Mutex::new(miner)))
+    }
+
+    fn new() -> Result<Self, VulkanMinerError> {
+        let library = VulkanLibrary::new()
+            .map_err(|err| VulkanMinerError::Load(err.to_string()))?;
         let instance = Instance::new(library, InstanceCreateInfo::default())
             .map_err(VulkanMinerError::Instance)?;
 
         let physical_device = instance
             .enumerate_physical_devices()
             .map_err(VulkanMinerError::EnumerateDevices)?
-            //.filter(|d| d.supported_features().shader_int64)
+            .filter(|d| {
+                let features = d.supported_features();
+                features.shader_int8 &&
+                    features.shader_int64
+            })
             .next()
             .ok_or_else(|| VulkanMinerError::NoDevices)?;
 
@@ -215,7 +230,7 @@ impl VulkanMiner {
             work_group_size: WORK_GROUP_SIZE,
 
             descriptor_set_layout_index,
-            descriptor_set,
+            descriptor_set: descriptor_set.into(),
 
             queue,
             device,
@@ -252,7 +267,7 @@ impl VulkanMiner {
     }
 }
 
-impl SHA3_256PoWMiner for VulkanMiner {
+impl Sha3_256PoWMiner for VulkanMiner {
     fn is_hw_accelerated(&self) -> bool {
         true
     }
@@ -374,7 +389,7 @@ impl SHA3_256PoWMiner for VulkanMiner {
                 PipelineBindPoint::Compute,
                 compute_pipeline.layout().clone(),
                 self.descriptor_set_layout_index as u32,
-                self.descriptor_set.clone(),
+                (*self.descriptor_set).clone(),
             )
             .unwrap()
             .dispatch(work_group_counts)
