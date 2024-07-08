@@ -18,8 +18,9 @@ jobs:
   build:
     name: Build & Push [${{ inputs.NODE_TYPE }}] (${{ matrix.platform}})
     runs-on: ubuntu-latest
+    continue-on-error: false
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         platform:
           - linux/amd64
