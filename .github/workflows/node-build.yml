@@ -18,8 +18,9 @@ jobs:
   build:
     name: Build & Push [${{ inputs.NODE_TYPE }}] (${{ matrix.platform}})
     runs-on: ubuntu-latest
+    continue-on-error: false
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         platform:
           - linux/amd64
@@ -62,8 +63,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NODE_TYPE_ARG=${{ inputs.NODE_TYPE }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

@@ -13,6 +13,11 @@ on:
           - miner
           - user
           - storage
+      tag:
+        description: "tag used for the image"
+        default: "latest"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -33,4 +38,5 @@ jobs:
     with:
       REGISTRY: ${{ vars.REGISTRY }}
       NODE_TYPE: ${{ inputs.node_type }}
+      TAG: ${{ inputs.tag }}
     secrets: inherit
