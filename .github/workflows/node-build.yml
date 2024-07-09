@@ -25,7 +25,7 @@ jobs:
         include:
         - builder: ubuntu-latest
           platform: linux/amd64
-        - builder: ubuntu-24-arm
+        - builder: ubuntu-latest
           platform: linux/arm64
     steps:
       - name: Prepare
