@@ -1,6 +1,6 @@
-use tw_chain::crypto::sha3_256;
 use crate::constants::MINING_DIFFICULTY;
-use crate::miner_pow::{MinerStatistics, Sha3_256PoWMiner, PoWDifficulty, MineError};
+use crate::miner_pow::{MineError, MinerStatistics, PoWDifficulty, Sha3_256PoWMiner};
+use tw_chain::crypto::sha3_256;
 
 /// A miner which runs on the CPU.
 #[derive(Copy, Clone, Debug)]
@@ -51,19 +51,17 @@ impl Sha3_256PoWMiner for CpuMiner {
             PoWDifficulty::LeadingZeroBytes { leading_zeroes } => {
                 assert_eq!(*leading_zeroes, MINING_DIFFICULTY);
                 None
-            },
+            }
             PoWDifficulty::TargetHash { target_hash } => Some(target_hash),
         };
 
         let block_header_nonce_offset = leading_bytes.len();
-        let mut block_header_bytes =
-            [ leading_bytes, &0u32.to_le_bytes(), trailing_bytes ].concat();
+        let mut block_header_bytes = [leading_bytes, &0u32.to_le_bytes(), trailing_bytes].concat();
 
         for i in 0..nonce_count {
             let nonce = first_nonce.wrapping_add(i);
 
-            block_header_bytes
-                [block_header_nonce_offset..block_header_nonce_offset + 4]
+            block_header_bytes[block_header_nonce_offset..block_header_nonce_offset + 4]
                 .copy_from_slice(&nonce.to_ne_bytes());
 
             let hash = sha3_256::digest(&block_header_bytes);

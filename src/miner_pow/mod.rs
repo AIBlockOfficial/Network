@@ -2,19 +2,19 @@ pub mod cpu;
 pub mod opengl;
 pub mod vulkan;
 
-use std::fmt;
-use std::fmt::Debug;
-use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
-use tw_chain::primitives::block::BlockHeader;
 use crate::asert::{CompactTarget, CompactTargetError};
 use crate::constants::{ADDRESS_POW_NONCE_LEN, MINING_DIFFICULTY, POW_NONCE_MAX_LEN};
 use crate::interfaces::ProofOfWork;
 use crate::miner_pow::cpu::CpuMiner;
 use crate::utils::{all_byte_strings, split_range_into_blocks, UnitsPrefixed};
+use std::fmt;
+use std::fmt::Debug;
+use std::ops::RangeInclusive;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
+use tw_chain::primitives::block::BlockHeader;
 
 pub const SHA3_256_BYTES: usize = 32;
 pub const BLOCK_HEADER_MAX_BYTES: usize = 1024;
@@ -48,10 +48,10 @@ impl PoWDifficulty {
     pub fn check_hash(&self, hash: &[u8; SHA3_256_BYTES]) -> bool {
         match self {
             PoWDifficulty::TargetHashAlwaysPass => true,
-            PoWDifficulty::LeadingZeroBytes { leading_zeroes } =>
-                *leading_zeroes <= hash.len() && hash[..*leading_zeroes].iter().all(|b| *b == 0),
-            PoWDifficulty::TargetHash { target_hash } =>
-                hash <= target_hash,
+            PoWDifficulty::LeadingZeroBytes { leading_zeroes } => {
+                *leading_zeroes <= hash.len() && hash[..*leading_zeroes].iter().all(|b| *b == 0)
+            }
+            PoWDifficulty::TargetHash { target_hash } => hash <= target_hash,
         }
     }
 }
@@ -73,9 +73,16 @@ impl std::error::Error for PoWError {}
 impl fmt::Display for PoWError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::NonceLength { nonce_length, permitted_lengths } =>
-                write!(f, "The provided nonce length {} is invalid (should be in range {}..={})",
-                       nonce_length, permitted_lengths.start(), permitted_lengths.end()),
+            Self::NonceLength {
+                nonce_length,
+                permitted_lengths,
+            } => write!(
+                f,
+                "The provided nonce length {} is invalid (should be in range {}..={})",
+                nonce_length,
+                permitted_lengths.start(),
+                permitted_lengths.end()
+            ),
         }
     }
 }
@@ -103,20 +110,31 @@ fn find_nonce_location<T: PoWObject + serde::Serialize>(
     object.set_nonce(nonce_ff.clone()).unwrap();
     let serialized_ff = bincode::serialize(&object).unwrap();
 
-    assert_ne!(serialized_00, serialized_ff,
-               "changing the nonce didn't affect the serialized object?!?");
-    assert_eq!(serialized_00.len(), serialized_ff.len(),
-               "changing the nonce affected the object's serialized length?!?");
+    assert_ne!(
+        serialized_00, serialized_ff,
+        "changing the nonce didn't affect the serialized object?!?"
+    );
+    assert_eq!(
+        serialized_00.len(),
+        serialized_ff.len(),
+        "changing the nonce affected the object's serialized length?!?"
+    );
 
     // find the index at which the two headers differ
     let nonce_offset = (0..serialized_00.len())
         .find(|offset| serialized_00[*offset] != serialized_ff[*offset])
         .expect("the serialized objects are not equal, but are equal at every index?!?");
 
-    assert_eq!(&serialized_00.as_slice()[nonce_offset..nonce_offset + 4], nonce_00.as_slice(),
-               "serialized object with nonce 0x00000000 has different bytes at presumed nonce offset!");
-    assert_eq!(&serialized_ff.as_slice()[nonce_offset..nonce_offset + 4], nonce_ff.as_slice(),
-               "serialized object with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!");
+    assert_eq!(
+        &serialized_00.as_slice()[nonce_offset..nonce_offset + 4],
+        nonce_00.as_slice(),
+        "serialized object with nonce 0x00000000 has different bytes at presumed nonce offset!"
+    );
+    assert_eq!(
+        &serialized_ff.as_slice()[nonce_offset..nonce_offset + 4],
+        nonce_ff.as_slice(),
+        "serialized object with nonce 0xFFFFFFFF has different bytes at presumed nonce offset!"
+    );
 
     let leading_bytes = serialized_00[..nonce_offset].into();
     let trailing_bytes = serialized_00[nonce_offset + nonce_length..].into();
@@ -135,13 +153,16 @@ fn expand_compact_target_difficulty(compact_target: CompactTarget) -> Option<[u8
     let mut result = [0u8; SHA3_256_BYTES];
     result[SHA3_256_BYTES - byte_digits.len()..].copy_from_slice(&byte_digits);
 
-    assert_eq!(expanded_target, rug::Integer::from_digits(&result, rug::integer::Order::MsfBe));
+    assert_eq!(
+        expanded_target,
+        rug::Integer::from_digits(&result, rug::integer::Order::MsfBe)
+    );
 
     Some(result)
 }
 
 /// An object which contains a nonce and can therefore be mined.
-pub trait PoWObject : Clone {
+pub trait PoWObject: Clone {
     /// Gets a range containing all nonce lengths permitted by this object.
     fn permitted_nonce_lengths() -> RangeInclusive<usize>;
 
@@ -289,7 +310,9 @@ impl MinerStatistics {
     /// * `duration`         - How long it took to compute the indicated number of hashes
     pub fn update_immediate(&mut self, computed_hashes: u128, duration: Duration) {
         (self.total_computed_hashes, self.total_mining_duration) = (
-            self.total_computed_hashes.checked_add(computed_hashes).unwrap(),
+            self.total_computed_hashes
+                .checked_add(computed_hashes)
+                .unwrap(),
             self.total_mining_duration.checked_add(duration).unwrap(),
         );
     }
@@ -328,16 +351,20 @@ impl<'a> MinerStatisticsUpdater<'a> {
 
 impl<'a> Drop for MinerStatisticsUpdater<'a> {
     fn drop(&mut self) {
-        self.statistics.update_immediate(self.computed_hashes, self.start_time.elapsed())
+        self.statistics
+            .update_immediate(self.computed_hashes, self.start_time.elapsed())
     }
 }
 
 impl fmt::Display for MinerStatistics {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Computed {} hashes in {:.3}s, speed: {:.3}",
-               self.total_computed_hashes,
-               self.total_mining_duration.as_secs_f64(),
-               self.hash_rate_units())
+        write!(
+            f,
+            "Computed {} hashes in {:.3}s, speed: {:.3}",
+            self.total_computed_hashes,
+            self.total_mining_duration.as_secs_f64(),
+            self.hash_rate_units()
+        )
     }
 }
 
@@ -360,12 +387,15 @@ impl std::error::Error for MineError {}
 impl fmt::Display for MineError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::GetDifficulty(cause) =>
-                write!(f, "Unable to determine PoW difficulty: {}", cause),
-            Self::GetLeadingTrailingBytes(cause) =>
-                write!(f, "Unable to get leading and trailing bytes for PoW object: {}", cause),
-            Self::Wrapped(cause) =>
-                write!(f, "An error occurred while mining: {}", cause),
+            Self::GetDifficulty(cause) => {
+                write!(f, "Unable to determine PoW difficulty: {}", cause)
+            }
+            Self::GetLeadingTrailingBytes(cause) => write!(
+                f,
+                "Unable to get leading and trailing bytes for PoW object: {}",
+                cause
+            ),
+            Self::Wrapped(cause) => write!(f, "An error occurred while mining: {}", cause),
         }
     }
 }
@@ -453,9 +483,9 @@ pub fn generate_pow<O: PoWObject>(
 
         // Precompute the leading and trailing bytes for the object assuming a `nonce_length`-byte
         // nonce.
-        let (leading_bytes, trailing_bytes) =
-            object.get_leading_and_trailing_bytes_for_mine(nonce_length)
-                .map_err(MineError::GetLeadingTrailingBytes)?;
+        let (leading_bytes, trailing_bytes) = object
+            .get_leading_and_trailing_bytes_for_mine(nonce_length)
+            .map_err(MineError::GetLeadingTrailingBytes)?;
 
         // Since SHA3_256PoWMiner always inserts exactly 4 bytes of nonce, we'll need to provide
         // an additional `nonce_length - 4` bytes so that the resulting nonce does end up being
@@ -486,11 +516,10 @@ pub fn generate_pow<O: PoWObject>(
                 info!("Mining statistics: {}", statistics);
 
                 if let Some(nonce_4byte) = result {
-                    let full_nonce = [&nonce_4byte.to_le_bytes(), nonce_supplement.as_ref()].concat();
+                    let full_nonce =
+                        [&nonce_4byte.to_le_bytes(), nonce_supplement.as_ref()].concat();
                     info!("Miner found nonce: {:?}", full_nonce);
-                    return Ok(MineResult::FoundNonce {
-                        nonce: full_nonce,
-                    });
+                    return Ok(MineResult::FoundNonce { nonce: full_nonce });
                 }
 
                 // If a termination flag was provided and is set to true, stop mining now.
@@ -527,16 +556,15 @@ static OPENGL_ERRORED: OnceLock<()> = OnceLock::new();
 ///
 /// * `difficulty`  - An optional hint for the difficulty of the resource that will be mined, to
 ///                   help choose an optimal miner implementation.
-pub fn create_any_miner(
-    difficulty: Option<&PoWDifficulty>,
-) -> Arc<Mutex<dyn Sha3_256PoWMiner>> {
+pub fn create_any_miner(difficulty: Option<&PoWDifficulty>) -> Arc<Mutex<dyn Sha3_256PoWMiner>> {
     if let Some(difficulty) = difficulty {
         match difficulty {
             // If the difficulty is sufficiently low that the overhead of a GPU miner would make
             // things slower, don't bother!
-            PoWDifficulty::TargetHashAlwaysPass |
-            PoWDifficulty::LeadingZeroBytes { leading_zeroes: ..=1 } =>
-                return Arc::new(Mutex::new(CpuMiner::new())),
+            PoWDifficulty::TargetHashAlwaysPass
+            | PoWDifficulty::LeadingZeroBytes {
+                leading_zeroes: ..=1,
+            } => return Arc::new(Mutex::new(CpuMiner::new())),
             _ => (),
         }
     }
@@ -556,7 +584,7 @@ pub fn create_any_miner(
                 // Remember that OpenGL miner creation failed, so we don't keep trying over and over
                 // on subsequent attempts.
                 OPENGL_ERRORED.get_or_init(|| ());
-            },
+            }
         };
     }
 
@@ -565,10 +593,10 @@ pub fn create_any_miner(
 
 #[cfg(test)]
 pub(super) mod test {
+    use super::*;
     use crate::miner_pow::cpu::CpuMiner;
     use crate::miner_pow::opengl::OpenGlMiner;
     use crate::miner_pow::vulkan::VulkanMiner;
-    use super::*;
 
     #[derive(Copy, Clone, Debug)]
     pub struct TestBlockMinerInternal {
@@ -625,7 +653,12 @@ pub(super) mod test {
 
         pub fn test_miner(&self, miner: &mut impl Sha3_256PoWMiner, is_bench: bool) {
             if !miner.is_hw_accelerated()
-                && if is_bench { self.requires_hw_accel.1 } else { self.requires_hw_accel.0 } {
+                && if is_bench {
+                    self.requires_hw_accel.1
+                } else {
+                    self.requires_hw_accel.0
+                }
+            {
                 println!("Skipping test case {} (too hard)", self.name);
                 return;
             }
@@ -633,20 +666,26 @@ pub(super) mod test {
             let block_header = test_block_header(self.difficulty);
 
             let difficulty = block_header.pow_difficulty().expect(self.name);
-            let (leading_bytes, trailing_bytes) =
-                block_header.get_leading_and_trailing_bytes_for_mine(4)
-                    .expect(self.name);
+            let (leading_bytes, trailing_bytes) = block_header
+                .get_leading_and_trailing_bytes_for_mine(4)
+                .expect(self.name);
 
             let mut statistics = Default::default();
             assert_eq!(
-                miner.generate_pow_internal(
-                    &leading_bytes,
-                    &trailing_bytes,
-                    &difficulty,
-                    0, self.max_nonce_count, &mut statistics,
-                ).expect(self.name),
+                miner
+                    .generate_pow_internal(
+                        &leading_bytes,
+                        &trailing_bytes,
+                        &difficulty,
+                        0,
+                        self.max_nonce_count,
+                        &mut statistics,
+                    )
+                    .expect(self.name),
                 Some(self.expected_nonce),
-                "Test case {:?}", self);
+                "Test case {:?}",
+                self
+            );
 
             println!("Test case {} statistics: {}", self.name, statistics);
         }
@@ -676,14 +715,20 @@ pub(super) mod test {
 
         fn to_int(digits: &[u8]) -> Integer {
             let res = Integer::from_digits(digits, rug::integer::Order::MsfBe);
-            assert_eq!(res, Integer::from_digits(digits, rug::integer::Order::MsfLe));
+            assert_eq!(
+                res,
+                Integer::from_digits(digits, rug::integer::Order::MsfLe)
+            );
             res
         }
 
         fn test(hash: &[u8], target: &[u8], order: Ordering) {
             let (hash, target) = (to_int(hash), to_int(target));
-            assert_eq!(PartialOrd::partial_cmp(&hash, &target), Some(order),
-                       "hash: {hash}, target: {target}");
+            assert_eq!(
+                PartialOrd::partial_cmp(&hash, &target),
+                Some(order),
+                "hash: {hash}, target: {target}"
+            );
         }
 
         test(b"\x00", b"\x00", Equal);
@@ -692,32 +737,80 @@ pub(super) mod test {
 
         test(b"\x0201234567", b"\x8001234567", Less);
         test(b"\x8001234567", b"\x8001234567", Equal);
-        test(b"01234567890abcde01234567890abcde", b"01234567890abcde01234567890abcde", Equal);
-        test(b"01234567890abcde01234567890abcde", b"91234567890abcde01234567890abcde", Less);
-        test(b"01234567890abcde01234567890abcde", b"01234567890abcde91234567890abcde", Less);
+        test(
+            b"01234567890abcde01234567890abcde",
+            b"01234567890abcde01234567890abcde",
+            Equal,
+        );
+        test(
+            b"01234567890abcde01234567890abcde",
+            b"91234567890abcde01234567890abcde",
+            Less,
+        );
+        test(
+            b"01234567890abcde01234567890abcde",
+            b"01234567890abcde91234567890abcde",
+            Less,
+        );
     }
 
     #[test]
     fn test_expand_compact_target_difficulty() {
         fn test_hex(compact_target: u32, target_hash_hex: Option<&str>) {
-            let target_hash = expand_compact_target_difficulty(CompactTarget::from_array(compact_target.to_be_bytes()))
-                .map(|h| hex::encode_upper(&h));
-            assert_eq!(target_hash.as_ref().map(|s| s.as_str()), target_hash_hex,
-                       "compact_target=0x{:08x}", compact_target)
+            let target_hash = expand_compact_target_difficulty(CompactTarget::from_array(
+                compact_target.to_be_bytes(),
+            ))
+            .map(|h| hex::encode_upper(&h));
+            assert_eq!(
+                target_hash.as_ref().map(|s| s.as_str()),
+                target_hash_hex,
+                "compact_target=0x{:08x}",
+                compact_target
+            )
         }
 
-        test_hex(0x00000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
-        test_hex(0x03000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
-        test_hex(0xFF000000, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+        test_hex(
+            0x00000000,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        test_hex(
+            0x03000000,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        test_hex(
+            0xFF000000,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
 
-        test_hex(0x03000001, Some("0000000000000000000000000000000000000000000000000000000000000001"));
-        test_hex(0x037FFFFF, Some("00000000000000000000000000000000000000000000000000000000007FFFFF"));
-        test_hex(0x03FFFFFF, Some("00000000000000000000000000000000000000000000000000000000007FFFFF"));
-        test_hex(0x02FFFFFF, Some("0000000000000000000000000000000000000000000000000000000000007FFF"));
-        test_hex(0x01FFFFFF, Some("000000000000000000000000000000000000000000000000000000000000007F"));
-        test_hex(0x00FFFFFF, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+        test_hex(
+            0x03000001,
+            Some("0000000000000000000000000000000000000000000000000000000000000001"),
+        );
+        test_hex(
+            0x037FFFFF,
+            Some("00000000000000000000000000000000000000000000000000000000007FFFFF"),
+        );
+        test_hex(
+            0x03FFFFFF,
+            Some("00000000000000000000000000000000000000000000000000000000007FFFFF"),
+        );
+        test_hex(
+            0x02FFFFFF,
+            Some("0000000000000000000000000000000000000000000000000000000000007FFF"),
+        );
+        test_hex(
+            0x01FFFFFF,
+            Some("000000000000000000000000000000000000000000000000000000000000007F"),
+        );
+        test_hex(
+            0x00FFFFFF,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
 
-        test_hex(0x22000001, Some("0100000000000000000000000000000000000000000000000000000000000000"));
+        test_hex(
+            0x22000001,
+            Some("0100000000000000000000000000000000000000000000000000000000000000"),
+        );
 
         test_hex(0xFFFFFFFF, None);
     }
@@ -751,11 +844,11 @@ pub(super) mod test {
 #[cfg(test)]
 #[cfg(feature = "benchmark_miners")]
 mod bench {
+    use super::test::*;
+    use super::*;
     use crate::miner_pow::cpu::CpuMiner;
     use crate::miner_pow::opengl::OpenGlMiner;
     use crate::miner_pow::vulkan::VulkanMiner;
-    use super::*;
-    use super::test::*;
 
     #[test]
     fn bench_cpu() {

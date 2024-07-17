@@ -295,8 +295,11 @@ impl std::error::Error for CompactTargetError {}
 impl fmt::Display for CompactTargetError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::SliceLength { length } =>
-                write!(f, "Cannot construct CompactTarget from slice of length {}", length),
+            Self::SliceLength { length } => write!(
+                f,
+                "Cannot construct CompactTarget from slice of length {}",
+                length
+            ),
         }
     }
 }
@@ -346,9 +349,12 @@ impl CompactTarget {
 
     pub fn try_from_slice(slice: &[u8]) -> Result<Self, CompactTargetError> {
         // This requires that the slice's length is exactly 4
-        slice.try_into()
+        slice
+            .try_into()
             .map(Self::from_array)
-            .map_err(|_| CompactTargetError::SliceLength { length: slice.len() })
+            .map_err(|_| CompactTargetError::SliceLength {
+                length: slice.len(),
+            })
     }
 }
 
