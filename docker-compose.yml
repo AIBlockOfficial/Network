@@ -14,6 +14,7 @@ services:
     volumes:  
       - /tmp/mempool:/src
     command: mempool
+    platform: linux/amd64
     networks:
       aiblock:
         ipv4_address: 172.28.0.3
@@ -32,6 +33,8 @@ services:
 
   miner-node:
     <<: *node-default
+    environment:
+      RUST_LOG: trace
     depends_on: 
       - mempool-node
       - storage-node
