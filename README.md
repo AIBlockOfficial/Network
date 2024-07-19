@@ -48,6 +48,7 @@ sudo apt install build-essential
 sudo apt-get install m4
 sudo apt-get install llvm
 sudo apt-get install libclang-dev
+sudo apt install clang
 ```
 
 The above should enable you to install `librocksdb-sys` successfully, but older versions of this crate had bugs so it would be wise to ensure you've installed `rocksdb = "0.21.0"` or higher in order to avoid compilation issues.
