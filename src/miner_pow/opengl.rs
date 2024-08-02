@@ -22,6 +22,7 @@ use tracing::{debug, info, warn};
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum OpenGlMinerError {
     LockFailed,
+    InitializeGlfwMsg(glfw::Error, String),
     InitializeGlfw(glfw::InitError),
     CreateGlfwWindow,
     CompileShader(CompileShaderError),
@@ -33,6 +34,7 @@ impl fmt::Display for OpenGlMinerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::LockFailed => f.write_str("couldn't acquire global lock for using GLFW context"),
+            Self::InitializeGlfwMsg(cause, msg) => write!(f, "Failed to initialize GLFW: {cause}: {msg}"),
             Self::InitializeGlfw(cause) => write!(f, "Failed to initialize GLFW: {cause}"),
             Self::CreateGlfwWindow => f.write_str("Failed to create GLFW window"),
             Self::CompileShader(cause) => write!(f, "Failed to compile shader: {cause}"),
@@ -97,6 +99,7 @@ impl<'glfw, Ctx: fmt::Debug> Drop for GlfwContextGuard<'glfw, Ctx> {
 }
 
 static GLFW_MUTEX: Mutex<()> = Mutex::new(());
+static mut GLFW_INIT_ERR: Option<(glfw::Error, String)> = None;
 
 impl<Ctx: fmt::Debug> GlfwContext<Ctx> {
     fn new(f: impl FnOnce() -> Result<Ctx, OpenGlMinerError>) -> Result<Self, OpenGlMinerError> {
@@ -109,8 +112,17 @@ impl<Ctx: fmt::Debug> GlfwContext<Ctx> {
             .lock()
             .map_err(|_| OpenGlMinerError::LockFailed)?;
 
-        let mut glfw =
-            glfw::init(glfw::fail_on_errors).map_err(OpenGlMinerError::InitializeGlfw)?;
+        // This is hacky, but glfw::init demands a static callback function.
+        // We'll save the error in a static field and then test it afterward to see if the error
+        // callback actually fired. If so, return the descriptive error provided by the callback.
+        let mut glfw = {
+            unsafe { GLFW_INIT_ERR = None };
+            let init = glfw::init(|err, msg| unsafe { GLFW_INIT_ERR = Some((err, msg)) });
+            if let Some((err, msg)) = unsafe { GLFW_INIT_ERR.take() } {
+                return Err(OpenGlMinerError::InitializeGlfwMsg(err, msg));
+            }
+            init.map_err(OpenGlMinerError::InitializeGlfw)?
+        };
 
         glfw.window_hint(WindowHint::ContextVersion(4, 5));
         glfw.window_hint(WindowHint::OpenGlProfile(OpenGlProfileHint::Core));
