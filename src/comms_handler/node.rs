@@ -81,7 +81,11 @@
 //! [netbuffersize]: https://stackoverflow.com/a/7865130/168853
 
 use super::tcp_tls::{
-    verify_is_valid_for_dns_names, TcpTlsConnector, TcpTlsListner, TcpTlsStream, TlsCertificate,
+    // verify_is_valid_for_dns_names,
+    TcpTlsConnector,
+    TcpTlsListner,
+    TcpTlsStream,
+    TlsCertificate,
 };
 use super::{CommsError, Event, Result, TcpTlsConfig};
 use crate::comms_handler::error::PeerInfo;
@@ -973,7 +977,7 @@ impl Node {
         &self,
         peer_out_addr: SocketAddr,
         mut peer_in_addr: SocketAddr,
-        peer_cert: &Option<TlsCertificate>,
+        _peer_cert: &Option<TlsCertificate>,
         mut send_tx: ResultBytesSender,
         network_version: u32,
         peer_type: NodeType,
@@ -1024,16 +1028,16 @@ impl Node {
         }
 
         // We only do DNS validation on mempool and storage nodes
-        if self.node_type == NodeType::Mempool || self.node_type == NodeType::Storage {
-            if let Some(peer_cert) = peer_cert {
-                let connector = self.tcp_tls_connector.read().await;
-                let peer_name = connector.socket_name_mapping(peer_in_addr);
-                // We don't need strict DNS name validation for miner or user nodes
-                if peer_type != NodeType::Miner && peer_type != NodeType::User {
-                    verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
-                }
-            }
-        }
+        // if self.node_type == NodeType::Mempool || self.node_type == NodeType::Storage {
+        //     if let Some(peer_cert) = peer_cert {
+        //         let connector = self.tcp_tls_connector.read().await;
+        //         let peer_name = connector.socket_name_mapping(peer_in_addr);
+        //         // We don't need strict DNS name validation for miner or user nodes
+        //         if peer_type != NodeType::Miner && peer_type != NodeType::User {
+        //             verify_is_valid_for_dns_names(peer_cert, std::iter::once(peer_name.as_str()))?;
+        //         }
+        //     }
+        // }
 
         peer.network_version = Some(network_version);
         peer.peer_type = Some(peer_type);

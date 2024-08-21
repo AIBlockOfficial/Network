@@ -18,7 +18,7 @@ use tokio_rustls::rustls::client::ServerName;
 use tokio_rustls::rustls::{
     Certificate, ClientConfig, CommonState, PrivateKey, RootCertStore, ServerConfig,
 };
-use tokio_rustls::webpki::{DnsNameRef, EndEntityCert};
+// use tokio_rustls::webpki::{DnsNameRef, EndEntityCert};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_stream::Stream;
 
@@ -311,7 +311,7 @@ fn new_client_config(config: &TcpTlsConfig) -> Result<ClientConfig> {
         .with_safe_default_protocol_versions()
         .unwrap()
         .with_root_certificates(root_store)
-        .with_single_cert(certs, keys.remove(0))?;
+        .with_client_auth_cert(certs, keys.remove(0))?;
 
     Ok(client_config)
 }
@@ -387,19 +387,19 @@ impl AsyncWrite for TcpTlsStream {
     }
 }
 
-/// verify the dna name is valid for the certificae
-pub fn verify_is_valid_for_dns_names<'a>(
-    cert: &TlsCertificate,
-    tls_names: impl Iterator<Item = &'a str>,
-) -> Result<()> {
-    let domains: std::result::Result<Vec<_>, _> =
-        tls_names.map(DnsNameRef::try_from_ascii_str).collect();
-    let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
+// /// verify the dna name is valid for the certificae
+// pub fn verify_is_valid_for_dns_names<'a>(
+//     cert: &TlsCertificate,
+//     tls_names: impl Iterator<Item = &'a str>,
+// ) -> Result<()> {
+//     let domains: std::result::Result<Vec<_>, _> =
+//         tls_names.map(DnsNameRef::try_from_ascii_str).collect();
+//     let domains = domains.map_err(|_| CommsError::ConfigError("invalid dnsname"))?;
 
-    let cert = EndEntityCert::try_from(cert.0.as_slice()).unwrap();
-    cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().copied())?;
-    Ok(())
-}
+//     let cert = EndEntityCert::try_from(cert.0.as_slice()).unwrap();
+//     cert.verify_is_valid_for_at_least_one_dns_name(domains.iter().copied())?;
+//     Ok(())
+// }
 
 /// Retrieves the certificate from a TLS session connection. In later versions of rustls, this is
 /// a method on `CommonState`
