@@ -285,6 +285,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("peer_limit", DEFAULT_PEER_LIMIT).unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("session_length") {
+        settings.set("session_length", 120).unwrap();
+    }
+
     // If index is passed, take note of the index to set address later
     if let Some(idx) = matches.value_of("index") {
         node_index = idx.parse::<usize>().unwrap();

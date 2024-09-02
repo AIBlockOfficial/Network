@@ -441,6 +441,10 @@ fn load_settings(matches: &clap::ArgMatches) -> (config::Config, Option<config::
         settings.set("miner_address", addr.to_string()).unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("session_length") {
+        settings.set("session_length", 120).unwrap();
+    }
+
     let mut db_mode = settings.get_table("miner_db_mode").unwrap();
     if let Some(test_idx) = db_mode.get_mut("Test") {
         *test_idx = Value::new(None, miner_index.to_string());

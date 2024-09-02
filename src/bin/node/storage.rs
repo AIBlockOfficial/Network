@@ -213,6 +213,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
         settings.set("peer_limit", 1000).unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("session_length") {
+        settings.set("session_length", 120).unwrap();
+    }
+
     if let Some(port) = matches.value_of("api_port") {
         settings.set("storage_api_port", port).unwrap();
     }

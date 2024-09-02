@@ -285,6 +285,10 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
             .unwrap();
     }
 
+    if let Err(ConfigError::NotFound(_)) = settings.get_int("session_length") {
+        settings.set("session_length", 120).unwrap();
+    }
+
     if let Err(ConfigError::NotFound(_)) = settings.get_int("peer_limit") {
         settings.set("peer_limit", 1000).unwrap();
     }
