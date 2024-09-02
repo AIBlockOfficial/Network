@@ -12,6 +12,7 @@ use bincode::deserialize;
 use bytes::Bytes;
 use std::{collections::BTreeSet, error::Error, fmt, future::Future, net::SocketAddr};
 use tokio::task;
+use tokio::time::Duration;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -83,6 +84,8 @@ struct PreLaunchNodeConfigSelected {
     pub raft_db_spec: SimpleDbSpec,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 impl PreLaunchNodeConfigSelected {
@@ -98,6 +101,7 @@ impl PreLaunchNodeConfigSelected {
                 db_spec: crate::mempool::DB_SPEC,
                 raft_db_spec: crate::mempool_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
+                session_length: config.session_length,
             },
             PreLaunchNodeType::Storage => Self {
                 pre_launch_node_idx: config.storage_node_idx,
@@ -109,6 +113,7 @@ impl PreLaunchNodeConfigSelected {
                 db_spec: crate::storage::DB_SPEC,
                 raft_db_spec: crate::storage_raft::DB_SPEC,
                 peer_limit: config.peer_limit,
+                session_length: config.session_length,
             },
         }
     }
@@ -149,6 +154,7 @@ impl PreLaunchNode {
             &tcp_tls_config,
             config.peer_limit,
             config.peer_limit,
+            Duration::from_secs(config.session_length),
             NodeType::PreLaunch,
             false,
             false,

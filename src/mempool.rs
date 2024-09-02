@@ -38,6 +38,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tokio::task;
+use tokio::time::Duration;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 use tw_chain::primitives::asset::TokenAmount;
@@ -207,10 +208,13 @@ impl MempoolNode {
             .mempool_api_use_tls
             .then(|| tcp_tls_config.clone_private_info());
 
+        let session_length = Duration::from_secs(config.session_length);
+
         let node = Node::new(
             &tcp_tls_config,
             config.peer_limit,
             config.sub_peer_limit,
+            session_length,
             NodeType::Mempool,
             false,
             true,

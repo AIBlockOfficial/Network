@@ -127,6 +127,9 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5); // 5 seconds is just 
 /// Contains a shared list of connected peers.
 type PeerList = HashMap<SocketAddr, Peer>;
 
+/// Contains a shared list of connected peers' TTLs
+type PeerTtls = HashMap<SocketAddr, u32>;
+
 /// Closing listener info
 type CloseListener = Option<(oneshot::Sender<()>, JoinHandle<()>)>;
 
@@ -155,6 +158,10 @@ pub struct Node {
     peer_limit: usize,
     /// The max number of sub peers this node should handle (currently only relevant to Mempool).
     sub_peer_limit: usize,
+    /// Time that a peer is allowed to be connected for
+    session_length: Duration,
+    /// TTL for connected peers
+    peer_ttls: Arc<RwLock<PeerTtls>>,
     /// Tracing context.
     span: Span,
     /// Channel to transmit incoming frames and events from peers.
@@ -222,6 +229,7 @@ impl Node {
         config: &TcpTlsConfig,
         peer_limit: usize,
         sub_peer_limit: usize,
+        session_length: Duration,
         node_type: NodeType,
         disable_listening: bool,
         send_heartbeat_messages: bool,
@@ -231,6 +239,7 @@ impl Node {
             peer_limit,
             sub_peer_limit,
             node_type,
+            session_length,
             NETWORK_VERSION,
             disable_listening,
             send_heartbeat_messages,
@@ -251,6 +260,7 @@ impl Node {
         peer_limit: usize,
         sub_peer_limit: usize,
         node_type: NodeType,
+        session_length: Duration,
         network_version: u32,
         disable_listening: bool,
         send_heartbeat_messages: bool,
@@ -273,10 +283,12 @@ impl Node {
             node_type,
             peers: Arc::new(RwLock::new(HashMap::with_capacity(peer_limit))),
             sub_peers: Arc::new(RwLock::new(HashSet::with_capacity(sub_peer_limit))),
+            peer_ttls: Arc::new(RwLock::new(PeerTtls::new())),
             peer_limit,
             sub_peer_limit,
             span,
             event_tx,
+            session_length,
             event_rx: Arc::new(Mutex::new(event_rx)),
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
@@ -352,6 +364,13 @@ impl Node {
                 let mut cancellable_listener = listener.take_until(close_rx.unwrap_or_else(|_| ()));
 
                 while let Some(new_conn) = cancellable_listener.next().await {
+                    let peers_count = node.peers.read().await.len();
+
+                    if peers_count >= node.peer_limit {
+                        warn!("Peer limit reached. Ignoring new connection.");
+                        continue;
+                    }
+
                     match new_conn {
                         Ok(conn) => {
                             if *node.listener_and_connect_paused.read().await {
@@ -365,10 +384,23 @@ impl Node {
                                 peer_addr = tracing::field::debug(conn.peer_addr())
                             );
 
-                            let new_peer = node.add_peer(conn, false, peer_span, true).await;
-                            match new_peer {
-                                Ok(()) => {}
-                                Err(error) => warn!(?error, "Could not add a new peer"),
+                            let handshake_timeout = Duration::from_secs(10);
+                            let handshake_result = timeout(
+                                handshake_timeout,
+                                node.add_peer(conn, false, peer_span, true),
+                            )
+                            .await;
+
+                            match handshake_result {
+                                Ok(Ok(())) => {
+                                    // Handshake successful, peer added
+                                }
+                                Ok(Err(error)) => {
+                                    warn!(?error, "Could not add a new peer");
+                                }
+                                Err(_) => {
+                                    warn!("Handshake timed out, closing connection");
+                                }
                             }
                         }
                         Err(error) => {
@@ -1410,6 +1442,7 @@ mod test {
             peer_limit,
             peer_limit,
             NodeType::Mempool,
+            Duration::from_secs(120),
             network_version,
             false,
             false,

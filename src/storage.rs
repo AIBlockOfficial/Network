@@ -28,6 +28,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
+use tokio::time::Duration;
 use tracing::{debug, error, error_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -179,6 +180,7 @@ impl StorageNode {
             &tcp_tls_config,
             config.peer_limit,
             config.peer_limit,
+            Duration::from_secs(config.session_length),
             NodeType::Storage,
             false,
             false,

@@ -162,6 +162,8 @@ pub struct MempoolNodeConfig {
     pub initial_issuances: Vec<InitialIssuance>,
     /// Lifetime of a transaction's status in seconds
     pub tx_status_lifetime: i64,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 /// Configuration option for a mempool node that can be shared across peers
@@ -208,6 +210,8 @@ pub struct StorageNodeConfig {
     pub backup_restore: Option<bool>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 /// Configuration option for a storage node
@@ -245,6 +249,8 @@ pub struct MinerNodeConfig {
     pub peer_limit: usize,
     /// Aggregation limit
     pub address_aggregation_limit: Option<usize>,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 /// Configuration option for a user node
@@ -281,6 +287,8 @@ pub struct UserNodeConfig {
     pub backup_block_modulo: Option<u64>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 /// Configuration option for a pre-launch node
@@ -304,6 +312,8 @@ pub struct PreLaunchNodeConfig {
     pub storage_nodes: Vec<String>,
     /// Limit for the number of peers this node can have
     pub peer_limit: usize,
+    /// Session length in seconds
+    pub session_length: u64,
 }
 
 /// Type of node in pre-launch mode

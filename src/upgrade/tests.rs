@@ -724,6 +724,7 @@ fn complete_network_config(initial_port: u16) -> NetworkConfig {
         peer_limit: 1000,
         address_aggregation_limit: Some(5),
         initial_issuances: Default::default(),
+        session_length: 120,
     }
     .with_groups(1, 1)
 }

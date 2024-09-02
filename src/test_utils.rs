@@ -101,6 +101,7 @@ pub struct NetworkConfig {
     pub peer_limit: usize,
     pub address_aggregation_limit: Option<usize>,
     pub initial_issuances: Vec<InitialIssuance>,
+    pub session_length: u64,
 }
 
 /// Node info to create node
@@ -1060,6 +1061,7 @@ async fn init_miner(
         mining_api_key: config.mining_api_key.clone(),
         peer_limit: config.peer_limit,
         address_aggregation_limit: config.address_aggregation_limit,
+        session_length: config.session_length,
     };
     let info_str = format!("{} -> {}", name, node_info.node_spec);
     info!("New Miner {}", info_str);
@@ -1115,6 +1117,7 @@ async fn init_storage(
         backup_block_modulo: config.backup_block_modulo,
         backup_restore: config.backup_restore,
         peer_limit: config.peer_limit,
+        session_length: config.session_length,
     };
     let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Storage {}", info);
@@ -1192,6 +1195,7 @@ async fn init_mempool(
         sub_peer_limit: config.peer_limit,
         initial_issuances: config.initial_issuances.clone(),
         tx_status_lifetime: 600000,
+        session_length: config.session_length,
     };
     let info = format!("{} -> {}", name, node_info.node_spec);
     info!("New Mempool {}", info);
@@ -1247,6 +1251,7 @@ async fn init_user(
         routes_pow: Default::default(),
         backup_block_modulo: Default::default(),
         peer_limit: config.peer_limit,
+        session_length: config.session_length,
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec);
@@ -1295,6 +1300,7 @@ async fn init_pre_launch(
             .map(|v| v.to_string())
             .collect(),
         peer_limit: config.peer_limit,
+        session_length: config.session_length,
     };
 
     let info = format!("{} -> {}", name, node_info.node_spec);

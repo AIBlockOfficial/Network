@@ -23,6 +23,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{
     error::Error,
     fmt,
@@ -209,6 +210,7 @@ impl MinerNode {
             &tcp_tls_config,
             config.peer_limit,
             config.peer_limit,
+            Duration::from_secs(config.session_length),
             NodeType::Miner,
             disable_tcp_listener,
             false,

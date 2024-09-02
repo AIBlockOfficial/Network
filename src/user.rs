@@ -19,6 +19,12 @@ use bincode::deserialize;
 use bytes::Bytes;
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
+use tokio::sync::mpsc;
+use tokio::task;
+use tokio::time::Duration;
+use tracing::{debug, error, error_span, info, info_span, trace, warn};
+use tracing_futures::Instrument;
 use tw_chain::primitives::asset::{Asset, TokenAmount};
 use tw_chain::primitives::block::Block;
 use tw_chain::primitives::druid::{DdeValues, DruidExpectation};
@@ -28,12 +34,6 @@ use tw_chain::utils::transaction_utils::{
     construct_tx_core, construct_tx_hash, construct_tx_ins_address, update_input_signatures,
     ReceiverInfo,
 };
-
-use std::{collections::BTreeMap, error::Error, fmt, future::Future, net::SocketAddr};
-use tokio::sync::mpsc;
-use tokio::task;
-use tracing::{debug, error, error_span, info, info_span, trace, warn};
-use tracing_futures::Instrument;
 
 /// Key for last pow coinbase produced
 pub const TX_GENERATOR_KEY: &str = "TxGeneratorKey";
@@ -171,6 +171,7 @@ impl UserNode {
             &tcp_tls_config,
             config.peer_limit,
             config.peer_limit,
+            Duration::from_secs(config.session_length),
             NodeType::User,
             disable_tcp_listener,
             false,

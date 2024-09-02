@@ -2121,6 +2121,7 @@ mod test {
             sub_peer_limit: 1000,
             initial_issuances: Default::default(),
             tx_status_lifetime: 600000,
+            session_length: 120,
         };
         let mut node = MempoolRaft::new(&mempool_config, Default::default()).await;
         node.set_key_run(0);
