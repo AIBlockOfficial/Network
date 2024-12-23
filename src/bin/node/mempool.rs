@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! App to run a mempool node.
 
 use aiblock_network::configurations::MempoolNodeConfig;
@@ -27,7 +28,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let local_event_tx = node.local_event_tx().clone();
     let threaded_calls_tx = node.threaded_call_tx().clone();
 
-    // PERMANENT CONNEXION/DISCONNECTION HANDLING
+    // PERMANENT CONNECTION/DISCONNECTION HANDLING
     let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
         let (re_connect, disconnect_test) =
             loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect, local_event_tx);

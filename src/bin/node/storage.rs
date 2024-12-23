@@ -1,4 +1,4 @@
-//! App to run a storage node.
+#! App to run a storage node.
 
 use aiblock_network::configurations::StorageNodeConfig;
 use aiblock_network::StorageNode;
