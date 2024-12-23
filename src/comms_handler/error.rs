@@ -20,7 +20,7 @@ pub enum CommsError {
     PeerListFull,
     /// No such peer found.
     PeerNotFound(PeerInfo),
-    /// No such peer found.in TLS mapping.
+    /// No such peer found in TLS mapping.
     PeerNameNotFound(PeerInfo),
     /// Peer is in invalid state.
     PeerInvalidState(PeerInfo),
