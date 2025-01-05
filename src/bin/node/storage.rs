@@ -1,10 +1,7 @@
-//! App to run a storage node.
-
 use aiblock_network::configurations::StorageNodeConfig;
 use aiblock_network::StorageNode;
 use aiblock_network::{
-    loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
-    ResponseResult,
+    loop_wait_connnect_to_peers_async, routes, shutdown_connections, ResponseResult,
 };
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
@@ -21,24 +18,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let api_inputs = node.api_inputs();
-
     let local_event_tx = node.local_event_tx().clone();
 
-    // PERMANENT CONNEXION/DISCONNECTION HANDLING
-    let ((conn_loop_handle, stop_re_connect_tx), (disconn_loop_handle, stop_disconnect_tx)) = {
-        let (re_connect, disconnect_test) =
-            loops_re_connect_disconnect(node_conn.clone(), addrs_to_connect, local_event_tx);
-
-        (
-            (tokio::spawn(re_connect.0), re_connect.1),
-            (tokio::spawn(disconnect_test.0), disconnect_test.1),
-        )
-    };
-
-    // Need to connect first so Raft messages can be sent.
     loop_wait_connnect_to_peers_async(node_conn.clone(), expected_connected_addrs).await;
 
-    // RAFT HANDLING
     let raft_loop_handle = {
         let raft_loop = node.raft_loop();
         tokio::spawn(async move {
@@ -48,7 +31,6 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         })
     };
 
-    // Warp API
     let warp_handle = tokio::spawn({
         let (db, api_addr, api_tls, api_keys, api_pow_info) = api_inputs;
 
@@ -79,7 +61,6 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         }
     });
 
-    // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
         let mut node_conn = node_conn.clone();
@@ -93,27 +74,17 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                     break;
                 }
             }
-            stop_re_connect_tx.send(()).unwrap();
-            stop_disconnect_tx.send(()).unwrap();
 
             node.close_raft_loop().await;
             shutdown_connections(&mut node_conn).await;
         }
     });
 
-    let (main, warp, raft, conn, disconn) = tokio::join!(
-        main_loop_handle,
-        warp_handle,
-        raft_loop_handle,
-        conn_loop_handle,
-        disconn_loop_handle
-    );
+    let (main, warp, raft) = tokio::join!(main_loop_handle, warp_handle, raft_loop_handle);
 
     main.unwrap();
     warp.unwrap();
     raft.unwrap();
-    conn.unwrap();
-    disconn.unwrap();
 }
 
 pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
@@ -262,7 +233,6 @@ mod test {
 
     #[test]
     fn validate_startup_key_override() {
-        // Use argument instead of std::env as env apply to all tests
         let args = vec!["bin_name", "--tls_private_key_override=42"];
         let expected = (DbMode::Test(0), Some("42".to_owned()));
 
@@ -312,17 +282,11 @@ mod test {
     }
 
     fn validate_startup_common(args: Vec<&str>, expected: Expected) {
-        //
-        // Act
-        //
         let app = clap_app();
         let matches = app.get_matches_from_safe(args).unwrap();
         let settings = load_settings(&matches);
         let config = configuration(settings);
 
-        //
-        // Assert
-        //
         let (expected_mode, expected_key) = expected;
         assert_eq!(config.storage_db_mode, expected_mode);
         assert_eq!(
