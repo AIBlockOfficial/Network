@@ -20,7 +20,7 @@ pub enum CommsError {
     PeerListFull,
     /// No such peer found.
     PeerNotFound(PeerInfo),
-    /// No such peer found.in TLS mapping.
+    /// No such peer found in TLS mapping.
     PeerNameNotFound(PeerInfo),
     /// Peer is in invalid state.
     PeerInvalidState(PeerInfo),
@@ -34,6 +34,8 @@ pub enum CommsError {
     ChannelSendError(mpsc::error::SendError<Event>),
     /// Webpki error
     WebpkiError(webpki::Error),
+    /// Error that maintains order of occurrence.
+    OrderedError(Vec<CommsError>),
 }
 
 #[derive(Debug)]
@@ -58,6 +60,7 @@ impl fmt::Display for CommsError {
             Self::Serialization(err) => write!(f, "Serialization error: {err}"),
             Self::ChannelSendError(err) => write!(f, "MPSC channel send error: {err}"),
             Self::WebpkiError(err) => write!(f, "Webpki error: {err}"),
+            Self::OrderedError(errors) => write!(f, "Ordered Errors: {:#?}", errors),
         }
     }
 }
@@ -78,6 +81,7 @@ impl Error for CommsError {
             Self::Serialization(err) => Some(err),
             Self::ChannelSendError(err) => Some(err),
             Self::WebpkiError(err) => Some(err),
+            Self::OrderedError(_) => None,
         }
     }
 }

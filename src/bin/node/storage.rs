@@ -10,6 +10,7 @@ use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
 use tracing::info;
+use linked_hash_map::LinkedHashMap;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
@@ -87,6 +88,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
         async move {
             node.send_startup_requests().await.unwrap();
 
+            let mut storage: LinkedHashMap<KeyType, ValueType> = LinkedHashMap::new();
             let mut exit = std::future::pending();
             while let Some(response) = node.handle_next_event(&mut exit).await {
                 if node.handle_next_event_response(response).await == ResponseResult::Exit {

@@ -9,6 +9,7 @@ use aiblock_network::{
 use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use tracing::info;
+use mio::{Events, Interest, Poll};
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
@@ -40,8 +41,11 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     // REQUEST HANDLING
     let main_loop_handle = tokio::spawn({
         let mut node = node;
-        let mut node_conn = node_conn;
-
+        let mut node_conn = node_conn; // maintain the mutable reference for use in event loop
+        
+        let poll = Poll::new().unwrap();
+        let mut events = Events::with_capacity(128);
+        
         async move {
             node.send_startup_requests().await.unwrap();
 
@@ -50,6 +54,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
                 if node.handle_next_event_response(response).await == ResponseResult::Exit {
                     break;
                 }
+                poll.registry().register(&node_conn, Interest::readable()).unwrap();
+                poll.poll(&mut events, None).unwrap();
             }
             stop_re_connect_tx.send(()).unwrap();
             stop_disconnect_tx.send(()).unwrap();

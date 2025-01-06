@@ -1,6 +1,4 @@
-//! # Art
-//!
-//! A library for modeling artistic concepts.
+//! This library now incorporates new functionalities from external dependencies.
 #![allow(dead_code)]
 
 mod active_raft;
@@ -15,6 +13,7 @@ pub mod key_creation;
 mod mempool;
 mod mempool_raft;
 mod miner;
+mod new_dependency;
 mod pre_launch;
 mod raft;
 mod raft_store;
@@ -42,6 +41,7 @@ pub use interfaces::Rs2JsMsg;
 pub use interfaces::{MempoolRequest, MinerInterface, Response, StorageInterface};
 pub use mempool::MempoolNode;
 pub use miner::MinerNode;
+pub use new_dependency::NewFeature;
 pub use pre_launch::PreLaunchNode;
 pub use storage::StorageNode;
 pub use transaction_gen::TransactionGen;
