@@ -29,10 +29,7 @@ const WALLET_PASSWORD: &str = "TestPassword";
 const LAST_BLOCK_STORED_NUM: u64 = 22;
 const LAST_BLOCK_BLOCK_HASH: &str =
     "b0080224b52d62c3312537a60a109d0cc1469022a0d1aec4c5819c0796b51741c";
-const LAST_BLOCK_STORAGE_DB_V0_6_0_INDEX: usize = 22; // Total number of blocks
 const STORAGE_DB_V0_6_0_INDEXES: &[(&str, usize, usize)] = &[
-    // TODO: Automate finding the indexes for these fields, instead of manually finding them
-    // (named key, json index, data index)
     ("nIndexedBlockHashKey_0000000000000000", 82, 311),
     ("nIndexedBlockHashKey_0000000000000001", 80, 309),
     ("nIndexedBlockHashKey_0000000000000002", 81, 310),
@@ -169,16 +166,10 @@ async fn upgrade_user_in_memory() {
 async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeCfg) {
     test_step_start();
 
-    //
-    // Arrange
-    //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
     let db = create_old_node_db(&n_info);
 
-    //
-    // Act
-    //
     let db = get_upgrade_node_db(&n_info, in_memory(db)).unwrap();
     let (db, status) = upgrade_node_db(&n_info, db, &upgrade_cfg).unwrap();
     let db = open_as_new_node_db(&n_info, in_memory(db)).unwrap();
@@ -187,9 +178,6 @@ async fn upgrade_common(config: NetworkConfig, name: &str, upgrade_cfg: UpgradeC
     network.re_spawn_dead_nodes().await;
     raft_node_handle_event(&mut network, name, "Snapshot applied").await;
 
-    //
-    // Assert
-    //
     match n_info.node_type {
         NodeType::Mempool => {
             let (expected_mining_b_num, expected_b_num) = (None, Some(LAST_BLOCK_STORED_NUM));
@@ -309,16 +297,10 @@ async fn open_upgrade_started_mempool_common(
 ) {
     test_step_start();
 
-    //
-    // Arrange
-    //
     let mut network = Network::create_stopped_from_config(&config);
     let n_info = network.get_node_info(name).unwrap().clone();
     let db = create_old_node_db(&n_info);
 
-    //
-    // Act
-    //
     let err_new_1 = open_as_new_node_db(&n_info, cloned_in_memory(&db)).err();
     let db = open_as_old_node_db(&n_info, in_memory(db)).unwrap();
 
@@ -328,9 +310,6 @@ async fn open_upgrade_started_mempool_common(
 
     let err_new_2 = open_as_new_node_db(&n_info, cloned_in_memory(&db)).err();
 
-    //
-    // Assert
-    //
     assert!(err_new_1.is_some());
     assert!(err_new_2.is_some());
 
@@ -352,8 +331,6 @@ async fn upgrade_restart_network_in_memory() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_raft_2_in_memory() {
-    // Create 2 identical copy of the database in memory for each node in raft grup.
-    // Upgrade applying the configuration data and run.
     let raft_len = 2;
 
     let config = complete_network_config(20220).with_groups(raft_len, raft_len);
@@ -364,7 +341,6 @@ async fn upgrade_restart_network_raft_2_in_memory() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_raft_3_raft_db_only_in_memory() {
-    // Only copy over the upgraded raft database, and pull main db
     let raft_len = 3;
     let filter = ExtraNodeParamsFilter {
         db: false,
@@ -388,7 +364,6 @@ async fn upgrade_restart_network_raft_3_raft_db_only_in_memory() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn upgrade_restart_network_raft_3_pre_launch_only_in_memory() {
-    // Pull raft database during pre-launch, and pull main db
     let raft_len = 3;
     let filter = ExtraNodeParamsFilter {
         db: false,
@@ -418,9 +393,6 @@ async fn upgrade_restart_network_common(
 ) {
     test_step_start();
 
-    //
-    // Arrange
-    //
     config.user_test_auto_gen_setup = get_test_auto_gen_setup(Some(0));
     let mut network = Network::create_stopped_from_config(&config);
     let mempool_nodes = &config.nodes[&NodeType::Mempool];
@@ -438,9 +410,6 @@ async fn upgrade_restart_network_common(
         network.add_extra_params(&name, in_memory(db));
     }
 
-    //
-    // Act
-    //
     if pre_launch {
         network.pre_launch_nodes_named(&raft_nodes).await;
         let handles = network
@@ -460,9 +429,6 @@ async fn upgrade_restart_network_common(
         .await;
     node_join_all_checked(handles, &"").await.unwrap();
 
-    //
-    // Assert
-    //
     {
         let mempool = network.mempool("mempool1").unwrap().lock().await;
         let b_num = mempool.get_committed_current_block_num();
@@ -501,12 +467,8 @@ async fn upgrade_restart_network_common(
     test_step_complete(network).await;
 }
 
-// Spend transactions with old address structure
 #[tokio::test(flavor = "current_thread")]
 async fn upgrade_spend_old_tx() {
-    //
-    // Arrange
-    //
     let config = complete_network_config(20260);
     let mut network = Network::create_stopped_from_config(&config);
 
@@ -519,9 +481,6 @@ async fn upgrade_spend_old_tx() {
         network.add_extra_params(name, in_memory(db));
     }
 
-    //
-    // Act
-    //
     network.re_spawn_dead_nodes().await;
     raft_node_handle_event(&mut network, "user1", "Snapshot applied").await;
     raft_node_handle_event(&mut network, "mempool1", "Snapshot applied").await;
@@ -539,15 +498,8 @@ async fn upgrade_spend_old_tx() {
     raft_node_handle_event(&mut network, "mempool1", "Transactions committed").await;
     let actual_tx_pool = mempool_committed_tx_pool(&mut network, "mempool1").await;
 
-    //
-    // Assert
-    //
     assert_eq!(actual_tx_pool.len(), 1);
 }
-
-//
-// Test helpers
-//
 
 fn create_old_node_db(info: &NetworkNodeInfo) -> ExtraNodeParams {
     match info.node_type {
@@ -733,14 +685,6 @@ fn real_db(mut config: NetworkConfig) -> NetworkConfig {
     config
 }
 
-fn get_static_column(spec: SimpleDbSpec, name: &str) -> &'static str {
-    [DB_COL_DEFAULT]
-        .iter()
-        .chain(spec.columns.iter())
-        .find(|sn| **sn == name)
-        .unwrap()
-}
-
 fn cfg_upgrade() -> UpgradeCfg {
     UpgradeCfg {
         raft_len: 1,
@@ -751,9 +695,6 @@ fn cfg_upgrade() -> UpgradeCfg {
 }
 
 fn get_expected_last_block_stored() -> BlockStoredInfo {
-    use tw_chain::primitives::transaction::{Transaction, TxIn, TxOut};
-    use tw_chain::script::{lang::Script, StackEntry};
-
     BlockStoredInfo {
         block_hash: LAST_BLOCK_BLOCK_HASH.to_owned(),
         block_num: LAST_BLOCK_STORED_NUM,
@@ -846,14 +787,6 @@ fn cloned_in_memory(dbs: &ExtraNodeParams) -> ExtraNodeParams {
     }
 }
 
-fn test_timeout() -> impl Future<Output = &'static str> + Unpin {
-    Box::pin(async move {
-        tokio::time::sleep(TIMEOUT_TEST_WAIT_DURATION).await;
-        "Test timeout elapsed"
-    })
-}
-
-// Make a payment transaction from inputs containing old address structure
 async fn user_make_payment_transaction(
     network: &mut Network,
     user: &str,
