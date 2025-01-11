@@ -10,6 +10,7 @@ use clap::{App, Arg, ArgMatches};
 use config::ConfigError;
 use std::net::SocketAddr;
 use tracing::info;
+use aiblock_network::WalletDb;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut config = configuration(load_settings(matches));
@@ -17,7 +18,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     info!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
-    let node = MempoolNode::new(config, Default::default()).await.unwrap();
+    let wallet_db = WalletDb::new(config.mempool_db_mode, extra.wallet_db.take(), config.passphrase, extra.custom_wallet_spec)?;
+    let node = MempoolNode::new(config, Default::default(), wallet_db).await.unwrap();
     let api_inputs = node.api_inputs();
 
     info!("API Inputs: {api_inputs:?}");
