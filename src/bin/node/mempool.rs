@@ -2,6 +2,7 @@
 
 use aiblock_network::configurations::MempoolNodeConfig;
 use aiblock_network::MempoolNode;
+use aiblock_network::wallet::WalletDb;
 use aiblock_network::{
     get_sanction_addresses, loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes,
     shutdown_connections, ResponseResult, SANC_LIST_PROD,
@@ -17,7 +18,7 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     info!("Start node with config {config:?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
-    let node = MempoolNode::new(config, Default::default()).await.unwrap();
+    let node = MempoolNode::new(config, Default::default(), WalletDb::new(config.wallet_db_config.clone())).await.unwrap();
     let api_inputs = node.api_inputs();
 
     info!("API Inputs: {api_inputs:?}");

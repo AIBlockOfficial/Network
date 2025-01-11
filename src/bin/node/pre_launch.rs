@@ -1,6 +1,6 @@
 //! App to run a pre-launch node.
 
-use aiblock_network::configurations::PreLaunchNodeConfig;
+use aiblock_network::configurations::{PreLaunchNodeConfig, WalletDbConfig};
 use aiblock_network::PreLaunchNode;
 use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, shutdown_connections,
@@ -11,10 +11,10 @@ use config::ConfigError;
 use tracing::info;
 
 pub async fn run_node(matches: &ArgMatches<'_>) {
-    let config = configuration(load_settings(matches));
+    let config = configuration(load_settings(matches), load_wallet_db_settings(matches));
 
     info!("Start node with config {config:?}");
-    let node = PreLaunchNode::new(config, Default::default())
+    let node = PreLaunchNode::new(config, Default::default(), Default::default())
         .await
         .unwrap();
 
@@ -103,6 +103,12 @@ pub fn clap_app<'a, 'b>() -> App<'a, 'b> {
                 .help("Use PKCS8 private key as a string to use for this node TLS certificate.")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("wallet_db_config")
+                .long("wallet_db_config")
+                .help("Run the storage node using the given wallet db config file.")
+                .takes_value(true),
+        )
 }
 
 fn load_settings(matches: &clap::ArgMatches) -> config::Config {
@@ -165,8 +171,17 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
     settings
 }
 
-fn configuration(settings: config::Config) -> PreLaunchNodeConfig {
-    settings.try_into().unwrap()
+fn load_wallet_db_settings(matches: &clap::ArgMatches) -> config::Config {
+    let mut settings = config::Config::default();
+    let wallet_db_setting_file = matches.value_of("wallet_db_config").unwrap_or("src/bin/wallet_db_settings.toml");
+    settings.merge(config::File::with_name(wallet_db_setting_file)).unwrap();
+    settings
+}
+
+fn configuration(settings: config::Config, wallet_db_settings: config::Config) -> PreLaunchNodeConfig {
+    let mut config: PreLaunchNodeConfig = settings.try_into().unwrap();
+    config.wallet_db_config = wallet_db_settings.try_into().unwrap();
+    config
 }
 
 #[cfg(test)]
@@ -242,7 +257,7 @@ mod test {
         let app = clap_app();
         let matches = app.get_matches_from_safe(args).unwrap();
         let settings = load_settings(&matches);
-        let config = configuration(settings);
+        let config = configuration(settings, load_wallet_db_settings(&matches));
 
         //
         // Assert
