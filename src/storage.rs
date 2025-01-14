@@ -142,6 +142,7 @@ pub struct StorageNode {
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
+    wallet_db: WalletDb,
 }
 
 impl StorageNode {
@@ -202,6 +203,13 @@ impl StorageNode {
             raft_peers.chain(mempool).collect()
         };
 
+        let wallet_db = WalletDb::new(
+            config.storage_db_mode,
+            extra.wallet_db.take(),
+            config.passphrase,
+            extra.custom_wallet_spec,
+        )?;
+
         StorageNode {
             node,
             node_raft,
@@ -213,6 +221,7 @@ impl StorageNode {
             whitelisted: Default::default(),
             shutdown_group,
             blockchain_item_fetched: Default::default(),
+            wallet_db,
         }
         .load_local_db()
     }
@@ -1015,6 +1024,25 @@ impl StorageNode {
     /// Get `Node` member
     pub fn get_node(&self) -> &Node {
         &self.node
+    }
+
+    /// Method to get wallet_db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
+    }
+
+    /// Method to load data from wallet_db
+    async fn load_local_db(mut self) -> Result<Self> {
+        // Load data from wallet_db if necessary
+        // Example: self.wallet_db.load_some_data().await?;
+        
+        Ok(self)
+    }
+
+    /// Method to store data in wallet_db
+    async fn store_data_in_wallet_db(&self, data: SomeDataType) -> Result<()> {
+        self.wallet_db.store_some_data(data).await?;
+        Ok(())
     }
 }
 

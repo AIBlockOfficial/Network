@@ -174,6 +174,7 @@ pub struct MempoolNode {
         Node,
     ),
     init_issuances: Vec<InitialIssuance>,
+    wallet_db: WalletDb,
 }
 
 impl MempoolNode {
@@ -200,6 +201,8 @@ impl MempoolNode {
             .map_err(|_| {
                 MempoolError::ConfigError("Invalid storage node address in config file")
             })?;
+
+        
 
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(addr.ip(), config.mempool_api_port);
@@ -247,6 +250,14 @@ impl MempoolNode {
             ));
         }
 
+        // Initialize wallet_db
+        let wallet_db = WalletDb::new(
+            config.mempool_db_mode,
+            extra.wallet_db.take(),
+            config.passphrase,
+            extra.custom_wallet_spec,
+        )?;
+
         MempoolNode {
             node,
             node_raft,
@@ -281,6 +292,7 @@ impl MempoolNode {
             init_issuances,
             tx_status_list: Default::default(),
             tx_status_lifetime: config.tx_status_lifetime,
+            wallet_db,
         }
         .load_local_db()
     }
@@ -2457,6 +2469,25 @@ impl MempoolNode {
                 MempoolRequest::SendSharedConfig { shared_config },
             )
             .await?;
+        Ok(())
+    }
+
+    // Method to get wallet_db
+    pub fn get_wallet_db(&self) -> &WalletDb {
+        &self.wallet_db
+    }
+
+    // Method to load data from wallet_db
+    async fn load_local_db(mut self) -> Result<Self> {
+        // Load data from wallet_db if necessary
+        // Example: self.wallet_db.load_some_data().await?;
+        
+        Ok(self)
+    }
+
+    // Method to store data in wallet_db
+    async fn store_data_in_wallet_db(&self, data: SomeDataType) -> Result<()> {
+        self.wallet_db.store_some_data(data).await?;
         Ok(())
     }
 }
