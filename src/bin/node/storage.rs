@@ -2,6 +2,7 @@
 
 use aiblock_network::configurations::StorageNodeConfig;
 use aiblock_network::StorageNode;
+use aiblock_network::WalletDb;
 use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
@@ -15,7 +16,8 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let config = configuration(load_settings(matches));
 
     info!("Start node with config {config:?}");
-    let node = StorageNode::new(config, Default::default()).await.unwrap();
+    let wallet_db = WalletDb::new();
+    let node = StorageNode::new(config, wallet_db).await.unwrap();
 
     info!("Started node at {}", node.local_address());
 

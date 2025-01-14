@@ -1,6 +1,7 @@
 //! App to run a mining node.
 
 use aiblock_network::configurations::{ExtraNodeParams, MinerNodeConfig, UserNodeConfig};
+use aiblock_network::wallet_db::WalletDb;
 use aiblock_network::{
     loop_wait_connnect_to_peers_async, loops_re_connect_disconnect, routes, shutdown_connections,
     ResponseResult,
@@ -18,8 +19,9 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
     let node = MinerNode::new(config, Default::default()).await.unwrap();
     info!("Started node at {}", node.local_address());
 
+    let wallet_db = WalletDb::new();
     let miner_api_inputs = node.api_inputs();
-    let shared_wallet_db = Some(node.get_wallet_db().clone());
+    let shared_wallet_db = Some(wallet_db.clone());
     let (node_conn, addrs_to_connect, expected_connected_addrs) = node.connect_info_peers();
     let local_event_tx = node.local_event_tx().clone();
 
@@ -60,8 +62,10 @@ pub async fn run_node(matches: &ArgMatches<'_>) {
 
     match user_config {
         Some(config) => {
+            let user_wallet_db = WalletDb::new();
             let shared_members = ExtraNodeParams {
                 shared_wallet_db,
+                user_wallet_db,
                 ..Default::default()
             };
 
