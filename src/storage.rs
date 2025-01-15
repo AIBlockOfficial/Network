@@ -1,3 +1,4 @@
+```rust
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig, TlsPrivateInfo};
 use crate::constants::{
@@ -18,6 +19,7 @@ use crate::utils::{
     to_route_pow_infos, ApiKeys, LocalEvent, LocalEventChannel, LocalEventSender, ResponseResult,
     RoutesPoWInfo,
 };
+use crate::wallet::{WalletDb, WalletDbError, DB_SPEC}; // added WalletDb imports
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use serde::Serialize;
@@ -88,6 +90,7 @@ pub enum StorageError {
     Network(CommsError),
     DbError(SimpleDbError),
     Serialization(bincode::Error),
+    WalletError(WalletDbError), // Include WalletDbError
 }
 
 impl fmt::Display for StorageError {
@@ -97,6 +100,7 @@ impl fmt::Display for StorageError {
             Self::Network(err) => write!(f, "Network error: {err}"),
             Self::DbError(err) => write!(f, "DB error: {err}"),
             Self::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Self::WalletError(err) => write!(f, "Wallet DB error: {err}"), // Display this error
         }
     }
 }
@@ -108,6 +112,7 @@ impl Error for StorageError {
             Self::Network(ref e) => Some(e),
             Self::DbError(ref e) => Some(e),
             Self::Serialization(ref e) => Some(e),
+            Self::WalletError(ref e) => Some(e), // Source for WalletDbError
         }
     }
 }
@@ -130,6 +135,12 @@ impl From<bincode::Error> for StorageError {
     }
 }
 
+impl From<WalletDbError> for StorageError {
+    fn from(other: WalletDbError) -> Self {
+        Self::WalletError(other)
+    }
+}
+
 #[derive(Debug)]
 pub struct StorageNode {
     node: Node,
@@ -142,10 +153,11 @@ pub struct StorageNode {
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
+    wallet_db: Arc<Mutex<WalletDb>>, // Add WalletDb
 }
 
 impl StorageNode {
-    ///Constructor for a new StorageNode
+    /// Constructor for a new StorageNode
     ///
     /// ### Arguments
     ///
@@ -196,6 +208,8 @@ impl StorageNode {
             Arc::new(Mutex::new(raw_db))
         };
 
+        let wallet_db = Arc::new(Mutex::new(WalletDb::new(&DB_SPEC)?)); // Initialize WalletDb
+
         let shutdown_group = {
             let mempool = std::iter::once(mempool_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -213,6 +227,7 @@ impl StorageNode {
             whitelisted: Default::default(),
             shutdown_group,
             blockchain_item_fetched: Default::default(),
+            wallet_db, // Assign WalletDb
         }
         .load_local_db()
     }
@@ -241,7 +256,7 @@ impl StorageNode {
         (self.db.clone(), api_addr, api_tls, api_keys, api_pow_info)
     }
 
-    ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
+    /// Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
     ///
     /// ### Arguments
     ///
@@ -462,7 +477,7 @@ impl StorageNode {
         }
     }
 
-    ///Handle a local event
+    /// Handle a local event
     ///
     /// ### Arguments
     ///
@@ -491,7 +506,7 @@ impl StorageNode {
         }
     }
 
-    ///Handle commit data
+    /// Handle commit data
     ///
     /// ### Arguments
     ///
@@ -558,7 +573,7 @@ impl StorageNode {
         }
     }
 
-    /// Hanldes a new incoming message from a peer.
+    /// Handles a new incoming message from a peer.
     ///
     /// ### Arguments
     ///
@@ -614,7 +629,7 @@ impl StorageNode {
         }
     }
 
-    ///Sends the latest blockchain item fetched from storage.
+    /// Sends the latest blockchain item fetched from storage.
     pub async fn send_blockchain_item(&mut self) -> Result<()> {
         if let Some((key, item, peer)) = self.blockchain_item_fetched.take() {
             match self.node.get_peer_node_type(peer).await? {
@@ -634,7 +649,7 @@ impl StorageNode {
         Ok(())
     }
 
-    ///Stores a completed block including transactions and mining transactions.
+    /// Stores a completed block including transactions and mining transactions.
     ///
     /// ### Arguments
     ///
@@ -785,7 +800,7 @@ impl StorageNode {
         last_block_stored_info
     }
 
-    ///Stores a completed block including transactions and mining transactions.
+    /// Stores a completed block including transactions and mining transactions.
     ///
     /// ### Arguments
     ///
@@ -1300,10 +1315,11 @@ pub fn decode_version_pointer(pointer: &[u8]) -> (u32, &'static str, &[u8]) {
     (*version, cf, key)
 }
 
-/// Return an option, emiting a warning for errors converted to
+/// Return an option, emitting a warning for errors converted to
 fn ok_or_warn<V, E: fmt::Display>(r: std::result::Result<Option<V>, E>, tag: &str) -> Option<V> {
     r.unwrap_or_else(|e| {
         warn!("{}: {}", tag, e);
         None
     })
 }
+```
