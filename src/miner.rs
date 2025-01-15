@@ -1,3 +1,4 @@
+```rust
 use crate::comms_handler::Node;
 use crate::comms_handler::{CommsError, Event, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, MinerNodeConfig, TlsPrivateInfo};
@@ -1789,3 +1790,5 @@ fn log_received_blockchain_item(_key: &str, item: &BlockchainItem, _peer: &Socke
         SerializationErr(e) => warn!("Failed to deserialize blockchain item {:?}", e),
     }
 }
+
+```

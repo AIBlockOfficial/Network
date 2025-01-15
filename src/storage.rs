@@ -1,3 +1,4 @@
+```rust
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
 use crate::configurations::{ExtraNodeParams, StorageNodeConfig, TlsPrivateInfo};
 use crate::constants::{
@@ -142,6 +143,7 @@ pub struct StorageNode {
     whitelisted: HashMap<SocketAddr, bool>,
     shutdown_group: BTreeSet<SocketAddr>,
     blockchain_item_fetched: Option<(String, BlockchainItem, SocketAddr)>,
+    wallet_db: Arc<Mutex<WalletDb>>, // New WalletDb member
 }
 
 impl StorageNode {
@@ -196,6 +198,12 @@ impl StorageNode {
             Arc::new(Mutex::new(raw_db))
         };
 
+        // Initialize the new WalletDb
+        let wallet_db = {
+            let raw_wallet_db = db_utils::new_wallet_db(config.storage_db_mode, extra.wallet_db.take(), None);
+            Arc::new(Mutex::new(raw_wallet_db))
+        };
+
         let shutdown_group = {
             let mempool = std::iter::once(mempool_addr);
             let raft_peers = node_raft.raft_peer_addrs().copied();
@@ -207,6 +215,7 @@ impl StorageNode {
             node_raft,
             catchup_fetch,
             db,
+            wallet_db, // Assign wallet_db to the structure
             api_info: (api_addr, api_tls_info, api_keys, api_pow_info),
             local_events: Default::default(),
             mempool_addr,
@@ -232,13 +241,14 @@ impl StorageNode {
         &self,
     ) -> (
         Arc<Mutex<SimpleDb>>,
+        Arc<Mutex<WalletDb>>, // Update to return WalletDb
         SocketAddr,
         Option<TlsPrivateInfo>,
         ApiKeys,
         RoutesPoWInfo,
     ) {
         let (api_addr, api_tls, api_keys, api_pow_info) = self.api_info.clone();
-        (self.db.clone(), api_addr, api_tls, api_keys, api_pow_info)
+        (self.db.clone(), self.wallet_db.clone(), api_addr, api_tls, api_keys, api_pow_info)
     }
 
     ///Adds a uses data as the payload to create a frame, from the peer address, in the node object of this class.
@@ -291,10 +301,12 @@ impl StorageNode {
     pub async fn take_closed_extra_params(&mut self) -> ExtraNodeParams {
         let raft_db = self.node_raft.take_closed_persistent_store().await;
         let mut self_db = self.db.lock().unwrap();
+        let mut wallet_db = self.wallet_db.lock().unwrap(); // New wallet_db extraction
 
         ExtraNodeParams {
             db: self_db.take().in_memory(),
             raft_db: raft_db.in_memory(),
+            wallet_db: wallet_db.take().in_memory(), // Add wallet_db to extraced params
             ..Default::default()
         }
     }
@@ -305,6 +317,10 @@ impl StorageNode {
             let self_db = self.db.lock().unwrap();
             if let Err(e) = self_db.file_backup() {
                 error!("Error bakup up main db: {:?}", e);
+            }
+            let wallet_db = self.wallet_db.lock().unwrap(); // Backup wallet_db
+            if let Err(e) = wallet_db.file_backup() {
+                error!("Error backing up wallet db: {:?}", e);
             }
         }
     }
@@ -1307,3 +1323,4 @@ fn ok_or_warn<V, E: fmt::Display>(r: std::result::Result<Option<V>, E>, tag: &st
         None
     })
 }
+```
