@@ -1,9 +1,10 @@
 use crate::api::handlers::{self, DbgPaths};
 use crate::api::utils::{
     auth_request, create_new_cache, handle_rejection, map_api_res_and_cache, warp_path,
-    with_node_component, ReplyCache, CACHE_LIVE_TIME,
+    with_node_component, with_semaphore, ReplyCache, CACHE_LIVE_TIME,
 };
 use crate::comms_handler::Node;
+use crate::constants::API_CONCURRENCY_LIMIT;
 use crate::db_utils::SimpleDb;
 use crate::interfaces::{MempoolApi, UserApi};
 use crate::miner::CurrentBlockWithMutex;
@@ -11,6 +12,7 @@ use crate::threaded_call::ThreadedCallSender;
 use crate::utils::{ApiKeys, RoutesPoWInfo};
 use crate::wallet::WalletDb;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
 
 use warp::{Filter, Rejection, Reply};
 
@@ -148,11 +150,13 @@ pub fn debug_data(
     aux_node: Option<Node>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "debug_data";
     warp_path(&mut dp, route)
         .and(warp::get())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow.clone(), api_keys))
         .and(with_node_component(dp))
         .and(with_node_component(node))
@@ -160,7 +164,7 @@ pub fn debug_data(
         .and(with_node_component(routes_pow))
         .and(with_node_component(cache))
         .and_then(
-            move |call_id: String, dp, node, aux, routes_pow: RoutesPoWInfo, cache| {
+            move |_, call_id: String, dp, node, aux, routes_pow: RoutesPoWInfo, cache| {
                 let routes = routes_pow.lock().unwrap().clone();
                 map_api_res_and_cache(
                     call_id.clone(),
@@ -201,14 +205,16 @@ pub fn total_supply(
     dp: &mut DbgPaths,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "total_supply";
     warp_path(dp, route)
         .and(warp::get())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, cache| {
+        .and_then(move |_, call_id: String, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -224,15 +230,17 @@ pub fn issued_supply(
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "issued_supply";
     warp_path(dp, route)
         .and(warp::get())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, tc, cache| {
+        .and_then(move |_, call_id: String, tc, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -529,16 +537,18 @@ pub fn transaction_status(
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "transaction_status";
     warp_path(dp, route)
         .and(warp::post())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, tc, info, cache| {
+        .and_then(move |_, call_id: String, tc, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -581,16 +591,18 @@ pub fn fetch_balance(
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "fetch_balance";
     warp_path(dp, route)
         .and(warp::post())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, tc, info, cache| {
+        .and_then(move |_, call_id: String, tc, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -631,16 +643,18 @@ pub fn create_item_asset(
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let route = "create_item_asset";
     warp_path(dp, route)
         .and(warp::post())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, tc, info, cache| {
+        .and_then(move |_, call_id: String, tc, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -706,16 +720,18 @@ pub fn create_transactions(
     threaded_calls: ThreadedCallSender<dyn MempoolApi>,
     routes_pow: RoutesPoWInfo,
     api_keys: ApiKeys,
+    semaphore: Arc<Semaphore>,
     cache: ReplyCache,
 ) -> impl Filter<Extract = (impl Reply,), Error = warp::Rejection> + Clone {
     let route = "create_transactions";
     warp_path(dp, route)
         .and(warp::post())
+        .and(with_semaphore(semaphore))
         .and(auth_request(routes_pow, api_keys))
         .and(with_node_component(threaded_calls))
         .and(warp::body::json())
         .and(with_node_component(cache))
-        .and_then(move |call_id: String, tc, info, cache| {
+        .and_then(move |_, call_id: String, tc, info, cache| {
             map_api_res_and_cache(
                 call_id.clone(),
                 cache,
@@ -907,6 +923,7 @@ pub fn user_node_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(Semaphore::new(API_CONCURRENCY_LIMIT));
 
     let routes = wallet_info(
         dp,
@@ -1014,6 +1031,7 @@ pub fn user_node_routes(
         None,
         routes_pow_info,
         api_keys,
+        semaphore,
         cache,
     ));
 
@@ -1030,6 +1048,7 @@ pub fn storage_node_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(Semaphore::new(API_CONCURRENCY_LIMIT));
 
     let routes = block_by_num(
         dp,
@@ -1078,6 +1097,7 @@ pub fn storage_node_routes(
         None,
         routes_pow_info,
         api_keys,
+        semaphore,
         cache,
     ));
 
@@ -1096,12 +1116,14 @@ pub fn mempool_node_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(Semaphore::new(API_CONCURRENCY_LIMIT));
 
     let routes = fetch_balance(
         dp,
         threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     )
     .or(create_item_asset(
@@ -1109,6 +1131,7 @@ pub fn mempool_node_routes(
         threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     ))
     .or(create_transactions(
@@ -1116,12 +1139,14 @@ pub fn mempool_node_routes(
         threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     ))
     .or(total_supply(
         dp,
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     ))
     .or(issued_supply(
@@ -1129,6 +1154,7 @@ pub fn mempool_node_routes(
         threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     ))
     .or(transaction_status(
@@ -1136,6 +1162,7 @@ pub fn mempool_node_routes(
         threaded_calls.clone(),
         routes_pow_info.clone(),
         api_keys.clone(),
+        semaphore.clone(),
         cache.clone(),
     ))
     // .or(utxo_addresses(
@@ -1185,6 +1212,7 @@ pub fn mempool_node_routes(
         None,
         routes_pow_info,
         api_keys,
+        semaphore,
         cache,
     ));
 
@@ -1202,6 +1230,7 @@ pub fn miner_node_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(Semaphore::new(API_CONCURRENCY_LIMIT));
 
     let routes = wallet_info(
         dp,
@@ -1258,6 +1287,7 @@ pub fn miner_node_routes(
         None,
         routes_pow_info,
         api_keys,
+        semaphore,
         cache,
     ));
 
@@ -1277,6 +1307,7 @@ pub fn miner_node_with_user_routes(
     let mut dp_vec = DbgPaths::new();
     let dp = &mut dp_vec;
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(Semaphore::new(API_CONCURRENCY_LIMIT));
 
     let routes = wallet_info(
         dp,
@@ -1379,6 +1410,7 @@ pub fn miner_node_with_user_routes(
         Some(user_node),
         routes_pow_info,
         api_keys,
+        semaphore,
         cache,
     ));
 

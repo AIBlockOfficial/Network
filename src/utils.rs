@@ -10,9 +10,11 @@ use crate::interfaces::{
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
 use bincode::serialize;
+use bincode::{self, Error as BincodeError};
 use chrono::Utc;
 use futures::future::join_all;
 use rand::{self, Rng};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -581,7 +583,16 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
-    validate_pow(&pow_body).is_some()
+    validate_pow_leading_zeroes(&pow_body).is_some()
+}
+
+/// Will attempt deserialization of a given byte array using bincode
+///
+/// ### Arguments
+///
+/// * `data`    - Byte array to attempt deserialization on
+pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, BincodeError> {
+    bincode::deserialize(data)
 }
 
 /// Generate Proof of Work for a block with a mining transaction
@@ -639,8 +650,34 @@ pub fn validate_pow_block(header: &BlockHeader) -> bool {
 ///
 /// * `header`   - The header for PoW
 fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
-    let pow = serialize(header).unwrap();
-    validate_pow(&pow)
+    // [AM] even though we've got explicit activation height in configuration
+    // and a hard-coded fallback elsewhere in the code, here
+    // we're basically sniffing at the difficulty field in the
+    // block header to figure out what the target actually is.
+    // this is fine when the choices are:
+    // (1) zero-length difficulty vec, or
+    // (2) a vec that can be converted to a CompactTarget
+    // however, if there's another change we will need to update
+    // this switching logic to be a bit smarter. context-free
+    // pure functions like this one either need to take additional
+    // arguments or be moved to something more stateful that can
+    // access configuration.
+
+    if header.difficulty.is_empty() {
+        let pow = serialize(header).unwrap();
+        validate_pow_leading_zeroes(&pow)
+    } else {
+        use crate::asert::{CompactTarget, HeaderHash};
+
+        let target = CompactTarget::try_from_slice(&header.difficulty)?;
+        let header_hash = HeaderHash::try_calculate(header)?;
+
+        if header_hash.is_below_compact_target(&target) {
+            Some(header_hash.into_vec())
+        } else {
+            None
+        }
+    }
 }
 
 /// Check the hash of given data reach MINING_DIFFICULTY
@@ -649,7 +686,7 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
 ///
 /// * `mining_difficulty`    - usize mining difficulty
 /// * `pow`                  - &u8 proof of work
-pub fn validate_pow_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
+fn validate_pow_leading_zeroes_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
     let pow_hash = sha3_256::digest(pow).to_vec();
     if pow_hash[0..mining_difficulty].iter().all(|v| *v == 0) {
         Some(pow_hash)
@@ -663,8 +700,8 @@ pub fn validate_pow_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec
 /// ### Arguments
 ///
 /// * `pow`    - &u8 proof of work
-fn validate_pow(pow: &[u8]) -> Option<Vec<u8>> {
-    validate_pow_for_diff(MINING_DIFFICULTY, pow)
+fn validate_pow_leading_zeroes(pow: &[u8]) -> Option<Vec<u8>> {
+    validate_pow_leading_zeroes_for_diff(MINING_DIFFICULTY, pow)
 }
 
 /// Get the payment info from the given transactions

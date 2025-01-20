@@ -6,7 +6,7 @@ use crate::unicorn::{construct_seed, construct_unicorn, UnicornFixedParam, Unico
 use keccak_prime::fortuna::Fortuna;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::net::SocketAddr;
 use tracing::log::{debug, info};
@@ -125,12 +125,120 @@ pub struct MiningPipelineInfo {
     current_reward: TokenAmount,
     /// Proposed keys for current mining pipeline cycle
     proposed_keys: BTreeSet<RaftContextKey>,
+
+    /// [AM] The total number of hashes since ASERT activation
+    #[serde(default)]
+    asert_winning_hashes_count: u64,
+
+    /// [AM] the block height at which ASERT activates
+    //
+    // note: this data structure has a subtly complex interaction between:
+    //       - new fields being added (schema migrations)
+    //       - values for those fields being set via configuration
+    //       - raft snapshotting
+    //
+    //       the default here will result in the activation height being
+    //       set to the hard-coded main network activation height, however
+    //       for testnets and local runs, this is overridable in configuration.
+    //       because of this default, the fact that this configuration is
+    //       almost certainly lost when a snapshot created before these fields
+    //       were added to the struct is restored is annoying.
+    //
+    //       it is at least safe for mainnet.
+    //
+    //       this may be frustrating to debug without this code comment because
+    //       it will work until it doesn't. running locally, blowing away the
+    //       database between runs, the config value will be passed in, and it
+    //       will make it into future snapshots, so even restored snapshots
+    //       will behave themselves.
+    //
+    //       this quirk will only manifest when restoring a snapshot that was
+    //       created from a version of this struct without this field, as the
+    //       field value will be defaulted to the ACTIVATION_HEIGHT_ASERT
+    //       constant, and not the value from configuration.
+    //
+    //       as an aside, it appears that `unicorn_info` has the same issue,
+    //       although there may not be any instances of a raft snapshot without
+    //       unicorn parameters out there in the wild. if the unicorn parameters
+    //       are ever changed (through configuration) then it's unlikely that
+    //       the change will be applied to an instance that restores from
+    //       snapshot.
+    #[serde(default = "activation_height_asert")]
+    activation_height_asert: u64,
+}
+
+/// A dirty patch to enable continuation of mining off of pre-difficulty snapshots
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MiningPipelineInfoPreDifficulty {
+    /// Participants for intake phase
+    participants_intake: BTreeMap<u64, Participants>,
+    /// Participants during actual mining
+    participants_mining: BTreeMap<u64, Participants>,
+    /// Empty Participants collection
+    empty_participants: Participants,
+    /// The last round winning hashes
+    last_winning_hashes: BTreeSet<String>,
+    /// The wining PoWs for selection
+    all_winning_pow: Vec<(SocketAddr, WinningPoWInfo)>,
+    /// The unicorn info for the selections
+    unicorn_info: UnicornInfo,
+    /// The selected wining PoW
+    winning_pow: Option<(SocketAddr, WinningPoWInfo)>,
+    /// The current status
+    mining_pipeline_status: MiningPipelineStatus,
+    /// The timeout ids
+    current_phase_timeout_peer_ids: BTreeSet<u64>,
+    /// The timeout ids for a forceful pipeline change
+    current_phase_reset_pipeline_peer_ids: BTreeSet<u64>,
+    /// Fixed info for unicorn generation
+    unicorn_fixed_param: UnicornFixedParam,
+    /// Index of the last block,
+    current_block_num: Option<u64>,
+    /// Current block ready to mine (consensused).
+    current_block: Option<Block>,
+    /// All transactions present in current_block (consensused).
+    current_block_tx: BTreeMap<String, Transaction>,
+    /// The current reward for a given mempool node
+    current_reward: TokenAmount,
+    /// Proposed keys for current mining pipeline cycle
+    proposed_keys: BTreeSet<RaftContextKey>,
+}
+
+const fn activation_height_asert() -> u64 {
+    crate::constants::ACTIVATION_HEIGHT_ASERT
 }
 
 pub struct MiningPipelineInfoImport {
     pub unicorn_fixed_param: UnicornFixedParam,
     pub current_block_num: Option<u64>,
     pub current_block: Option<Block>,
+    pub asert_winning_hashes_count: u64,
+    pub activation_height_asert: u64,
+}
+
+impl From<MiningPipelineInfoPreDifficulty> for MiningPipelineInfo {
+    fn from(value: MiningPipelineInfoPreDifficulty) -> Self {
+        Self {
+            unicorn_fixed_param: value.unicorn_fixed_param,
+            current_block_num: value.current_block_num,
+            current_block: value.current_block,
+            participants_intake: value.participants_intake,
+            participants_mining: value.participants_mining,
+            empty_participants: value.empty_participants,
+            last_winning_hashes: value.last_winning_hashes,
+            all_winning_pow: value.all_winning_pow,
+            unicorn_info: value.unicorn_info,
+            winning_pow: value.winning_pow,
+            mining_pipeline_status: value.mining_pipeline_status,
+            current_phase_timeout_peer_ids: value.current_phase_timeout_peer_ids,
+            current_phase_reset_pipeline_peer_ids: value.current_phase_reset_pipeline_peer_ids,
+            current_block_tx: value.current_block_tx,
+            current_reward: value.current_reward,
+            proposed_keys: value.proposed_keys,
+            asert_winning_hashes_count: 0,
+            activation_height_asert: activation_height_asert(),
+        }
+    }
 }
 
 impl MiningPipelineInfo {
@@ -142,6 +250,22 @@ impl MiningPipelineInfo {
             security: unicorn_fixed_info.security,
         };
         self
+    }
+
+    /// Specify the height at which the ASERT algorithm activates
+    pub fn with_activation_height_asert(mut self, height: u64) -> Self {
+        self.activation_height_asert = height;
+        self
+    }
+
+    /// Returns the number of winning hashes submitted since the ASERT DAA activated
+    pub fn get_asert_winning_hashes_count(&self) -> u64 {
+        self.asert_winning_hashes_count
+    }
+
+    /// Returns the height at which the ASERT DAA activated, or will activate
+    pub fn get_activation_height_asert(&self) -> u64 {
+        self.activation_height_asert
     }
 
     /// Gets the current reward for a given block
@@ -454,6 +578,22 @@ impl MiningPipelineInfo {
         let all_winning_pow = std::mem::take(&mut self.all_winning_pow);
         let _timeouts = std::mem::take(&mut self.current_phase_timeout_peer_ids);
 
+        // [AM] we need to track the number of solutions since the activation block
+        // as this is an input to the mapping function between target-solutions-per-block
+        // and the ASERT algorithm's understanding of target-block-interval.
+        if let Some(b_num) = self.current_block_num {
+            // greater-than-or-equal, greater-than?
+            // anchor block is at the activation height.
+            // the first block to use ASERT is the one that immediately follows the anchor block.
+            // therefore, we collect metrics from the anchor block.
+            if b_num >= self.activation_height_asert {
+                self.asert_winning_hashes_count += u64::try_from(all_winning_pow.len())
+                    .unwrap_or(crate::constants::ASERT_TARGET_HASHES_PER_BLOCK);
+            }
+        } else {
+            panic!("[AM] we've hooked the wrong place; we need the block number and the number of winning hashes in the same place at the same time");
+        }
+
         self.winning_pow = self
             .get_unicorn_item(WINNING_MINER_UN, &all_winning_pow)
             .cloned();
@@ -557,12 +697,16 @@ impl MiningPipelineInfo {
             unicorn_fixed_param,
             current_block_num,
             current_block,
+            activation_height_asert,
+            asert_winning_hashes_count,
         } = value;
 
         Self {
             unicorn_fixed_param,
             current_block_num,
             current_block,
+            activation_height_asert,
+            asert_winning_hashes_count,
             ..Default::default()
         }
     }
@@ -573,6 +717,8 @@ impl MiningPipelineInfo {
             unicorn_fixed_param: self.unicorn_fixed_param,
             current_block_num: self.current_block_num,
             current_block: self.current_block,
+            activation_height_asert: self.activation_height_asert,
+            asert_winning_hashes_count: self.asert_winning_hashes_count,
         }
     }
 }

@@ -14,7 +14,7 @@ use tracing::info;
 pub async fn run_node(matches: &ArgMatches<'_>) {
     let mut config = configuration(load_settings(matches));
 
-    info!("Start node with config {config:?}");
+    info!("Start node with config {config:#?}");
 
     config.sanction_list = get_sanction_addresses(SANC_LIST_PROD.to_string(), &config.jurisdiction);
     let node = MempoolNode::new(config, Default::default()).await.unwrap();

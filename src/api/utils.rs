@@ -1,5 +1,5 @@
 use super::{
-    errors::{ApiError, ApiErrorType},
+    errors::{ApiError, ApiErrorType, OverloadedError},
     handlers::DbgPaths,
     responses::{common_error_reply, json_serialize_embed, CallResponse, JsonReply},
 };
@@ -7,7 +7,9 @@ use crate::utils::{ApiKeys, RoutesPoWInfo, StringError};
 use futures::Future;
 use moka::future::{Cache, CacheBuilder};
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{log::error, warn};
 use warp::{
     hyper::{HeaderMap, StatusCode},
@@ -152,7 +154,8 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
         // This should not happen! All errors should be handled
         error!("Unhandled API rejection: {:?}", err);
         error.code = StatusCode::INTERNAL_SERVER_ERROR;
-        error.message = ApiErrorType::Generic(format!("Unhandled rejection: {err:?}"));
+        error.message =
+            ApiErrorType::Generic(format!("Unhandled rejection. Internal Server Error"));
     }
 
     Ok(common_error_reply(
@@ -209,4 +212,23 @@ pub async fn get_or_insert_cache_value(
     }
 
     insert_cache_value(&call_id, r.await, &cache).await
+}
+
+/// Filter to limit the number of concurrent requests.
+///
+/// # Arguments
+///
+/// * `semaphore` - A reference to a semaphore that limits the number of concurrent requests.
+pub fn with_semaphore(
+    semaphore: Arc<Semaphore>,
+) -> impl Filter<Extract = ((),), Error = warp::Rejection> + Clone {
+    warp::any().and_then(move || {
+        let semaphore = semaphore.clone();
+        async move {
+            let _permit = semaphore
+                .try_acquire()
+                .map_err(|_| warp::reject::custom(OverloadedError))?;
+            Ok::<(), warp::Rejection>(())
+        }
+    })
 }

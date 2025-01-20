@@ -617,7 +617,7 @@ pub enum Rs2JsMsg {
     Exit,
 }
 
-///============ COMPUTE NODE ============///
+///============ MEMPOOL NODE ============///
 
 // Encapsulates mempool requests injected by API
 #[allow(clippy::enum_variant_names)]

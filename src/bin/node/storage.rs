@@ -242,7 +242,16 @@ fn load_settings(matches: &clap::ArgMatches) -> config::Config {
 }
 
 fn configuration(settings: config::Config) -> StorageNodeConfig {
-    settings.try_into().unwrap()
+    let mut settings: StorageNodeConfig = settings.try_into().unwrap();
+
+    // todo: patch this at the point of usage or leave it here?
+    if let Some(height) = settings.activation_height_asert {
+        if height < 2 {
+            settings.activation_height_asert = Some(2);
+        }
+    }
+
+    settings
 }
 
 #[cfg(test)]

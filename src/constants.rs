@@ -74,6 +74,9 @@ pub const SANC_LIST_TEST: &str = "src/db/sanc_list_test.json";
 /// Default limit on number of internal transactions for a miner node
 pub const INTERNAL_TX_LIMIT: usize = 999;
 
+/// Default limit on the number of concurrent API connections per node
+pub const API_CONCURRENCY_LIMIT: usize = 100;
+
 /// Maximum number of attempts to resend trigger messages before proposing to reset the mining pipeline
 pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 5;
 
@@ -101,6 +104,24 @@ pub const OLD_BACKUP_COUNT: usize = 5;
 /// Coinbase locktime constant
 /// TODO: Update to 5 once locktime tests are introduced
 pub const COINBASE_MATURITY: u64 = if cfg!(test) { 0 } else { 100 };
+
+// todo: actually set this!
+//       note that this can be overriden through configuration,
+//       which is handy for running locally or for low-difficulty test networks.
+/// Block height at which ASERT DAA is activated
+pub const ACTIVATION_HEIGHT_ASERT: u64 = u64::MAX;
+/// Number of desired hashes submitted per block interval by miners
+pub const ASERT_TARGET_HASHES_PER_BLOCK: u64 = 11;
+
+const BCH_SECONDS_PER_BLOCK: u64 = 10 * 60;
+const BCH_HALF_LIFE: u64 = 2 * 24 * 60 * 60;
+/// ASERT algorithm constant for smoothing difficulty target adjustments over a number of blocks
+///
+/// Our mapping function projects number of hashes to seconds, so we feed ASERT_TARGET_HASHES_PER_BLOCK
+/// to asert as the target block time. This constant adjusts the half life constant such that ASERT's
+/// smoothing/spreading/smearing acts over the same number of blocks as it would in BCH.
+pub const ASERT_HALF_LIFE: u64 =
+    BCH_HALF_LIFE * ASERT_TARGET_HASHES_PER_BLOCK / BCH_SECONDS_PER_BLOCK;
 
 /*------- TESTS -------*/
 

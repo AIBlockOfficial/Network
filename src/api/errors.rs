@@ -74,3 +74,8 @@ impl std::fmt::Display for ApiErrorType {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct OverloadedError;
+
+impl warp::reject::Reject for OverloadedError {}
