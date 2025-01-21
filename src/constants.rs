@@ -83,6 +83,9 @@ pub const POW_RNUM_SELECT: usize = 10;
 /// Default limit on number of internal transactions for a miner node
 pub const INTERNAL_TX_LIMIT: usize = 999;
 
+/// Default limit on the number of concurrent API connections per node
+pub const API_CONCURRENCY_LIMIT: usize = 100;
+
 /// Maximum number of attempts to resend trigger messages before proposing to reset the mining pipeline
 pub const RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT: usize = 5;
 

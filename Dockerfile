@@ -1,4 +1,4 @@
-FROM rust:1.79.0-slim-bullseye AS chef
+FROM --platform=$BUILDPLATFORM rust:1.76.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl cmake libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev python3
 RUN cargo install cargo-chef 
@@ -12,6 +12,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /aiblock/recipe.json /aiblock/recipe.json 
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
 RUN cargo chef cook --release --recipe-path /aiblock/recipe.json
 COPY . .
 RUN cargo build --release

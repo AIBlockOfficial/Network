@@ -9,7 +9,7 @@ mod pre_launch;
 mod storage;
 mod user;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     tracing_subscriber::fmt::init();
     let matches = clap_app().get_matches();

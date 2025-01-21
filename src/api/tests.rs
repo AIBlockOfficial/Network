@@ -1688,12 +1688,14 @@ async fn test_post_fetch_balance() {
     //
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
 
     let filter = routes::fetch_balance(
         &mut dp(),
         mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        semaphore,
         cache,
     )
     .recover(handle_rejection);
@@ -1879,11 +1881,13 @@ async fn test_post_create_transactions_common(address_version: Option<u64>) {
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
 
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
     let filter = routes::create_transactions(
         &mut dp(),
         mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        semaphore,
         cache,
     )
     .recover(handle_rejection);
@@ -2133,12 +2137,14 @@ async fn test_post_create_item_asset_tx_mempool() {
     //
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
 
     let filter = routes::create_item_asset(
         &mut dp(),
         mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        semaphore,
         cache,
     )
     .recover(handle_rejection);
@@ -2230,11 +2236,13 @@ async fn test_post_create_item_asset_tx_mempool_failure() {
     //
     let ks = to_api_keys(Default::default());
     let cache = create_new_cache(CACHE_LIVE_TIME);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
     let filter = routes::create_item_asset(
         &mut dp(),
         mempool.threaded_calls.tx.clone(),
         Default::default(),
         ks,
+        semaphore,
         cache,
     )
     .recover(handle_rejection);
