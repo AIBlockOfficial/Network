@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use {
     crate::constants::{ASERT_HALF_LIFE, ASERT_TARGET_HASHES_PER_BLOCK},
     rug::{integer::ParseIntegerError, Integer},
@@ -117,7 +118,7 @@ fn map_asert_inputs(
     const TARGET_BLOCK_TIME_D: Duration = Duration::from_secs(ASERT_TARGET_HASHES_PER_BLOCK);
     const HALF_LIFE_D: Duration = Duration::from_secs(ASERT_HALF_LIFE);
 
-    let anchor_target = "0x1f00ffff".parse().unwrap();
+    let anchor_target = "0xc800ffff".parse().unwrap();
 
     let context = Asert::with_parameters(TARGET_BLOCK_TIME_D, HALF_LIFE_D)
         .with_anchor(anchor_block_height, anchor_target)
@@ -278,6 +279,31 @@ impl Sub for Timestamp {
     }
 }
 
+/// An error which can occur when working with `CompactTarget`.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CompactTargetError {
+    /// Indicates that an attempt was made to construct a `CompactTarget` from a byte slice with
+    /// an invalid length.
+    SliceLength {
+        /// The length of the slice
+        length: usize,
+    },
+}
+
+impl std::error::Error for CompactTargetError {}
+
+impl fmt::Display for CompactTargetError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::SliceLength { length } => write!(
+                f,
+                "Cannot construct CompactTarget from slice of length {}",
+                length
+            ),
+        }
+    }
+}
+
 /// A 32-bit approximation of a 256-bit number that represents the target
 /// a block hash must be lower than in order to meet PoW requirements.
 ///
@@ -290,8 +316,9 @@ impl Sub for Timestamp {
 pub struct CompactTarget(u32);
 
 impl CompactTarget {
-    /// This is defined ... somewhere.
-    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x1d, 0x00, 0xff, 0xff]));
+    /// This is the easiest difficulty possible. It's roughly equivalent to requiring a single
+    /// leading zero byte.
+    pub const MAX: CompactTarget = CompactTarget(u32::from_be_bytes([0x22, 0x00, 0x00, 0x01]));
 
     pub fn expand(&self) -> Target {
         let byte_len = self.0 >> 24;
@@ -308,6 +335,10 @@ impl CompactTarget {
         Target(target)
     }
 
+    pub fn expand_integer(&self) -> Integer {
+        self.expand().0
+    }
+
     pub fn into_array(self) -> [u8; 4] {
         self.0.to_be_bytes()
     }
@@ -316,14 +347,14 @@ impl CompactTarget {
         Self(u32::from_be_bytes(array))
     }
 
-    pub fn try_from_slice(slice: &[u8]) -> Option<Self> {
-        if slice.len() < 4 {
-            return None;
-        }
-
-        let mut array = [0u8; 4];
-        array.copy_from_slice(&slice[slice.len() - 4..]);
-        Some(Self::from_array(array))
+    pub fn try_from_slice(slice: &[u8]) -> Result<Self, CompactTargetError> {
+        // This requires that the slice's length is exactly 4
+        slice
+            .try_into()
+            .map(Self::from_array)
+            .map_err(|_| CompactTargetError::SliceLength {
+                length: slice.len(),
+            })
     }
 }
 
@@ -374,27 +405,53 @@ impl CompactTarget {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct HeaderHash(sha3_256::Output<sha3::Sha3_256>);
 
 impl HeaderHash {
-    pub fn try_calculate(header: &BlockHeader) -> Option<Self> {
-        let serialized = bincode::serialize(header).ok()?;
-        let hashed = sha3_256::digest(&serialized);
-        Some(Self(hashed))
+    pub fn calculate(header: &BlockHeader) -> Self {
+        let serialized = bincode::serialize(header).unwrap();
+        Self(sha3_256::digest(&serialized))
     }
 
     pub fn is_below_target(&self, target: &Target) -> bool {
         let h_int = Integer::from_digits(self.0.as_slice(), rug::integer::Order::MsfBe);
+        println!("h_int: {:?}", h_int);
+        println!("target: {:?}", target.0);
+        println!("h_int <= target.0: {:?}", h_int <= target.0);
         h_int <= target.0
     }
 
     pub fn is_below_compact_target(&self, target: &CompactTarget) -> bool {
         let target = target.expand();
+        println!("target: {:?}", target);
         self.is_below_target(&target)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 
     pub fn into_vec(self) -> Vec<u8> {
         self.0.to_vec()
+    }
+}
+
+impl From<sha3_256::Output<sha3::Sha3_256>> for HeaderHash {
+    fn from(value: sha3_256::Output<sha3::Sha3_256>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<HeaderHash> for sha3_256::Output<sha3::Sha3_256> {
+    fn from(value: HeaderHash) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<[u8]> for HeaderHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 

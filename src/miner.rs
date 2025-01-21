@@ -42,6 +42,7 @@ use tw_chain::primitives::transaction::Transaction;
 use tw_chain::utils::transaction_utils::{
     construct_tx_core, construct_tx_hash, update_input_signatures,
 };
+use warp::filters::trace;
 
 /// Key for last pow coinbase produced
 pub const LAST_COINBASE_KEY: &str = "LastCoinbaseKey";
@@ -1136,8 +1137,13 @@ impl MinerNode {
             .map(|c| c.block.b_num);
         if new_b_num <= current_b_num {
             if new_b_num == current_b_num {
+                info!("Received block with same b_num as current block");
+                info!("Current block: {:?}", self.current_block.lock().await);
+
                 self.process_found_block_pow().await;
             }
+
+            warn!("Received block with b_num less than current block");
             return false;
         }
 
@@ -1192,6 +1198,8 @@ impl MinerNode {
 
     /// Process the found PoW sending it to the related peer and logging errors
     pub async fn process_found_block_pow(&mut self) -> bool {
+        trace!("Current mining block task: {:?}", self.mining_block_task);
+
         let BlockPoWInfo {
             peer,
             start_time,
@@ -1536,7 +1544,15 @@ impl MinerNode {
     /// * `info`      - Block Proof of work info
     fn generate_pow_for_block(mut info: BlockPoWInfo) -> task::JoinHandle<BlockPoWInfo> {
         task::spawn_blocking(move || {
-            info.header = generate_pow_for_block(info.header);
+            info.header.nonce_and_mining_tx_hash.0 = generate_pow_for_block(&info.header)
+                .expect("error occurred while mining block")
+                // TODO: We should make BlockPoWInfo actually indicate if no PoW could be found
+                .expect("couldn't find a valid nonce");
+
+            trace!(
+                "Found possible POW for block: {:?}",
+                info.header.nonce_and_mining_tx_hash.0
+            );
             info
         })
     }

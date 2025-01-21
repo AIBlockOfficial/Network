@@ -1,0 +1,10 @@
+/.idea/
+/.vscode/
+
+/assets/
+/run/
+/src/bin/tls_data/
+/src/db/db/
+/src/wallet/wallet/
+/target/
+*.log

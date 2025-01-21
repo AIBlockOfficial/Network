@@ -4992,7 +4992,9 @@ async fn construct_mining_common_info(
     let tx = construct_coinbase_tx(block_num, amount, addr);
     let hash = construct_tx_hash(&tx);
     block.header = apply_mining_tx(block.header, Vec::new(), hash.clone());
-    block.header = generate_pow_for_block(block.header);
+    block.header.nonce_and_mining_tx_hash.0 = generate_pow_for_block(&block.header)
+        .expect("error occurred while mining block")
+        .expect("couldn't find a valid nonce");
     block_txs.insert(hash, tx);
 
     CommonBlockInfo {

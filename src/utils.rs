@@ -1,12 +1,14 @@
+use crate::asert::{CompactTarget, CompactTargetError, HeaderHash};
 use crate::comms_handler::Node;
 use crate::configurations::{UnicornFixedInfo, UtxoSetSpec, WalletTxSpec};
 use crate::constants::{
-    BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64, MINING_DIFFICULTY, NETWORK_VERSION,
-    REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
+    ADDRESS_POW_NONCE_LEN, BLOCK_PREPEND, COINBASE_MATURITY, D_DISPLAY_PLACES_U64,
+    MINING_DIFFICULTY, NETWORK_VERSION, POW_RNUM_SELECT, REWARD_ISSUANCE_VAL, REWARD_SMOOTHING_VAL,
 };
 use crate::interfaces::{
     BlockchainItem, BlockchainItemMeta, DruidDroplet, PowInfo, ProofOfWork, StoredSerializingBlock,
 };
+use crate::miner_pow::{MineError, PoWError, PoWObject};
 use crate::wallet::WalletDb;
 use crate::Rs2JsMsg;
 use bincode::serialize;
@@ -17,18 +19,20 @@ use rand::{self, Rng};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt;
+use std::fmt::Write;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
+use std::{fmt, vec};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio::time::Instant;
 use tracing::{info, trace, warn};
+use tracing_subscriber::field::debug;
 use trust_dns_resolver::TokioAsyncResolver;
 use tw_chain::constants::TOTAL_TOKENS;
 use tw_chain::crypto::sha3_256;
@@ -178,21 +182,35 @@ impl fmt::Debug for LocalEventChannel {
 #[derive(PartialEq, Eq)]
 pub struct StringError(pub String);
 
-impl Error for StringError {
-    fn description(&self) -> &str {
-        &self.0
+impl StringError {
+    pub fn from<T: Error>(value: T) -> Self {
+        Self(value.to_string())
     }
 }
 
+impl Error for StringError {}
+
 impl fmt::Display for StringError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(&self.0)
     }
 }
 
 impl fmt::Debug for StringError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for StringError {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for StringError {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }
 
@@ -462,14 +480,36 @@ pub fn apply_mining_tx(mut header: BlockHeader, nonce: Vec<u8>, tx_hash: String)
     header
 }
 
-/// Generates a random sequence of values for a nonce
-pub fn generate_pow_nonce() -> Vec<u8> {
-    generate_random_num(16)
-}
-
 /// Generates a random num for use for proof of work
 pub fn generate_pow_random_num() -> Vec<u8> {
-    generate_random_num(10)
+    generate_random_num(POW_RNUM_SELECT)
+}
+
+/// Increments the provided nonce
+///
+/// ### Arguments
+///
+/// * `nonce` - Nonce to increment
+fn get_nonce_increment(nonce: &[u8]) -> Vec<u8> {
+    // Ensure the input vector has exactly 4 bytes
+    if nonce.len() != 4 {
+        return vec![];
+    }
+
+    // Convert the u8 slice to a fixed-size array
+    let mut array: [u8; 4] = [0; 4];
+    array.copy_from_slice(&nonce);
+
+    // Interpret the fixed-size array as i32
+    let current_value = i32::from_le_bytes(array); // Assuming little-endian byte order
+
+    // Increment the value
+    let incremented_value = current_value + 1;
+
+    // Convert incremented value back to u8 vector
+    let incremented_bytes = incremented_value.to_le_bytes().to_vec(); // Convert i32 to little-endian u8 vector
+
+    incremented_bytes
 }
 
 /// Generates a garbage random num for use in network testing
@@ -566,11 +606,13 @@ pub fn generate_pow_for_address(
     task::spawn_blocking(move || {
         let mut pow = ProofOfWork {
             address,
-            nonce: generate_pow_nonce(),
+            // TODO: instead of hard-coding a separate constant for this, rewrite this to use
+            //       the existing miner infrastructure
+            nonce: vec![0; ADDRESS_POW_NONCE_LEN],
         };
 
         while !validate_pow_for_address(&pow, &rand_num.as_ref()) {
-            pow.nonce = generate_pow_nonce();
+            pow.nonce = get_nonce_increment(&pow.nonce);
         }
 
         (pow, pow_info, peer)
@@ -583,7 +625,7 @@ pub fn validate_pow_for_address(pow: &ProofOfWork, rand_num: &Option<&Vec<u8>>) 
     pow_body.extend(rand_num.iter().flat_map(|r| r.iter()).copied());
     pow_body.extend(&pow.nonce);
 
-    validate_pow_leading_zeroes(&pow_body).is_some()
+    validate_pow_leading_zeroes(&pow_body).is_ok()
 }
 
 /// Will attempt deserialization of a given byte array using bincode
@@ -600,12 +642,42 @@ pub fn try_deserialize<'a, T: Deserialize<'a>>(data: &'a [u8]) -> Result<T, Binc
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn generate_pow_for_block(mut header: BlockHeader) -> BlockHeader {
-    header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
-    while !validate_pow_block(&header) {
-        header.nonce_and_mining_tx_hash.0 = generate_pow_nonce();
+pub fn generate_pow_for_block(header: &BlockHeader) -> Result<Option<Vec<u8>>, MineError> {
+    use crate::miner_pow::*;
+
+    let mut statistics = Default::default();
+    let terminate_flag = None;
+    let timeout_duration = None;
+
+    let miner = create_any_miner(Some(
+        &header.pow_difficulty().map_err(MineError::GetDifficulty)?,
+    ));
+    let result = generate_pow(
+        &mut *miner.lock().unwrap(),
+        header,
+        &mut statistics,
+        terminate_flag,
+        timeout_duration,
+    )?;
+
+    match result {
+        MineResult::FoundNonce { nonce } => {
+            // Verify that the found nonce is actually valid
+            let mut header_copy = header.clone();
+            header_copy.nonce_and_mining_tx_hash.0 = nonce.clone();
+            assert_eq!(
+                validate_pow_block(&header_copy),
+                Ok(()),
+                "generated PoW nonce {} isn't actually valid! block header: {:#?}",
+                hex::encode(&nonce),
+                header
+            );
+            Ok(Some(header_copy.nonce_and_mining_tx_hash.0))
+        }
+        MineResult::Exhausted => Ok(None),
+        MineResult::TerminateRequested => Ok(None),
+        MineResult::TimeoutReached => Ok(None),
     }
-    header
 }
 
 /// Verify block is valid & consistent: Can be fully verified from PoW hash.
@@ -626,13 +698,58 @@ pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringErr
         ));
     }
 
-    let hash_digest = validate_pow_block_hash(&block.header).ok_or_else(|| {
-        StringError("Only block passing validate_pow_block are accepted".to_owned())
-    })?;
+    let hash_digest = validate_pow_block_hash(&block.header).map_err(StringError::from)?;
 
     let mut hash_digest = hex::encode(hash_digest);
     hash_digest.insert(0, BLOCK_PREPEND as char);
     Ok(hash_digest)
+}
+
+/// An error which can occur while validating a block header's proof-of-work.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum ValidatePoWBlockError {
+    /// Indicates that the block header's nonce is invalid
+    InvalidNonce { cause: PoWError },
+    /// Indicates that the block header's difficulty is invalid
+    InvalidDifficulty { cause: CompactTargetError },
+    /// Indicates that the block header has no difficulty threshold, and its hash has an
+    /// insufficient number of leading zero bytes.
+    InvalidLeadingBytes {
+        cause: ValidatePoWLeadingZeroesError,
+    },
+    /// Indicates that the block header has a threshold, and its hash has an
+    /// insufficient number of leading zero bytes.
+    DoesntMeetThreshold {
+        header_hash: HeaderHash,
+        target: CompactTarget,
+    },
+}
+
+impl std::error::Error for ValidatePoWBlockError {}
+
+impl fmt::Display for ValidatePoWBlockError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InvalidNonce { cause } => write!(f, "Block header nonce is invalid: {}", cause),
+            Self::InvalidDifficulty { cause } => {
+                write!(f, "Block header difficulty is invalid: {}", cause)
+            }
+            Self::InvalidLeadingBytes { cause } => write!(
+                f,
+                "Block header does not meet the difficulty requirements: {}",
+                cause
+            ),
+            Self::DoesntMeetThreshold {
+                header_hash: hash,
+                target,
+            } => write!(
+                f,
+                "Block header does not meet the difficulty requirements: target={}, hash={:?}",
+                target,
+                hash.as_bytes()
+            ),
+        }
+    }
 }
 
 /// Validate Proof of Work for a block with a mining transaction
@@ -640,8 +757,8 @@ pub fn construct_valid_block_pow_hash(block: &Block) -> Result<String, StringErr
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-pub fn validate_pow_block(header: &BlockHeader) -> bool {
-    validate_pow_block_hash(header).is_some()
+pub fn validate_pow_block(header: &BlockHeader) -> Result<(), ValidatePoWBlockError> {
+    validate_pow_block_hash(header).map(|_| ())
 }
 
 /// Validate Proof of Work for a block with a mining transaction returning the PoW hash
@@ -649,7 +766,7 @@ pub fn validate_pow_block(header: &BlockHeader) -> bool {
 /// ### Arguments
 ///
 /// * `header`   - The header for PoW
-fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
+fn validate_pow_block_hash(header: &BlockHeader) -> Result<HeaderHash, ValidatePoWBlockError> {
     // [AM] even though we've got explicit activation height in configuration
     // and a hard-coded fallback elsewhere in the code, here
     // we're basically sniffing at the difficulty field in the
@@ -663,20 +780,53 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
     // arguments or be moved to something more stateful that can
     // access configuration.
 
+    // Ensure the nonce length is valid
+    BlockHeader::check_nonce_length(header.get_nonce().len())
+        .map_err(|cause| ValidatePoWBlockError::InvalidNonce { cause })?;
+
     if header.difficulty.is_empty() {
         let pow = serialize(header).unwrap();
         validate_pow_leading_zeroes(&pow)
+            .map(HeaderHash::from)
+            .map_err(|cause| ValidatePoWBlockError::InvalidLeadingBytes { cause })
     } else {
-        use crate::asert::{CompactTarget, HeaderHash};
+        info!("We have difficulty");
 
-        let target = CompactTarget::try_from_slice(&header.difficulty)?;
-        let header_hash = HeaderHash::try_calculate(header)?;
+        let target = CompactTarget::try_from_slice(&header.difficulty)
+            .map_err(|cause| ValidatePoWBlockError::InvalidDifficulty { cause })?;
+        let header_hash = HeaderHash::calculate(header);
 
         if header_hash.is_below_compact_target(&target) {
-            Some(header_hash.into_vec())
+            Ok(header_hash)
         } else {
-            None
+            Err(ValidatePoWBlockError::DoesntMeetThreshold {
+                header_hash,
+                target,
+            })
         }
+    }
+}
+
+/// An error which indicates that a Proof-of-Work action contained an invalid number of leading
+/// zero bytes.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct ValidatePoWLeadingZeroesError {
+    /// The computed hash
+    pub hash: sha3::digest::Output<sha3::Sha3_256>,
+    /// The mining difficulty
+    pub mining_difficulty: usize,
+}
+
+impl Error for ValidatePoWLeadingZeroesError {}
+
+impl fmt::Display for ValidatePoWLeadingZeroesError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Hash {:?} has fewer than {} leading zero bytes",
+            self.hash.as_slice(),
+            self.mining_difficulty
+        )
     }
 }
 
@@ -686,12 +836,21 @@ fn validate_pow_block_hash(header: &BlockHeader) -> Option<Vec<u8>> {
 ///
 /// * `mining_difficulty`    - usize mining difficulty
 /// * `pow`                  - &u8 proof of work
-fn validate_pow_leading_zeroes_for_diff(mining_difficulty: usize, pow: &[u8]) -> Option<Vec<u8>> {
-    let pow_hash = sha3_256::digest(pow).to_vec();
-    if pow_hash[0..mining_difficulty].iter().all(|v| *v == 0) {
-        Some(pow_hash)
+fn validate_pow_leading_zeroes_for_diff(
+    mining_difficulty: usize,
+    pow: &[u8],
+) -> Result<sha3::digest::Output<sha3::Sha3_256>, ValidatePoWLeadingZeroesError> {
+    let hash = sha3_256::digest(pow);
+    if hash.as_slice()[0..mining_difficulty]
+        .iter()
+        .all(|v| *v == 0)
+    {
+        Ok(hash)
     } else {
-        None
+        Err(ValidatePoWLeadingZeroesError {
+            hash,
+            mining_difficulty,
+        })
     }
 }
 
@@ -700,7 +859,9 @@ fn validate_pow_leading_zeroes_for_diff(mining_difficulty: usize, pow: &[u8]) ->
 /// ### Arguments
 ///
 /// * `pow`    - &u8 proof of work
-fn validate_pow_leading_zeroes(pow: &[u8]) -> Option<Vec<u8>> {
+fn validate_pow_leading_zeroes(
+    pow: &[u8],
+) -> Result<sha3::digest::Output<sha3::Sha3_256>, ValidatePoWLeadingZeroesError> {
     validate_pow_leading_zeroes_for_diff(MINING_DIFFICULTY, pow)
 }
 
@@ -1342,6 +1503,133 @@ pub mod rug_integer {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
+pub struct UnitsPrefixed {
+    pub value: f64,
+    pub unit_name: &'static str,
+    pub duration: Option<Duration>,
+}
+
+impl fmt::Display for UnitsPrefixed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let scales = &[
+            (1000_000_000_000f64, "T"),
+            (1000_000_000f64, "G"),
+            (1000_000f64, "M"),
+            (1000f64, "k"),
+        ];
+
+        let value = match &self.duration {
+            None => self.value,
+            Some(duration) => self.value / duration.as_secs_f64(),
+        };
+
+        let (divisor, prefix) = scales
+            .iter()
+            .find(|(threshold, _)| value > *threshold)
+            .unwrap_or(&(1f64, ""));
+
+        match &self.duration {
+            None => write!(f, "{} {}{}", value / divisor, prefix, self.unit_name),
+            Some(_) => write!(f, "{} {}{}/s", value / divisor, prefix, self.unit_name),
+        }
+    }
+}
+
+/// Splits the given integer range into smaller segments with the given maximum size.
+///
+/// ### Arguments
+///
+/// * `start`           - the first value
+/// * `len`             - the total length of the range
+/// * `max_block_size`  - the maximum size of each block
+pub fn split_range_into_blocks(
+    start: u32,
+    len: u32,
+    max_block_size: u32,
+) -> impl Iterator<Item = (u32, u32)> {
+    assert_ne!(max_block_size, 0);
+
+    struct Itr {
+        pos: u32,
+        remaining: u32,
+        max_block_size: u32,
+    }
+
+    impl Iterator for Itr {
+        type Item = (u32, u32);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining == 0 {
+                return None;
+            }
+
+            let block_size = u32::min(self.remaining, self.max_block_size);
+            let result = (self.pos, block_size);
+            self.pos += block_size;
+            self.remaining -= block_size;
+            Some(result)
+        }
+    }
+
+    Itr {
+        pos: start,
+        remaining: len,
+        max_block_size,
+    }
+}
+
+/// Returns all possible byte strings with the given length.
+///
+/// Note that for a length of `0` this will return a single 0-length byte string.
+///
+/// ### Arguments
+///
+/// * `len`  - the length of the byte strings to generate
+pub fn all_byte_strings(len: usize) -> impl Iterator<Item = Box<[u8]>> {
+    struct Itr {
+        buf: Box<[u8]>,
+        done: bool,
+    }
+
+    impl Iterator for Itr {
+        type Item = Box<[u8]>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.done {
+                // Iterator has already reached the end
+                return None;
+            }
+
+            // Save the current value to be returned later
+            let result = self.buf.clone();
+
+            // Try to increment the value
+            for byte in self.buf.as_mut() {
+                if let Some(next_value) = (*byte).checked_add(1) {
+                    // The byte was incremented successfully
+                    *byte = next_value;
+                    return Some(result);
+                } else {
+                    // The byte overflowed, set it to 0 and proceed to increment the next one
+                    *byte = 0;
+                }
+            }
+
+            // If we got this far, all the bytes were 0xFF, meaning that we've successfully
+            // iterated through the entire sequence.
+            self.done = true;
+
+            Some(result)
+        }
+    }
+
+    Itr {
+        buf: vec![0u8; len].into_boxed_slice(),
+        done: false,
+    }
+}
+
 /*---- TESTS ----*/
 
 #[cfg(test)]
@@ -1379,6 +1667,48 @@ mod util_tests {
         assert_eq!(
             domain_with_port_addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12300)
+        );
+    }
+
+    #[test]
+    fn test_split_range_into_blocks() {
+        assert_eq!(
+            split_range_into_blocks(0, 16, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 4)]
+        );
+
+        assert_eq!(
+            split_range_into_blocks(0, 15, 4).collect::<Vec<_>>(),
+            vec![(0, 4), (4, 4), (8, 4), (12, 3)]
+        );
+
+        assert_eq!(
+            split_range_into_blocks(0, u32::MAX, 1 << 30).collect::<Vec<_>>(),
+            vec![
+                (0 << 30, 1 << 30),
+                (1 << 30, 1 << 30),
+                (2 << 30, 1 << 30),
+                (3 << 30, (1 << 30) - 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_all_byte_strings() {
+        assert_eq!(all_byte_strings(0).collect::<Vec<_>>(), vec![Box::from([])]);
+
+        assert_eq!(
+            all_byte_strings(1).collect::<Vec<_>>(),
+            (u8::MIN..=u8::MAX)
+                .map(|b| b.to_le_bytes().into())
+                .collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            all_byte_strings(2).collect::<Vec<_>>(),
+            (u16::MIN..=u16::MAX)
+                .map(|b| b.to_le_bytes().into())
+                .collect::<Vec<_>>()
         );
     }
 }

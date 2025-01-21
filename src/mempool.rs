@@ -2079,10 +2079,10 @@ impl MempoolNode {
         // Perform validation
         let coinbase_hash = construct_tx_hash(&coinbase);
         let block_to_check = apply_mining_tx(block_to_check, nonce, coinbase_hash);
-        if !validate_pow_block(&block_to_check) {
+        if let Err(err) = validate_pow_block(&block_to_check) {
             return Some(Response {
                 success: false,
-                reason: "Invalid PoW for block".to_owned(),
+                reason: format!("Invalid PoW for block: {}", err),
             });
         }
 
