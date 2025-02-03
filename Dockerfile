@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.76.0-slim-bullseye AS chef
+FROM --platform=$BUILDPLATFORM rust:1.79.0-slim-bullseye AS chef
 
 RUN apt-get update && apt-get -y --no-install-recommends install git build-essential m4 llvm libclang-dev diffutils curl cmake libglfw3-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev python3
 RUN cargo install cargo-chef 
