@@ -25,7 +25,7 @@ RUN cargo build --release
 #
 FROM rust:1.79.0-slim-bullseye
 RUN apt-get update && apt-get -y --no-install-recommends install libclang-dev libxinerama-dev
-#USER nonroot
+USER nonroot
 
 # Set these in the environment to override [use once we have env vars available]
 ARG NODE_TYPE_ARG="mempool"
