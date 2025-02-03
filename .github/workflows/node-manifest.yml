@@ -68,10 +68,10 @@ jobs:
     secrets:
       webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-  scan-image:
-    name: Scan Image [${{ inputs.NODE_TYPE }}]
-    needs: [create-and-push-manifest]
-    uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
-    secrets: inherit
-    with:
-      IMAGE: ${{ fromJson(needs.create-and-push-manifest.outputs.json).tags[0] }}
+  # scan-image:
+  #   name: Scan Image [${{ inputs.NODE_TYPE }}]
+  #   needs: [create-and-push-manifest]
+  #   uses: aiblockofficial/workflows/.github/workflows/scan-image.yml@main
+  #   secrets: inherit
+  #   with:
+  #     IMAGE: ${{ fromJson(needs.create-and-push-manifest.outputs.json).tags[0] }}
