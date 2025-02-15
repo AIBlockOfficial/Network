@@ -34,7 +34,9 @@ impl fmt::Display for OpenGlMinerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::LockFailed => f.write_str("couldn't acquire global lock for using GLFW context"),
-            Self::InitializeGlfwMsg(cause, msg) => write!(f, "Failed to initialize GLFW: {cause}: {msg}"),
+            Self::InitializeGlfwMsg(cause, msg) => {
+                write!(f, "Failed to initialize GLFW: {cause}: {msg}")
+            }
             Self::InitializeGlfw(cause) => write!(f, "Failed to initialize GLFW: {cause}"),
             Self::CreateGlfwWindow => f.write_str("Failed to create GLFW window"),
             Self::CompileShader(cause) => write!(f, "Failed to compile shader: {cause}"),
