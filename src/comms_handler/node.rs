@@ -169,6 +169,8 @@ pub struct Node {
     connect_to_handshake_contacts: bool,
     /// Threadhandle for a HeartBeat Prober
     heartbeat_handle: Option<Arc<JoinHandle<()>>>,
+    /// Add rate limiting and backoff for miner connections
+    miner_connection_attempts: Arc<RwLock<HashMap<SocketAddr, u32>>>,
 }
 
 pub(crate) struct Peer {
@@ -281,6 +283,7 @@ impl Node {
             seen_gossip_messages: Arc::new(RwLock::new(HashSet::new())),
             connect_to_handshake_contacts: false,
             heartbeat_handle: None,
+            miner_connection_attempts: Arc::new(RwLock::new(HashMap::new())),
         };
 
         if !disable_listening {
@@ -1009,18 +1012,46 @@ impl Node {
                 address: Some(peer_out_addr),
             }))?;
 
-        // Check if the peer is a miner and we are a mempool
-        let mut sub_peers = self.sub_peers.write().await;
+        // Add rate limiting and backoff for miner connections
         if self.node_type == NodeType::Mempool && peer_type == NodeType::Miner {
-            debug!("Current sub-peers: {:?}", sub_peers);
-            debug!("Sub-peer limit: {:?}", self.sub_peer_limit);
+            let mut sub_peers = self.sub_peers.write().await;
+
+            // Track connection attempts per miner
+            let mut attempts_map = self.miner_connection_attempts.write().await;
+            let attempts = attempts_map
+                .entry(peer_in_addr)
+                .and_modify(|counter| *counter += 1)
+                .or_insert(1);
 
             if sub_peers.len() + 1 > self.sub_peer_limit {
-                all_peers.remove_entry(&peer_in_addr);
-                return Err(CommsError::PeerListFull);
-            } else {
-                sub_peers.insert(peer_in_addr);
+                // Calculate exponential backoff based on number of attempts
+                let backoff = Duration::from_secs(2u64.saturating_pow(*attempts as u32));
+
+                // Cap maximum backoff at 5 minutes
+                let capped_backoff = std::cmp::min(backoff, Duration::from_secs(300));
+
+                warn!(
+                    "Miner connection attempt rate limited. Peer: {}, Attempts: {}, Backoff: {}s",
+                    peer_in_addr,
+                    attempts,
+                    capped_backoff.as_secs()
+                );
+
+                tokio::time::sleep(capped_backoff).await;
+
+                // Still reject if at capacity after backoff
+                if sub_peers.len() + 1 > self.sub_peer_limit {
+                    all_peers.remove_entry(&peer_in_addr);
+                    return Err(CommsError::PeerListFull);
+                }
             }
+
+            // Reset attempt counter on successful connection
+            if let Some(counter) = attempts_map.get_mut(&peer_in_addr) {
+                *counter = 0;
+            }
+
+            sub_peers.insert(peer_in_addr);
         }
 
         // We only do DNS validation on mempool and storage nodes

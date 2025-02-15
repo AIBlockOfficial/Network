@@ -34,6 +34,7 @@ use std::{
 };
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
+use tokio::time::Duration;
 use tracing::{debug, error, error_span, info, info_span, trace, warn};
 use tracing_futures::Instrument;
 use tw_chain::primitives::asset::{Asset, TokenAmount};
@@ -81,6 +82,7 @@ pub enum MinerError {
     Serialization(bincode::Error),
     AsyncTask(task::JoinError),
     WalletError(WalletDbError),
+    StartupFailed(String),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -103,6 +105,7 @@ impl fmt::Display for MinerError {
             Self::AsyncTask(err) => write!(f, "Async task error: {err}"),
             Self::Serialization(err) => write!(f, "Serialization error: {err}"),
             Self::WalletError(err) => write!(f, "Wallet error: {err}"),
+            Self::StartupFailed(err) => write!(f, "Startup failed: {err}"),
         }
     }
 }
@@ -115,6 +118,7 @@ impl Error for MinerError {
             Self::AsyncTask(e) => Some(e),
             Self::Serialization(ref e) => Some(e),
             Self::WalletError(ref e) => Some(e),
+            Self::StartupFailed(_) => None,
         }
     }
 }
@@ -203,9 +207,17 @@ impl MinerNode {
         let tls_addr = create_socket_addr(&addr).await.unwrap();
         let tcp_tls_config = TcpTlsConfig::from_tls_spec(tls_addr, &config.tls_config)?;
         let api_addr = SocketAddr::new(tls_addr.ip(), config.miner_api_port);
-        let api_tls_info = config
-            .miner_api_use_tls
-            .then(|| tcp_tls_config.clone_private_info());
+        let api_tls_info = if config.miner_api_use_tls {
+            // Make sure the TLS config has a private key
+            if config.tls_config.key.is_none() {
+                return Err(MinerError::ConfigError(
+                    "TLS config missing private key for API server",
+                ));
+            }
+            Some(tcp_tls_config.clone_private_info())
+        } else {
+            None
+        };
         let api_keys = to_api_keys(config.api_keys.clone());
         let node = Node::new(
             &tcp_tls_config,
@@ -549,6 +561,11 @@ impl MinerNode {
                     trace!("handle_next_event evt {:?}", event);
                     if let res @ Some(_) = self.handle_event(event?).await.transpose() {
                         return res;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                    if let Err(e) = self.monitor_mining_status().await {
+                        error!("Mining monitor error: {}", e);
                     }
                 }
                 _ = self.mining_partition_task.wait() => {
@@ -1664,6 +1681,34 @@ impl MinerNode {
             AggregationStatus::UtxoUpdate(addr) => Some(addr),
             _ => None,
         }
+    }
+
+    /// Add monitoring for mining status
+    pub async fn monitor_mining_status(&mut self) -> Result<()> {
+        let current_status = self.receive_get_mining_status_request().await;
+
+        if !current_status.success || *self.pause_node.read().await {
+            // Mining has stopped - attempt recovery
+            info!("Mining appears to have stopped, attempting recovery...");
+
+            // Check connection
+            if self.is_disconnected().await {
+                info!("Reconnecting to mempool...");
+                self.handle_connect_to_mempool().await;
+            }
+
+            // Attempt to resume mining
+            if let Err(err) = self.send_startup_requests().await {
+                error!("Failed to restart mining: {}", err);
+                return Err(MinerError::StartupFailed(err.to_string()));
+            }
+
+            *self.pause_node.write().await = false;
+
+            info!("Mining recovery attempted");
+        }
+
+        Ok(())
     }
 }
 
