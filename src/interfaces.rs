@@ -662,6 +662,11 @@ pub enum MempoolRequest {
         runtime_data: MempoolConsensusedRuntimeData,
     },
     SendRaftCmd(RaftMessageWrapper),
+    /// Request to synchronize after mining a block
+    SyncAfterMining {
+        /// The block number to synchronize at
+        block_num: u64,
+    },
 }
 
 impl fmt::Debug for MempoolRequest {
@@ -695,6 +700,7 @@ impl fmt::Debug for MempoolRequest {
             RequestRuntimeData => write!(f, "RequestRuntimeData"),
             SendRuntimeData { .. } => write!(f, "SendRuntimeData"),
             SendRaftCmd(_) => write!(f, "SendRaftCmd"),
+            SyncAfterMining { .. } => write!(f, "SyncAfterMining"),
         }
     }
 }

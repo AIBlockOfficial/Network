@@ -492,6 +492,10 @@ impl StorageNode {
                     reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
+            LocalEvent::SendBlockToStorage => {
+                self.resend_trigger_message().await;
+                None
+            },
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }

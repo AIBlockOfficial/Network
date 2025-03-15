@@ -62,6 +62,7 @@ pub enum LocalEvent {
     CoordinatedShutdown(u64),
     ReconnectionComplete,
     Exit(&'static str),
+    SendBlockToStorage,
     Ignore,
 }
 

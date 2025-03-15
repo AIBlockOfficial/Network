@@ -118,7 +118,7 @@ pub enum RaftCmd {
 
 pub struct RaftNode {
     /// Runing raft node.
-    node: RawNode<RaftStore>,
+    pub node: RawNode<RaftStore>,
     /// Backlog of raft proposal while leader unavailable, and proposer id.
     propose_data_backlog: Vec<(RaftData, RaftData, u64)>,
     /// Input command and messages.

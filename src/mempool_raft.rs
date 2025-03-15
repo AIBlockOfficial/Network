@@ -812,7 +812,35 @@ impl MempoolRaft {
         match self.local_initial_proposal {
             None | Some(InitialProposal::PendingAuthorized) => {
                 self.local_initial_proposal = None;
-                self.propose_item_dedup(&item, b_num).await.is_some()
+                // After proposing the item, we need to ensure the mining pipeline transitions to the next phase
+                let result = self.propose_item_dedup(&item, b_num).await.is_some();
+                
+                // If the proposal was successful, start the mining pipeline
+                if result {
+                    info!("Successfully proposed block with last info, b_num={}", b_num);
+                    
+                    // Set the next mining event timeout to trigger the pipeline
+                    self.set_next_propose_mining_event_timeout_at();
+                    
+                    // If the mining pipeline is in Halted state, try to transition it
+                        if matches!(self.consensused.block_pipeline.get_mining_pipeline_status(), MiningPipelineStatus::Halted) {
+                            info!("Mining pipeline still halted after start_items_intake, forcing reset");
+                            // Create a PipelineEventInfo with default values to reset the pipeline
+                            let extra = PipelineEventInfo {
+                                proposer_id: 0,
+                                sufficient_majority: 1,
+                                unanimous_majority: 1,
+                                partition_full_size: self.consensused.partition_full_size,
+                            };
+                            self.consensused.block_pipeline.handle_reset_pipeline(extra);
+                            self.consensused.start_items_intake();
+                        }
+                    
+                } else {
+                    error!("Failed to propose block with last info, b_num={}", b_num);
+                }
+                
+                result
             }
             Some(InitialProposal::PendingAll) | Some(InitialProposal::PendingItem { .. }) => {
                 let dedup_b_num = Some(b_num);

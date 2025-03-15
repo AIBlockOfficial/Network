@@ -534,6 +534,7 @@ impl UserNode {
             }
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
+            LocalEvent::SendBlockToStorage => None,
         }
     }
 

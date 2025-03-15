@@ -1,16 +1,17 @@
 use crate::block_pipeline::{MiningPipelineItem, MiningPipelineStatus, Participants};
 use crate::comms_handler::{CommsError, Event, Node, TcpTlsConfig};
+use crate::interfaces::{
+    NodeType, Response, BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
+    MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
+    MinedBlockExtraInfo, UtxoSet, UtxoFetchType,
+    WinningPoWInfo, PowInfo, ProofOfWork, TxStatus, TxStatusType, UserRequest, StorageRequest,
+};
+use crate::key_creation::PeerInfo;
 use crate::configurations::{
     ExtraNodeParams, MempoolNodeConfig, MempoolNodeSharedConfig, TlsPrivateInfo,
 };
 use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
-use crate::interfaces::{
-    BlockStoredInfo, CommonBlockInfo, Contract, DruidDroplet, DruidPool, InitialIssuance,
-    MempoolApi, MempoolApiRequest, MempoolInterface, MempoolRequest, MineRequest, MinedBlock,
-    MinedBlockExtraInfo, NodeType, PowInfo, ProofOfWork, Response, StorageRequest, TxStatus,
-    TxStatusType, UserRequest, UtxoFetchType, UtxoSet, WinningPoWInfo,
-};
 use crate::mempool_raft::{
     CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
     MempoolRuntimeItem,
@@ -46,6 +47,7 @@ use tw_chain::primitives::transaction::{GenesisTxHashSpec, Transaction};
 use tw_chain::utils::druid_utils::druid_expectations_are_met;
 use tw_chain::utils::script_utils::{tx_has_valid_create_script, tx_is_valid};
 use tw_chain::utils::transaction_utils::construct_tx_hash;
+use rand::Rng;
 
 /// Key for local miner list
 pub const REQUEST_LIST_KEY: &str = "RequestListKey";
@@ -561,17 +563,6 @@ impl MempoolNode {
         self.mining_block_mined();
     }
 
-    /// Gets a decremented socket address of peer for storage
-    /// ### Arguments
-    /// * `address`    - Address to decrement
-    fn get_storage_address(&self, address: SocketAddr) -> SocketAddr {
-        let mut storage_address = address;
-        storage_address.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-        storage_address.set_port(address.port() - 1);
-
-        storage_address
-    }
-
     /// Return closure use to validate a transaction
     fn transactions_validator(&mut self) -> impl Fn(&Transaction) -> (bool, String) + '_ {
         let utxo_set = self.node_raft.get_committed_utxo_set();
@@ -616,15 +607,35 @@ impl MempoolNode {
         // Flush stale tx status
         self.flush_stale_tx_status();
 
+        // Check if storage node is connected
+        if !self.is_storage_connected().await {
+            error!("Storage node is not connected, cannot send block to storage");
+            return Err(MempoolError::GenericError(StringError(
+                format!("Storage node at {} is not connected", self.storage_addr)
+            )));
+        }
+
         info!("");
         info!("Proposing timestamp next");
         info!("");
-
         self.node_raft.propose_timestamp().await;
         self.node
             .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
             .await?;
         Ok(())
+    }
+
+    /// Check if the storage node is connected
+    pub async fn is_storage_connected(&self) -> bool {
+        let peers = self.node.get_peers().await;
+        
+        // Check if the storage address is in the peers list
+        if !peers.contains_key(&self.storage_addr) {
+            error!("Storage node at {} is not in the peers list", self.storage_addr);
+            return false;
+        }
+        
+        true
     }
 
     /// Floods all peers with a PoW for UnicornShard creation
@@ -1106,6 +1117,35 @@ impl MempoolNode {
                     reason: "Sent startup requests on reconnection".to_owned(),
                 })
             }
+            LocalEvent::SendBlockToStorage => {
+                info!("Handling SendBlockToStorage event");
+                match self.send_block_to_storage().await {
+                    Ok(_) => {
+                        // Check if we actually had a block to send
+                        if self.current_mined_block.is_some() {
+                            info!("Successfully sent block to storage");
+                            Some(Response {
+                                success: true,
+                                reason: "Block sent to storage".to_owned(),
+                            })
+                        } else {
+                            // No block was available to send
+                            info!("No block was available to send to storage");
+                            Some(Response {
+                                success: true,
+                                reason: "No block available to send to storage".to_owned(),
+                            })
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to send block to storage: {:?}", e);
+                        Some(Response {
+                            success: false,
+                            reason: "Failed to send block to storage".to_owned(),
+                        })
+                    }
+                }
+            }
             LocalEvent::CoordinatedShutdown(shutdown) => {
                 self.coordinated_shutdown = shutdown;
                 Some(Response {
@@ -1225,6 +1265,14 @@ impl MempoolNode {
                         None
                     }
                 }
+            }
+            SyncAfterMining { block_num } => {
+                // Temporary implementation until handle_sync_after_mining is implemented
+                info!("Received sync after mining request for block {}", block_num);
+                Some(Response {
+                    success: true,
+                    reason: "Sync after mining acknowledged".to_owned(),
+                })
             }
         }
     }
@@ -2131,13 +2179,65 @@ impl MempoolNode {
             });
         }
 
-        if !self
-            .node_raft
-            .propose_block_with_last_info(previous_block_info)
-            .await
-        {
+        info!("Received block stored info from storage: block_num={}, hash={}", 
+            previous_block_info.block_num, 
+            previous_block_info.block_hash);
+
+        // Try to propose the block with the last info
+        let proposal_result = self.node_raft.propose_block_with_last_info(previous_block_info).await;
+        
+        if !proposal_result {
+            info!("Failed to propose block with last info, re-proposing uncommitted current block number");
             self.node_raft.re_propose_uncommitted_current_b_num().await;
             return None;
+        }
+        
+        info!("Successfully proposed block with last info");
+
+        // Generate a new random number for the next mining round
+        // Use OsRng which is thread-safe instead of thread_rng
+        let new_random: Vec<u8> = (0..10).map(|_| rand::rngs::OsRng.gen()).collect();
+        
+        // Store the previous random number and set the new one
+        self.previous_random_num = self.current_random_num.clone();
+        self.current_random_num = new_random;
+        
+        // Store the random numbers in the database
+        if let Err(e) = self.db.put_cf(
+            DB_COL_INTERNAL,
+            POW_RANDOM_NUM_KEY,
+            &serialize(&self.current_random_num).unwrap(),
+        ) {
+            error!("Failed to store current random number: {:?}", e);
+        }
+        
+        if let Err(e) = self.db.put_cf(
+            DB_COL_INTERNAL,
+            POW_PREV_RANDOM_NUM_KEY,
+            &serialize(&self.previous_random_num).unwrap(),
+        ) {
+            error!("Failed to store previous random number: {:?}", e);
+        }
+
+        // Reset the trigger messages count
+        self.current_trigger_messages_count = 0;
+        
+        // Check if the mining pipeline is still halted after processing the block
+        if matches!(self.node_raft.get_mining_pipeline_status(), MiningPipelineStatus::Halted) {
+            info!("Mining pipeline is still halted after block stored, forcing reset");
+            
+            // Force a reset of the mining block process
+            self.reset_mining_block_process().await;
+            
+            // Propose a pipeline reset to get things moving again
+            if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
+                error!("Failed to propose mining pipeline reset");
+            } else {
+                info!("Successfully proposed mining pipeline reset");
+            }
+        } else {
+            info!("Mining pipeline is in state {:?} after block stored", 
+                  self.node_raft.get_mining_pipeline_status());
         }
 
         Some(Response {
@@ -2166,44 +2266,70 @@ impl MempoolNode {
                 if let Err(e) = self.flood_rand_and_block_to_partition().await {
                     error!("Resend block and rand to partition miners failed {:?}", e);
                 }
-                if self.enable_trigger_messages_pipeline_reset {
-                    info!("Resend trigger messages for pipeline reset");
-                    let mining_participants = &self.node_raft.get_mining_participants().unsorted;
-                    let disconnected_participants =
-                        self.node.unconnected_peers(mining_participants).await;
+            }
+        }
 
-                    info!(
-                        "Disconnected participants: {:?}",
-                        disconnected_participants.len()
-                    );
+        // Increment the trigger messages count
+        self.current_trigger_messages_count += 1;
+        info!("Current trigger messages count: {}", self.current_trigger_messages_count);
 
-                    info!("Mining participants: {:?}", mining_participants.len());
-
-                    // If all miners participating in this mining round disconnected
-                    // and we've reached the appropriate threshold for maximum number of
-                    // retries, we need to propose the pipeline revert to participant intake
-                    //
-                    // NB: This vote requires a unanimous_majority vote
-                    //
-                    // TODO: Apply the same logic to any other pipeline stages that might get stuck
-                    if disconnected_participants.len() == mining_participants.len() {
-                        self.current_trigger_messages_count += 1;
+        // If we've sent too many trigger messages and the pipeline reset is enabled,
+        // try to reset the pipeline to break out of any potential loops
+        if self.enable_trigger_messages_pipeline_reset && self.current_trigger_messages_count > RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT {
+            info!("Resend trigger messages limit reached, attempting pipeline reset");
+            
+            // Get information about the mining participants
+            let all_participants = self.node_raft.get_mining_participants().clone();
+            let connected_miners = self.get_connected_miners().await;
+            let disconnected_participants = all_participants.unsorted.iter()
+                .filter(|p| !connected_miners.contains(p))
+                .count();
+            
+            info!("Disconnected participants: {}", disconnected_participants);
+            info!("Total mining participants: {}", all_participants.unsorted.len());
+            
+            // Check if we have any mining participants at all
+            if all_participants.unsorted.is_empty() {
+                info!("No mining participants available, forcing reset");
+                self.reset_mining_block_process().await;
+                self.current_trigger_messages_count = 0;
+                
+                // Try to propose a new block to get things moving again
+                if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
+                    info!("Pipeline is halted, attempting to reset pipeline");
+                    if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
+                        error!("Failed to propose mining pipeline reset");
                     }
-
-                    info!(
-                        "Current trigger messages count: {:?}",
-                        self.current_trigger_messages_count
-                    );
-
-                    if self.current_trigger_messages_count >= RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT
-                    {
-                        self.current_trigger_messages_count = Default::default();
-                        self.node_raft
-                            .propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline)
-                            .await;
+                }
+                return;
+            }
+            
+            // Check if we have disconnected participants
+            if disconnected_participants > 0 {
+                info!("Detected {} disconnected participants, resetting mining process", disconnected_participants);
+                self.reset_mining_block_process().await;
+                self.current_trigger_messages_count = 0;
+                
+                // Try to propose a new block to get things moving again
+                if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
+                    info!("Pipeline is halted, attempting to reset pipeline");
+                    if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
+                        error!("Failed to propose mining pipeline reset");
                     }
-                } else {
-                    warn!("Resend trigger messages for pipeline reset is not enabled");
+                }
+                return;
+            }
+            
+            // Force a reset after too many attempts, regardless of participant status
+            info!("Forcing reset of mining pipeline after too many trigger messages");
+            self.reset_mining_block_process().await;
+            self.current_trigger_messages_count = 0;
+            
+            // Try to propose a new block to get things moving again
+            if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
+                info!("Pipeline is halted, attempting to reset pipeline");
+                if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
+                    error!("Failed to propose mining pipeline reset");
                 }
             }
         }
@@ -2666,3 +2792,4 @@ fn delete_local_transactions(db: &mut SimpleDb, keys: &[String]) {
     let batch = batch.done();
     db.write(batch).unwrap();
 }
+

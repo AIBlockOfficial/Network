@@ -366,6 +366,7 @@ impl PreLaunchNode {
                     reason: "Sent startup requests on reconnection".to_string(),
                 })
             }
+            LocalEvent::SendBlockToStorage => None,
             LocalEvent::CoordinatedShutdown(_) => None,
             LocalEvent::Ignore => None,
         }

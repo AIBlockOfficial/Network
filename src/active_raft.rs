@@ -3,6 +3,7 @@ use crate::raft::{
     CommitReceiver, RaftCmd, RaftCmdSender, RaftCommit, RaftCommitData, RaftData,
     RaftMessageWrapper, RaftMsgReceiver, RaftNode,
 };
+use raft::prelude::MessageType;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
@@ -32,6 +33,8 @@ pub struct ActiveRaft {
     raft_peers_to_connect: Vec<SocketAddr>,
     /// Collection of the peer expected to be connected.
     raft_peer_addrs: Vec<SocketAddr>,
+    /// Track if this node is the leader
+    is_leader: Arc<Mutex<bool>>,
 }
 
 impl ActiveRaft {
@@ -81,6 +84,9 @@ impl ActiveRaft {
             .map(|(_, addr)| *addr)
             .collect();
 
+        // First peer is initially the leader
+        let is_leader = Arc::new(Mutex::new(node_idx == 0));
+
         Self {
             use_raft,
             peer_id,
@@ -91,6 +97,7 @@ impl ActiveRaft {
             peer_addr,
             raft_peers_to_connect,
             raft_peer_addrs,
+            is_leader,
         }
     }
 
@@ -174,6 +181,44 @@ impl ActiveRaft {
 
     /// Process a raft message: send to spawned raft loop.
     pub async fn received_message(&mut self, msg: RaftMessageWrapper) {
+        // Check if this is a message that indicates leadership changes
+        if let RaftMessageWrapper(ref message) = msg {
+            match message.get_msg_type() {
+                MessageType::MsgRequestVoteResponse => {
+                    // If we get a vote response and we're the candidate, we might become leader
+                    if message.get_to() == self.peer_id && !message.get_reject() {
+                        // A successful vote for us - we might become leader soon
+                        // But we'll wait for explicit leadership confirmation
+                    }
+                },
+                MessageType::MsgHeartbeatResponse => {
+                    // If we're receiving heartbeat responses, we're likely the leader
+                    if message.get_to() == self.peer_id {
+                        *self.is_leader.lock().await = true;
+                    }
+                },
+                MessageType::MsgHeartbeat => {
+                    // If we're receiving heartbeats, someone else is the leader
+                    if message.get_to() == self.peer_id {
+                        *self.is_leader.lock().await = false;
+                    }
+                },
+                MessageType::MsgAppend => {
+                    // If we're receiving append entries, someone else is the leader
+                    if message.get_to() == self.peer_id {
+                        *self.is_leader.lock().await = false;
+                    }
+                },
+                MessageType::MsgAppendResponse => {
+                    // If we're receiving append responses, we're likely the leader
+                    if message.get_to() == self.peer_id {
+                        *self.is_leader.lock().await = true;
+                    }
+                },
+                _ => {}
+            }
+        }
+        
         self.cmd_tx.send(RaftCmd::Raft(msg)).unwrap();
     }
 
@@ -203,5 +248,21 @@ impl ActiveRaft {
                 .send(RaftCmd::Snapshot { idx, data, backup })
                 .unwrap();
         }
+    }
+
+    /// Check if this node is the leader in the Raft consensus
+    pub fn is_leader(&self) -> bool {
+        if !self.use_raft {
+            // If we're not using Raft, consider this node as the leader
+            return true;
+        }
+        
+        // Get the leadership status directly from the RaftNode
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let raft_node = self.raft_node.lock().await;
+                raft_node.node.raft.leader_id == raft_node.node.raft.id
+            })
+        })
     }
 }
