@@ -206,7 +206,12 @@ impl StorageRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data, context) => {
-                self.received_commit_proposal(data, context).await
+                if context.is_empty() {
+                    trace!(commit_index = raft_commit.index, "Skipping processing of proposed commit with empty context (likely Raft internal entry).");
+                    None
+                } else {
+                    self.received_commit_proposal(data, context).await
+                }
             }
             RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {

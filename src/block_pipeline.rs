@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::net::SocketAddr;
-use tracing::log::{debug, info};
+use tracing::log::{debug, info, warn, trace};
 use tw_chain::primitives::asset::TokenAmount;
 use tw_chain::primitives::block::Block;
 use tw_chain::primitives::transaction::Transaction;
@@ -165,6 +165,9 @@ pub struct MiningPipelineInfo {
     //       snapshot.
     #[serde(default = "activation_height_asert")]
     activation_height_asert: u64,
+
+    /// The current pipeline phase change
+    current_pipeline_phase_change: Option<MiningPipelinePhaseChange>,
 }
 
 /// A dirty patch to enable continuation of mining off of pre-difficulty snapshots
@@ -237,6 +240,7 @@ impl From<MiningPipelineInfoPreDifficulty> for MiningPipelineInfo {
             proposed_keys: value.proposed_keys,
             asert_winning_hashes_count: 0,
             activation_height_asert: activation_height_asert(),
+            current_pipeline_phase_change: None,
         }
     }
 }
@@ -324,12 +328,13 @@ impl MiningPipelineInfo {
 
     /// Start participants intake phase
     pub fn start_items_intake(&mut self, extra: PipelineEventInfo) {
-        self.mining_pipeline_status = if self.participants_intake.is_empty() {
-            MiningPipelineStatus::ParticipantOnlyIntake
-        } else {
+        // If we already have miners in participants_intake, move them to participants_mining
+        if !self.participants_intake.is_empty() {
             self.unicorn_select_participants_mining(extra.partition_full_size);
-            MiningPipelineStatus::AllItemsIntake
-        };
+            self.mining_pipeline_status = MiningPipelineStatus::AllItemsIntake;
+        } else {
+            self.mining_pipeline_status = MiningPipelineStatus::ParticipantOnlyIntake;
+        }
 
         // Only keep relevant info for this phase
         self.last_winning_hashes = Default::default();
@@ -365,13 +370,57 @@ impl MiningPipelineInfo {
                 self.add_to_participants(extra.proposer_id, addr);
             }
             (CompleteParticipant, ParticipantOnlyIntake) => {
+                // Append the vote indicating this peer is ready to move on
                 self.append_current_phase_timeout(extra.proposer_id);
+                info!("[HANDLE_ITEM_LOG] Processed CompleteParticipant from peer {}. Total timeout votes: {}", extra.proposer_id, self.current_phase_timeout_peer_ids.len());
+                
+                // Check if enough votes have been received to trigger the phase change *now*
+                let threshold_met = self.has_ready_select_participating_miners(extra.sufficient_majority);
+                info!("[HANDLE_ITEM_LOG] Checking threshold to transition from ParticipantOnlyIntake. Met: {}", threshold_met);
+                
+                if threshold_met {
+                    info!("[HANDLE_ITEM_LOG] Sufficient votes for CompleteParticipant received, transitioning to AllItemsIntake.");
+                    self.start_items_intake(extra.clone()); // Use clone if extra is needed later
+                    // Return phase change immediately
+                    info!("[HANDLE_ITEM_LOG] Returning StartPhasePowIntake");
+                    return Some(MiningPipelinePhaseChange::StartPhasePowIntake);
+                } else {
+                    debug!("[HANDLE_ITEM_LOG] CompleteParticipant vote added, waiting for {} more votes to transition.", 
+                           extra.sufficient_majority.saturating_sub(self.current_phase_timeout_peer_ids.len()));
+                    // Not enough votes yet, return None (but PipelineProgress will be signaled upstream)
+                    info!("[HANDLE_ITEM_LOG] Returning None (threshold not met)");
+                    return None;
+                }
             }
-            (WinningPoW(addr, info), AllItemsIntake) => {
-                self.add_to_winning_pow(extra.proposer_id, (addr, *info));
+            (WinningPoW(addr, pow_info), AllItemsIntake) => {
+                self.add_to_winning_pow(extra.proposer_id, (addr, *pow_info));
+                trace!("[HANDLE_ITEM_LOG] Processed WinningPoW from peer {}. Total PoWs: {}", extra.proposer_id, self.all_winning_pow.len());
+                // Check if enough PoWs received to select winner & transition
+                if self.has_ready_select_winning_miner(extra.sufficient_majority) {
+                    trace!("[HANDLE_ITEM_LOG] Checking threshold to transition from AllItemsIntake (WinningPoW). Met: true");
+                    self.start_winning_pow_halted(); // Selects winner, sets state to Halted
+                    info!("[HANDLE_ITEM_LOG] Sufficient WinningPoW received, setting signal to transition to Halted.");
+                    self.current_pipeline_phase_change = Some(MiningPipelinePhaseChange::StartPhaseHalted);
+                } else {
+                     trace!("[HANDLE_ITEM_LOG] Checking threshold to transition from AllItemsIntake (WinningPoW). Met: false");
+                    // Not enough votes yet, do nothing
+                }
             }
             (CompleteMining, AllItemsIntake) => {
+                // Append the vote indicating this peer is ready to move on
                 self.append_current_phase_timeout(extra.proposer_id);
+                // Check if enough votes have been received to trigger the phase change *now*
+                if self.has_ready_select_winning_miner(extra.sufficient_majority) {
+                    info!("Sufficient votes for CompleteMining received, selecting winner and transitioning to Halted.");
+                    self.start_winning_pow_halted();
+                    // Return phase change immediately
+                    return Some(MiningPipelinePhaseChange::StartPhaseHalted);
+                } else {
+                    debug!("CompleteMining vote added, waiting for {} more votes (or PoW entries) to transition.", 
+                           extra.sufficient_majority.saturating_sub(self.current_phase_timeout_peer_ids.len()));
+                    // Not enough votes/PoW yet, return None (but PipelineProgress will be signaled upstream)
+                    return None;
+                }
             }
             (ResetPipeline, _) => {
                 self.append_reset_pipeline_timeout(extra.proposer_id);
@@ -384,7 +433,11 @@ impl MiningPipelineInfo {
             }
         }
 
-        // There's been a vote for a forceful pipeline change instead of default flow
+        // The checks below are still needed for cases where the threshold is met
+        // by the time this point is reached, even if the specific item didn't trigger it.
+        // However, the explicit return in the match arm handles the direct trigger case.
+
+        // Check for forceful reset
         if self.has_ready_reset_pipeline(extra.unanimous_majority) {
             return self.handle_reset_pipeline(extra);
         }
@@ -539,10 +592,23 @@ impl MiningPipelineInfo {
         self.all_winning_pow.push(winning_pow);
     }
 
+    /// Helper method to count unique participants across all proposers in the intake phase.
+    fn get_total_unique_intake_participants_count(&self) -> usize {
+        let mut unique_participants = BTreeSet::new();
+        for participants_list in self.participants_intake.values() {
+            for participant_addr in &participants_list.unsorted {
+                unique_participants.insert(participant_addr);
+            }
+        }
+        unique_participants.len()
+    }
+
     /// Selects a winning miner from the list via UNICORN
     pub fn has_ready_select_participating_miners(&mut self, sufficient_majority: usize) -> bool {
+        // Condition 1: Enough nodes have voted to complete the phase
         self.current_phase_timeout_peer_ids.len() >= sufficient_majority
-            && self.participants_intake.len() >= sufficient_majority
+            // Condition 2: Restore check - At least one unique participant must have been committed.
+            && self.get_total_unique_intake_participants_count() > 0 
     }
 
     /// Has enough majority vote to change the mining pipeline status forcefully
@@ -630,7 +696,13 @@ impl MiningPipelineInfo {
 
     /// Sets the new UNICORN value based on the latest info
     pub fn construct_unicorn(&mut self) {
-        let block = self.current_block.as_mut().unwrap();
+        // Check if current_block exists before proceeding
+        if self.current_block.is_none() {
+            warn!("Attempted to construct unicorn, but current_block is None. Skipping.");
+            return;
+        }
+
+        let block = self.current_block.as_mut().unwrap(); // Now safe to unwrap
         let tx_inputs = &block.transactions;
 
         debug!(

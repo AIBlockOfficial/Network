@@ -8,7 +8,7 @@ use raft::storage::MemStorage;
 use raft::{Result as RaftResult, StorageError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{error, info};
+use tracing::{error, info, warn, trace};
 
 pub const HARDSTATE_KEY: &str = "HardStateKey";
 pub const SNAPSHOT_DATA_KEY: &str = "SnaphotDataKey";
@@ -132,18 +132,36 @@ impl RaftStore {
 
         let mut first = true;
         let mut batch = self.presistent.batch_writer();
+        let mut entry_count = 0;
         for (ent, index) in entries_to_write {
+            entry_count += 1;
             if first {
                 first = false;
                 self.proposed_context.retain(|_, ctx_idx| *ctx_idx < index);
             }
+            let context_bytes = ent.get_context();
+            if context_bytes.is_empty() {
+                warn!(entry_index = index, "Attempting to persist Raft entry with empty context!");
+            }
             self.proposed_context
-                .insert(ent.get_context().to_owned(), index);
+                .insert(context_bytes.to_owned(), index);
             set_persistent_entry(&mut batch, index, ent)?;
             set_last_persistent_entry(&mut batch, index)?;
         }
-        let batch = batch.done();
-        batch_write(&mut self.presistent, batch)?;
+
+        if entry_count > 0 {
+            let batch = batch.done();
+            info!(entry_count, "Attempting to batch write {} Raft entries to persistent storage.", entry_count);
+            match batch_write(&mut self.presistent, batch) {
+                Ok(()) => {
+                    trace!(entry_count, "Successfully wrote {} Raft entries to persistent storage.", entry_count);
+                }
+                Err(e) => {
+                    error!(entry_count, error = ?e, "Failed to write {} Raft entries to persistent storage: {:?}", entry_count, e);
+                    return Err(e);
+                }
+            }
+        }
 
         Ok(())
     }

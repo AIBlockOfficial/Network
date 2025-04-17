@@ -91,6 +91,7 @@ pub enum CommittedItem {
     Transactions,
     Snapshot,
     CoordinatedCmd(CoordinatedCommand),
+    PipelineProgress, // Added new variant
 }
 
 impl From<MiningPipelinePhaseChange> for CommittedItem {
@@ -538,7 +539,14 @@ impl MempoolRaft {
         self.consensused.last_committed_raft_idx_and_term = (raft_commit.index, raft_commit.term);
         match raft_commit.data {
             RaftCommitData::Proposed(data, context) => {
-                self.received_commit_proposal(data, context).await
+                // Check if the context is empty. Raft internal entries might have empty context.
+                if context.is_empty() {
+                    trace!(commit_index = raft_commit.index, "Skipping processing of proposed commit with empty context (likely Raft internal entry).");
+                    None // Don't try to deserialize or process if context is empty
+                } else {
+                    // Context is not empty, proceed with deserialization and processing as before.
+                    self.received_commit_proposal(data, context).await
+                }
             }
             RaftCommitData::Snapshot(data) => self.apply_snapshot(data),
             RaftCommitData::NewLeader => {
@@ -633,25 +641,33 @@ impl MempoolRaft {
         trace!("received_commit_proposal {:?} -> {:?}", key, item);
         match item {
             MempoolRaftItem::FirstBlock(uxto_set) => {
+                // Check if it's actually the first block context
                 if !self.consensused.is_first_block() {
-                    error!("Proposed FirstBlock after startup {:?}", key);
-                    return None;
+                    error!("Proposed FirstBlock commit received after startup context. Key: {:?}", key);
+                    return None; // Ignore if not in the initial state
                 }
+                info!(raft_key = ?key, "Processing Raft commit for MempoolRaftItem::FirstBlock");
 
-                self.consensused.append_first_block_info(key, uxto_set);
-                if self.consensused.has_different_block_stored_info() {
-                    error!("Proposed uxtosets are different {:?}", key);
-                }
-
-                if self.consensused.has_block_stored_info_ready() {
-                    // First block complete:
-                    self.consensused.apply_ready_block_stored_info();
-                    self.consensused.generate_first_block().await;
-                    self.consensused.start_items_intake();
-                    self.set_next_propose_mining_event_timeout_at();
-                    self.event_processed_generate_snapshot();
-                    return Some(CommittedItem::FirstBlock);
-                }
+                // --- REMOVE CONSENSUS LOGIC --- 
+                // self.consensused.append_first_block_info(key, uxto_set); 
+                // if self.consensused.has_different_block_stored_info() { ... }
+                // if self.consensused.has_block_stored_info_ready() { ... } else { ... }
+                // --- END REMOVAL ---
+                
+                // --- UNCONDITIONAL PROCESSING --- 
+                info!(raft_key = ?key, "Applying FirstBlock UTXO set directly.");
+                // Directly apply the UTXO set from the committed proposal
+                self.consensused.apply_first_block_utxo_set_direct(uxto_set);
+                info!(raft_key = ?key, "Generating first block structure...");
+                self.consensused.generate_first_block().await;
+                info!(raft_key = ?key, "Starting items intake...");
+                self.consensused.start_items_intake();
+                info!(raft_key = ?key, "Resetting mining event timeout...");
+                self.set_next_propose_mining_event_timeout_at();
+                info!(raft_key = ?key, "Generating snapshot...");
+                self.event_processed_generate_snapshot();
+                return Some(CommittedItem::FirstBlock);
+                // --- END UNCONDITIONAL PROCESSING --- 
             }
             MempoolRaftItem::Transactions(mut txs) => {
                 self.local_tx_hash_last_commited = txs.keys().cloned().collect();
@@ -667,6 +683,13 @@ impl MempoolRaft {
             }
             MempoolRaftItem::Block(info) => {
                 let b_num = info.block_num;
+                info!(raft_key = ?key, b_num, "Processing Raft commit for MempoolRaftItem::Block");
+
+                // --- REVERTED CODE START ---
+                // Remove the special handling for first block added previously
+                // if self.consensused.is_first_block() { ... }
+
+                // Restore original logic for REGULAR BLOCK PROCESSING (Requires Majority)
                 if !self.consensused.is_current_block(info.block_num) {
                     trace!("Ignore invalid or outdated block stored info {:?}", key);
                     return None;
@@ -674,27 +697,39 @@ impl MempoolRaft {
 
                 self.consensused.append_block_stored_info(key, info);
                 if self.consensused.has_different_block_stored_info() {
-                    warn!("Proposed previous blocks are different {:?}", key);
+                    warn!(raft_key = ?key, "Proposed previous blocks are different");
                 }
 
                 if self.consensused.has_block_stored_info_ready() {
-                    // New block:
-                    // Must not populate further tx_pool & tx_druid_pool
-                    // before generating block.
-                    self.consensused.apply_ready_block_stored_info();
+                    info!(raft_key = ?key, b_num, "Sufficient votes received for block info, applying.");
+                    self.consensused.apply_ready_block_stored_info(); // Use original apply method
                     if self.is_shutdown_on_commit() {
+                        info!(raft_key = ?key, b_num, "Shutdown triggered, processing shutdown block.");
                         self.event_processed_re_align_utxo_set(b_num);
                         self.event_processed_generate_snapshot();
                         return Some(CommittedItem::BlockShutdown);
                     } else {
+                        info!(raft_key = ?key, b_num, "Generating next block...");
                         self.consensused.generate_block().await;
+                        info!(raft_key = ?key, b_num, "Starting items intake for next block...");
                         self.consensused.start_items_intake();
+                        info!(raft_key = ?key, b_num, "Resetting mining event timeout...");
                         self.set_next_propose_mining_event_timeout_at();
                         self.event_processed_re_align_utxo_set(b_num);
                         self.event_processed_generate_snapshot();
+                        info!(raft_key = ?key, b_num, "Block commit processing complete.");
                         return Some(CommittedItem::Block);
                     }
+                } else {
+                    info!(
+                        raft_key = ?key,
+                        b_num,
+                        votes = self.consensused.max_agreeing_block_stored_info(),
+                        needed = self.consensused.sufficient_majority,
+                        "Waiting for more votes on block info."
+                    );
                 }
+                 // --- REVERTED CODE END ---
             }
             MempoolRaftItem::PipelineItem(mining_pipeline_item, b_num) => {
                 if !self.consensused.is_current_block(b_num) {
@@ -702,10 +737,14 @@ impl MempoolRaft {
                     return None;
                 }
 
-                match self
+                // Log the result received from the block pipeline handler
+                let pipeline_result = self
                     .consensused
                     .handle_mining_pipeline_item(mining_pipeline_item, key)
-                    .await
+                    .await;
+                info!(raft_key = ?key, ?pipeline_result, "[RAFT_COMMIT_LOG] Result from handle_mining_pipeline_item");
+
+                match pipeline_result
                 {
                     Some(v @ MiningPipelinePhaseChange::StartPhasePowIntake)
                     | Some(v @ MiningPipelinePhaseChange::StartPhaseHalted) => {
@@ -720,7 +759,8 @@ impl MempoolRaft {
                         self.consensused.block_pipeline.clear_proposed_keys();
                         return Some(v.into());
                     }
-                    None => return None,
+                    // If no phase change, return PipelineProgress to signify commit processed
+                    None => return Some(CommittedItem::PipelineProgress),
                 }
             }
             MempoolRaftItem::CoordinatedCmd(cmd) => {
@@ -822,20 +862,6 @@ impl MempoolRaft {
                     // Set the next mining event timeout to trigger the pipeline
                     self.set_next_propose_mining_event_timeout_at();
                     
-                    // If the mining pipeline is in Halted state, try to transition it
-                        if matches!(self.consensused.block_pipeline.get_mining_pipeline_status(), MiningPipelineStatus::Halted) {
-                            info!("Mining pipeline still halted after start_items_intake, forcing reset");
-                            // Create a PipelineEventInfo with default values to reset the pipeline
-                            let extra = PipelineEventInfo {
-                                proposer_id: 0,
-                                sufficient_majority: 1,
-                                unanimous_majority: 1,
-                                partition_full_size: self.consensused.partition_full_size,
-                            };
-                            self.consensused.block_pipeline.handle_reset_pipeline(extra);
-                            self.consensused.start_items_intake();
-                        }
-                    
                 } else {
                     error!("Failed to propose block with last info, b_num={}", b_num);
                 }
@@ -869,25 +895,85 @@ impl MempoolRaft {
     pub async fn propose_mining_event_at_timeout(&mut self) -> bool {
         self.set_next_propose_mining_event_timeout_at();
 
+        // Check if the pipeline needs to propose an event
         if let Some(item) = self.consensused.block_pipeline.mining_event_at_timeout() {
-            debug!("propose_mining_event_at_timeout: {:?}", item);
-            self.propose_mining_pipeline_item(item).await
+            debug!("Timeout suggests proposing: {:?}", item);
+
+            // Construct the full Raft item to check against in-flight proposals
+            if let Some(block) = self.get_mining_block() {
+                let b_num = block.header.b_num;
+                let raft_item_to_check = MempoolRaftItem::PipelineItem(item.clone(), b_num);
+
+                // Check if this exact item is already in flight
+                if self.is_proposal_in_flight(&raft_item_to_check, b_num) {
+                    trace!("Skipping proposal because item is already in flight: {:?}", raft_item_to_check);
+                    return false; // Don't re-propose if already in flight
+                }
+                
+                // Item is needed and not in flight, proceed with proposal
+                debug!("Proposing mining event via timeout: {:?}", item);
+                self.propose_mining_pipeline_item(item).await
+                
+            } else {
+                warn!("Cannot propose mining event via timeout because mining block is None");
+                false // Cannot propose without a block reference
+            }
         } else {
-            false
+            false // Pipeline doesn't need an event proposed right now
         }
     }
 
     /// Propose a new mining pipeline item
     pub async fn propose_mining_pipeline_item(&mut self, item: MiningPipelineItem) -> bool {
-        if let Some(block) = self.get_mining_block() {
-            let b_num = block.header.b_num;
+        info!("Proposing mining pipeline item: {:?}", item);
+        info!("Current mining pipeline status: {:?}", self.consensused.block_pipeline.get_mining_pipeline_status());
+        
+        // Special case for ResetPipeline - allow it to be proposed even without a mining block
+        if matches!(item, MiningPipelineItem::ResetPipeline) {
+            info!("Processing ResetPipeline item without requiring a mining block");
+            
+            // Use block number 0 as a placeholder for reset operations when no block is available
+            let b_num = self.get_mining_block()
+                .as_ref()
+                .map(|block| block.header.b_num)
+                .unwrap_or_else(|| {
+                    info!("No mining block available, using placeholder block number for reset");
+                    self.consensused.block_pipeline.current_block_num().unwrap_or(0)
+                });
+            
             let item = MempoolRaftItem::PipelineItem(item, b_num);
+            info!("Created MempoolRaftItem::PipelineItem with block number: {}", b_num);
+            
             if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+                info!("Successfully proposed reset item with key: {:?}", key);
                 self.consensused.block_pipeline.add_proposed_key(key);
+                info!("Added proposed key to block pipeline");
+                info!("New mining pipeline status: {:?}", self.consensused.block_pipeline.get_mining_pipeline_status());
                 return true;
             }
+            warn!("Failed to propose reset item, possibly duplicate");
+            return false;
+        }
+        
+        // Normal case - require a mining block for all other pipeline items
+        if let Some(block) = self.get_mining_block() {
+            let b_num = block.header.b_num;
+            info!("Mining block found with block number: {}", b_num);
+            
+            let item = MempoolRaftItem::PipelineItem(item, b_num);
+            info!("Created MempoolRaftItem::PipelineItem with block number: {}", b_num);
+            
+            if let Some(key) = self.propose_item_dedup(&item, b_num).await {
+                info!("Successfully proposed item with key: {:?}", key);
+                self.consensused.block_pipeline.add_proposed_key(key);
+                info!("Added proposed key to block pipeline");
+                info!("New mining pipeline status: {:?}", self.consensused.block_pipeline.get_mining_pipeline_status());
+                return true;
+            }
+            warn!("Failed to propose item, possibly duplicate");
             false
         } else {
+            warn!("No mining block available, cannot propose mining pipeline item");
             false
         }
     }
@@ -1001,9 +1087,19 @@ impl MempoolRaft {
         item: &MempoolRaftItem,
         b_num: u64,
     ) -> Option<RaftContextKey> {
-        self.proposed_in_flight
+        info!("Attempting to propose item with deduplication for block number: {}", b_num);
+        debug!("Item details: {:?}", item);
+        
+        let result = self.proposed_in_flight
             .propose_item(&mut self.raft_active, item, Some(b_num))
-            .await
+            .await;
+            
+        match &result {
+            Some(key) => info!("Successfully proposed item with key: {:?}", key),
+            None => warn!("Failed to propose item, possibly duplicate or rejected"),
+        }
+        
+        result
     }
 
     /// Propose an item to raft if use_raft, or commit it otherwise.
@@ -1242,6 +1338,59 @@ impl MempoolRaft {
             }
         }
         false
+    }
+
+    /// Propose a pipeline item directly with a specified block number
+    /// This bypasses the requirement for a mining block to be available
+    ///
+    /// ### Arguments
+    ///
+    /// * `item` - The mining pipeline item to propose
+    /// * `block_num` - The block number to associate with the item
+    pub async fn propose_pipeline_item_with_block_num(&mut self, item: MiningPipelineItem, block_num: u64) -> bool {
+        info!("Proposing pipeline item with specified block number: {:?}, block_num: {}", item, block_num);
+        
+        let raft_item = MempoolRaftItem::PipelineItem(item, block_num);
+        
+        if let Some(key) = self.propose_item_dedup(&raft_item, block_num).await {
+            info!("Successfully proposed pipeline item with key: {:?}", key);
+            self.consensused.block_pipeline.add_proposed_key(key);
+            info!("Added proposed key to block pipeline");
+            info!("New mining pipeline status: {:?}", self.consensused.block_pipeline.get_mining_pipeline_status());
+            return true;
+        }
+        
+        warn!("Failed to propose pipeline item, possibly duplicate");
+        false
+    }
+
+    /// Get the proposed keys from the block pipeline
+    pub fn get_block_pipeline_proposed_keys(&self) -> &BTreeSet<RaftContextKey> {
+        self.consensused.block_pipeline.get_proposed_keys()
+    }
+
+    /// Check if the proposal for the given item/block number is already in flight.
+    pub fn is_proposal_in_flight(&self, item: &MempoolRaftItem, b_num: u64) -> bool {
+        self.proposed_in_flight.is_proposal_in_flight(item, b_num)
+    }
+
+    /// Check if the node is processing the first block.
+    pub fn is_first_block(&self) -> bool {
+        self.consensused.is_first_block()
+    }
+
+    /// Check if the initial FirstBlock proposal is currently in flight.
+    pub fn is_initial_proposal_in_flight(&self) -> bool {
+        if let Some(InitialProposal::PendingItem { ref item, .. }) = self.local_initial_proposal {
+            // Check if the specific FirstBlock item is in the in-flight map
+            // Use block number 0 as the context for the first block proposal
+            self.proposed_in_flight.is_proposal_in_flight(item, 0)
+        } else {
+            // If local_initial_proposal is None, PendingAll, or PendingAuthorized, 
+            // it means either it's already proposed or not ready yet.
+            // We can consider it "effectively" in flight or handled if it's None.
+            self.local_initial_proposal.is_none()
+        }
     }
 }
 
@@ -1883,7 +2032,10 @@ impl MempoolConsensused {
 
     /// Apply accumulated block info.
     pub fn apply_ready_block_stored_info(&mut self) {
-        let block_num = match self.take_ready_block_stored_info() {
+        let block_info = self.take_ready_block_stored_info();
+        // Restore original direct logic inside this function
+        // self.apply_ready_block_stored_info_direct(block_info);
+        let block_num = match block_info {
             AccumulatingBlockStoredInfo::FirstBlock(utxo_set) => {
                 self.current_issuance = get_total_coinbase_tokens(&utxo_set);
                 self.initial_utxo_txs = Some(utxo_set);
@@ -1891,8 +2043,6 @@ impl MempoolConsensused {
             }
             AccumulatingBlockStoredInfo::Block(info) => {
                 if self.special_handling.is_none() && info.shutdown {
-                    // Coordinated Shutdown for upgrade: Do not process this block until restart
-                    // If we just restarted from shutdown, ignore it as it is the block that shut us down
                     self.special_handling = Some(SpecialHandling::Shutdown);
                     return;
                 }
@@ -1965,6 +2115,16 @@ impl MempoolConsensused {
             .handle_mining_pipeline_item(pipeline_item, extra)
             .await
     }
+
+    /// Apply first block UTXO set directly.
+    fn apply_first_block_utxo_set_direct(&mut self, utxo_set: BTreeMap<String, Transaction>) {
+        self.current_issuance = get_total_coinbase_tokens(&utxo_set);
+        self.initial_utxo_txs = Some(utxo_set);
+        let block_num = 0; // First block is block 0
+        let reward = calculate_reward(self.current_issuance) / self.unanimous_majority as u64;
+        self.block_pipeline
+            .apply_ready_block_stored_info(block_num, reward);
+    }
 }
 
 /// Take the first `n` items of the given map.
@@ -1990,6 +2150,8 @@ mod test {
     use std::collections::BTreeSet;
     use tw_chain::crypto::sign_ed25519 as sign;
     use tw_chain::primitives::asset::TokenAmount;
+    use tw_chain::primitives::block::Block;
+    use tw_chain::utils::transaction_utils::{construct_tx_hash, get_inputs_previous_out_point};
 
     #[tokio::test]
     async fn generate_first_block_no_raft() {

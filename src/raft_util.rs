@@ -4,8 +4,9 @@ use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn, trace, error};
 use tw_chain::crypto::sha3_256;
+use hex;
 
 /// Key serialized into RaftData and process by Raft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -49,6 +50,7 @@ impl RaftInFlightProposals {
         raft_data: &'a [u8],
         raft_ctx: &'a [u8],
     ) -> Option<(RaftContextKey, Item, bool)> {
+        info!("Attempting to deserialize RaftContextKey from raft_ctx with length: {}", raft_ctx.len());
         match (
             deserialize::<Item>(raft_data),
             deserialize::<RaftContextKey>(raft_ctx),
@@ -56,6 +58,15 @@ impl RaftInFlightProposals {
             (Ok(item), Ok(key)) => {
                 let removed = self.proposed_in_flight.remove(&key).is_some();
                 self.proposed_keys_b_num.remove(&key);
+                // Calculate hash of the committed data and remove from deduplication map
+                let data_hash = sha3_256::digest(raft_data).to_vec();
+                if self.already_proposed_hashes.remove(&data_hash).is_some() {
+                    trace!(key = ?key, hash = %hex::encode(&data_hash), "Removed committed proposal hash from already_proposed_hashes.");
+                } else {
+                    // This might happen if the item wasn't proposed with a deduplication block number,
+                    // or if there was an issue adding it earlier.
+                    trace!(key = ?key, hash = %hex::encode(&data_hash), "Hash for committed proposal not found in already_proposed_hashes (might be okay).");
+                }
                 Some((key, item, removed))
             }
             (Err(error), Ok(key)) => {
@@ -83,6 +94,10 @@ impl RaftInFlightProposals {
         dedup_b_num: Option<u64>,
     ) -> Option<RaftContextKey> {
         let data = serialize(item).unwrap();
+        
+        // Log the state of already_proposed_hashes before checking deduplication
+        info!(?self.already_proposed_hashes, "propose_item: Checking deduplication. Current already_proposed_hashes map.");
+        
         let dedup_info = check_deduplication(
             &self.already_proposed_hashes,
             self.min_b_num,
@@ -100,7 +115,7 @@ impl RaftInFlightProposals {
         };
         let context = serialize(&key).unwrap();
 
-        debug!("propose_item: {:?} -> {:?}", key, item);
+        info!("propose_item: {:?} -> {:?}", key, item);
 
         self.proposed_in_flight
             .insert(key, (data.clone(), context.clone()));
@@ -183,15 +198,44 @@ impl RaftInFlightProposals {
         self.already_proposed_hashes = {
             std::mem::take(&mut self.already_proposed_hashes)
                 .into_iter()
-                .filter(|(_, (_, b_num))| min_b_num > *b_num)
+                .filter(|(_, (_, b_num))| *b_num >= min_b_num)
                 .collect()
         };
         self.proposed_keys_b_num = {
             std::mem::take(&mut self.proposed_keys_b_num)
                 .into_iter()
-                .filter(|(_, b_num)| min_b_num > *b_num)
+                .filter(|(_, b_num)| *b_num >= min_b_num)
                 .collect()
         };
+    }
+
+    /// Check if a serialized item hash is already present in the deduplication map
+    /// for the relevant block number range.
+    pub fn is_proposal_in_flight<Item: Serialize>(
+        &self,
+        item: &Item,
+        dedup_b_num: u64, 
+    ) -> bool {
+        // Check if block number is too old (proposal wouldn't be accepted anyway)
+        if self.min_b_num > dedup_b_num {
+            return false; // Not considered in flight if it's for an old block
+        }
+
+        // Calculate hash (similar to check_deduplication)
+        let data = match serialize(item) {
+            Ok(d) => d,
+            Err(e) => {
+                // If serialization fails, we can't check the hash.
+                // Log error and assume not in flight to avoid blocking valid proposals.
+                error!(error = ?e, "Serialization failed during in-flight check for item: {:?}", std::any::type_name::<Item>());
+                return false;
+            }
+        };
+        let data_hash = sha3_256::digest(&data).to_vec();
+
+        // Check if the hash exists in the map.
+        // The map only contains hashes for blocks >= min_b_num due to cleanup logic.
+        self.already_proposed_hashes.contains_key(&data_hash)
     }
 }
 
@@ -210,19 +254,33 @@ fn check_deduplication(
     dedup_b_num: Option<u64>,
 ) -> Option<Option<(Vec<u8>, u64)>> {
     if let Some(b_num) = dedup_b_num {
+        // Log inputs
+        info!(min_b_num, b_num, "check_deduplication: Checking block number.");
+
         if min_b_num > b_num {
-            debug!("check_deduplication min({}) > b_num({})", min_b_num, b_num);
-            return None;
+            info!("check_deduplication failed: min_b_num({}) > b_num({})", min_b_num, b_num);
+            return None; // Reject: Block number too old
         }
 
         let data_hash = sha3_256::digest(item_data).to_vec();
+        let hash_hex = hex::encode(&data_hash); // Log hash for readability
+        info!(%hash_hex, b_num, "check_deduplication: Checking hash {}", hash_hex);
+
         if let Some((key, num)) = already_proposed_hashes.get(&data_hash) {
-            debug!("check_deduplication found: key({:?}), b_num({})", key, num);
-            None
+            // Log details if hash is found
+            info!(
+                "check_deduplication failed: Found hash {} for b_num={} (key={:?}) in already_proposed_hashes.",
+                hash_hex,
+                num,
+                key
+            );
+            None // Reject: Hash already proposed for this block range
         } else {
-            Some(Some((data_hash, b_num)))
+            info!(%hash_hex, b_num, "check_deduplication succeeded: Hash {} not found.", hash_hex);
+            Some(Some((data_hash, b_num))) // Accept: New hash
         }
     } else {
-        Some(None)
+        info!("check_deduplication skipped: No dedup_b_num provided.");
+        Some(None) // Accept: Deduplication not requested
     }
 }

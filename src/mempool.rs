@@ -14,7 +14,7 @@ use crate::constants::{DB_PATH, RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT};
 use crate::db_utils::{self, SimpleDb, SimpleDbError, SimpleDbSpec};
 use crate::mempool_raft::{
     CommittedItem, CoordinatedCommand, MempoolConsensusedRuntimeData, MempoolRaft,
-    MempoolRuntimeItem,
+    MempoolRuntimeItem, MempoolRaftItem,
 };
 use crate::raft::RaftCommit;
 use crate::threaded_call::{ThreadedCallChannel, ThreadedCallSender};
@@ -603,6 +603,21 @@ impl MempoolNode {
     /// Sends the latest block to storage
     pub async fn send_block_to_storage(&mut self) -> Result<()> {
         let mined_block = self.current_mined_block.clone();
+        
+        // Check if we have a mined block to send
+        if mined_block.is_none() {
+            info!("No mined block available to send to storage");
+            return Err(MempoolError::GenericError(StringError(
+                "No mined block available to send to storage".to_string()
+            )));
+        }
+        
+        // Log block details
+        if let Some(block) = &mined_block {
+            info!("Preparing to send mined block: block_num={}, hash={}", 
+                  block.common.block.header.b_num,
+                  block.common.block.header.previous_hash.clone().unwrap_or("".to_string()));
+        }
 
         // Flush stale tx status
         self.flush_stale_tx_status();
@@ -619,9 +634,26 @@ impl MempoolNode {
         info!("Proposing timestamp next");
         info!("");
         self.node_raft.propose_timestamp().await;
-        self.node
+        
+        info!("Sending block to storage at {}", self.storage_addr);
+        
+        // Log the current peers to see if the storage is connected
+        let peers = self.node.get_peers().await;
+        info!("Current connected peers: {:?}", peers.keys().collect::<Vec<_>>());
+        
+        if !peers.contains_key(&self.storage_addr) {
+            warn!("Storage at {} is not in the connected peers list!", self.storage_addr);
+        }
+        
+        match self.node
             .send(self.storage_addr, StorageRequest::SendBlock { mined_block })
-            .await?;
+            .await {
+                Ok(_) => info!("Successfully sent block to storage at {}", self.storage_addr),
+                Err(e) => {
+                    error!("Failed to send block to storage at {}: {:?}", self.storage_addr, e);
+                    return Err(e.into());
+                }
+            }
         Ok(())
     }
 
@@ -853,30 +885,32 @@ impl MempoolNode {
                 reason,
             }) if reason == "First Block committed" => {
                 // Only continue with the mining process if the node is not paused
-                if !self.is_paused().await {
-                    debug!("First block ready to mine: {:?}", self.get_mining_block());
-                    self.flood_block_to_users().await.unwrap();
-                    self.flood_rand_and_block_to_partition().await.unwrap()
-                } else {
-                    warn!("NODE PAUSED");
-                    // Disable trigger messages to ensure mining cannot take place
-                    *self.disable_trigger_messages.write().await = true;
-                }
+                debug!("First block committed, mining process will proceed based on state transitions.");
+                // if !self.is_paused().await {
+                //     debug!("First block ready to mine: {:?}", self.get_mining_block());
+                //     self.flood_block_to_users().await.unwrap();
+                //     self.flood_rand_and_block_to_partition().await.unwrap()
+                // } else {
+                //     warn!("NODE PAUSED");
+                //     // Disable trigger messages to ensure mining cannot take place
+                //     *self.disable_trigger_messages.write().await = true;
+                // }
             }
             Ok(Response {
                 success: true,
                 reason,
             }) if reason == "Block committed" => {
                 // Only continue with the mining process if the node is not paused
-                if !self.is_paused().await {
-                    debug!("Block ready to mine: {:?}", self.get_mining_block());
-                    self.flood_block_to_users().await.unwrap();
-                    self.flood_rand_and_block_to_partition().await.unwrap()
-                } else {
-                    warn!("NODE PAUSED");
-                    // Disable trigger messages to ensure mining cannot take place
-                    *self.disable_trigger_messages.write().await = true;
-                }
+                debug!("Block committed, mining process will proceed based on state transitions.");
+                // if !self.is_paused().await {
+                //     debug!("Block ready to mine: {:?}", self.get_mining_block());
+                //     self.flood_block_to_users().await.unwrap();
+                //     self.flood_rand_and_block_to_partition().await.unwrap()
+                // } else {
+                //     warn!("NODE PAUSED");
+                //     // Disable trigger messages to ensure mining cannot take place
+                //     *self.disable_trigger_messages.write().await = true;
+                // }
             }
             Ok(Response {
                 success: true,
@@ -1028,18 +1062,42 @@ impl MempoolNode {
     ///
     /// * `commit_data` - Commit to process.
     async fn handle_committed_data(&mut self, commit_data: RaftCommit) -> Option<Result<Response>> {
-        match self.node_raft.received_commit(commit_data).await {
+        let committed_item = self.node_raft.received_commit(commit_data).await;
+
+        // Process the committed item returned by the raft layer
+        let response = match committed_item {
             Some(CommittedItem::FirstBlock) => {
-                self.reset_mining_block_process().await;
                 self.backup_persistent_dbs().await;
+                info!("FirstBlock committed. Triggering participant proposal.");
+                // ---> ADDED: Propose waiting miners after FirstBlock commit <--- Corrected approach
+                let current_block_num = 0; // First block is always 0
+                let request_list_clone = self.request_list.clone(); // Clone to avoid borrow issues
+                if !request_list_clone.is_empty() {
+                    info!("Processing request list for Block {}", current_block_num);
+                    self.propose_miners_from_request_list(current_block_num, &request_list_clone).await;
+                }
+                // ---> END ADDED <--- Corrected approach
                 Some(Ok(Response {
                     success: true,
                     reason: "First Block committed".to_owned(),
                 }))
             }
             Some(CommittedItem::Block) => {
-                self.reset_mining_block_process().await;
+                let b_num = self.node_raft.get_committed_current_block_num().unwrap_or(0); // Get the committed block number
                 self.backup_persistent_dbs().await;
+                info!("Block {} committed. Triggering participant proposal.", b_num);
+                 // ---> ADDED: Propose waiting miners after Block commit <--- Corrected approach
+                 let next_block_num = b_num + 1; // Corrected: Propose for the *next* block number
+                 let request_list_clone = self.request_list.clone(); // Clone to avoid borrow issues
+                 if !request_list_clone.is_empty() {
+                     info!("Processing request list for Block {}", next_block_num);
+                     self.propose_miners_from_request_list(next_block_num, &request_list_clone).await;
+                 }
+                 // ---> END ADDED <--- Corrected approach
+
+                // Reset the process AFTER handling the Block commit itself.
+                self.reset_mining_block_process().await;
+
                 Some(Ok(Response {
                     success: true,
                     reason: "Block committed".to_owned(),
@@ -1053,12 +1111,23 @@ impl MempoolNode {
                     reason: "Block shutdown".to_owned(),
                 }))
             }
-            Some(CommittedItem::StartPhasePowIntake) => Some(Ok(Response {
-                success: true,
-                reason: "Winning PoW intake open".to_owned(),
-            })),
+            Some(CommittedItem::StartPhasePowIntake) => {
+                // RESTORED IMMEDIATE FLOOD CALL: Trigger flood *after* state transition is committed.
+                info!("StartPhasePowIntake commit received, state transitioned. Triggering flood.");
+                if let Err(e) = self.flood_rand_and_block_to_partition().await {
+                    error!("Failed to flood block/rand on StartPhasePowIntake commit: {:?}", e);
+                    // Log error, but allow pipeline to proceed. Flood function logs internally.
+                }
+                // Return the standard response indicating the phase transition occurred.
+                Some(Ok(Response {
+                    success: true,
+                    reason: "Winning PoW intake open".to_owned(), // Ensure this line is correct and only one reason field exists
+                }))
+            }
             Some(CommittedItem::StartPhaseHalted) => {
-                self.mining_block_mined();
+                self.mining_block_mined(); // RESTORED: Populate self.current_mined_block before attempting to send/reset.
+                // Reset is handled later in receive_block_stored after storage confirmation.
+                // self.reset_mining_block_process().await; // Keep this removed
                 Some(Ok(Response {
                     success: true,
                     reason: "Pipeline halted".to_owned(),
@@ -1088,9 +1157,16 @@ impl MempoolNode {
                     reason: "Snapshot applied".to_owned(),
                 }))
             }
+            // Handle the new variant
+            Some(CommittedItem::PipelineProgress) => {
+                debug!("Pipeline progress commit received (no phase change).");
+                None // No specific response needed for the main loop
+            }
             Some(CommittedItem::CoordinatedCmd(cmd)) => self.handle_coordinated_cmd(cmd).await,
             None => None,
-        }
+        };
+
+        response
     }
 
     ///Handle a local event
@@ -1618,7 +1694,7 @@ impl MempoolNode {
         peer: SocketAddr,
         mining_api_key: Option<String>,
     ) -> Response {
-        trace!("Received partition request from {peer:?}");
+        info!("Received partition request from {peer:?}");
 
         // We either kick it if it is unauthorized, or add it to the partition.
         self.miners_changed = true;
@@ -1650,26 +1726,45 @@ impl MempoolNode {
                 .await;
         }
 
+        // Check if the miner is already in the request list
+        if self.request_list.contains(&peer) {
+            info!("Miner {} is already in request list, skipping", peer);
+            return Response {
+                success: true,
+                reason: "Miner already in request list".to_owned(),
+            };
+        }
+
+        // Add the miner to the request list (in-memory only)
         self.request_list.insert(peer);
-        self.db
-            .put_cf(
-                DB_COL_INTERNAL,
-                REQUEST_LIST_KEY,
-                &serialize(&self.request_list).unwrap(),
-            )
-            .unwrap();
-        if self.request_list_first_flood == Some(self.request_list.len()) {
-            self.request_list_first_flood = None;
-            self.node_raft.propose_initial_item().await;
-            Response {
-                success: true,
-                reason: "Received first full partition request".to_owned(),
-            }
-        } else {
-            Response {
-                success: true,
-                reason: "Received partition request successfully".to_owned(),
-            }
+        // Remove DB save for request_list
+        // self.db
+        //     .put_cf(
+        //         DB_COL_INTERNAL,
+        //         REQUEST_LIST_KEY,
+        //         &serialize(&self.request_list).unwrap(),
+        //     )
+        //     .unwrap();
+
+        // Log status
+        if *self.node_raft.get_mining_pipeline_status() == MiningPipelineStatus::Halted {
+            info!("Mining pipeline is Halted. Miner {} added to request list. Waiting for next block cycle.", peer);
+        }
+
+        // Always return a consistent success message after adding the miner
+        // 
+        // ---> ADDED: Trigger flood if pipeline is ready when miner requests <---
+        if *self.node_raft.get_mining_pipeline_status() == MiningPipelineStatus::AllItemsIntake {
+            info!("Pipeline is in AllItemsIntake state. Triggering flood for newly requesting miner: {}", peer);
+            // It's safe to ignore the result here, as errors are logged within the flood function.
+            // The flood function will handle sending only to connected participants.
+            let _ = self.flood_rand_and_block_to_partition().await;
+        }
+        // ---> END ADDED <---
+
+        Response {
+            success: true,
+            reason: "Received partition request successfully".to_owned(),
         }
     }
 
@@ -1767,14 +1862,39 @@ impl MempoolNode {
 
     /// Floods the current block to participants for mining
     pub async fn flood_rand_and_block_to_partition(&mut self) -> Result<()> {
+        info!("[FLOOD_LOG] Entered flood_rand_and_block_to_partition");
+
+        // ---> ADDED CHECK: Ensure there are participants before flooding <---
+        let all_participants = self.node_raft.get_mining_participants();
+        if all_participants.unsorted.len() == 0 {
+            info!("[FLOOD_LOG] No target participants registered in the current mining pipeline state. Skipping flood.");
+            return Ok(()); // Exit early if no participants
+        }
+        // ---> END ADDED CHECK <---
+
         let (rnum, participant_only) = match self.node_raft.get_mining_pipeline_status() {
             MiningPipelineStatus::ParticipantOnlyIntake => (self.previous_random_num.clone(), true),
             MiningPipelineStatus::AllItemsIntake => (self.current_random_num.clone(), false),
-            MiningPipelineStatus::Halted => return Ok(()),
+            MiningPipelineStatus::Halted => {
+                warn!("[FLOOD_LOG] Status is Halted, exiting flood early."); // Log exit case
+                return Ok(());
+            },
         };
+        info!("[FLOOD_LOG] Determined phase: participant_only={}, status={:?}", 
+               participant_only, self.node_raft.get_mining_pipeline_status());
 
         let win_coinbases = self.node_raft.get_last_mining_transaction_hashes().clone();
-        let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap();
+        
+        // Ensure mining block exists before proceeding
+        // Replace guard! macro with standard if let
+        let block = if let Some(b) = self.node_raft.get_mining_block() {
+            b
+        } else {
+            error!("[FLOOD_LOG] Mining block is None, cannot flood.");
+            return Err(MempoolError::GenericError("Mining block not available for flooding".into()));
+        };
+        
+        // let block: &Block = self.node_raft.get_mining_block().as_ref().unwrap(); // Original potentially panicking line
 
         info!(
             "RANDOM NUMBER IN COMPUTE: {:?}, (mined:{})",
@@ -1793,13 +1913,40 @@ impl MempoolNode {
 
         let miner_removal_list = self.miner_removal_list.read().await.clone();
         let all_participants = self.node_raft.get_mining_participants().clone();
-        let participants = all_participants
+        
+        // Get currently connected peers
+        let connected_peers = self.node.get_peers().await;
+        info!("[FLOOD_LOG] Connected peers: {:?}", connected_peers.keys());
+        info!("[FLOOD_LOG] Target participants: {:?}", all_participants.unsorted);
+
+        // Filter participants to only include those currently connected and not in removal list
+        let connected_participants: Vec<SocketAddr> = all_participants
             .iter()
-            .filter(|participant| !miner_removal_list.contains(participant))
-            .copied();
+            .filter(|participant| connected_peers.contains_key(participant) && !miner_removal_list.contains(participant))
+            .copied()
+            .collect();
+        info!("[FLOOD_LOG] Sending block to connected participants: {:?}", connected_participants);
+            
+        // Identify participants who were selected but are not connected (or are being removed)
+        let mut unsent_miners: Vec<SocketAddr> = all_participants
+            .iter()
+            .filter(|participant| !connected_peers.contains_key(participant) || miner_removal_list.contains(participant))
+            .copied()
+            .collect();
+        info!("[FLOOD_LOG] Initial unsent/removed miners: {:?}", unsent_miners);
+
+        // Filter non-participants to only include those currently connected
         let request_list = self.request_list.clone();
-        let non_participants = request_list.difference(all_participants.lookup()).copied();
-        let mut unsent_miners = self.flush_unauthorized_miners().await.unwrap_or_default();
+        let connected_non_participants: Vec<SocketAddr> = request_list
+            .difference(all_participants.lookup())
+            .filter(|non_participant| connected_peers.contains_key(non_participant))
+            .copied()
+            .collect();
+        info!("[FLOOD_LOG] Sending block (header only) to connected non-participants: {:?}", connected_non_participants);
+
+        // Introduce a small delay to allow connections to fully establish
+        // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // info!("[FLOOD_LOG] Delay complete, attempting sends...");
 
         let _ = self
             .node
@@ -1809,10 +1956,11 @@ impl MempoolNode {
             )
             .await;
 
-        if let Ok(unsent_nodes) = self
+        // Send full block to CONNECTED participants
+        let send_participants_result = self
             .node
             .send_to_all(
-                participants,
+                connected_participants.into_iter(), // Use filtered list
                 MineRequest::SendBlock {
                     pow_info,
                     rnum: rnum.clone(),
@@ -1822,15 +1970,23 @@ impl MempoolNode {
                     b_num: header.b_num,
                 },
             )
-            .await
-        {
-            unsent_miners.extend(unsent_nodes);
+            .await;
+        // Handle the Ok case which contains the list of unsent peers
+        if let Ok(unsent_participants) = send_participants_result {
+            if !unsent_participants.is_empty() {
+                 info!("[FLOOD_LOG] Failed to send to some participants: {:?}", unsent_participants);
+                 unsent_miners.extend(unsent_participants);
+            }
+        } else if let Err(e) = send_participants_result {
+            // Log if the entire send_to_all operation failed
+            error!("[FLOOD_LOG] Error during send_to_all for participants: {:?}", e);
         }
 
-        if let Ok(unsent_nodes) = self
+        // Send header only to CONNECTED non-participants
+        let send_non_participants_result = self
             .node
             .send_to_all(
-                non_participants,
+                connected_non_participants.into_iter(), // Use filtered list
                 MineRequest::SendBlock {
                     pow_info,
                     rnum,
@@ -1840,17 +1996,46 @@ impl MempoolNode {
                     b_num: header.b_num,
                 },
             )
-            .await
-        {
-            unsent_miners.extend(unsent_nodes);
+            .await;
+        // Handle the Ok case which contains the list of unsent peers
+        if let Ok(unsent_non_participants) = send_non_participants_result {
+             if !unsent_non_participants.is_empty() {
+                 info!("[FLOOD_LOG] Failed to send to some non-participants: {:?}", unsent_non_participants);
+                 unsent_miners.extend(unsent_non_participants);
+            }
+        } else if let Err(e) = send_non_participants_result {
+             // Log if the entire send_to_all operation failed
+            error!("[FLOOD_LOG] Error during send_to_all for non-participants: {:?}", e);
         }
 
+        info!("[FLOOD_LOG] Final list of unsent/removed miners to potentially flush: {:?}", unsent_miners);
+        // REMOVED: Do not immediately flush miners just because they were not connected
+        // during this specific flood attempt. The retry mechanism in resend_trigger_message
+        // should handle eventually delivering the message once the miner connects.
+        // A separate mechanism should handle truly stale/inactive miners.
+        /*
         if !unsent_miners.is_empty() || !miner_removal_list.is_empty() {
-            unsent_miners.extend(miner_removal_list);
-            self.flush_stale_miners(unsent_miners.clone());
+            unsent_miners.extend(miner_removal_list.iter().copied()); // Corrected extend usage
+            self.flush_stale_miners(unsent_miners.clone()); // This flushes pipeline state
             self.miner_removal_list.write().await.clear();
+            // This proposes removal from consensus runtime data
             self.node_raft
                 .propose_runtime_item(MempoolRuntimeItem::RemoveMiningApiKeys(unsent_miners))
+                .await;
+        }
+        */ // Ensure comment is terminated
+
+        // Explicitly handle the miner_removal_list if it's not empty,
+        // but don't combine it with temporarily unsent miners.
+        let current_miner_removal_list = miner_removal_list; // Use the value read earlier
+        if !current_miner_removal_list.is_empty() {
+            info!("[FLOOD_LOG] Flushing explicitly removed miners: {:?}", current_miner_removal_list);
+            let miners_to_flush: Vec<SocketAddr> = current_miner_removal_list.into_iter().collect();
+            self.flush_stale_miners(miners_to_flush.clone()); // Flush pipeline state
+            self.miner_removal_list.write().await.clear(); // Clear the shared state
+             // Propose removal from consensus runtime data
+            self.node_raft
+                .propose_runtime_item(MempoolRuntimeItem::RemoveMiningApiKeys(miners_to_flush))
                 .await;
         }
 
@@ -1859,6 +2044,7 @@ impl MempoolNode {
             self.get_connected_miners().await.len()
         );
 
+        info!("[FLOOD_LOG] Exiting flood_rand_and_block_to_partition successfully."); // Added exit log
         Ok(())
     }
 
@@ -1963,76 +2149,186 @@ impl MempoolNode {
 
     /// Logs the winner of the block and changes the current block to a new block to be mined
     pub fn mining_block_mined(&mut self) {
-        let (mut block, mut block_txs) = self.node_raft.take_mining_block().unwrap();
-        let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
-        let unicorn = self.node_raft.get_current_unicorn().clone();
+        info!("Mining block mined"); // Added info log
+        if let Some((mut block, mut block_txs)) = self.node_raft.take_mining_block() {
+            let (_, winning_pow) = self.node_raft.get_winning_miner().clone().unwrap();
+            let unicorn = self.node_raft.get_current_unicorn().clone();
 
-        let mining_tx = winning_pow.mining_tx;
-        let nonce = winning_pow.nonce;
-        block.header = apply_mining_tx(block.header, nonce, mining_tx.0.clone());
-        block_txs.insert(mining_tx.0, mining_tx.1);
+            let mining_tx = winning_pow.mining_tx;
+            let nonce = winning_pow.nonce;
+            block.header = apply_mining_tx(block.header, nonce, mining_tx.0.clone());
+            block_txs.insert(mining_tx.0, mining_tx.1);
 
-        let extra_info = MinedBlockExtraInfo {
-            shutdown: self.coordinated_shutdown <= block.header.b_num,
-        };
-        let common = CommonBlockInfo {
-            block,
-            block_txs,
-            pow_p_value: winning_pow.p_value,
-            pow_d_value: winning_pow.d_value,
-            unicorn: unicorn.unicorn,
-            unicorn_witness: unicorn.witness,
-        };
-        self.current_mined_block = Some(MinedBlock { common, extra_info });
+            let extra_info = MinedBlockExtraInfo {
+                shutdown: self.coordinated_shutdown <= block.header.b_num,
+            };
+            let common = CommonBlockInfo {
+                block,
+                block_txs,
+                pow_p_value: winning_pow.p_value,
+                pow_d_value: winning_pow.d_value,
+                unicorn: unicorn.unicorn,
+                unicorn_witness: unicorn.witness,
+            };
+            let current_mined_block = MinedBlock { common, extra_info }; // Assign to a local variable first
+            self.current_mined_block = Some(current_mined_block.clone()); // Clone for the Option
+
+            info!(
+                "Current mined block set for block {}",
+                self.current_mined_block.as_ref().unwrap().common.block.header.b_num.clone()
+            );
+
+            // Call send_block_to_storage asynchronously
+            let mut node_clone = self.node.clone(); // Clone node for the async task
+            let storage_addr_clone = self.storage_addr;
+            // Clone the block data directly from the local variable
+            let current_mined_block_clone = current_mined_block;
+
+            tokio::spawn(async move {
+                info!("Spawning task to send block {} to storage {}", current_mined_block_clone.common.block.header.b_num.clone(), storage_addr_clone);
+                // Construct the CORRECT message type for storage
+                let message = StorageRequest::SendBlock { 
+                    mined_block: Some(current_mined_block_clone.clone()) // Send Option<MinedBlock>
+                }; 
+                match node_clone.send(storage_addr_clone, message).await {
+                    Ok(_) => info!("Successfully sent block {} to storage.", current_mined_block_clone.common.block.header.b_num),
+                    Err(e) => error!("Failed to send block {} to storage {}: {:?}", current_mined_block_clone.common.block.header.b_num, storage_addr_clone, e),
+                }
+            });
+
+            // self.node_raft.propose_block_with_last_info(block_info).await; // Keep this commented out
+
+        } else { // Handle the case where take_mining_block returns None
+             warn!("mining_block_mined called but no mining block was available to take.");
+        }
     }
 
     /// Reset the mining block processing to allow a new block.
     async fn reset_mining_block_process(&mut self) {
+        // REMOVED: Backup/clear/restore logic for request_list
+        // let request_list_backup = self.request_list.clone();
+        // let has_miners = !request_list_backup.is_empty();
+        // info!("[RESET_LOG] Starting reset_mining_block_process. has_miners_backup = {}", has_miners);
+        // info!("[RESET_LOG] Request list BEFORE clear: {:?}", self.request_list);
+
+        info!("Starting reset of mining block process");
+        info!("Current mining pipeline status: {:?}", self.node_raft.get_mining_pipeline_status());
+        
+        // Handle random numbers
+        info!("Updating random numbers");
         self.previous_random_num = Some(std::mem::take(&mut self.current_random_num))
             .filter(|v| !v.is_empty())
             .unwrap_or_else(generate_pow_random_num);
 
         self.current_random_num = generate_pow_random_num();
-        self.db
+        
+        info!("Storing random numbers in database");
+        if let Err(e) = self.db
             .put_cf(
                 DB_COL_INTERNAL,
                 POW_PREV_RANDOM_NUM_KEY,
                 &self.previous_random_num,
-            )
-            .unwrap();
-        self.db
+            ) {
+            error!("Failed to store previous random number: {:?}", e);
+        }
+        
+        if let Err(e) = self.db
             .put_cf(
                 DB_COL_INTERNAL,
                 POW_RANDOM_NUM_KEY,
                 &self.current_random_num,
-            )
-            .unwrap();
+            ) {
+            error!("Failed to store current random number: {:?}", e);
+        }
+        
+        // Clear the current mined block
+        if self.current_mined_block.is_some() {
+            info!("Clearing current mined block");
+            self.current_mined_block = None;
+        } else {
+            info!("No current mined block to clear");
+        }
 
-        self.current_mined_block = None;
+        // Reset the trigger messages count
+        info!("Resetting trigger messages count");
+        self.current_trigger_messages_count = 0;
+
+        // --- REMOVED Unconditional Clear ---
+        // info!("Clearing request list (backup captured: {} miners)", if has_miners { request_list_backup.len() } else { 0 });
+        // self.request_list = Default::default();
+        // info!("[RESET_LOG] Request list AFTER clear: {:?}", self.request_list);
+
+        // Reset the request list first flood
+        if self.request_list_first_flood.is_some() {
+            info!("Resetting request list first flood");
+            self.request_list_first_flood = None;
+        } else {
+            info!("Request list first flood is already None");
+        }
+
+        // Clear the user notification list
+        if !self.user_notification_list.is_empty() {
+            info!("Clearing user notification list with {} entries", self.user_notification_list.len());
+            self.user_notification_list = Default::default();
+        } else {
+            info!("User notification list is already empty");
+        }
+
+        // Log the proposed keys before clearing them
+        let proposed_keys = self.node_raft.get_block_pipeline_proposed_keys();
+        info!("Current proposed keys in block pipeline: {:?}", proposed_keys);
+        
+        // Clear the proposed keys in the block pipeline
+        info!("Clearing proposed keys in block pipeline");
         self.node_raft.clear_block_pipeline_proposed_keys();
+
         // If the node should pause, set the pause node flag to true
         if self.should_pause() {
+            info!("Node should pause, setting pause flag to true");
             *self.pause_node.write().await = true;
         }
+
+        // Flush stale miners
+        info!("Flushing stale miners");
+        if let Some(stale_miners) = self.flush_unauthorized_miners().await {
+            if !stale_miners.is_empty() {
+                info!("Flushed {} stale miners", stale_miners.len());
+                self.node_raft.flush_stale_miners(&stale_miners);
+            } else {
+                info!("No stale miners to flush");
+            }
+        } else {
+            info!("No stale miners to flush (None returned)");
+        }
+        
+        // --- REMOVED Restore Block ---
+        // info!("[RESET_LOG] Checking if miners should be restored (has_miners = {})", has_miners);
+        // if has_miners { ... }
+
+        info!("[RESET_LOG] Request list after reset (should be unchanged): {:?}", self.request_list);
+        info!("Mining block process reset complete");
+        info!("Current mining pipeline status after reset: {:?}", self.node_raft.get_mining_pipeline_status());
     }
 
     /// Load and apply the local database to our state
     fn load_local_db(mut self) -> Result<Self> {
-        self.request_list = match self.db.get_cf(DB_COL_INTERNAL, REQUEST_LIST_KEY) {
-            Ok(Some(list)) => {
-                let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
-                debug!("load_local_db: request_list {:?}", list);
-                list
-            }
-            Ok(None) => self.request_list,
-            Err(e) => panic!("Error accessing db: {:?}", e),
-        };
-        if let Some(first) = self.request_list_first_flood {
-            if first <= self.request_list.len() {
-                self.request_list_first_flood = None;
-                self.node_raft.set_initial_proposal_done();
-            }
-        }
+        // Remove loading of request_list from DB
+        // self.request_list = match self.db.get_cf(DB_COL_INTERNAL, REQUEST_LIST_KEY) {
+        //     Ok(Some(list)) => {
+        //         let list = deserialize::<BTreeSet<SocketAddr>>(&list)?;
+        //         debug!("load_local_db: request_list {:?}", list);
+        //         list
+        //     }
+        //     Ok(None) => self.request_list, // Keep default if not found
+        //     Err(e) => panic!("Error accessing db: {:?}", e),
+        // };
+        // // Check related first_flood logic - potentially remove if request_list isn't loaded
+        // if let Some(first) = self.request_list_first_flood {
+        //     if first <= self.request_list.len() {
+        //         self.request_list_first_flood = None;
+        //         self.node_raft.set_initial_proposal_done();
+        //     }
+        // }
 
         self.user_notification_list = match self.db.get_cf(DB_COL_INTERNAL, USER_NOTIFY_LIST_KEY) {
             Ok(Some(list)) => {
@@ -2078,7 +2374,7 @@ impl MempoolNode {
             key_run
         });
 
-        self.node_raft
+            self.node_raft
             .append_to_tx_pool(get_local_transactions(&self.db));
 
         Ok(self)
@@ -2172,100 +2468,237 @@ impl MempoolNode {
         peer: SocketAddr,
         previous_block_info: BlockStoredInfo,
     ) -> Option<Response> {
+        info!(peer = ?peer, "Received block stored from peer: {}", peer);
+        // Verify the sender is the expected storage node
         if peer != self.storage_addr {
-            return Some(Response {
-                success: false,
-                reason: "Received block stored not from our storage peer".to_owned(),
-            });
-        }
-
-        info!("Received block stored info from storage: block_num={}, hash={}", 
-            previous_block_info.block_num, 
-            previous_block_info.block_hash);
-
-        // Try to propose the block with the last info
-        let proposal_result = self.node_raft.propose_block_with_last_info(previous_block_info).await;
-        
-        if !proposal_result {
-            info!("Failed to propose block with last info, re-proposing uncommitted current block number");
-            self.node_raft.re_propose_uncommitted_current_b_num().await;
+            warn!(
+                peer = ?peer,
+                "Received block stored from unexpected peer {}. Expected {}",
+                peer, self.storage_addr
+            );
+            // Decide if we should ignore or handle this case differently
+            // For now, let's ignore it to prevent potential issues.
             return None;
         }
-        
-        info!("Successfully proposed block with last info");
+        info!(peer = ?peer, "Expected storage address: {}", self.storage_addr);
+        info!(peer = ?peer, "Are they the same? {}", peer == self.storage_addr);
 
-        // Generate a new random number for the next mining round
-        // Use OsRng which is thread-safe instead of thread_rng
-        let new_random: Vec<u8> = (0..10).map(|_| rand::rngs::OsRng.gen()).collect();
-        
-        // Store the previous random number and set the new one
-        self.previous_random_num = self.current_random_num.clone();
-        self.current_random_num = new_random;
-        
-        // Store the random numbers in the database
-        if let Err(e) = self.db.put_cf(
-            DB_COL_INTERNAL,
-            POW_RANDOM_NUM_KEY,
-            &serialize(&self.current_random_num).unwrap(),
-        ) {
-            error!("Failed to store current random number: {:?}", e);
-        }
-        
-        if let Err(e) = self.db.put_cf(
-            DB_COL_INTERNAL,
-            POW_PREV_RANDOM_NUM_KEY,
-            &serialize(&self.previous_random_num).unwrap(),
-        ) {
-            error!("Failed to store previous random number: {:?}", e);
+        let b_num = previous_block_info.block_num;
+        let b_hash = previous_block_info.block_hash.clone();
+        info!(peer = ?peer, "Received block stored info from storage: block_num={}, hash={}", b_num, b_hash);
+
+        let current_block_num = self.node_raft.get_current_block_num(); // This returns u64
+        info!(peer = ?peer, "Current mining block number: {}", current_block_num); // Log the u64 directly
+
+        // Correct comparison: compare u64 with u64
+        if current_block_num != b_num {
+            warn!(peer = ?peer, "Received stale block stored info for block {}, current is {}", b_num, current_block_num);
+            // Maybe request catch-up if we fall behind?
+            return None;
         }
 
-        // Reset the trigger messages count
-        self.current_trigger_messages_count = 0;
-        
-        // Check if the mining pipeline is still halted after processing the block
-        if matches!(self.node_raft.get_mining_pipeline_status(), MiningPipelineStatus::Halted) {
-            info!("Mining pipeline is still halted after block stored, forcing reset");
-            
-            // Force a reset of the mining block process
-            self.reset_mining_block_process().await;
-            
-            // Propose a pipeline reset to get things moving again
-            if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
-                error!("Failed to propose mining pipeline reset");
-            } else {
-                info!("Successfully proposed mining pipeline reset");
+        // If this node is the leader (or Raft is disabled), propose the next block info
+        // The proposal will contain the hash and number of the block just stored (b_num)
+        // The Raft layer will increment this to b_num + 1 when generating the *next* block
+        info!(peer = ?peer, "Current mining pipeline status before proposing: {:?}", self.node_raft.get_mining_pipeline_status());
+        info!(peer = ?peer, "Proposing block with last info to Raft");
+        let proposed = self
+            .node_raft
+            .propose_block_with_last_info(BlockStoredInfo {
+                block_hash: b_hash.clone(), // Hash of the block JUST stored
+                block_num: b_num, // Block number JUST stored
+                nonce: vec![], // Nonce not needed here, just block id
+                mining_transactions: BTreeMap::new(), // Mining txs not needed here
+                shutdown: self.coordinated_shutdown == b_num + 1, // Check if NEXT block is shutdown block
+            })
+            .await;
+
+        if proposed {
+            info!(peer = ?peer, "Successfully proposed block with last info, transitioning to next mining phase");
+
+            // Block proposal accepted by raft, clear the locally held mined block
+            info!(peer = ?peer, "Clearing current mined block as it has been successfully processed");
+            self.current_mined_block = None;
+
+            // Generate and store the next random number pair
+            info!(peer = ?peer, "Generating new random number for next mining round");
+            self.previous_random_num = self.current_random_num.clone();
+            // Correct function name
+            self.current_random_num = generate_pow_random_num();
+            info!(peer = ?peer, "Storing random numbers in database");
+            // Correct method name put_cf
+            if let Err(e) = self.db.put_cf(
+                DB_COL_INTERNAL,
+                POW_PREV_RANDOM_NUM_KEY,
+                &self.previous_random_num,
+            ) {
+                error!("Failed to store previous random number: {:?}", e);
             }
+            // Correct method name put_cf
+            if let Err(e) = self.db.put_cf(
+                DB_COL_INTERNAL,
+                POW_RANDOM_NUM_KEY,
+                &self.current_random_num,
+            ) {
+                error!("Failed to store current random number: {:?}", e);
+            }
+
+            // Reset trigger message counter for the new block cycle
+            info!(peer = ?peer, "Resetting trigger messages count");
+            self.current_trigger_messages_count = 0;
+            self.request_list_first_flood = None; // Allow flooding again for the new block
+
+            info!(peer = ?peer, "Block stored processing complete, returning success response");
+            // Correct Response structure
+            Some(Response {
+                success: true,
+                reason: "Received block stored".to_owned(),
+            })
         } else {
-            info!("Mining pipeline is in state {:?} after block stored", 
-                  self.node_raft.get_mining_pipeline_status());
+            warn!(peer = ?peer, "Failed to propose block info to Raft (maybe duplicate or not leader?). Will retry on trigger.");
+            // Don't clear current_mined_block if proposal failed
+            None
         }
 
-        Some(Response {
-            success: true,
-            reason: "Received block stored".to_owned(),
-        })
+        // REMOVED: This reset happened too early, before the Raft commit for the next block.
+        // info!(peer = ?peer, "Resetting mining block process after storage confirmation.");
+        // self.reset_mining_block_process().await;
+
     }
 
     /// Re-sends messages triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
+        info!("Current mining pipeline status: {:?}", self.node_raft.get_mining_pipeline_status());
+        
         match self.node_raft.get_mining_pipeline_status().clone() {
             MiningPipelineStatus::Halted => {
-                info!("Resend block to storage");
-                if let Err(e) = self.send_block_to_storage().await {
-                    error!("Resend block to storage failed {:?}", e);
+                info!("Mining pipeline is Halted, checking status...");
+                
+                // Check 2: Is the *next* block ready in the pipeline (i.e., has BlockFromStorage been committed)?
+                // This check implicitly assumes the previous block cycle is complete (current_mined_block is None).
+                if self.node_raft.get_mining_block().is_none() {
+                    info!("Next mining block is not yet available in the pipeline.");
+                    // We are Halted, no block sent (previous cycle complete), and no block ready for the *next* round.
+                    // This means we are waiting for storage confirmation OR it's the start/idle state.
+                    if self.request_list.is_empty() {
+                        info!("Request list is empty. Proposing pipeline reset.");
+                        // If no miners waiting, propose reset.
+                        let reset_block_num = self.node_raft.get_committed_current_block_num().unwrap_or(0);
+                        if !self.node_raft.propose_pipeline_item_with_block_num(MiningPipelineItem::ResetPipeline, reset_block_num).await {
+                            error!("Failed to propose reset pipeline item when Halted/NoBlock/NoMiners.");
+                        }
+                    } else {
+                        // Miners are waiting, but the block isn't ready. Initiate proposal if needed.
+                        
+                        // --- MODIFIED LOGIC START ---
+                        if self.node_raft.is_first_block() {
+                            // Handle proposal for the VERY FIRST block (Block 0)
+                            info!("Handling proposal for initial block (Block 0)");
+                            // No need to get genesis UTXOs here, MempoolRaft handles it.
+
+                            // Use the new check specific to the initial proposal state
+                            if self.node_raft.is_initial_proposal_in_flight() {
+                                info!("Initial FirstBlock proposal is already in flight/handled, waiting for commit.");
+                            } else {
+                                info!("Proposing initial FirstBlock item via propose_initial_item().");
+                                // Call the correct public method in MempoolRaft which holds the FirstBlock item
+                                self.node_raft.propose_initial_item().await;
+                                info!("Successfully called propose_initial_item(). Waiting for commit.");
+                            }
+                        } else {
+                            // Handle proposal for SUBSEQUENT blocks (Block 1+)
+                            let current_block_num = self.node_raft.get_committed_current_block_num().unwrap_or(0);
+                            let next_block_num = current_block_num + 1;
+                            info!("Initiating next block proposal for Block {}.", next_block_num);
+
+                            let block_info = BlockStoredInfo {
+                                block_hash: "".to_string(),
+                                block_num: next_block_num,
+                                nonce: vec![],
+                                mining_transactions: BTreeMap::new(),
+                                shutdown: false,
+                            };
+                            let item_to_propose = MempoolRaftItem::Block(block_info.clone());
+
+                            // Check if this Block proposal is already in flight
+                            if self.node_raft.is_proposal_in_flight(&item_to_propose, next_block_num) {
+                                info!("Block proposal for block {} is already in flight, waiting for commit.", next_block_num);
+                            } else {
+                                if !self.node_raft.propose_block_with_last_info(block_info).await {
+                                    error!("Failed to propose BlockFromStorage for block {}", next_block_num);
+                                } else {
+                                    info!("Successfully proposed BlockFromStorage for block {}. Waiting for commit.", next_block_num);
+                                }
+                            }
+                        }
+                        // --- MODIFIED LOGIC END ---
+                    }
+                } else {
+                    // The next block *is* available in the pipeline, but we are still Halted.
+                    // This implies BlockFromStorage was committed, but maybe participants haven't been handled.
+                    info!("Next mining block is available, but state is still Halted. Proceeding with participant intake.");
+
+                    // Check 3: Do we have miners waiting in the request list?
+                    if !self.request_list.is_empty() {
+                        info!("Found {} miners in request list. Processing participant proposals.", self.request_list.len());
+                        
+                        let current_participants = self.node_raft.get_mining_participants().clone();
+                        let current_block_num = self.node_raft.get_current_block_num(); // Use current, not committed
+                        info!("Using block number {} for participant proposals.", current_block_num);
+                        
+                        let mut added_any_miners = false;
+                        for &miner in &self.request_list {
+                            if current_participants.lookup.contains(&miner) {
+                                info!("Miner {} is already in participants list, skipping proposal.", miner);
+                                continue;
+                            }
+                            
+                            let proposal_item = MiningPipelineItem::MiningParticipant(miner, MiningPipelineStatus::ParticipantOnlyIntake);
+                            if self.node_raft.is_proposal_in_flight(&MempoolRaftItem::PipelineItem(proposal_item.clone(), current_block_num), current_block_num) {
+                                info!("Proposal for miner {} (block {}) is already in flight, skipping.", miner, current_block_num);
+                                continue;
+                            }
+                            
+                            info!("Proposing addition of miner {} for block {}.", miner, current_block_num);
+                            if self.node_raft.propose_pipeline_item_with_block_num(
+                                proposal_item,
+                                current_block_num
+                            ).await {
+                                info!("Successfully proposed adding miner {}.", miner);
+                                added_any_miners = true;
+                            } else {
+                                warn!("Failed unexpectedly when trying to propose adding miner {}.", miner);
+                            }
+                        }
+                        
+                        // Always attempt CompleteParticipant if list isn't empty (and block is ready)
+                        info!("Attempting CompleteParticipant proposal for block {}.", current_block_num);
+                        let complete_proposal_item = MiningPipelineItem::CompleteParticipant;
+                        if self.node_raft.propose_pipeline_item_with_block_num(
+                            complete_proposal_item,
+                            current_block_num
+                        ).await {
+                            info!("Successfully proposed CompleteParticipant (or deduplicated) for block {}.", current_block_num);
+                        } else {
+                            warn!("Failed to propose CompleteParticipant for block {}, maybe already handled?", current_block_num);
+                        }
+                        
+                    } else {
+                        // Halted, block ready, but no miners waiting. This seems like an idle state.
+                        info!("Halted with block ready, but no miners in request list. Pipeline remains idle.");
+                    }
                 }
             }
-            MiningPipelineStatus::ParticipantOnlyIntake => {
-                info!("Resend partition random number to miners");
-                if let Err(e) = self.flood_rand_and_block_to_partition().await {
-                    error!("Resend partition random number to miners failed {:?}", e);
-                }
-            }
+            // MiningPipelineStatus::ParticipantOnlyIntake => { ... }
             MiningPipelineStatus::AllItemsIntake => {
-                info!("Resend block and rand to partition miners");
+                info!("Resend trigger: Status is AllItemsIntake, re-flooding block/rand to partition.");
                 if let Err(e) = self.flood_rand_and_block_to_partition().await {
-                    error!("Resend block and rand to partition miners failed {:?}", e);
+                    error!("Resend trigger: Failed to flood block/rand to partition miners in AllItemsIntake: {:?}", e);
                 }
+            }
+            _ => {
+                // Optional: Log that no action is taken for other states
+                // trace!("Resend trigger: No specific action for status {:?}", self.node_raft.get_mining_pipeline_status());
             }
         }
 
@@ -2277,61 +2710,25 @@ impl MempoolNode {
         // try to reset the pipeline to break out of any potential loops
         if self.enable_trigger_messages_pipeline_reset && self.current_trigger_messages_count > RESEND_TRIGGER_MESSAGES_COMPUTE_LIMIT {
             info!("Resend trigger messages limit reached, attempting pipeline reset");
-            
-            // Get information about the mining participants
-            let all_participants = self.node_raft.get_mining_participants().clone();
-            let connected_miners = self.get_connected_miners().await;
-            let disconnected_participants = all_participants.unsorted.iter()
-                .filter(|p| !connected_miners.contains(p))
-                .count();
-            
-            info!("Disconnected participants: {}", disconnected_participants);
-            info!("Total mining participants: {}", all_participants.unsorted.len());
-            
-            // Check if we have any mining participants at all
-            if all_participants.unsorted.is_empty() {
-                info!("No mining participants available, forcing reset");
-                self.reset_mining_block_process().await;
-                self.current_trigger_messages_count = 0;
-                
-                // Try to propose a new block to get things moving again
-                if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
-                    info!("Pipeline is halted, attempting to reset pipeline");
-                    if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
-                        error!("Failed to propose mining pipeline reset");
-                    }
-                }
-                return;
-            }
-            
-            // Check if we have disconnected participants
-            if disconnected_participants > 0 {
-                info!("Detected {} disconnected participants, resetting mining process", disconnected_participants);
-                self.reset_mining_block_process().await;
-                self.current_trigger_messages_count = 0;
-                
-                // Try to propose a new block to get things moving again
-                if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
-                    info!("Pipeline is halted, attempting to reset pipeline");
-                    if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
-                        error!("Failed to propose mining pipeline reset");
-                    }
-                }
-                return;
-            }
-            
-            // Force a reset after too many attempts, regardless of participant status
-            info!("Forcing reset of mining pipeline after too many trigger messages");
+
+            // Perform local reset first
             self.reset_mining_block_process().await;
-            self.current_trigger_messages_count = 0;
-            
-            // Try to propose a new block to get things moving again
-            if let MiningPipelineStatus::Halted = self.node_raft.get_mining_pipeline_status() {
-                info!("Pipeline is halted, attempting to reset pipeline");
-                if !self.node_raft.propose_mining_pipeline_item(MiningPipelineItem::ResetPipeline).await {
-                    error!("Failed to propose mining pipeline reset");
-                }
+            self.current_trigger_messages_count = 0; // Reset counter after local reset
+
+            // Determine the correct block number context for the Raft reset proposal
+            let reset_block_num = self.node_raft.get_committed_current_block_num().unwrap_or(0);
+            info!(b_num=reset_block_num, "Proposing Raft pipeline reset for block context {}", reset_block_num);
+
+            // Propose the reset pipeline item to Raft
+            if self.node_raft.propose_pipeline_item_with_block_num(MiningPipelineItem::ResetPipeline, reset_block_num).await {
+                info!(b_num=reset_block_num, "Successfully proposed Raft reset pipeline item for block context {}", reset_block_num);
+            } else {
+                error!(b_num=reset_block_num, "Failed to propose Raft reset pipeline item for block context {}", reset_block_num);
             }
+
+            // --- REMOVED OLD LOGIC that re-added miners for block 0 ---
+            // The ResetPipeline commit handler in Raft should now correctly reset the state.
+            return; // Exit after initiating reset
         }
     }
 
@@ -2584,6 +2981,29 @@ impl MempoolNode {
             )
             .await?;
         Ok(())
+    }
+
+    /// Proposes miners from the request list to the Raft layer for the given block number.
+    async fn propose_miners_from_request_list(&mut self, block_num: u64, request_list: &BTreeSet<SocketAddr>) {
+        for &miner in request_list {
+            let proposal_item = MiningPipelineItem::MiningParticipant(miner, MiningPipelineStatus::ParticipantOnlyIntake);
+            let raft_item_to_check = MempoolRaftItem::PipelineItem(proposal_item.clone(), block_num);
+
+            // Check if this specific proposal is already in flight for this block number
+            if self.node_raft.is_proposal_in_flight(&raft_item_to_check, block_num) {
+                trace!("Proposal for miner {} (block {}) already in flight, skipping.", miner, block_num);
+                continue;
+            }
+
+            info!("Proposing MiningParticipant for {} (block {})", miner, block_num);
+            // Use propose_pipeline_item_with_block_num as mining block might not be set synchronously
+            if !self.node_raft.propose_pipeline_item_with_block_num(
+                proposal_item,
+                block_num
+            ).await {
+                warn!("Failed to propose miner {} for block {} (unexpected)", miner, block_num);
+            }
+        }
     }
 }
 

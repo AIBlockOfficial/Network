@@ -165,6 +165,8 @@ impl StorageNode {
             .mempool_nodes
             .get(config.storage_node_idx)
             .ok_or(StorageError::ConfigError("Invalid mempool index"))?;
+        info!("Storage node connecting to mempool node at {}", raw_mempool_addr.address);
+        
         let mempool_addr = create_socket_addr(&raw_mempool_addr.address)
             .await
             .map_err(|_| StorageError::ConfigError("Invalid mempool address supplied"))?;
@@ -888,9 +890,24 @@ impl StorageNode {
     pub async fn send_stored_block(&mut self) -> Result<()> {
         // Only the first call will send to storage.
         if let Some(block) = self.get_last_block_stored().clone() {
-            self.node
+            info!("Attempting to send block stored to mempool at {}", self.mempool_addr);
+            
+            // Log the current peers to see if the mempool is connected
+            let peers = self.node.get_peers().await;
+            info!("Current connected peers: {:?}", peers.keys().collect::<Vec<_>>());
+            
+            if !peers.contains_key(&self.mempool_addr) {
+                warn!("Mempool at {} is not in the connected peers list!", self.mempool_addr);
+            }
+            
+            match self.node
                 .send(self.mempool_addr, MempoolRequest::SendBlockStored(block))
-                .await?;
+                .await {
+                    Ok(_) => info!("Successfully sent block stored to mempool at {}", self.mempool_addr),
+                    Err(e) => error!("Failed to send block stored to mempool at {}: {:?}", self.mempool_addr, e),
+                }
+        } else {
+            info!("No block stored info available to send to mempool");
         }
 
         Ok(())
@@ -898,9 +915,18 @@ impl StorageNode {
 
     /// Re-sends messages triggering the next step in flow
     pub async fn resend_trigger_message(&mut self) {
-        info!("Resend block stored: Send to mempool");
+        info!("Resend block stored: Send to mempool at {}", self.mempool_addr);
+        
+        // Log the current peers to see if the mempool is connected
+        let peers = self.node.get_peers().await;
+        info!("Current connected peers during resend: {:?}", peers.keys().collect::<Vec<_>>());
+        
+        if !peers.contains_key(&self.mempool_addr) {
+            warn!("During resend: Mempool at {} is not in the connected peers list!", self.mempool_addr);
+        }
+        
         if let Err(e) = self.send_stored_block().await {
-            error!("Resend lock stored not sent {:?}", e);
+            error!("Resend block stored not sent to {}: {:?}", self.mempool_addr, e);
         }
     }
 
@@ -963,9 +989,14 @@ impl StorageNode {
         peer: SocketAddr,
         mined_block: Option<MinedBlock>,
     ) -> Option<Response> {
+        info!("Received block from peer: {}", peer);
+        info!("Expected mempool address: {}", self.mempool_addr);
+        info!("Are they the same? {}", peer == self.mempool_addr);
+        
         let (common, extra_info) = if let Some(MinedBlock { common, extra_info }) = mined_block {
             (common, extra_info)
         } else {
+            info!("No mined block provided, resending trigger message");
             self.resend_trigger_message().await;
             return None;
         };

@@ -215,6 +215,7 @@ impl RaftNode {
 
     /// Async RAFT loop processing inputs and populating output channels.
     pub async fn run_raft_loop(&mut self) {
+        info!(peer_id = self.node.raft.id, "Starting Raft loop");
         // Notify commited snapshot if loaded one.
         let snapshot = self.node.get_store().snapshot().unwrap();
         self.apply_committed_entries(&mut Ready::default(), Some(&snapshot))
@@ -222,10 +223,15 @@ impl RaftNode {
 
         // Start processing events.
         loop {
+            trace!(peer_id = self.node.raft.id, "Waiting for next Raft event...");
             match self.next_event().await {
-                Some(_) => (),
+                Some(_) => {
+                    trace!(peer_id = self.node.raft.id, "Processed Raft event");
+                    ()
+                }
                 None => {
                     // complete
+                    info!(peer_id = self.node.raft.id, "Exiting Raft loop");
                     return;
                 }
             }
@@ -323,10 +329,13 @@ impl RaftNode {
     /// Advance notifies the node that the application has applied and saved progress in the last Ready results.
     async fn process_ready(&mut self) {
         if !self.node.has_ready() {
+            trace!(peer_id = self.node.raft.id, "No ready state to process.");
             return;
         }
+        //info!(peer_id = self.node.raft.id, "Processing Raft ready state...");
 
         let mut ready = self.node.ready();
+        //info!(peer_id = self.node.raft.id, ready_snapshot_empty = raft::is_empty_snap(ready.snapshot()), ready_entries_len = ready.entries().len(), ready_committed_len = ready.committed_entries.as_ref().map_or(0, |v| v.len()), ready_msgs_len = ready.messages.len(), "Ready details");
 
         let is_leader = self.node.raft.leader_id == self.node.raft.id;
         if is_leader {
@@ -338,6 +347,7 @@ impl RaftNode {
         }
 
         self.apply_committed_entries(&mut ready, None).await;
+        //info!(peer_id = self.node.raft.id, "Advancing Raft state machine after processing ready.");
         self.node.advance(ready);
     }
 
@@ -390,42 +400,45 @@ impl RaftNode {
         snap_overwrite: Option<&Snapshot>,
     ) {
         let mut committed = Vec::new();
+        let mut committed_count = 0;
 
         {
             let snapshot = snap_overwrite
                 .or_else(|| Some(ready.snapshot()).filter(|s| !raft::is_empty_snap(s)));
 
             if let Some(snapshot) = snapshot {
+                info!(peer_id = self.node.raft.id, snapshot_index = snapshot.get_metadata().index, "Applying snapshot commit.");
                 committed.push(RaftCommit {
                     term: snapshot.get_metadata().term,
                     index: snapshot.get_metadata().index,
                     data: RaftCommitData::Snapshot(snapshot.data.clone()),
                 });
+                committed_count += 1;
             }
         }
 
         if let Some(mut committed_entries) = ready.committed_entries.take() {
+            self.committed_entries_and_groups_count.1 += 1;
+            self.committed_entries_and_groups_count.0 += committed_entries.len();
+            committed_count += committed_entries.len();
             committed.extend(
                 committed_entries
                     .drain(..)
-                    .filter(|entry| entry.get_entry_type() == EntryType::EntryNormal)
-                    .map(|mut entry| {
-                        let term = entry.get_term();
-                        let index = entry.get_index();
-                        let data = if entry.get_data().is_empty() {
-                            RaftCommitData::NewLeader
-                        } else {
-                            RaftCommitData::Proposed(entry.take_data(), entry.take_context())
-                        };
-                        RaftCommit { term, index, data }
-                    }),
+                    .map(|mut entry| RaftCommit {
+                        term: entry.term,
+                        index: entry.index,
+                        data: RaftCommitData::Proposed(entry.take_data(), entry.take_context()),
+                    })
+                    .collect::<Vec<_>>(),
             );
         }
 
         if !committed.is_empty() {
-            self.committed_entries_and_groups_count.1 += 1;
-            self.committed_entries_and_groups_count.0 += committed.len();
-            let _ok_or_closed = self.committed_tx.send(committed, "committed").await;
+            info!(peer_id = self.node.raft.id, count = committed_count, "Sending committed entries to application layer.");
+            let _ok_or_closed = self
+                .committed_tx
+                .send(committed, "committed_entries")
+                .await;
         }
     }
 
@@ -597,7 +610,7 @@ mod tests {
     }
 
     // Setup a peer group running all raft loops and dispatching messages.
-    // Node not receiving message can catch up, need to use snapshot as record is gone.
+    // Node not receiving message can catch up, and then need to use snapshot as record is gone.
     #[tokio::test(flavor = "current_thread")]
     async fn test_snap_catch_up_3() {
         let _ = tracing_log_try_init();
