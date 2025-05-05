@@ -209,7 +209,9 @@ impl MinerNode {
         let api_addr = SocketAddr::new(tls_addr.ip(), config.miner_api_port);
         let api_tls_info = if config.miner_api_use_tls {
             // Make sure the TLS config has a private key
-            if config.tls_config.key.is_none() {
+            if config.tls_config.pem_pkcs8_private_key_override.is_none()
+                && config.tls_config.pem_pkcs8_private_keys.is_empty()
+            {
                 return Err(MinerError::ConfigError(
                     "TLS config missing private key for API server",
                 ));
