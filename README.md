@@ -1,3 +1,5 @@
+> **Repository moved:** Active development continues at **[lineage-foundation/fleet](https://github.com/lineage-foundation/fleet)**. Please open issues and pull requests there. This AIBlockOfficial repository is retained for history.
+
 <div align="center">
   <a>
     <img src="https://github.com/AIBlockOfficial/Network/blob/develop/assets/hero.jpg" alt="Logo" style="width:100%;max-width:700px">
